@@ -29,7 +29,12 @@ export class Tring extends Emitter<TringEvent> {
   private readonly autoAnswer: boolean;
   private credentials: SipCredentialsResponse | null = null;
   private currentSession: Invitation | null = null;
-  private pendingCall: { to: string; resolve: (c: Call) => void } | null = null;
+  private pendingCall: {
+    to: string;
+    resolve: (c: Call) => void;
+    reject: (e: Error) => void;
+    cancelTimeout: () => void;
+  } | null = null;
 
   static async init(opts: InitOpts): Promise<Tring> {
     const t = new Tring(opts);
@@ -57,24 +62,47 @@ export class Tring extends Emitter<TringEvent> {
   /**
    * Place an outbound call. The backend originates; FreeSWITCH calls back
    * into this browser via an inbound INVITE; we accept it and audio flows.
+   *
+   * If a previous call() is still waiting for its INVITE, it is cancelled
+   * (resolves with a "superseded" error) before the new one is started —
+   * a rapid second click should not produce a phantom timeout log later.
+   *
+   * Timeout: 5s from originate ACK to inbound INVITE. FreeSWITCH responds
+   * within ~1s on the happy path; anything longer is a real failure (no
+   * registered contact, trunk rejected, etc.).
    */
   async call(to: string): Promise<Call> {
+    // Cancel an in-flight pending call before starting a new one.
+    if (this.pendingCall) {
+      this.pendingCall.cancelTimeout();
+      this.pendingCall.reject(new Error("superseded by a newer call"));
+      this.pendingCall = null;
+    }
+
     await this.api.originate(to);
 
-    // The originate will trigger an inbound INVITE within ~1s. Wire a
-    // one-shot resolver so we hand back a Call to the caller once the
-    // INVITE lands.
     return new Promise<Call>((resolve, reject) => {
       const timeout = setTimeout(() => {
+        // Only fire once; defend against late timeouts after pendingCall
+        // was already cleared by handleInvitation.
+        if (!this.pendingCall || this.pendingCall.to !== to) return;
         this.pendingCall = null;
-        reject(new Error("timed out waiting for ring"));
-      }, 15_000);
+        const err = new Error("no INVITE received from FreeSWITCH within 5s");
+        this.emit({ type: "error", error: err });
+        reject(err);
+      }, 5_000);
+
       this.pendingCall = {
         to,
         resolve: (c) => {
           clearTimeout(timeout);
           resolve(c);
         },
+        reject: (e) => {
+          clearTimeout(timeout);
+          reject(e);
+        },
+        cancelTimeout: () => clearTimeout(timeout),
       };
     });
   }

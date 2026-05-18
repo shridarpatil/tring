@@ -24,3 +24,8 @@ sdk/js/dist/
 
 # OS
 .DS_Store
+
+# Project-internal docs / planning (not for the public repo)
+/CHANGELOG.md
+/docs/DEMO_SCRIPT.md
+/docs/PHASE_1_PLAN.md

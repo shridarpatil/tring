@@ -43,26 +43,37 @@ func New(d *db.DB, addr, password string) *Runner {
 }
 
 // Run keeps a connection to FreeSWITCH ESL alive. On any disconnect it
-// reconnects with capped exponential backoff. Returns only when ctx is
-// cancelled.
+// reconnects with capped exponential backoff (1s → 2 → 4 → 8 → 16 → 30s).
+// A session that ran healthy for ≥5s resets the backoff back to 1s on the
+// next failure, so a one-off FS restart doesn't poison subsequent reconnect
+// timings into 30s waits. Returns only when ctx is cancelled.
 func (r *Runner) Run(ctx context.Context) error {
-	backoff := time.Second
+	const (
+		initialBackoff = 1 * time.Second
+		maxBackoff     = 30 * time.Second
+		healthyAfter   = 5 * time.Second
+	)
+	backoff := initialBackoff
 	for {
+		startedAt := time.Now()
 		err := r.runOnce(ctx)
 		if ctx.Err() != nil {
 			return nil
 		}
-		log.Printf("orchestrator: esl session ended (%v); reconnect in %v", err, backoff)
+		sessionDuration := time.Since(startedAt)
+		if sessionDuration >= healthyAfter {
+			backoff = initialBackoff
+		}
+		log.Printf("orchestrator: esl session ended after %v (%v); reconnect in %v",
+			sessionDuration.Round(time.Millisecond), err, backoff)
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
-			backoff *= 2
-		}
-		if backoff > 30*time.Second {
-			backoff = 30 * time.Second
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }

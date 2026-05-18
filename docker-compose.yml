@@ -40,6 +40,7 @@ services:
       - ./freeswitch/conf/vars.xml:/etc/freeswitch/vars.xml:ro
       - ./freeswitch/conf/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml:ro
       - ./freeswitch/conf/directory/default.xml:/etc/freeswitch/directory/default.xml:ro
+      - ./freeswitch/conf/autoload_configs/modules.conf.xml:/etc/freeswitch/autoload_configs/modules.conf.xml:ro
       - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/etc/freeswitch/autoload_configs/xml_curl.conf.xml:ro
       - ./freeswitch/conf/sip_profiles/external/exotel.xml:/etc/freeswitch/sip_profiles/external/exotel.xml:ro
       - ./freeswitch/conf/sip_profiles/external/airtel.xml:/etc/freeswitch/sip_profiles/external/airtel.xml:ro
