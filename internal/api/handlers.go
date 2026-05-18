@@ -189,6 +189,12 @@ type patchNumberRequest struct {
 // allocation record for audit). Operators driving `manual` strategy use
 // this to switch primary; failover/round_robin tenants use it to
 // quarantine a misbehaving trunk.
+//
+// Guardrail: deactivating the *last* active outbound trunk would leave
+// the tenant with zero usable trunks and silently break every outbound
+// call. We reject that with 409. Operators must register a replacement
+// first, or accept that no calls will work and explicitly DELETE the
+// number (Phase 2 endpoint) instead.
 func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -204,6 +210,44 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	if req.Priority == nil && req.Active == nil {
 		writeError(w, http.StatusBadRequest, "at least one of priority or active is required")
 		return
+	}
+
+	// If the request would deactivate an outbound trunk, check this isn't
+	// the only active outbound trunk left. Skip the check for inbound /
+	// masking numbers (they don't carry outbound caller-ID and have
+	// different invariants).
+	if req.Active != nil && !*req.Active {
+		var rowType string
+		var rowActive bool
+		err := s.db.Pool.QueryRow(r.Context(),
+			`SELECT type::text, active FROM numbers WHERE id = $1 AND tenant_id = $2`,
+			id, t.ID,
+		).Scan(&rowType, &rowActive)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "number not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
+			return
+		}
+		if rowType == "outbound" && rowActive {
+			var otherActive int
+			err = s.db.Pool.QueryRow(r.Context(), `
+				SELECT COUNT(*) FROM numbers
+				WHERE tenant_id = $1 AND type = 'outbound' AND active AND id != $2
+			`, t.ID, id).Scan(&otherActive)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
+				return
+			}
+			if otherActive == 0 {
+				writeError(w, http.StatusConflict,
+					"cannot deactivate the last active outbound trunk for this tenant; "+
+						"register another outbound number first")
+				return
+			}
+		}
 	}
 
 	var n Number
