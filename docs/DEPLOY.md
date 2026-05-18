@@ -110,14 +110,14 @@ Then `docker compose pull && docker compose up -d` to roll forward.
 
 ### CI secrets (one-time setup)
 
-To enable Docker Hub publishing, add two repository secrets at **Settings → Secrets and variables → Actions**:
+The workflow always tries to log in to both registries. Add these repo secrets at **Settings → Secrets and variables → Actions** before the first push:
 
 - `DOCKERHUB_USERNAME` — your Docker Hub login (often the same as your GitHub handle)
-- `DOCKERHUB_TOKEN` — a Docker Hub PAT with Read+Write on the `tring-*` repos
+- `DOCKERHUB_PASSWORD` — a Docker Hub PAT with Read+Write on the `tring-*` repos
 
 GHCR uses the workflow's built-in `GITHUB_TOKEN` — nothing to configure.
 
-If the Docker Hub secrets aren't set, the workflow still publishes to GHCR (the Docker Hub login step is conditional on the secrets being present).
+If you don't want Docker Hub mirroring, delete the two Docker Hub steps from `.github/workflows/build-images.yml` and the second `tags:` line in the build step.
 
 ## Backups
 
