@@ -1,0 +1,125 @@
+# GoReleaser v2 config for Tring tag releases.
+#
+# Triggered by .github/workflows/release.yml on tag pushes (v*). Builds
+# both Go binaries for linux/darwin × amd64/arm64, ships them in tar.gz
+# archives, builds Docker images per (binary, arch), assembles multi-arch
+# manifests, pushes to GHCR + Docker Hub, and creates a GitHub Release
+# with the auto-generated changelog.
+#
+# Env vars expected from the workflow:
+#   GITHUB_TOKEN  - built-in; for the GitHub Release + GHCR pushes
+#   DOCKER_ORG    - Docker Hub user/org (typically your DOCKERHUB_USERNAME)
+#   GITHUB_ORG    - GitHub user/org (== github.repository_owner)
+
+version: 2
+
+project_name: tring
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: api
+    main: ./cmd/api
+    binary: tring-api
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+
+  - id: orchestrator
+    main: ./cmd/orchestrator
+    binary: tring-orchestrator
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+
+archives:
+  - id: api
+    ids: [api]
+    name_template: "tring-api_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [LICENSE, NOTICE, README.md]
+  - id: orchestrator
+    ids: [orchestrator]
+    name_template: "tring-orchestrator_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [LICENSE, NOTICE, README.md]
+
+# Per-(binary, arch) Docker images. Each builds a single-arch image; the
+# `docker_manifests` block below stitches them into a multi-arch manifest
+# under one tag so consumers can `docker pull <image>:<tag>` and get the
+# right arch automatically.
+dockers:
+  # api · amd64
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-api:{{ .Tag }}-amd64"
+      - "{{ .Env.DOCKER_ORG }}/tring-api:{{ .Tag }}-amd64"
+    use: buildx
+    build_flag_templates: [--platform=linux/amd64, --build-arg=CMD=api]
+    dockerfile: Dockerfile
+    goarch: amd64
+    ids: [api]
+  # api · arm64
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-api:{{ .Tag }}-arm64"
+      - "{{ .Env.DOCKER_ORG }}/tring-api:{{ .Tag }}-arm64"
+    use: buildx
+    build_flag_templates: [--platform=linux/arm64, --build-arg=CMD=api]
+    dockerfile: Dockerfile
+    goarch: arm64
+    ids: [api]
+  # orchestrator · amd64
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-orchestrator:{{ .Tag }}-amd64"
+      - "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}-amd64"
+    use: buildx
+    build_flag_templates: [--platform=linux/amd64, --build-arg=CMD=orchestrator]
+    dockerfile: Dockerfile
+    goarch: amd64
+    ids: [orchestrator]
+  # orchestrator · arm64
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-orchestrator:{{ .Tag }}-arm64"
+      - "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}-arm64"
+    use: buildx
+    build_flag_templates: [--platform=linux/arm64, --build-arg=CMD=orchestrator]
+    dockerfile: Dockerfile
+    goarch: arm64
+    ids: [orchestrator]
+
+docker_manifests:
+  - name_template: "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-api:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-api:{{ .Tag }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-api:{{ .Tag }}-arm64"
+  - name_template: "{{ .Env.DOCKER_ORG }}/tring-api:{{ .Tag }}"
+    image_templates:
+      - "{{ .Env.DOCKER_ORG }}/tring-api:{{ .Tag }}-amd64"
+      - "{{ .Env.DOCKER_ORG }}/tring-api:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-orchestrator:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-orchestrator:{{ .Tag }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-orchestrator:{{ .Tag }}-arm64"
+  - name_template: "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}"
+    image_templates:
+      - "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}-amd64"
+      - "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}-arm64"
+
+changelog:
+  sort: asc
+  filters:
+    exclude: [^docs:, ^test:, ^ci:, ^chore:]
+
+release:
+  name_template: "Tring {{ .Tag }}"
+  draft: false
+  prerelease: auto

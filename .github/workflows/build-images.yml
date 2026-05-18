@@ -1,15 +1,16 @@
-name: Build images
+name: Build develop images
+
+# Main-only workflow. Tags are handled by .github/workflows/release.yml
+# (GoReleaser). Both binaries get published to GHCR + Docker Hub with
+# the `:develop` tag on every push to main.
 
 on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
-# Cancel any in-flight build for the same ref when a newer push arrives.
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-develop-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -17,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write   # for ghcr.io push
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -25,18 +26,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # Tag rule:
-      #   - push to main      → "develop"
-      #   - push tag v0.2.0   → "v0.2.0"  (literal — the user wanted the tag name)
-      - name: Determine image tag
-        id: tag
-        run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=develop" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -57,7 +46,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push develop image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -67,9 +56,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.binary }}:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.binary }}:${{ steps.tag.outputs.tag }}
-          # GHA cache, scoped per binary so the two matrix legs don't
-          # invalidate each other's layers.
+            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.binary }}:develop
+            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.binary }}:develop
           cache-from: type=gha,scope=tring-${{ matrix.binary }}
           cache-to: type=gha,mode=max,scope=tring-${{ matrix.binary }}
