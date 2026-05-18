@@ -308,20 +308,39 @@
        If unspecified, the bind_server_ip value is used.
        Used by: sofia.conf.xml dingaling.conf.xml
   -->
-  <X-PRE-PROCESS cmd="stun-set" data="external_rtp_ip=stun:stun.freeswitch.org"/>
+  <!--
+       TRING_PUBLIC_IP is read from the FS container's environment (set
+       in .env, passed through by docker-compose.yml). It feeds both
+       external_rtp_ip (where receivers send media back to) and
+       external_sip_ip (the public address advertised in SDP Contact and
+       Via headers). Mismatching these with the real public IP is the
+       #1 cause of "one-way audio" on a VPS.
 
-  <!-- external_sip_ip
-      Used as the public IP address for SDP.
-       Can be an one of:
-           ip address: "12.34.56.78"
-           a stun server lookup: "stun:stun.server.com"
-           a DNS name: "host:host.server.com"
-       where fs.mydomain.com is a DNS A record-useful when fs is on
-       a dynamic IP address, and uses a dynamic DNS updater.
-       If unspecified, the bind_server_ip value is used.
-       Used by: sofia.conf.xml dingaling.conf.xml
+       Accepted values:
+         - bare public IP:   TRING_PUBLIC_IP=203.0.113.42
+         - DNS name:         TRING_PUBLIC_IP=host:voice.example.com
+         - STUN auto-detect: TRING_PUBLIC_IP=stun:stun.freeswitch.org  (dev/LAN default)
+
+       env-set establishes the default (STUN) if no env var is exported,
+       so a fresh dev clone Just Works without anyone editing this file.
   -->
-  <X-PRE-PROCESS cmd="stun-set" data="external_sip_ip=stun:stun.freeswitch.org"/>
+  <!-- env-set syntax is `data="preproc_var=ENV_VAR_NAME"` — reads the
+       env var and assigns to the preprocessor variable. The default
+       (stun:stun.freeswitch.org) lives in docker-compose.yml's
+       environment block so the env is always populated when FS starts.
+       Sofia detects the `stun:` prefix at its own startup and does the
+       STUN lookup natively; a bare IP or `host:fqdn` is used verbatim.
+       `set` (not `stun-set`) so $${...} macro-expansion runs first. -->
+  <!-- TRING_PUBLIC_IP comes from the FS container env (docker-compose.yml
+       defaults it to stun:stun.freeswitch.org). exec-set reads stdout of
+       the given command — robust across FS versions; env-set behaviour
+       was inconsistent for values containing colons. Sofia detects the
+       `stun:` prefix at its own startup and does the STUN lookup, or
+       uses a bare IP / `host:fqdn` verbatim. -->
+  <X-PRE-PROCESS cmd="exec-set" data="tring_public_ip=sh -c 'echo ${TRING_PUBLIC_IP:-stun:stun.freeswitch.org}'"/>
+  <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${tring_public_ip}"/>
+  <!-- external_sip_ip — see external_rtp_ip block above for value forms. -->
+  <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${tring_public_ip}"/>
 
   <!-- unroll-loops
        Used to turn on sip loopback unrolling.

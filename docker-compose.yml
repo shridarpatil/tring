@@ -12,6 +12,10 @@ services:
     environment:
       - SOUND_RATES=8000:16000
       - SOUND_TYPES=music:en-us-callie
+      # Public IP advertised in SDP and used for external RTP. Defaults
+      # to STUN auto-detect for dev; on a VPS set TRING_PUBLIC_IP to the
+      # real public IP in .env (one-way audio == this is wrong).
+      - TRING_PUBLIC_IP=${TRING_PUBLIC_IP:-stun:stun.freeswitch.org}
       # Default the Exotel vars to safe values so vars.xml's env-set lines
       # don't leave FreeSWITCH variables empty (which would break the
       # gateway parse). Override via .env above.
