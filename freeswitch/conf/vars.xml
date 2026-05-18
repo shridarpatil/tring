@@ -342,6 +342,15 @@
   <!-- external_sip_ip — see external_rtp_ip block above for value forms. -->
   <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${tring_public_ip}"/>
 
+  <!-- RTP UDP port range. Defaults match FS's compiled defaults
+       (16384-32768) but can be narrowed via TRING_RTP_START_PORT /
+       TRING_RTP_END_PORT in .env. Narrowing is recommended on a VPS:
+       the firewall only needs to allow the configured range inbound,
+       and FS will refuse to allocate outside it. Each concurrent call
+       uses 2 ports (RTP + RTCP), so 100 ports = ~50 simultaneous calls. -->
+  <X-PRE-PROCESS cmd="exec-set" data="rtp_start_port=sh -c 'echo ${TRING_RTP_START_PORT:-16384}'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="rtp_end_port=sh -c 'echo ${TRING_RTP_END_PORT:-32768}'"/>
+
   <!-- unroll-loops
        Used to turn on sip loopback unrolling.
   -->

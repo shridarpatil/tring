@@ -16,6 +16,11 @@ services:
       # to STUN auto-detect for dev; on a VPS set TRING_PUBLIC_IP to the
       # real public IP in .env (one-way audio == this is wrong).
       - TRING_PUBLIC_IP=${TRING_PUBLIC_IP:-stun:stun.freeswitch.org}
+      # RTP UDP port range. FS will allocate ONLY within [start, end]
+      # — sized to match your VPS firewall rules. Each concurrent call
+      # consumes 2 ports (RTP + RTCP).
+      - TRING_RTP_START_PORT=${TRING_RTP_START_PORT:-16384}
+      - TRING_RTP_END_PORT=${TRING_RTP_END_PORT:-32768}
       # Default the Exotel vars to safe values so vars.xml's env-set lines
       # don't leave FreeSWITCH variables empty (which would break the
       # gateway parse). Override via .env above.
@@ -46,6 +51,9 @@ services:
       - ./freeswitch/conf/directory/default.xml:/etc/freeswitch/directory/default.xml:ro
       - ./freeswitch/conf/autoload_configs/modules.conf.xml:/etc/freeswitch/autoload_configs/modules.conf.xml:ro
       - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/etc/freeswitch/autoload_configs/xml_curl.conf.xml:ro
+      # Overrides the default switch.conf.xml to wire the RTP port range
+      # to vars.xml's $${rtp_start_port}/$${rtp_end_port} placeholders.
+      - ./freeswitch/conf/autoload_configs/switch.conf.xml:/etc/freeswitch/autoload_configs/switch.conf.xml:ro
       - ./freeswitch/conf/sip_profiles/external/exotel.xml:/etc/freeswitch/sip_profiles/external/exotel.xml:ro
       - ./freeswitch/conf/sip_profiles/external/airtel.xml:/etc/freeswitch/sip_profiles/external/airtel.xml:ro
       - ./freeswitch/conf/sip_profiles/external/jio.xml:/etc/freeswitch/sip_profiles/external/jio.xml:ro
