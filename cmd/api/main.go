@@ -69,12 +69,16 @@ func main() {
 	srv := &http.Server{
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
-			DB:          database,
-			JWTSecret:   envOr("TRING_JWT_SECRET", defaultJWT),
-			FSBasicAuth: envOr("TRING_FS_BASIC_AUTH", defaultFSAuth),
-			WSURL:       envOr("TRING_WS_URL", defaultWSURL()),
-			ESLAddr:     envOr("TRING_ESL_ADDR", defaultESLAddr),
-			ESLPassword: envOr("TRING_ESL_PASSWORD", defaultESLPassword),
+			DB:           database,
+			JWTSecret:    envOr("TRING_JWT_SECRET", defaultJWT),
+			FSBasicAuth:  envOr("TRING_FS_BASIC_AUTH", defaultFSAuth),
+			WSURL:        envOr("TRING_WS_URL", defaultWSURL()),
+			ESLAddr:      envOr("TRING_ESL_ADDR", defaultESLAddr),
+			ESLPassword:  envOr("TRING_ESL_PASSWORD", defaultESLPassword),
+			STUNURL:      envOr("TRING_STUN_URL", "stun:stun.l.google.com:19302"),
+			TURNURL:      os.Getenv("TRING_TURN_URL"),
+			TURNUsername: os.Getenv("TRING_TURN_USERNAME"),
+			TURNPassword: os.Getenv("TRING_TURN_PASSWORD"),
 		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

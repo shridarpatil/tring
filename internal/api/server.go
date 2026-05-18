@@ -26,6 +26,16 @@ type Config struct {
 	WSURL       string // ws(s)://host:port that the SDK passes to sip.js
 	ESLAddr     string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
 	ESLPassword string // FreeSWITCH ESL password (default ClueCon)
+
+	// WebRTC ICE servers. STUN gives the browser its srflx (public)
+	// candidate. TURN relays media through a public-IP server when both
+	// peers are behind symmetric NAT or CGNAT and direct paths fail.
+	// All three TURN fields are required together; absent TURN means
+	// the SDK gets a STUN-only iceServers list.
+	STUNURL      string
+	TURNURL      string
+	TURNUsername string
+	TURNPassword string
 }
 
 type Server struct {
@@ -37,10 +47,24 @@ type Server struct {
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
 
+	// Resolved iceServers built once at startup from STUN/TURN config and
+	// returned verbatim by /v1/sdk/credentials. Empty slice == "no ICE
+	// servers configured", which is valid (works on LANs).
+	iceServers []iceServer
+
 	// Round-robin trunk selection state. Lazily initialised in
 	// nextRoundRobin (see trunks.go).
 	rrMu sync.Mutex
 	rr   map[uuid.UUID]int
+}
+
+// iceServer matches the RTCIceServer JSON shape consumed by browsers.
+// `urls` can be a single URL or an array of URLs; we always serialize a
+// single string here for simplicity. `credential` only sent for TURN.
+type iceServer struct {
+	URLs       string `json:"urls"`
+	Username   string `json:"username,omitempty"`
+	Credential string `json:"credential,omitempty"`
 }
 
 func NewServer(cfg Config) *Server {
@@ -53,7 +77,27 @@ func NewServer(cfg Config) *Server {
 		wsURL:       cfg.WSURL,
 		fs:          freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
 		notifier:    webhook.New(cfg.DB),
+		iceServers:  buildICEServers(cfg),
 	}
+}
+
+// buildICEServers turns the STUN/TURN env config into the iceServers
+// array the SDK passes to RTCPeerConnection. Order matters: STUN first
+// so the browser tries direct candidates before falling back to TURN
+// relay (which costs the operator bandwidth).
+func buildICEServers(cfg Config) []iceServer {
+	out := []iceServer{}
+	if cfg.STUNURL != "" {
+		out = append(out, iceServer{URLs: cfg.STUNURL})
+	}
+	if cfg.TURNURL != "" {
+		out = append(out, iceServer{
+			URLs:       cfg.TURNURL,
+			Username:   cfg.TURNUsername,
+			Credential: cfg.TURNPassword,
+		})
+	}
+	return out
 }
 
 func (s *Server) Router() http.Handler {

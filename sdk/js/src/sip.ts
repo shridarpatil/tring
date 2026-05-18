@@ -43,6 +43,16 @@ export class SipAdapter {
       authorizationUsername: creds.sip_username,
       authorizationPassword: creds.sip_password,
       transportOptions: { server: creds.ws_url },
+      // ICE servers flow from the credentials response into the
+      // underlying RTCPeerConnection. With TURN configured server-side,
+      // browsers behind symmetric NAT / CGNAT get a relay candidate and
+      // calls connect; without TURN, those same browsers see ICE
+      // failures and the call sets up but has no audio.
+      sessionDescriptionHandlerFactoryOptions: {
+        peerConnectionConfiguration: {
+          iceServers: creds.ice_servers ?? [],
+        },
+      },
       delegate: {
         onInvite: (invitation: Invitation) => {
           this.wireAudio(invitation);

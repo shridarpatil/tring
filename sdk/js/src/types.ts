@@ -50,4 +50,12 @@ export interface SipCredentialsResponse {
   sip_password: string;
   sip_domain: string;
   ws_url: string;
+  /**
+   * ICE servers for WebRTC media setup. Always includes at least one
+   * STUN entry; TURN entries (carry username + credential) appear when
+   * the Tring server has TRING_TURN_URL configured. Browsers behind
+   * symmetric NAT or CGNAT need TURN to relay media — pure STUN fails.
+   * Passed through to RTCPeerConnection unchanged.
+   */
+  ice_servers: RTCIceServer[];
 }

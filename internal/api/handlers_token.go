@@ -52,10 +52,11 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 }
 
 type sipCreds struct {
-	SipUsername string `json:"sip_username"`
-	SipPassword string `json:"sip_password"`
-	SipDomain   string `json:"sip_domain"`
-	WSURL       string `json:"ws_url"`
+	SipUsername string      `json:"sip_username"`
+	SipPassword string      `json:"sip_password"`
+	SipDomain   string      `json:"sip_domain"`
+	WSURL       string      `json:"ws_url"`
+	ICEServers  []iceServer `json:"ice_servers"`
 }
 
 // handleSDKCredentials returns the SIP credentials the JS SDK needs to
@@ -88,5 +89,6 @@ func (s *Server) handleSDKCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	creds.WSURL = s.wsURL
+	creds.ICEServers = s.iceServers
 	writeJSON(w, http.StatusOK, creds)
 }

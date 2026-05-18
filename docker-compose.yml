@@ -117,6 +117,15 @@ services:
       - TRING_WS_URL=${TRING_WS_URL:-}
       - TRING_ESL_ADDR=${TRING_ESL_ADDR:-127.0.0.1:8021}
       - TRING_ESL_PASSWORD=${TRING_ESL_PASSWORD:-ClueCon}
+      # WebRTC ICE servers, returned by /v1/sdk/credentials. STUN
+      # default is Google's public server; replace with a self-hosted
+      # STUN if you don't want browsers calling out to Google. TURN is
+      # opt-in — without it, browsers behind symmetric NAT can't
+      # establish media.
+      - TRING_STUN_URL=${TRING_STUN_URL:-stun:stun.l.google.com:19302}
+      - TRING_TURN_URL=${TRING_TURN_URL:-}
+      - TRING_TURN_USERNAME=${TRING_TURN_USERNAME:-}
+      - TRING_TURN_PASSWORD=${TRING_TURN_PASSWORD:-}
     restart: unless-stopped
 
   orchestrator:
