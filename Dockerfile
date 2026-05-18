@@ -12,15 +12,21 @@
 ARG GO_VERSION=1.25
 
 # ---- build stage ---------------------------------------------------------
-FROM golang:${GO_VERSION}-alpine AS builder
+# --platform=$BUILDPLATFORM pins the builder to the *runner's* native arch
+# (always amd64 on a stock GitHub runner). Combined with GOARCH=$TARGETARCH
+# below, this turns multi-arch builds into native Go cross-compilation
+# instead of QEMU-emulated `go build`, which is ~10x faster for arm64.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
 ARG CMD=api
+# TARGETOS and TARGETARCH are auto-populated by BuildKit to the target
+# platform of the current build (e.g. linux/arm64). Go's cross-compiler
+# reads these via the GOOS/GOARCH env vars below.
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
-# Cache the module graph separately from sources for faster incremental
-# builds. Go's BuildKit cache mounts further reduce rebuild time when the
-# source changes but deps don't.
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
@@ -32,7 +38,7 @@ COPY . .
 # slightly smaller binary).
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/tring ./cmd/${CMD}
 
 # ---- runtime stage -------------------------------------------------------
