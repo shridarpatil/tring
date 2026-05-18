@@ -22,14 +22,21 @@ func New(addr, password string) *Client {
 }
 
 // OriginateRequest is everything Tring needs to ask FreeSWITCH to place a
-// call. v0 supports the two-leg pattern: ring ALeg first; on answer, bridge
-// to BLeg. Vars are applied as global channel vars on the originate.
+// call. ALeg rings first; on answer, FS bridges to BLegs (joined with `|`
+// for failover). Each entry in BLegs is already a full dial string,
+// optionally prefixed with `[var=val,...]` per-leg variables — typically
+// `effective_caller_id_number=<that-trunk's-DID>` so each trunk presents
+// its own allocated DID, not the primary's.
+//
+// Vars become global `{k=v,...}` channel variables on the A-leg. Most
+// important: `continue_on_fail` controls which hangup causes roll over to
+// the next BLeg.
 type OriginateRequest struct {
-	ALeg    string            // e.g. "user/alice@t_dev.tring.local"
-	BLeg    string            // e.g. "sofia/gateway/exotel/+919876543210"
-	UUID    string            // pre-allocated origination_uuid we'll write to DB
-	CallerID string           // becomes origination_caller_id_number
-	Vars    map[string]string // extra channel vars (override caller-id etc.)
+	ALeg     string
+	BLegs    []string // ≥1 entry; if >1 they're pipe-joined inside &bridge()
+	UUID     string
+	CallerID string
+	Vars     map[string]string
 }
 
 // OriginateResult holds the two FreeSWITCH identifiers tied to a single
@@ -64,14 +71,17 @@ func (c *Client) Originate(ctx context.Context, req OriginateRequest) (Originate
 		vars["origination_caller_id_number"] = req.CallerID
 	}
 
+	if len(req.BLegs) == 0 {
+		return OriginateResult{}, fmt.Errorf("originate: no B-legs")
+	}
 	// FreeSWITCH originate interprets the second argument as an *extension*
-	// (or `&app(args)`), NOT as a B-leg URL. To actually bridge the A-leg
-	// to a SIP/loopback/gateway URL, wrap it in `&bridge(...)`. Without
-	// this, FS rings alice, then drops her into the dialplan with
-	// destination_number = the literal B-leg string (e.g. "loopback/9196")
-	// which matches nothing and falls through to the catch-all that
-	// transfers to a non-existent context → hangup ~10s after answer.
-	args := fmt.Sprintf("%s%s &bridge(%s)", buildVarBlock(vars), req.ALeg, req.BLeg)
+	// (or `&app(args)`), NOT as a B-leg URL. To actually bridge to a
+	// SIP/loopback/gateway URL, wrap it in `&bridge(...)`. Multiple
+	// pipe-separated dial strings inside `&bridge()` are tried in order
+	// for failover; `continue_on_fail` (set on the A-leg vars) constrains
+	// which causes trigger the rollover.
+	bridgeArgs := strings.Join(req.BLegs, "|")
+	args := fmt.Sprintf("%s%s &bridge(%s)", buildVarBlock(vars), req.ALeg, bridgeArgs)
 
 	resp, err := conn.SendCommand(ctx, command.API{
 		Command:    "originate",

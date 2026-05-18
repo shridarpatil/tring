@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -121,28 +122,23 @@ func (s *Server) originateForAgent(
 		return Call{}, http.StatusInternalServerError, errors.New("agent lookup failed")
 	}
 
-	// Resolve outbound DID + trunk provider. None → loopback for dev.
-	var outboundE164, providerName string
-	err = s.db.Pool.QueryRow(ctx, `
-		SELECT e164, provider FROM numbers
-		WHERE tenant_id = $1 AND type = 'outbound'
-		ORDER BY created_at ASC LIMIT 1
-	`, t.ID).Scan(&outboundE164, &providerName)
-	if errors.Is(err, pgx.ErrNoRows) {
-		outboundE164, providerName = "", "loopback"
-	} else if err != nil {
-		return Call{}, http.StatusInternalServerError, errors.New("did lookup failed")
+	// Pick the trunk(s) to use based on the tenant's outbound strategy.
+	// May return zero trunks (dev: fall back to loopback) or many
+	// (failover: pipe-join in priority order).
+	trunks, err := s.selectTrunks(ctx, t)
+	if err != nil {
+		return Call{}, http.StatusBadRequest, err
 	}
 
-	prov := provider.For(providerName)
-
-	// Normalize + validate the destination BEFORE asking FreeSWITCH to
-	// dial. Bad numbers (wrong country for the configured trunk, junk
-	// input, etc.) are 400s; if they slipped past, the trunk would
-	// either reject them at the SIP layer (wasted round-trip) or — in
-	// the worst case — silently misroute and bill us. Cheap to catch
-	// here, expensive otherwise.
-	normalized, err := prov.NormalizeE164(to)
+	// Normalize using the primary trunk's provider. All trunks for a
+	// tenant target the same country today (all four pre-baked ones are
+	// India). When per-tenant cross-country trunks land in Phase 2, this
+	// becomes a per-trunk loop.
+	primaryProvider := provider.For("loopback")
+	if len(trunks) > 0 {
+		primaryProvider = provider.For(trunks[0].Provider)
+	}
+	normalized, err := primaryProvider.NormalizeE164(to)
 	if err != nil {
 		return Call{}, http.StatusBadRequest, fmt.Errorf("invalid destination %q: %w", to, err)
 	}
@@ -150,27 +146,57 @@ func (s *Server) originateForAgent(
 
 	fsUUID := uuid.New()
 
-	// Look up the tenant's SIP domain if not pre-populated (JWT path
-	// supplies it; API-key path needs to refetch).
 	sipDomain := t.SipDomain
 	if sipDomain == "" {
 		_ = s.db.Pool.QueryRow(ctx,
 			`SELECT sip_domain FROM tenants WHERE id = $1`, t.ID,
 		).Scan(&sipDomain)
 	}
-
 	aLeg := fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
-	bLeg := prov.DialString(to)
+
+	// Build BLegs. Each entry presents that trunk's own DID as caller-ID
+	// via per-leg `[var=val]` prefix, so a roll-over from Airtel→Jio
+	// doesn't try to present Airtel's DID over the Jio trunk (which
+	// would fail caller-ID-validation at Jio's side).
+	bLegs := make([]string, 0, max(1, len(trunks)))
+	primaryDID := ""
+	if len(trunks) == 0 {
+		bLegs = append(bLegs, provider.For("loopback").DialString(to))
+	} else {
+		primaryDID = trunks[0].E164
+		for _, tr := range trunks {
+			p := provider.For(tr.Provider)
+			bLegs = append(bLegs,
+				fmt.Sprintf("[effective_caller_id_number=%s]%s", tr.E164, p.DialString(to)),
+			)
+		}
+	}
+
+	// If there are 2+ B-legs, set `continue_on_fail` per tenant config so
+	// FS rolls to the next trunk only on the causes the operator opted in
+	// for. Single-quote-wrapped so the commas inside don't terminate the
+	// `{}` vars block.
+	originateVars := map[string]string{}
+	if len(bLegs) > 1 && len(t.FailoverCauses) > 0 {
+		originateVars["continue_on_fail"] = "'" + strings.Join(t.FailoverCauses, ",") + "'"
+	}
 
 	or, err := s.fs.Originate(ctx, freeswitch.OriginateRequest{
 		ALeg:     aLeg,
-		BLeg:     bLeg,
+		BLegs:    bLegs,
 		UUID:     fsUUID.String(),
-		CallerID: outboundE164,
+		CallerID: primaryDID,
+		Vars:     originateVars,
 	})
 	if err != nil {
 		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
 	}
+
+	// from_number for the CDR is the primary DID (the one we expected
+	// the call to come from). If failover kicked in and we actually
+	// used a secondary, the orchestrator will (Phase 3) record which
+	// trunk-leg was answered.
+	outboundE164 := primaryDID
 
 	var c Call
 	err = s.db.Pool.QueryRow(ctx, `

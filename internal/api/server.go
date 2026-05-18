@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
@@ -34,6 +36,11 @@ type Server struct {
 	wsURL       string
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
+
+	// Round-robin trunk selection state. Lazily initialised in
+	// nextRoundRobin (see trunks.go).
+	rrMu sync.Mutex
+	rr   map[uuid.UUID]int
 }
 
 func NewServer(cfg Config) *Server {
@@ -74,12 +81,14 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)
 			r.Get("/tenants/me", s.handleGetMyTenant)
+			r.Patch("/tenants/me", s.handlePatchMyTenant)
 			r.Post("/agents", s.handleCreateAgent)
 			r.Get("/agents", s.handleListAgents)
 			r.Get("/agents/{id}", s.handleGetAgent)
 			r.Get("/agents/{id}/token", s.handleAgentToken)
 			r.Post("/numbers", s.handleCreateNumber)
 			r.Get("/numbers", s.handleListNumbers)
+			r.Patch("/numbers/{id}", s.handlePatchNumber)
 
 			r.Post("/calls", s.handleCreateCall)
 			r.Get("/calls", s.handleListCalls)

@@ -10,13 +10,32 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- api_key_hash is SHA-256(plaintext_key). The plaintext is shown to the
 -- operator exactly once at creation. api_key_prefix is the first 12 chars
 -- of the plaintext key, kept for admin-UI identification (Stripe pattern).
+--
+-- outbound_strategy controls how multiple outbound trunks are picked per
+-- call. Values:
+--   'failover'    - bridge to all in priority order; continue_on_fail
+--                   constrained to the causes in failover_causes
+--   'round_robin' - pick the next one in rotation per call (in-memory)
+--   'manual'      - use only the lowest-priority active number; operator
+--                   flips `numbers.active` to control fail-over manually
+--   'load_based'  - reserved (not implemented in v0.2; runtime returns 501)
 CREATE TABLE tenants (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name            TEXT NOT NULL,
-    api_key_hash    TEXT NOT NULL UNIQUE,
-    api_key_prefix  TEXT NOT NULL,
-    sip_domain      TEXT NOT NULL UNIQUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name              TEXT NOT NULL,
+    api_key_hash      TEXT NOT NULL UNIQUE,
+    api_key_prefix    TEXT NOT NULL,
+    sip_domain        TEXT NOT NULL UNIQUE,
+    outbound_strategy TEXT NOT NULL DEFAULT 'failover',
+    failover_causes   TEXT[] NOT NULL DEFAULT ARRAY[
+        'NETWORK_OUT_OF_ORDER',
+        'GATEWAY_DOWN',
+        'USER_NOT_REGISTERED',
+        'SUBSCRIBER_ABSENT',
+        'NORMAL_TEMPORARY_FAILURE',
+        'RECOVERY_ON_TIMER_EXPIRE',
+        'NO_ROUTE_DESTINATION'
+    ]::TEXT[],
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Agents are SIP identities owned by a tenant. The sip_password is what
@@ -43,13 +62,16 @@ CREATE TABLE numbers (
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     e164            TEXT NOT NULL,
     type            number_type NOT NULL,
-    provider        TEXT NOT NULL,           -- 'exotel', 'plivo', 'raw_sip'
+    provider        TEXT NOT NULL,           -- 'exotel', 'airtel', 'jio', 'tata', 'loopback'
     provider_did_id TEXT,                    -- provider-side identifier
+    priority        INT NOT NULL DEFAULT 100, -- lower = preferred; failover/manual use this ordering
+    active          BOOLEAN NOT NULL DEFAULT true, -- manual kill switch; PATCH this off to take a trunk out of rotation without deleting
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, e164)
 );
 
 CREATE INDEX ON numbers (tenant_id, type);
+CREATE INDEX ON numbers (tenant_id, type, priority ASC) WHERE active;
 
 -- Calls. One row per call leg group (parent UUID); leg-level detail can be
 -- added later if we need it for billing reconciliation.

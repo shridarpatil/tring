@@ -11,6 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Ensure pgx errors are reachable in PATCH endpoints below.
+var _ = errors.Is
+
 // ---- Tenants ------------------------------------------------------------
 
 func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
@@ -125,6 +128,8 @@ type Number struct {
 	Type          string    `json:"type"`
 	Provider      string    `json:"provider"`
 	ProviderDIDID string    `json:"provider_did_id,omitempty"`
+	Priority      int       `json:"priority"`
+	Active        bool      `json:"active"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -133,6 +138,7 @@ type createNumberRequest struct {
 	Type          string `json:"type"`
 	Provider      string `json:"provider"`
 	ProviderDIDID string `json:"provider_did_id"`
+	Priority      *int   `json:"priority,omitempty"`
 }
 
 func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
@@ -153,13 +159,18 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	priority := 100
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
+
 	var n Number
 	err := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO numbers (tenant_id, e164, type, provider, provider_did_id)
-		VALUES ($1, $2, $3::number_type, $4, NULLIF($5, ''))
-		RETURNING id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), created_at
-	`, t.ID, req.E164, req.Type, req.Provider, req.ProviderDIDID).Scan(
-		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.CreatedAt,
+		INSERT INTO numbers (tenant_id, e164, type, provider, provider_did_id, priority)
+		VALUES ($1, $2, $3::number_type, $4, NULLIF($5, ''), $6)
+		RETURNING id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), priority, active, created_at
+	`, t.ID, req.E164, req.Type, req.Provider, req.ProviderDIDID, priority).Scan(
+		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if err != nil {
 		writeError(w, http.StatusConflict, "number already registered for this tenant")
@@ -168,13 +179,108 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, n)
 }
 
+type patchNumberRequest struct {
+	Priority *int  `json:"priority,omitempty"`
+	Active   *bool `json:"active,omitempty"`
+}
+
+// handlePatchNumber updates a number's priority / active flag. Used to
+// flip a trunk on or off without deleting the row (preserves the DID
+// allocation record for audit). Operators driving `manual` strategy use
+// this to switch primary; failover/round_robin tenants use it to
+// quarantine a misbehaving trunk.
+func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req patchNumberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Priority == nil && req.Active == nil {
+		writeError(w, http.StatusBadRequest, "at least one of priority or active is required")
+		return
+	}
+
+	var n Number
+	err = s.db.Pool.QueryRow(r.Context(), `
+		UPDATE numbers
+		SET priority = COALESCE($1, priority),
+		    active   = COALESCE($2, active)
+		WHERE id = $3 AND tenant_id = $4
+		RETURNING id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), priority, active, created_at
+	`, req.Priority, req.Active, id, t.ID).Scan(
+		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "number not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, n)
+}
+
+type patchTenantRequest struct {
+	OutboundStrategy *string  `json:"outbound_strategy,omitempty"`
+	FailoverCauses   []string `json:"failover_causes,omitempty"`
+}
+
+// handlePatchMyTenant updates tenant-level settings. Today: outbound
+// trunk strategy and the cause list that triggers fail-over.
+func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	var req patchTenantRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy or failover_causes is required")
+		return
+	}
+	if req.OutboundStrategy != nil {
+		switch *req.OutboundStrategy {
+		case "failover", "round_robin", "manual", "load_based":
+		default:
+			writeError(w, http.StatusBadRequest, "outbound_strategy must be failover|round_robin|manual|load_based")
+			return
+		}
+	}
+	var causes interface{}
+	if req.FailoverCauses != nil {
+		causes = req.FailoverCauses
+	}
+
+	var out Tenant
+	err := s.db.Pool.QueryRow(r.Context(), `
+		UPDATE tenants
+		SET outbound_strategy = COALESCE($1, outbound_strategy),
+		    failover_causes   = COALESCE($2::TEXT[], failover_causes)
+		WHERE id = $3
+		RETURNING id, name, sip_domain, outbound_strategy, failover_causes
+	`, req.OutboundStrategy, causes, t.ID).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), created_at
+		SELECT id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), priority, active, created_at
 		FROM numbers
 		WHERE tenant_id = $1
-		ORDER BY created_at DESC
+		ORDER BY type, priority ASC, created_at DESC
 	`, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -185,7 +291,7 @@ func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	numbers := []Number{}
 	for rows.Next() {
 		var n Number
-		if err := rows.Scan(&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}

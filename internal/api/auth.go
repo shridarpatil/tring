@@ -16,9 +16,11 @@ const (
 )
 
 type Tenant struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	SipDomain string    `json:"sip_domain"`
+	ID               uuid.UUID `json:"id"`
+	Name             string    `json:"name"`
+	SipDomain        string    `json:"sip_domain"`
+	OutboundStrategy string    `json:"outbound_strategy"`
+	FailoverCauses   []string  `json:"failover_causes"`
 }
 
 func (s *Server) AuthRequired(next http.Handler) http.Handler {
@@ -30,9 +32,10 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		}
 		var t Tenant
 		err := s.db.Pool.QueryRow(r.Context(),
-			`SELECT id, name, sip_domain FROM tenants WHERE api_key_hash = $1`,
+			`SELECT id, name, sip_domain, outbound_strategy, failover_causes
+			 FROM tenants WHERE api_key_hash = $1`,
 			HashKey(key),
-		).Scan(&t.ID, &t.Name, &t.SipDomain)
+		).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
