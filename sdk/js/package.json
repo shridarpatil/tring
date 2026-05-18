@@ -1,0 +1,35 @@
+{
+  "name": "@tring/voice",
+  "version": "0.0.1",
+  "description": "Tring browser SDK — drop-in voice calling for any CRM.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/tring.esm.js",
+  "module": "./dist/tring.esm.js",
+  "browser": "./dist/tring.iife.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/tring.esm.js",
+      "browser": "./dist/tring.iife.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "sip.js": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

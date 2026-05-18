@@ -1,0 +1,149 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/freeswitch"
+	"github.com/whatomate/tring/internal/webhook"
+)
+
+// Config bundles the dependencies an api.Server needs at construction time.
+// Wiring it explicitly (vs. picking env vars inside api/) keeps the package
+// testable and lets the CLI in cmd/api drive defaults.
+type Config struct {
+	DB          *db.DB
+	JWTSecret   string
+	FSBasicAuth string // "user:pass" — shared with FreeSWITCH mod_xml_curl
+	WSURL       string // ws(s)://host:port that the SDK passes to sip.js
+	ESLAddr     string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
+	ESLPassword string // FreeSWITCH ESL password (default ClueCon)
+}
+
+type Server struct {
+	db          *db.DB
+	jwtSecret   []byte
+	fsBasicUser string
+	fsBasicPass string
+	wsURL       string
+	fs          *freeswitch.Client
+	notifier    *webhook.Notifier
+}
+
+func NewServer(cfg Config) *Server {
+	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
+	return &Server{
+		db:          cfg.DB,
+		jwtSecret:   []byte(cfg.JWTSecret),
+		fsBasicUser: user,
+		fsBasicPass: pass,
+		wsURL:       cfg.WSURL,
+		fs:          freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
+		notifier:    webhook.New(cfg.DB),
+	}
+}
+
+func (s *Server) Router() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(30 * time.Second))
+	// CORS must come BEFORE the auth wall — preflight OPTIONS requests
+	// from browsers don't carry `Authorization`, so they'd otherwise 401.
+	r.Use(corsMiddleware)
+
+	r.Get("/healthz", s.handleHealthz)
+
+	// FreeSWITCH-facing endpoints. Basic Auth shared with mod_xml_curl;
+	// not behind the tenant API-key wall.
+	r.Route("/fs", func(r chi.Router) {
+		r.Use(s.FSBasicAuth)
+		r.Post("/directory", s.handleFSDirectory)
+	})
+
+	r.Route("/v1", func(r chi.Router) {
+		// Tenant-scoped routes: API key auth, full access within the tenant.
+		r.Group(func(r chi.Router) {
+			r.Use(s.AuthRequired)
+			r.Get("/tenants/me", s.handleGetMyTenant)
+			r.Post("/agents", s.handleCreateAgent)
+			r.Get("/agents", s.handleListAgents)
+			r.Get("/agents/{id}", s.handleGetAgent)
+			r.Get("/agents/{id}/token", s.handleAgentToken)
+			r.Post("/numbers", s.handleCreateNumber)
+			r.Get("/numbers", s.handleListNumbers)
+
+			r.Post("/calls", s.handleCreateCall)
+			r.Get("/calls", s.handleListCalls)
+			r.Get("/calls/{id}", s.handleGetCall)
+
+			r.Post("/webhooks", s.handleCreateWebhook)
+			r.Get("/webhooks", s.handleListWebhooks)
+			r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
+			r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
+		})
+
+		// SDK routes: JWT auth, scoped to the JWT's subject agent.
+		r.Group(func(r chi.Router) {
+			r.Use(s.JWTAuthRequired)
+			r.Get("/sdk/credentials", s.handleSDKCredentials)
+			r.Post("/sdk/calls", s.handleSDKCreateCall)
+		})
+	})
+
+	return r
+}
+
+func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if err := s.db.Pool.Ping(r.Context()); err != nil {
+		writeError(w, http.StatusServiceUnavailable, "db unreachable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// corsMiddleware reflects the request's Origin so browsers from any CRM
+// (dev: localhost:9999, prod: customer's CRM domain) can hit the API. The
+// browser SDK is the primary cross-origin caller; tenant backends speak
+// server-to-server and don't need CORS at all.
+//
+// v0 is permissive (echo any Origin). Phase 2: per-tenant allowed-origins
+// list to lock things down once we're confident in the abuse surface.
+// The /fs/* endpoints are deliberately excluded — they're localhost-only
+// by design.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Vary", "Origin")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key")
+			h.Set("Access-Control-Max-Age", "3600")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

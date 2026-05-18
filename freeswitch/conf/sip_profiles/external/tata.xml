@@ -1,0 +1,11 @@
+<include>
+  <gateway name="tata">
+    <param name="username" value="$${tata_sip_username}"/>
+    <param name="password" value="$${tata_sip_password}"/>
+    <param name="realm" value="$${tata_sip_realm}"/>
+    <param name="register" value="$${tata_register}"/>
+    <param name="expire-seconds" value="600"/>
+    <param name="retry-seconds" value="30"/>
+    <param name="caller-id-in-from" value="true"/>
+  </gateway>
+</include>

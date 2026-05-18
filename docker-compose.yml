@@ -1,0 +1,74 @@
+services:
+  freeswitch:
+    image: safarov/freeswitch:latest
+    container_name: tring-fs
+    network_mode: host
+    env_file:
+      # Per-deployment trunk credentials (Exotel etc.). Gitignored; see
+      # .env.example for the schema. Missing file is fine — defaults
+      # keep the trunk inert.
+      - path: .env
+        required: false
+    environment:
+      - SOUND_RATES=8000:16000
+      - SOUND_TYPES=music:en-us-callie
+      # Default the Exotel vars to safe values so vars.xml's env-set lines
+      # don't leave FreeSWITCH variables empty (which would break the
+      # gateway parse). Override via .env above.
+      - EXOTEL_SIP_USERNAME=${EXOTEL_SIP_USERNAME:-}
+      - EXOTEL_SIP_PASSWORD=${EXOTEL_SIP_PASSWORD:-}
+      - EXOTEL_SIP_REALM=${EXOTEL_SIP_REALM:-placeholder.in.exotel.com}
+      - EXOTEL_REGISTER=${EXOTEL_REGISTER:-false}
+      - AIRTEL_SIP_USERNAME=${AIRTEL_SIP_USERNAME:-}
+      - AIRTEL_SIP_PASSWORD=${AIRTEL_SIP_PASSWORD:-}
+      - AIRTEL_SIP_REALM=${AIRTEL_SIP_REALM:-placeholder.airtel.com}
+      - AIRTEL_REGISTER=${AIRTEL_REGISTER:-false}
+      - JIO_SIP_USERNAME=${JIO_SIP_USERNAME:-}
+      - JIO_SIP_PASSWORD=${JIO_SIP_PASSWORD:-}
+      - JIO_SIP_REALM=${JIO_SIP_REALM:-placeholder.jio.com}
+      - JIO_REGISTER=${JIO_REGISTER:-false}
+      - TATA_SIP_USERNAME=${TATA_SIP_USERNAME:-}
+      - TATA_SIP_PASSWORD=${TATA_SIP_PASSWORD:-}
+      - TATA_SIP_REALM=${TATA_SIP_REALM:-placeholder.tatateleservices.com}
+      - TATA_REGISTER=${TATA_REGISTER:-false}
+    volumes:
+      - freeswitch-sounds:/usr/share/freeswitch/sounds
+      # All bind mounts use :ro because the safarov/freeswitch entrypoint
+      # blindly copies vanilla templates over /etc/freeswitch/* on every
+      # start. Read-only mounts make those copies silently fail and our
+      # configs survive.
+      - ./freeswitch/conf/vars.xml:/etc/freeswitch/vars.xml:ro
+      - ./freeswitch/conf/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml:ro
+      - ./freeswitch/conf/directory/default.xml:/etc/freeswitch/directory/default.xml:ro
+      - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/etc/freeswitch/autoload_configs/xml_curl.conf.xml:ro
+      - ./freeswitch/conf/sip_profiles/external/exotel.xml:/etc/freeswitch/sip_profiles/external/exotel.xml:ro
+      - ./freeswitch/conf/sip_profiles/external/airtel.xml:/etc/freeswitch/sip_profiles/external/airtel.xml:ro
+      - ./freeswitch/conf/sip_profiles/external/jio.xml:/etc/freeswitch/sip_profiles/external/jio.xml:ro
+      - ./freeswitch/conf/sip_profiles/external/tata.xml:/etc/freeswitch/sip_profiles/external/tata.xml:ro
+    # network_mode: host is simplest for SIP/RTP during dev.
+    # Ports: 5060 (SIP), 5080 (external SIP), 8021 (ESL),
+    #        7443 (WSS for WebRTC), 16384-32768 (RTP).
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: tring-db
+    environment:
+      POSTGRES_USER: tring
+      POSTGRES_PASSWORD: tring_dev
+      POSTGRES_DB: tring
+    ports:
+      - "5434:5432"
+    volumes:
+      - tring-db-data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+      - ./db/seed.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro
+    restart: unless-stopped
+
+volumes:
+  freeswitch-sounds:
+  tring-db-data:
+
+  # Go services (api, orchestrator) run on the host for dev — `go run ./cmd/api`
+  # and `go run ./cmd/orchestrator`. They speak to FreeSWITCH on 127.0.0.1:8021
+  # (ESL) and Postgres on 127.0.0.1:5432.

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Acme Sales — powered by Tring</title>
+  <style>
+    :root {
+      --bg: #f9fafb;
+      --card: #ffffff;
+      --text: #111827;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --shadow: 0 1px 3px rgba(0,0,0,.05), 0 1px 2px rgba(0,0,0,.04);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+    body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    header h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+    header .badge {
+      background: #ecfdf5; color: #047857;
+      padding: 0.25rem 0.6rem; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+    }
+    .panel {
+      background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1.25rem; box-shadow: var(--shadow); margin-bottom: 1.25rem;
+    }
+    .panel h2 { margin: 0 0 0.5rem; font-size: 1rem; font-weight: 600; color: var(--text); }
+    .panel p, .panel li { color: var(--muted); margin: 0.25rem 0; font-size: 13px; }
+    .token-form { display: flex; gap: 0.5rem; align-items: stretch; margin-top: 0.75rem; }
+    .token-form input { flex: 1; min-width: 0; }
+    input, button {
+      font: inherit; padding: 0.5rem 0.75rem; border-radius: 6px;
+      border: 1px solid var(--border); background: white;
+    }
+    input { color: var(--text); }
+    input:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
+    button {
+      background: var(--primary); color: white; border-color: var(--primary);
+      cursor: pointer; font-weight: 500;
+    }
+    button:hover { background: var(--primary-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.75rem; border-bottom: 1px solid var(--border); }
+    tr:last-child td { border-bottom: none; }
+    th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; letter-spacing: 0.5px; }
+    .name { font-weight: 500; }
+    .phone { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); font-size: 13px; }
+    .call-btn { padding: 0.4rem 0.8rem; font-size: 13px; }
+    .dial-row td { padding-top: 1rem; }
+    .dial-row input { width: 220px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    code { background: rgba(0,0,0,0.05); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 12px; }
+    .toolbar { display: flex; align-items: center; gap: 0.5rem; font-size: 13px; }
+    .toolbar .dot { width: 8px; height: 8px; border-radius: 50%; background: #d1d5db; }
+    .toolbar.ready .dot { background: #10b981; }
+    .toolbar.connecting .dot { background: #f59e0b; animation: pulse 1s infinite; }
+    .toolbar.error .dot { background: #ef4444; }
+    @keyframes pulse { 50% { opacity: 0.3; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>📇 Acme Sales — Customer Index</h1>
+      <span class="badge" id="brand">powered by Tring</span>
+    </header>
+
+    <section class="panel" id="setup">
+      <h2>Local demo setup</h2>
+      <p>This page has zero JS of its own. The only voice-related bit is a single
+      <code>&lt;script src="voice.js"&gt;</code> tag injected after you paste a JWT below.
+      In a real CRM, your backend mints and templates the JWT before the page is rendered.</p>
+      <p>Mint a JWT against the running Tring API:</p>
+      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;">KEY='tk_test_dev_local_only_change_me_in_prod'
+AGENT=$(curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents | jq -r '.[0].id')
+curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/token | jq -r .token</pre>
+      <div class="token-form">
+        <input id="tokenInput" type="text" placeholder="Paste JWT here…" autocomplete="off" />
+        <button id="loadBtn">Load voice.js</button>
+      </div>
+      <div class="toolbar" id="status" style="margin-top:0.75rem;">
+        <span class="dot"></span> <span class="text">not loaded</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Customers</h2>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Phone</th><th>Last contact</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">Aanya Sharma</td>
+            <td class="phone">+91 98765-43210</td>
+            <td class="phone">2 days ago</td>
+            <td><button class="call-btn" data-tring-call data-to="+919876543210">📞 Call</button></td>
+          </tr>
+          <tr>
+            <td class="name">Rahul Patel</td>
+            <td class="phone">+91 88880-01122</td>
+            <td class="phone">a week ago</td>
+            <td><button class="call-btn" data-tring-call data-to="+918888001122">📞 Call</button></td>
+          </tr>
+          <tr>
+            <td class="name">Priya Iyer</td>
+            <td class="phone">+91 77001-23456</td>
+            <td class="phone">3 weeks ago</td>
+            <td><button class="call-btn" data-tring-call data-to="+917700123456">📞 Call</button></td>
+          </tr>
+          <tr>
+            <td class="name">Echo test (FS internal)</td>
+            <td class="phone">9196</td>
+            <td class="phone">—</td>
+            <td><button class="call-btn" data-tring-call data-to="9196">📞 Call</button></td>
+          </tr>
+          <tr class="dial-row">
+            <td colspan="3"><input id="freeform" type="text" placeholder="+91XXXXXXXXXX or extension" /></td>
+            <td><button class="call-btn" data-tring-call data-to-target="#freeform">📞 Call</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>What's happening under the hood</h2>
+      <ul>
+        <li>Each <em>Call</em> button has <code>data-tring-call data-to="…"</code> — that's the whole integration on the HTML side.</li>
+        <li><code>voice.js</code> fetches your agent's SIP credentials with the JWT, registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>, and listens for incoming INVITEs.</li>
+        <li>Clicking Call posts to <code>/v1/sdk/calls</code>. Tring tells FreeSWITCH to ring the agent's browser; on answer, the call bridges to the destination via the configured trunk (loopback in dev, Exotel/Airtel/Jio/Tata in production).</li>
+        <li>The floating panel in the bottom right shows ringing → connected → ended status with a single Hang up button. Pure CSS, no framework.</li>
+      </ul>
+    </section>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const setStatus = (cls, text) => {
+      const el = $('status');
+      el.className = 'toolbar ' + cls;
+      el.querySelector('.text').textContent = text;
+    };
+
+    $('loadBtn').addEventListener('click', () => {
+      const token = $('tokenInput').value.trim();
+      if (!token) { setStatus('error', 'paste a JWT first'); return; }
+      setStatus('connecting', 'loading voice.js…');
+      const s = document.createElement('script');
+      s.src = '../sdk/js/dist/voice.iife.js';
+      s.setAttribute('data-api-base', 'http://localhost:8085');
+      s.setAttribute('data-token', token);
+      s.onload = () => setStatus('ready', 'voice.js loaded — click any Call button');
+      s.onerror = () => setStatus('error', 'voice.js failed to load');
+      document.body.appendChild(s);
+      $('loadBtn').disabled = true;
+      $('loadBtn').textContent = 'Loaded';
+    });
+  </script>
+</body>
+</html>

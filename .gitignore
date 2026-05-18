@@ -1,0 +1,26 @@
+# Go
+*.exe
+*.test
+*.out
+/bin/
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Env (.env.example is checked in as the schema reference)
+.env
+.env.local
+!.env.example
+
+# Node
+node_modules/
+sdk/js/dist/
+
+# Postgres
+*.dump
+
+# OS
+.DS_Store

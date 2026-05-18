@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tring SDK — smoke test</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+    input, button { font: inherit; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 4px; }
+    input { width: 100%; box-sizing: border-box; }
+    button { cursor: pointer; background: #2563eb; color: white; border: none; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.danger { background: #dc2626; }
+    pre { background: #f3f4f6; padding: 0.75rem; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+    .row { display: flex; gap: 0.5rem; align-items: end; }
+    .row > * { flex: 1; }
+    .row > button { flex: 0; }
+    .status { font-weight: 600; }
+    .status[data-state="idle"] { color: #6b7280; }
+    .status[data-state="registered"] { color: #16a34a; }
+    .status[data-state="ringing"], .status[data-state="connected"] { color: #2563eb; }
+    .status[data-state="error"] { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <h1>Tring SDK smoke test</h1>
+  <p>
+    Mint a JWT against the running API (<code>GET /v1/agents/&lt;id&gt;/token</code>
+    with the tenant API key), paste it below, and click <strong>Connect</strong>.
+    The SDK will register against FreeSWITCH and you can place a test call.
+  </p>
+
+  <label for="apiBase">API base</label>
+  <input id="apiBase" value="http://localhost:8085" />
+
+  <label for="token">Agent JWT</label>
+  <input id="token" placeholder="eyJhbGciOiJIUzI1NiIs..." />
+
+  <div style="margin-top: 1rem;">
+    <button id="connect">Connect</button>
+    <button id="disconnect" class="danger" disabled>Disconnect</button>
+  </div>
+
+  <p>Status: <span id="status" class="status" data-state="idle">idle</span></p>
+
+  <label for="to">Destination</label>
+  <div class="row">
+    <input id="to" placeholder="9196 (echo) or +919876543210" value="9196" />
+    <button id="callBtn" disabled>Call</button>
+    <button id="hangupBtn" class="danger" disabled>Hang up</button>
+  </div>
+
+  <h3>Log</h3>
+  <pre id="log"></pre>
+
+  <script src="../dist/tring.iife.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const logEl = $('log');
+    const statusEl = $('status');
+    let tring = null;
+    let activeCall = null;
+
+    const log = (msg, data) => {
+      const line = `[${new Date().toLocaleTimeString()}] ${msg}` +
+        (data ? '  ' + JSON.stringify(data) : '');
+      logEl.textContent = line + '\n' + logEl.textContent;
+    };
+    const setStatus = (state, text) => {
+      statusEl.dataset.state = state;
+      statusEl.textContent = text;
+    };
+
+    $('connect').onclick = async () => {
+      try {
+        const token = $('token').value.trim();
+        const apiBase = $('apiBase').value.trim();
+        if (!token) return log('paste a JWT first');
+        $('connect').disabled = true;
+        log('connecting...');
+        tring = await Tring.init({ token, apiBase });
+
+        tring.on('registered', () => {
+          setStatus('registered', 'registered');
+          $('callBtn').disabled = false;
+          $('disconnect').disabled = false;
+          log('registered with FreeSWITCH');
+        });
+        tring.on('unregistered', (e) => {
+          setStatus('idle', 'unregistered');
+          log('unregistered', e);
+        });
+        tring.on('call:ringing', (e) => {
+          activeCall = e.call;
+          setStatus('ringing', 'ringing');
+          $('hangupBtn').disabled = false;
+          log('ringing', { to: e.call.to });
+        });
+        tring.on('call:answered', () => {
+          setStatus('connected', 'connected');
+          log('answered');
+        });
+        tring.on('call:ended', (e) => {
+          activeCall = null;
+          setStatus('registered', 'registered');
+          $('hangupBtn').disabled = true;
+          log('ended', { cause: e.cause });
+        });
+        tring.on('error', (e) => {
+          setStatus('error', 'error');
+          log('error: ' + e.error.message);
+        });
+      } catch (err) {
+        $('connect').disabled = false;
+        setStatus('error', 'error');
+        log('init failed: ' + err.message);
+      }
+    };
+
+    $('disconnect').onclick = async () => {
+      await tring?.disconnect();
+      tring = null;
+      $('connect').disabled = false;
+      $('disconnect').disabled = true;
+      $('callBtn').disabled = true;
+      $('hangupBtn').disabled = true;
+      setStatus('idle', 'idle');
+    };
+
+    $('callBtn').onclick = async () => {
+      const to = $('to').value.trim();
+      if (!tring || !to) return;
+      try {
+        log('calling ' + to);
+        await tring.call(to);
+      } catch (e) {
+        log('call failed: ' + e.message);
+      }
+    };
+
+    $('hangupBtn').onclick = async () => {
+      await activeCall?.hangup();
+    };
+  </script>
+</body>
+</html>
