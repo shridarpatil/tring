@@ -1,0 +1,116 @@
+name: Tests
+
+# Two-stage test pipeline. The fast `unit` job runs on every push + PR and
+# covers everything that doesn't need FreeSWITCH: pure-function tests, JWT,
+# masking, webhook signing, plus DB-backed handler/trunks tests against a
+# Postgres service container. The slower `integration` job boots the full
+# docker-compose stack and runs the FreeSWITCH-tagged tests against a real
+# ESL endpoint. PRs don't get the integration job (gating on FS boot would
+# wedge unrelated PRs); it runs only on main + manual dispatch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit + handler tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tring
+          POSTGRES_PASSWORD: tring_dev
+          POSTGRES_DB: tring
+        ports:
+          - 5432:5432
+        # Health check is what lets `go test` start the moment the DB is
+        # actually accepting connections, rather than racing the daemon boot.
+        options: >-
+          --health-cmd "pg_isready -U tring -d tring"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Apply schema
+        env:
+          PGPASSWORD: tring_dev
+        run: |
+          # Wait for the service container to be reachable (the service
+          # health check covers the daemon, but the network path from this
+          # job step can take a second longer).
+          for i in 1 2 3 4 5; do
+            if pg_isready -h 127.0.0.1 -U tring -d tring; then break; fi
+            sleep 2
+          done
+          psql -h 127.0.0.1 -U tring -d tring -f db/schema.sql
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        env:
+          # The dbtest harness reads this; unset == skip DB-dependent tests.
+          TRING_TEST_DSN: postgres://tring:tring_dev@127.0.0.1:5432/tring
+        run: go test -race -count=1 -timeout=60s ./...
+
+  integration:
+    name: FreeSWITCH integration
+    # Only run on main pushes + manual dispatch. PRs from untrusted forks
+    # shouldn't get to boot a multi-service stack; the unit job already
+    # covers the typical regression surface.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      # Boot just the bits the FS integration test needs. Bringing up `api`
+      # and `orchestrator` here too would force a rebuild of two images per
+      # CI run; we don't need them for the ESL-level test.
+      - name: Boot FreeSWITCH + Postgres
+        run: |
+          docker compose up -d freeswitch postgres
+          # FreeSWITCH takes ~10s to load modules; the healthcheck is the
+          # source of truth.
+          for i in $(seq 1 30); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' tring-fs 2>/dev/null || echo none)
+            echo "tring-fs health: $state"
+            if [ "$state" = "healthy" ]; then break; fi
+            sleep 2
+          done
+          docker compose ps
+
+      - name: Run integration tests
+        env:
+          TRING_INTEGRATION_FS_ADDR: 127.0.0.1:8021
+          TRING_INTEGRATION_FS_PASSWORD: ClueCon
+        run: go test -tags=integration -count=1 -timeout=120s -v ./internal/freeswitch/...
+
+      - name: Dump FS logs on failure
+        if: failure()
+        run: docker compose logs freeswitch | tail -200
