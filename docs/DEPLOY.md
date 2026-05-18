@@ -76,6 +76,8 @@ If the trunk shows as `REGED`, you're live. If `NOREG`:
 
 ## Updating
 
+### From source
+
 ```bash
 git pull
 docker compose build api orchestrator   # rebuild Go images
@@ -83,6 +85,39 @@ docker compose up -d                    # rolling restart, picks up new images
 ```
 
 The first rebuild after a fresh `git pull` takes ~30s; subsequent rebuilds are 2-3s thanks to BuildKit cache mounts in the Dockerfile.
+
+### From pre-built images (CI publishes both registries)
+
+Every push to `main` publishes `:develop` tags to **GHCR** and **Docker Hub**:
+
+- `ghcr.io/shridarpatil/tring-api:develop` / `:tring-orchestrator:develop`
+- `docker.io/shridarpatil/tring-api:develop` / `:tring-orchestrator:develop`
+
+Tag pushes (`v0.2.0`) publish `:v0.2.0` *and* `:0.2.0` (semver-stripped). Multi-arch (`linux/amd64` + `linux/arm64`).
+
+To deploy from pre-built images, override the local-build directive in `docker-compose.yml`:
+
+```yaml
+services:
+  api:
+    image: ghcr.io/shridarpatil/tring-api:develop    # or a pinned version
+    # build: { ... }       # remove or comment out the build block
+  orchestrator:
+    image: ghcr.io/shridarpatil/tring-orchestrator:develop
+```
+
+Then `docker compose pull && docker compose up -d` to roll forward.
+
+### CI secrets (one-time setup)
+
+To enable Docker Hub publishing, add two repository secrets at **Settings → Secrets and variables → Actions**:
+
+- `DOCKERHUB_USERNAME` — your Docker Hub login (often the same as your GitHub handle)
+- `DOCKERHUB_TOKEN` — a Docker Hub PAT with Read+Write on the `tring-*` repos
+
+GHCR uses the workflow's built-in `GITHUB_TOKEN` — nothing to configure.
+
+If the Docker Hub secrets aren't set, the workflow still publishes to GHCR (the Docker Hub login step is conditional on the secrets being present).
 
 ## Backups
 

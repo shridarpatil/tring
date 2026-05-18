@@ -1,0 +1,102 @@
+name: build-images
+
+# Two triggers:
+#   - push to main         → publish images tagged `develop`
+#   - push tag matching v* → publish images tagged with the tag name
+#
+# Two registries, in parallel:
+#   - ghcr.io/<owner>/tring-{api,orchestrator}
+#   - docker.io/<owner>/tring-{api,orchestrator}
+#
+# Both binaries are built from the same root Dockerfile via the `CMD`
+# build-arg. Multi-arch (linux/amd64 + linux/arm64) so VPS providers and
+# Apple Silicon dev boxes both work without a separate build.
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME  - Docker Hub login (usually same as GitHub handle)
+#   DOCKERHUB_TOKEN     - Docker Hub PAT with Read/Write to <USERNAME>/tring-*
+#
+# GHCR uses the workflow's built-in GITHUB_TOKEN; no secret to set up.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+# Cancel any in-flight build for the same ref when a newer push arrives.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write   # for ghcr.io push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [api, orchestrator]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU lets buildx emulate arm64 on the amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # docker/metadata-action computes the image refs + tags. We feed it
+      # BOTH registry image paths so the same set of tags is published to
+      # both registries.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.binary }}
+            ${{ secrets.DOCKERHUB_USERNAME != '' && format('docker.io/{0}/tring-{1}', secrets.DOCKERHUB_USERNAME, matrix.binary) || '' }}
+          # Tags:
+          #   - on main pushes: `develop`
+          #   - on tag pushes:   the literal tag (e.g. `v0.2.0`) plus the
+          #                      semver-stripped variant (e.g. `0.2.0`) so
+          #                      consumers can pin either form
+          tags: |
+            type=raw,value=develop,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          build-args: |
+            CMD=${{ matrix.binary }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GHA cache backend — persists buildkit cache mounts across runs.
+          # Without this, every workflow run re-downloads the Go module
+          # graph and recompiles from scratch.
+          cache-from: type=gha,scope=tring-${{ matrix.binary }}
+          cache-to: type=gha,scope=tring-${{ matrix.binary }},mode=max
