@@ -64,12 +64,69 @@ services:
       - tring-db-data:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
       - ./db/seed.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tring -d tring"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ---- Tring Go services ------------------------------------------------
+  # Both are built from the same Dockerfile via build args (CMD=api or
+  # CMD=orchestrator). Distroless final image, statically linked binary,
+  # ~15 MB. Use host networking so they can speak to FreeSWITCH on the
+  # standard 127.0.0.1:8021 ESL port and the host-mapped Postgres on :5434
+  # without bridge-DNS gymnastics.
+  #
+  # For dev hot-reload, stop the relevant container and `go run` it on the
+  # host instead:  `docker compose stop api && go run ./cmd/api`.
+
+  api:
+    build:
+      context: .
+      args:
+        CMD: api
+    image: tring-api:local
+    container_name: tring-api
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - TRING_DSN=${TRING_DSN:-postgres://tring:tring_dev@127.0.0.1:5434/tring}
+      - TRING_JWT_SECRET=${TRING_JWT_SECRET:-tring_dev_jwt_secret_change_me_in_prod}
+      - TRING_FS_BASIC_AUTH=${TRING_FS_BASIC_AUTH:-fs:fs_dev_secret_change_me_in_prod}
+      # Empty TRING_WS_URL → API auto-detects the host's outbound IP and
+      # uses ws://<that>:5066 (FreeSWITCH's plain-WS binding). Override
+      # with wss://voice.yourdomain:7443 once you front FS with TLS.
+      - TRING_WS_URL=${TRING_WS_URL:-}
+      - TRING_ESL_ADDR=${TRING_ESL_ADDR:-127.0.0.1:8021}
+      - TRING_ESL_PASSWORD=${TRING_ESL_PASSWORD:-ClueCon}
+    restart: unless-stopped
+
+  orchestrator:
+    build:
+      context: .
+      args:
+        CMD: orchestrator
+    image: tring-orchestrator:local
+    container_name: tring-orchestrator
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - TRING_DSN=${TRING_DSN:-postgres://tring:tring_dev@127.0.0.1:5434/tring}
+      - TRING_ESL_ADDR=${TRING_ESL_ADDR:-127.0.0.1:8021}
+      - TRING_ESL_PASSWORD=${TRING_ESL_PASSWORD:-ClueCon}
     restart: unless-stopped
 
 volumes:
   freeswitch-sounds:
   tring-db-data:
-
-  # Go services (api, orchestrator) run on the host for dev — `go run ./cmd/api`
-  # and `go run ./cmd/orchestrator`. They speak to FreeSWITCH on 127.0.0.1:8021
-  # (ESL) and Postgres on 127.0.0.1:5432.

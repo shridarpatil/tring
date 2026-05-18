@@ -8,10 +8,12 @@ DEMO_URL  := http://localhost:$(DEMO_PORT)/examples/sample-crm.html
 
 help:
 	@echo "Common targets:"
-	@echo "  make up            - docker compose up -d (FreeSWITCH + Postgres)"
+	@echo "  make up            - docker compose up -d  (FS + Postgres + API + orchestrator)"
 	@echo "  make down          - docker compose down"
-	@echo "  make api           - run the API on :8085 (foreground)"
-	@echo "  make orchestrator  - run the orchestrator (foreground)"
+	@echo "  make logs          - tail logs of all four services"
+	@echo "  make images        - rebuild both Go images (forces fresh binary)"
+	@echo "  make api           - run the API on :8085 (foreground, host) — for dev hot-iterate"
+	@echo "  make orchestrator  - run the orchestrator (foreground, host) — for dev hot-iterate"
 	@echo "  make build         - go build ./... (both binaries)"
 	@echo "  make sdk           - npm run build in sdk/js"
 	@echo "  make sdk-watch     - rebuild SDK on change"
@@ -25,6 +27,12 @@ up:
 
 down:
 	docker compose down
+
+logs:
+	docker compose logs -f --tail=20
+
+images:
+	docker compose build api orchestrator
 
 api:
 	go run ./cmd/api

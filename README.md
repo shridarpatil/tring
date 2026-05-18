@@ -20,14 +20,22 @@ The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, K
 | Browser SDK | Yes | Limited | Yes (sip.js wrapper) |
 | Per-tenant trunks | Yes | n/a | Planned (Phase 2) |
 
-## Quickstart (local dev, ~3 minutes)
+## Quickstart (one command, fully containerized)
 
 ```bash
-git clone https://github.com/<you>/tring && cd tring
-docker compose up -d                  # FreeSWITCH (:5060, :8021 ESL, :7443 WSS) + Postgres (:5434)
-go run ./cmd/orchestrator &           # ESL event subscriber → CDR + webhooks
-go run ./cmd/api                      # REST API on :8085
+git clone https://github.com/shridarpatil/tring && cd tring
+docker compose up -d                  # All four services: API + orchestrator + FreeSWITCH + Postgres
 ```
+
+That brings up:
+- `tring-api` — REST API on `:8085`
+- `tring-orchestrator` — ESL event subscriber (writes CDRs, fires webhooks)
+- `tring-fs` — FreeSWITCH (`:5060` SIP, `:5066` plain WS, `:7443` WSS, `:8021` ESL)
+- `tring-db` — Postgres on `:5434` (moved off `:5432` to coexist with other local DBs)
+
+`docker compose logs -f` to tail everything. `docker compose down` to stop.
+
+For local dev with hot-reload on the Go services, `docker compose stop api orchestrator` then `make api` / `make orchestrator` (host `go run`).
 
 The dev seed creates a tenant with API key `tk_test_dev_local_only_change_me_in_prod`. Place your first call (loopback echo, no real trunk needed):
 

@@ -1,0 +1,32 @@
+# Keep build context small — Docker COPY only what the build actually
+# needs. Saves ~hundreds of MB of context that would otherwise be hashed
+# on every build.
+
+# VCS
+.git
+.gitignore
+
+# Node tooling — Go builds don't need these
+sdk/js/node_modules
+sdk/js/dist
+
+# Editor + OS
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Local dev state
+.env
+.env.local
+*.dump
+coverage.out
+
+# Docs not needed inside the image
+CLAUDE.md
+CHANGELOG.md
+docs/
+
+# Already-built local artefacts
+bin/
+dist/
