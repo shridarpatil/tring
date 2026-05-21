@@ -12,10 +12,11 @@ services:
     environment:
       - SOUND_RATES=8000:16000
       - SOUND_TYPES=music:en-us-callie
-      # Public IP advertised in SDP and used for external RTP. Defaults
-      # to STUN auto-detect for dev; on a VPS set TRING_PUBLIC_IP to the
-      # real public IP in .env (one-way audio == this is wrong).
-      - TRING_PUBLIC_IP=${TRING_PUBLIC_IP:-stun:stun.freeswitch.org}
+      # Public IP advertised in SDP / used for external RTP. Empty by
+      # default → FreeSWITCH advertises its LAN IP (correct for dev, binds
+      # cleanly). On a VPS set TRING_PUBLIC_IP to the real public IP in
+      # .env (mismatch == one-way audio).
+      - TRING_PUBLIC_IP=${TRING_PUBLIC_IP:-}
       # RTP UDP port range. FS will allocate ONLY within [start, end]
       # — sized to match your VPS firewall rules. Each concurrent call
       # consumes 2 ports (RTP + RTCP).
