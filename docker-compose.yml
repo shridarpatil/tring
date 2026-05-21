@@ -41,6 +41,13 @@ services:
       - TATA_SIP_PASSWORD=${TATA_SIP_PASSWORD:-}
       - TATA_SIP_REALM=${TATA_SIP_REALM:-placeholder.tatateleservices.com}
       - TATA_REGISTER=${TATA_REGISTER:-false}
+      # Tata private-circuit (IP-auth) trunk. Empty unless you're on the
+      # "SIP on Public Cloud" delivery — see docs/TATA_VPC_DEPLOY.md. Plumbed
+      # here so the values reach the FS container; the IP-auth gateway that
+      # consumes them is applied as a go-live step, not in the dev default.
+      - TATA_SBC_IP=${TATA_SBC_IP:-}
+      - TATA_SBC_CIDR=${TATA_SBC_CIDR:-}
+      - TATA_SIP_LAN_IP=${TATA_SIP_LAN_IP:-}
     volumes:
       - freeswitch-sounds:/usr/share/freeswitch/sounds
       # All bind mounts use :ro because the safarov/freeswitch entrypoint
