@@ -18,13 +18,25 @@ package dbtest
 
 import (
 	"context"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/whatomate/tring/internal/db"
 )
+
+// databaseName extracts the database name from a postgres DSN
+// (the last path segment of postgres://user:pass@host:port/<db>).
+func databaseName(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(u.Path, "/")
+}
 
 // Fixture is what Setup returns: a connected DB plus the tenant row it
 // inserted, so tests can authenticate without re-running INSERTs.
@@ -49,6 +61,15 @@ func Setup(t *testing.T) *Fixture {
 	dsn := os.Getenv("TRING_TEST_DSN")
 	if dsn == "" {
 		t.Skip("TRING_TEST_DSN not set; skipping DB-dependent test")
+	}
+
+	// Safety guard: Setup TRUNCATEs every table. If TRING_TEST_DSN is
+	// accidentally pointed at a dev/prod database, that's silent data loss.
+	// Require the target database name to contain "test" so a destructive
+	// run can only hit a database explicitly named for testing.
+	if name := databaseName(dsn); !strings.Contains(name, "test") {
+		t.Skipf("refusing destructive truncate: TRING_TEST_DSN database %q must contain 'test' in its name "+
+			"(point it at a dedicated test DB, e.g. tring_test)", name)
 	}
 
 	ctx := context.Background()

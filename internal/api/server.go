@@ -135,6 +135,7 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/numbers/{id}", s.handlePatchNumber)
 
 			r.Post("/calls", s.handleCreateCall)
+			r.Post("/calls/connect", s.handleConnectCall)
 			r.Get("/calls", s.handleListCalls)
 			r.Get("/calls/{id}", s.handleGetCall)
 

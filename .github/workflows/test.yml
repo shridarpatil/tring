@@ -29,13 +29,16 @@ jobs:
         env:
           POSTGRES_USER: tring
           POSTGRES_PASSWORD: tring_dev
-          POSTGRES_DB: tring
+          # DB name contains "test" — the dbtest harness refuses to run its
+          # destructive TRUNCATE against any database without "test" in the
+          # name, so a dev/prod DSN can never be wiped by accident.
+          POSTGRES_DB: tring_test
         ports:
           - 5432:5432
         # Health check is what lets `go test` start the moment the DB is
         # actually accepting connections, rather than racing the daemon boot.
         options: >-
-          --health-cmd "pg_isready -U tring -d tring"
+          --health-cmd "pg_isready -U tring -d tring_test"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -57,10 +60,10 @@ jobs:
           # health check covers the daemon, but the network path from this
           # job step can take a second longer).
           for i in 1 2 3 4 5; do
-            if pg_isready -h 127.0.0.1 -U tring -d tring; then break; fi
+            if pg_isready -h 127.0.0.1 -U tring -d tring_test; then break; fi
             sleep 2
           done
-          psql -h 127.0.0.1 -U tring -d tring -f db/schema.sql
+          psql -h 127.0.0.1 -U tring -d tring_test -f db/schema.sql
 
       - name: go vet
         run: go vet ./...
@@ -68,7 +71,8 @@ jobs:
       - name: go test
         env:
           # The dbtest harness reads this; unset == skip DB-dependent tests.
-          TRING_TEST_DSN: postgres://tring:tring_dev@127.0.0.1:5432/tring
+          # DB name must contain "test" (guard against truncating real data).
+          TRING_TEST_DSN: postgres://tring:tring_dev@127.0.0.1:5432/tring_test
         run: go test -race -count=1 -timeout=60s ./...
 
   integration:

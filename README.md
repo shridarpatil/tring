@@ -54,6 +54,18 @@ curl -sS -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
 
 You'll get a `Call` row back with `status=ringing`. Once the agent's browser registers (see SDK below), the call actually rings.
 
+### Connect two phone numbers (click-to-call / callback)
+
+When the agent is on a **phone** rather than a browser, `POST /v1/calls/connect` rings the agent's number first and, on answer, bridges the client — both legs over the tenant's trunk, both presenting the trunk's DID as caller ID. No softphone required on either end.
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"agent_number":"+919876543210","client_number":"+919812345678"}' \
+  http://localhost:8085/v1/calls/connect | jq
+```
+
+This is the Exotel-style flow: your CRM hits this endpoint, the agent's phone rings, they answer, the customer is dialed and bridged. Needs a live outbound trunk (in dev with no trunk it falls back to the loopback path).
+
 ## Drop-in browser widget
 
 ```html

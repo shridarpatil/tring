@@ -215,6 +215,114 @@ func (s *Server) originateForAgent(
 	return c, 0, nil
 }
 
+type connectCallRequest struct {
+	AgentNumber  string `json:"agent_number"`
+	ClientNumber string `json:"client_number"`
+}
+
+// handleConnectCall bridges two PSTN numbers over the tenant's trunk: it
+// rings agent_number first and, on answer, bridges client_number. Both legs
+// present the trunk's DID as caller ID (regulatory: you can only present a
+// number you own). This is the click-to-call / callback pattern — neither
+// party needs a softphone, just a phone that rings.
+//
+//	curl -X POST .../v1/calls/connect -H "Authorization: Bearer $KEY" \
+//	  -d '{"agent_number":"+919876543210","client_number":"+919812345678"}'
+func (s *Server) handleConnectCall(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	var req connectCallRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.AgentNumber == "" || req.ClientNumber == "" {
+		writeError(w, http.StatusBadRequest, "agent_number and client_number are required")
+		return
+	}
+	c, code, err := s.originateBridge(r.Context(), t, req.AgentNumber, req.ClientNumber)
+	if err != nil {
+		writeError(w, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+// originateBridge rings agent_number and bridges client_number, both over the
+// tenant's selected trunk. Returns (call, http_status_on_error, err).
+func (s *Server) originateBridge(
+	ctx context.Context,
+	t *Tenant,
+	agentNumber, clientNumber string,
+) (Call, int, error) {
+	trunks, err := s.selectTrunks(ctx, t)
+	if err != nil {
+		return Call{}, http.StatusBadRequest, err
+	}
+
+	// Normalize both numbers with the primary trunk's provider rules
+	// (loopback passthrough in dev when no trunk is configured).
+	primaryProvider := provider.For("loopback")
+	if len(trunks) > 0 {
+		primaryProvider = provider.For(trunks[0].Provider)
+	}
+	agentNorm, err := primaryProvider.NormalizeE164(agentNumber)
+	if err != nil {
+		return Call{}, http.StatusBadRequest, fmt.Errorf("invalid agent_number %q: %w", agentNumber, err)
+	}
+	clientNorm, err := primaryProvider.NormalizeE164(clientNumber)
+	if err != nil {
+		return Call{}, http.StatusBadRequest, fmt.Errorf("invalid client_number %q: %w", clientNumber, err)
+	}
+
+	aLeg, bLegs, callerID := buildBridgeLegs(trunks, agentNorm, clientNorm)
+
+	fsUUID := uuid.New()
+	or, err := s.fs.Originate(ctx, freeswitch.OriginateRequest{
+		ALeg:     aLeg,
+		BLegs:    bLegs,
+		UUID:     fsUUID.String(),
+		CallerID: callerID, // caller ID the agent's phone sees (the DID)
+	})
+	if err != nil {
+		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
+	}
+
+	// from = agent (the party rung first), to = client (the destination).
+	// agent_id is NULL — this path bridges raw numbers, not a SIP agent.
+	var c Call
+	err = s.db.Pool.QueryRow(ctx, `
+		INSERT INTO calls (tenant_id, direction, status, from_number, to_number, fs_uuid, fs_job_uuid)
+		VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5,''))
+		RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, fs_uuid, started_at
+	`, t.ID, agentNorm, clientNorm, or.ChannelUUID, or.JobUUID).
+		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.FSUUID, &c.StartedAt)
+	if err != nil {
+		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
+	}
+
+	s.notifier.Emit(ctx, t.ID, webhook.EventCallRinging, callPayload(c))
+	return c, 0, nil
+}
+
+// buildBridgeLegs constructs the originate legs for a two-PSTN-number bridge.
+// A-leg rings the agent's phone; on answer FS bridges to the client. Both
+// present the trunk's DID as caller ID. With no trunk (dev), falls back to
+// loopback dial strings and no caller ID. Pure function — unit-tested for the
+// exact dial-string shape FreeSWITCH expects.
+func buildBridgeLegs(trunks []trunk, agentNumber, clientNumber string) (aLeg string, bLegs []string, callerID string) {
+	if len(trunks) == 0 {
+		lp := provider.For("loopback")
+		return lp.DialString(agentNumber), []string{lp.DialString(clientNumber)}, ""
+	}
+	primary := trunks[0]
+	p := provider.For(primary.Provider)
+	aLeg = p.DialString(agentNumber)
+	bLegs = []string{
+		fmt.Sprintf("[effective_caller_id_number=%s]%s", primary.E164, p.DialString(clientNumber)),
+	}
+	return aLeg, bLegs, primary.E164
+}
+
 // callPayload is the data shape we ship in webhook envelopes. Mirrors the
 // REST response so integrators can use one decoder for both surfaces.
 func callPayload(c Call) map[string]interface{} {
