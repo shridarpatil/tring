@@ -1,0 +1,25 @@
+{
+  "name": "tring-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tring admin/management console — operator control panel for agents, numbers, calls, webhooks.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.6",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "tailwindcss": "^4.0.6",
+    "typescript": "~5.7.3",
+    "vite": "^6.1.0",
+    "vue-tsc": "^2.2.2"
+  }
+}
