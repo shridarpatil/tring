@@ -1,0 +1,20 @@
+<configuration name="acl.conf" description="Network Lists">
+  <!-- Trust inbound INVITEs from Tata's SBC /29 so incoming calls to your
+       DIDs are treated as gateway traffic, not anonymous callers.
+
+       ONLY needed for INBOUND calls (customer dials your DID). The outbound
+       connect/click-to-call test does NOT need this — skip it for the first
+       test, add it when wiring inbound.
+
+       Go-live (inbound):
+         cp deploy/tata/acl.conf.xml freeswitch/conf/autoload_configs/acl.conf.xml
+         # then add apply-inbound-acl="tata_sbc" to the external sofia profile
+         docker compose up -d --force-recreate freeswitch
+
+       tata_sbc_cidr is fed from TATA_SBC_CIDR (.env → compose → vars.xml). -->
+  <network-lists>
+    <list name="tata_sbc" default="deny">
+      <node type="allow" cidr="$${tata_sbc_cidr}"/>
+    </list>
+  </network-lists>
+</configuration>
