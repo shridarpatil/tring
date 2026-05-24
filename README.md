@@ -16,7 +16,7 @@ The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, K
 | Source available | No | No | **Yes (Apache 2.0)** |
 | Self-host | No | No | **Yes** |
 | India trunk swap (Airtel ↔ Jio ↔ Tata) | n/a | locked-in | **Config-only, no code change** |
-| 1600 transactional series | n/a | Yes | Yes (via Exotel) |
+| 1600 transactional series | n/a | Yes | Yes — via any licensed carrier (Tata, Airtel, Jio) |
 | Browser SDK | Yes | Limited | Yes (sip.js wrapper) |
 | Per-tenant trunks | Yes | n/a | Planned (Phase 2) |
 
