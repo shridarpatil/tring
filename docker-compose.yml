@@ -22,29 +22,14 @@ services:
       # consumes 2 ports (RTP + RTCP).
       - TRING_RTP_START_PORT=${TRING_RTP_START_PORT:-16384}
       - TRING_RTP_END_PORT=${TRING_RTP_END_PORT:-32768}
-      # Default the Exotel vars to safe values so vars.xml's env-set lines
-      # don't leave FreeSWITCH variables empty (which would break the
-      # gateway parse). Override via .env above.
-      - EXOTEL_SIP_USERNAME=${EXOTEL_SIP_USERNAME:-}
-      - EXOTEL_SIP_PASSWORD=${EXOTEL_SIP_PASSWORD:-}
-      - EXOTEL_SIP_REALM=${EXOTEL_SIP_REALM:-placeholder.in.exotel.com}
-      - EXOTEL_REGISTER=${EXOTEL_REGISTER:-false}
-      - AIRTEL_SIP_USERNAME=${AIRTEL_SIP_USERNAME:-}
-      - AIRTEL_SIP_PASSWORD=${AIRTEL_SIP_PASSWORD:-}
-      - AIRTEL_SIP_REALM=${AIRTEL_SIP_REALM:-placeholder.airtel.com}
-      - AIRTEL_REGISTER=${AIRTEL_REGISTER:-false}
-      - JIO_SIP_USERNAME=${JIO_SIP_USERNAME:-}
-      - JIO_SIP_PASSWORD=${JIO_SIP_PASSWORD:-}
-      - JIO_SIP_REALM=${JIO_SIP_REALM:-placeholder.jio.com}
-      - JIO_REGISTER=${JIO_REGISTER:-false}
-      - TATA_SIP_USERNAME=${TATA_SIP_USERNAME:-}
-      - TATA_SIP_PASSWORD=${TATA_SIP_PASSWORD:-}
-      - TATA_SIP_REALM=${TATA_SIP_REALM:-placeholder.tatateleservices.com}
-      - TATA_REGISTER=${TATA_REGISTER:-false}
-      # Tata private-circuit (IP-auth) trunk. Empty unless you're on the
-      # "SIP on Public Cloud" delivery — see docs/TATA_VPC_DEPLOY.md. Plumbed
-      # here so the values reach the FS container; the IP-auth gateway that
-      # consumes them is applied as a go-live step, not in the dev default.
+      # Trunk credentials (Exotel/Airtel/Jio/Tata) are now managed via
+      # the admin console at /trunks — see internal/api/handlers_trunks.go.
+      # The previous EXOTEL_/AIRTEL_/JIO_/TATA_SIP_* env vars have been
+      # removed; FS picks up trunks from external/dynamic/t_*.xml instead.
+      #
+      # The TATA_SBC_* vars below are retained for the deploy/tata/ go-live
+      # overlay only — they're not used by UI-managed trunks, where each
+      # trunk's proxy_ip/auth_acl_cidr come from the DB row.
       - TATA_SBC_IP=${TATA_SBC_IP:-}
       - TATA_SBC_CIDR=${TATA_SBC_CIDR:-}
       - TATA_SIP_LAN_IP=${TATA_SIP_LAN_IP:-}
@@ -62,10 +47,8 @@ services:
       # Overrides the default switch.conf.xml to wire the RTP port range
       # to vars.xml's $${rtp_start_port}/$${rtp_end_port} placeholders.
       - ./freeswitch/conf/autoload_configs/switch.conf.xml:/etc/freeswitch/autoload_configs/switch.conf.xml:ro
-      - ./freeswitch/conf/sip_profiles/external/exotel.xml:/etc/freeswitch/sip_profiles/external/exotel.xml:ro
-      - ./freeswitch/conf/sip_profiles/external/airtel.xml:/etc/freeswitch/sip_profiles/external/airtel.xml:ro
-      - ./freeswitch/conf/sip_profiles/external/jio.xml:/etc/freeswitch/sip_profiles/external/jio.xml:ro
-      - ./freeswitch/conf/sip_profiles/external/tata.xml:/etc/freeswitch/sip_profiles/external/tata.xml:ro
+      # (Static Exotel/Airtel/Jio/Tata gateway XML mounts removed.
+      # Trunks now live in DB and render to external/dynamic/ at runtime.)
       # Custom external sofia profile — adds external/dynamic/*.xml to
       # the gateway include list so UI-managed trunks are picked up on
       # `sofia profile external rescan`.
