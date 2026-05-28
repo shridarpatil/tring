@@ -77,10 +77,15 @@ jobs:
 
   integration:
     name: FreeSWITCH integration
-    # Only run on main pushes + manual dispatch. PRs from untrusted forks
-    # shouldn't get to boot a multi-service stack; the unit job already
-    # covers the typical regression surface.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Runs on main pushes, manual dispatch, and PRs from branches in this
+    # same repo. PRs from forks are excluded — booting a multi-service
+    # stack for untrusted code is both a CI-cost and a security concern
+    # (the integration test step has access to repo secrets).
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     needs: unit
     steps:
