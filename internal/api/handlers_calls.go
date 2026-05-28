@@ -130,13 +130,12 @@ func (s *Server) originateForAgent(
 		return Call{}, http.StatusBadRequest, err
 	}
 
-	// Normalize using the primary trunk's provider. All trunks for a
-	// tenant target the same country today (all four pre-baked ones are
-	// India). When per-tenant cross-country trunks land in Phase 2, this
-	// becomes a per-trunk loop.
+	// Normalize using the primary trunk's provider_type. All trunks for
+	// a tenant target the same country today; when cross-country trunks
+	// land in Phase 2, this becomes a per-trunk loop.
 	primaryProvider := provider.For("loopback")
 	if len(trunks) > 0 {
-		primaryProvider = provider.For(trunks[0].Provider)
+		primaryProvider = provider.For(trunks[0].ProviderType)
 	}
 	normalized, err := primaryProvider.NormalizeE164(to)
 	if err != nil {
@@ -165,9 +164,9 @@ func (s *Server) originateForAgent(
 	} else {
 		primaryDID = trunks[0].E164
 		for _, tr := range trunks {
-			p := provider.For(tr.Provider)
+			dial := fmt.Sprintf("sofia/gateway/%s/%s", tr.Gateway, to)
 			bLegs = append(bLegs,
-				fmt.Sprintf("[effective_caller_id_number=%s]%s", tr.E164, p.DialString(to)),
+				fmt.Sprintf("[effective_caller_id_number=%s]%s", tr.E164, dial),
 			)
 		}
 	}
@@ -259,11 +258,11 @@ func (s *Server) originateBridge(
 		return Call{}, http.StatusBadRequest, err
 	}
 
-	// Normalize both numbers with the primary trunk's provider rules
+	// Normalize both numbers with the primary trunk's provider_type rules
 	// (loopback passthrough in dev when no trunk is configured).
 	primaryProvider := provider.For("loopback")
 	if len(trunks) > 0 {
-		primaryProvider = provider.For(trunks[0].Provider)
+		primaryProvider = provider.For(trunks[0].ProviderType)
 	}
 	agentNorm, err := primaryProvider.NormalizeE164(agentNumber)
 	if err != nil {
@@ -315,10 +314,12 @@ func buildBridgeLegs(trunks []trunk, agentNumber, clientNumber string) (aLeg str
 		return lp.DialString(agentNumber), []string{lp.DialString(clientNumber)}, ""
 	}
 	primary := trunks[0]
-	p := provider.For(primary.Provider)
-	aLeg = p.DialString(agentNumber)
+	aLeg = fmt.Sprintf("sofia/gateway/%s/%s", primary.Gateway, agentNumber)
 	bLegs = []string{
-		fmt.Sprintf("[effective_caller_id_number=%s]%s", primary.E164, p.DialString(clientNumber)),
+		fmt.Sprintf(
+			"[effective_caller_id_number=%s]sofia/gateway/%s/%s",
+			primary.E164, primary.Gateway, clientNumber,
+		),
 	}
 	return aLeg, bLegs, primary.E164
 }

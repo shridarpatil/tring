@@ -7,14 +7,27 @@ import (
 	"github.com/whatomate/tring/internal/dbtest"
 )
 
-// insertOutbound adds an outbound number for the fixture tenant. Tests
+// insertOutbound creates a trunk + an outbound number bound to it. Tests
 // stack these and then call selectTrunks to verify ordering / strategy.
+// The trunk's provider_type drives normalization (kept as the caller's
+// `provider` arg for test brevity — it's both the trunk name and the
+// provider_type).
 func insertOutbound(t *testing.T, f *dbtest.Fixture, e164, provider string, priority int, active bool) {
 	t.Helper()
-	_, err := f.DB.Pool.Exec(context.Background(), `
-		INSERT INTO numbers (tenant_id, e164, type, provider, priority, active)
+	ctx := context.Background()
+	var trunkID string
+	err := f.DB.Pool.QueryRow(ctx, `
+		INSERT INTO trunks (tenant_id, name, provider_type, register, active)
+		VALUES ($1, $2 || '_' || md5(random()::text), $2, false, $3)
+		RETURNING id
+	`, f.TenantID, provider, active).Scan(&trunkID)
+	if err != nil {
+		t.Fatalf("insert trunk %s: %v", provider, err)
+	}
+	_, err = f.DB.Pool.Exec(ctx, `
+		INSERT INTO numbers (tenant_id, e164, type, trunk_id, priority, active)
 		VALUES ($1, $2, 'outbound', $3, $4, $5)
-	`, f.TenantID, e164, provider, priority, active)
+	`, f.TenantID, e164, trunkID, priority, active)
 	if err != nil {
 		t.Fatalf("insert number %s: %v", e164, err)
 	}
@@ -42,11 +55,13 @@ func TestSelectTrunksFailoverReturnsAllByPriority(t *testing.T) {
 	if len(trunks) != 3 {
 		t.Fatalf("got %d trunks, want 3 (failover returns all active)", len(trunks))
 	}
-	if trunks[0].Provider != "jio" {
-		t.Errorf("first trunk = %q, want jio (lowest priority)", trunks[0].Provider)
+	// Gateway is now derived from trunk UUID (t_<short>), not the
+	// provider string. Assert order via ProviderType instead.
+	if trunks[0].ProviderType != "jio" {
+		t.Errorf("first trunk type = %q, want jio (lowest priority)", trunks[0].ProviderType)
 	}
-	if trunks[2].Provider != "tata" {
-		t.Errorf("last trunk = %q, want tata (highest priority)", trunks[2].Provider)
+	if trunks[2].ProviderType != "tata" {
+		t.Errorf("last trunk type = %q, want tata (highest priority)", trunks[2].ProviderType)
 	}
 }
 
@@ -62,7 +77,7 @@ func TestSelectTrunksManualReturnsLowestPriorityOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectTrunks: %v", err)
 	}
-	if len(trunks) != 1 || trunks[0].Provider != "jio" {
+	if len(trunks) != 1 || trunks[0].ProviderType != "jio" {
 		t.Errorf("manual got %+v, want [{jio}]", trunks)
 	}
 }
@@ -88,7 +103,7 @@ func TestSelectTrunksRoundRobinCycles(t *testing.T) {
 		if len(trunks) != 1 {
 			t.Fatalf("round_robin returned %d trunks, want 1", len(trunks))
 		}
-		seen = append(seen, trunks[0].Provider)
+		seen = append(seen, trunks[0].ProviderType)
 	}
 	if seen[0] == seen[1] || seen[1] == seen[2] || seen[0] == seen[2] {
 		t.Errorf("round_robin not cycling, got %v", seen)
@@ -136,7 +151,7 @@ func TestSelectTrunksEmptyStrategyDefaultsToFailover(t *testing.T) {
 // expects so the curl works the moment a real trunk is live — no DB needed.
 
 func TestBuildBridgeLegsWithTrunk(t *testing.T) {
-	trunks := []trunk{{E164: "+918001234567", Provider: "tata"}}
+	trunks := []trunk{{E164: "+918001234567", Gateway: "tata", ProviderType: "tata"}}
 	aLeg, bLegs, callerID := buildBridgeLegs(trunks, "+919876543210", "+919812345678")
 
 	if aLeg != "sofia/gateway/tata/+919876543210" {
@@ -171,8 +186,8 @@ func TestBuildBridgeLegsLoopbackFallback(t *testing.T) {
 func TestBuildBridgeLegsUsesPrimaryTrunk(t *testing.T) {
 	// With multiple trunks, the bridge uses the first (primary) for both legs.
 	trunks := []trunk{
-		{E164: "+918002222222", Provider: "jio"},
-		{E164: "+918003333333", Provider: "airtel"},
+		{E164: "+918002222222", Gateway: "jio", ProviderType: "jio"},
+		{E164: "+918003333333", Gateway: "airtel", ProviderType: "airtel"},
 	}
 	aLeg, _, callerID := buildBridgeLegs(trunks, "+919876543210", "+919812345678")
 	if aLeg != "sofia/gateway/jio/+919876543210" {
@@ -195,7 +210,7 @@ func TestSelectTrunksInactiveExcluded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("selectTrunks: %v", err)
 	}
-	if len(trunks) != 1 || trunks[0].Provider != "airtel" {
+	if len(trunks) != 1 || trunks[0].ProviderType != "airtel" {
 		t.Errorf("got %+v, want only airtel (jio is inactive)", trunks)
 	}
 }

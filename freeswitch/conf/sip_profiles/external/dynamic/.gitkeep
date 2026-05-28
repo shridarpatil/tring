@@ -1,0 +1,3 @@
+# Dynamic gateway XMLs rendered by Tring (POST /v1/trunks → write here →
+# `sofia profile external rescan`). Files are named t_<trunk-uuid>.xml
+# and managed entirely by the api service. Don't hand-edit.

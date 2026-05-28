@@ -1,0 +1,212 @@
+package api
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// Flow mirrors the frontend's Flow shape (web/src/api/types.ts). The
+// FreeSWITCH executor (Phase 3) consumes `definition` — an IVRFlowData
+// v2 graph — to drive inbound calls.
+type Flow struct {
+	ID              uuid.UUID       `json:"id"`
+	TenantID        uuid.UUID       `json:"tenant_id"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description"`
+	IsActive        bool            `json:"is_active"`
+	IsCallStart     bool            `json:"is_call_start"`
+	IsOutgoingEnd   bool            `json:"is_outgoing_end"`
+	Definition      json.RawMessage `json:"definition"`
+	WelcomeAudioURL string          `json:"welcome_audio_url"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+}
+
+type createFlowRequest struct {
+	Name            string          `json:"name"`
+	Description     string          `json:"description,omitempty"`
+	IsActive        *bool           `json:"is_active,omitempty"`
+	IsCallStart     *bool           `json:"is_call_start,omitempty"`
+	IsOutgoingEnd   *bool           `json:"is_outgoing_end,omitempty"`
+	Definition      json.RawMessage `json:"definition,omitempty"`
+	WelcomeAudioURL string          `json:"welcome_audio_url,omitempty"`
+}
+
+type patchFlowRequest struct {
+	Name            *string         `json:"name,omitempty"`
+	Description     *string         `json:"description,omitempty"`
+	IsActive        *bool           `json:"is_active,omitempty"`
+	IsCallStart     *bool           `json:"is_call_start,omitempty"`
+	IsOutgoingEnd   *bool           `json:"is_outgoing_end,omitempty"`
+	Definition      json.RawMessage `json:"definition,omitempty"`
+	WelcomeAudioURL *string         `json:"welcome_audio_url,omitempty"`
+}
+
+const flowSelectColumns = `
+	id, tenant_id, name, description, is_active, is_call_start, is_outgoing_end,
+	definition, welcome_audio_url, created_at, updated_at
+`
+
+func scanFlow(scanner interface{ Scan(...interface{}) error }) (Flow, error) {
+	var f Flow
+	err := scanner.Scan(
+		&f.ID, &f.TenantID, &f.Name, &f.Description,
+		&f.IsActive, &f.IsCallStart, &f.IsOutgoingEnd,
+		&f.Definition, &f.WelcomeAudioURL, &f.CreatedAt, &f.UpdatedAt,
+	)
+	return f, err
+}
+
+func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	var req createFlowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	// Definition defaults to an empty v2 graph if not provided. JSONB
+	// column default handles this but we pass NULL through so callers
+	// can omit it without sending an empty object.
+	var def interface{}
+	if len(req.Definition) > 0 {
+		def = req.Definition
+	}
+
+	row := s.db.Pool.QueryRow(r.Context(), `
+		INSERT INTO flows (tenant_id, name, description, is_active, is_call_start, is_outgoing_end, definition, welcome_audio_url)
+		VALUES ($1, $2, $3,
+			COALESCE($4, true), COALESCE($5, false), COALESCE($6, false),
+			COALESCE($7::jsonb, '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb),
+			COALESCE(NULLIF($8, ''), '')
+		)
+		RETURNING `+flowSelectColumns,
+		t.ID, req.Name, req.Description,
+		req.IsActive, req.IsCallStart, req.IsOutgoingEnd,
+		def, req.WelcomeAudioURL,
+	)
+	f, err := scanFlow(row)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "insert failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, f)
+}
+
+func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	rows, err := s.db.Pool.Query(r.Context(),
+		`SELECT `+flowSelectColumns+` FROM flows WHERE tenant_id = $1 ORDER BY updated_at DESC`,
+		t.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+	out := []Flow{}
+	for rows.Next() {
+		f, err := scanFlow(rows)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "scan failed")
+			return
+		}
+		out = append(out, f)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetFlow(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	row := s.db.Pool.QueryRow(r.Context(),
+		`SELECT `+flowSelectColumns+` FROM flows WHERE id = $1 AND tenant_id = $2`,
+		id, t.ID)
+	f, err := scanFlow(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "flow not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req patchFlowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	var def interface{}
+	if len(req.Definition) > 0 {
+		def = req.Definition
+	}
+	row := s.db.Pool.QueryRow(r.Context(), `
+		UPDATE flows SET
+			name             = COALESCE($1, name),
+			description      = COALESCE($2, description),
+			is_active        = COALESCE($3, is_active),
+			is_call_start    = COALESCE($4, is_call_start),
+			is_outgoing_end  = COALESCE($5, is_outgoing_end),
+			definition       = COALESCE($6::jsonb, definition),
+			welcome_audio_url = COALESCE($7, welcome_audio_url),
+			updated_at       = now()
+		WHERE id = $8 AND tenant_id = $9
+		RETURNING `+flowSelectColumns,
+		req.Name, req.Description, req.IsActive, req.IsCallStart, req.IsOutgoingEnd,
+		def, req.WelcomeAudioURL, id, t.ID,
+	)
+	f, err := scanFlow(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "flow not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	tag, err := s.db.Pool.Exec(r.Context(),
+		`DELETE FROM flows WHERE id = $1 AND tenant_id = $2`,
+		id, t.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "flow not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

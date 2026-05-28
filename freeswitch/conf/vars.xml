@@ -63,22 +63,12 @@
   <X-PRE-PROCESS cmd="set" data="domain_name=$${domain}"/>
   <X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
   <X-PRE-PROCESS cmd="set" data="use_profile=external"/>
-  <X-PRE-PROCESS cmd="env-set" data="exotel_sip_username=EXOTEL_SIP_USERNAME"/>
-  <X-PRE-PROCESS cmd="env-set" data="exotel_sip_password=EXOTEL_SIP_PASSWORD"/>
-  <X-PRE-PROCESS cmd="env-set" data="exotel_sip_realm=EXOTEL_SIP_REALM"/>
-  <X-PRE-PROCESS cmd="env-set" data="exotel_register=EXOTEL_REGISTER"/>
-  <X-PRE-PROCESS cmd="env-set" data="airtel_sip_username=AIRTEL_SIP_USERNAME"/>
-  <X-PRE-PROCESS cmd="env-set" data="airtel_sip_password=AIRTEL_SIP_PASSWORD"/>
-  <X-PRE-PROCESS cmd="env-set" data="airtel_sip_realm=AIRTEL_SIP_REALM"/>
-  <X-PRE-PROCESS cmd="env-set" data="airtel_register=AIRTEL_REGISTER"/>
-  <X-PRE-PROCESS cmd="env-set" data="jio_sip_username=JIO_SIP_USERNAME"/>
-  <X-PRE-PROCESS cmd="env-set" data="jio_sip_password=JIO_SIP_PASSWORD"/>
-  <X-PRE-PROCESS cmd="env-set" data="jio_sip_realm=JIO_SIP_REALM"/>
-  <X-PRE-PROCESS cmd="env-set" data="jio_register=JIO_REGISTER"/>
-  <X-PRE-PROCESS cmd="env-set" data="tata_sip_username=TATA_SIP_USERNAME"/>
-  <X-PRE-PROCESS cmd="env-set" data="tata_sip_password=TATA_SIP_PASSWORD"/>
-  <X-PRE-PROCESS cmd="env-set" data="tata_sip_realm=TATA_SIP_REALM"/>
-  <X-PRE-PROCESS cmd="env-set" data="tata_register=TATA_REGISTER"/>
+  <!-- Trunk credentials are now managed via the admin console at /trunks.
+       Each trunk row in the `trunks` table renders to
+       external/dynamic/t_<uuid>.xml on save; `sofia profile external
+       rescan` picks them up live. The previous env-set lines for
+       EXOTEL_/AIRTEL_/JIO_/TATA_SIP_USERNAME etc. have been removed. -->
+
   <X-PRE-PROCESS cmd="set" data="rtp_sdes_suites=AEAD_AES_256_GCM_8|AEAD_AES_128_GCM_8|AES_CM_256_HMAC_SHA1_80|AES_CM_192_HMAC_SHA1_80|AES_CM_128_HMAC_SHA1_80|AES_CM_256_HMAC_SHA1_32|AES_CM_192_HMAC_SHA1_32|AES_CM_128_HMAC_SHA1_32|AES_CM_128_NULL_AUTH"/>
   <!--
       NOTICE: When using SRTP it's critical that you do not offer or accept
@@ -344,13 +334,11 @@
   <X-PRE-PROCESS cmd="exec-set" data="rtp_start_port=sh -c 'echo ${TRING_RTP_START_PORT:-16384}'"/>
   <X-PRE-PROCESS cmd="exec-set" data="rtp_end_port=sh -c 'echo ${TRING_RTP_END_PORT:-32768}'"/>
 
-  <!-- Tata private-circuit (IP-auth) trunk vars. Empty in dev (the dev
-       gateway is register-based and doesn't reference them). At go-live,
-       TATA_SBC_IP / TATA_SBC_CIDR come from .env and the IP-auth gateway
-       (deploy/tata/tata.xml) + ACL (deploy/tata/acl.conf.xml) consume them.
-       See docs/TATA_VPC_DEPLOY.md. -->
-  <X-PRE-PROCESS cmd="exec-set" data="tata_sbc_ip=sh -c 'echo $TATA_SBC_IP'"/>
-  <X-PRE-PROCESS cmd="exec-set" data="tata_sbc_cidr=sh -c 'echo $TATA_SBC_CIDR'"/>
+  <!-- Tata private-circuit IP-auth + ACL are now managed via the admin
+       console at /trunks (handlers_trunks.go writes the gateway XML to
+       external/dynamic/). The previous TATA_SBC_IP / TATA_SBC_CIDR
+       preprocessor vars have been removed. -->
+
 
   <!-- unroll-loops
        Used to turn on sip loopback unrolling.

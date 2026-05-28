@@ -15,7 +15,12 @@ import (
 
 	"github.com/whatomate/tring/internal/api"
 	"github.com/whatomate/tring/internal/db"
+	tringmigrate "github.com/whatomate/tring/internal/migrate"
 )
+
+// migrateRun is a tiny shim so the call site reads `migrateRun(...)`
+// rather than the long aliased package name everywhere.
+var migrateRun = tringmigrate.Run
 
 const (
 	defaultDSN         = "postgres://tring:tring_dev@localhost:5434/tring"
@@ -52,6 +57,13 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// Apply embedded schema migrations before opening the pool so the
+	// schema is at the expected version when handlers start running.
+	// Idempotent — no-op when the DB is already at the latest version.
+	if err := migrateRun(*dsn); err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
 
 	database, err := db.Connect(ctx, *dsn)
 	if err != nil {

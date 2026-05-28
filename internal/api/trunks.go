@@ -7,13 +7,19 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+
+	"github.com/whatomate/tring/internal/freeswitch"
 )
 
 // trunk is the bare info originate needs about an outbound number — the
-// allocated DID and which provider's gateway delivers it.
+// allocated DID, the FreeSWITCH gateway to dial through, and the
+// provider_type used for E.164 normalization. Numbers must reference a
+// trunk via numbers.trunk_id; numbers without it are skipped (operator
+// must attach one via the UI).
 type trunk struct {
-	E164     string
-	Provider string
+	E164         string
+	Gateway      string
+	ProviderType string
 }
 
 // selectTrunks resolves which outbound trunk(s) to use for the next call
@@ -31,9 +37,14 @@ type trunk struct {
 //   - empty list  → fine — caller falls back to the dev loopback path.
 func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
 	rows, err := s.db.Pool.Query(ctx, `
-		SELECT e164, provider FROM numbers
-		WHERE tenant_id = $1 AND type = 'outbound' AND active
-		ORDER BY priority ASC, created_at ASC
+		SELECT n.e164, tk.id, tk.provider_type
+		FROM numbers n
+		JOIN trunks tk ON tk.id = n.trunk_id
+		WHERE n.tenant_id = $1
+		  AND n.type = 'outbound'
+		  AND n.active
+		  AND tk.active
+		ORDER BY n.priority ASC, n.created_at ASC
 	`, t.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list outbound trunks: %w", err)
@@ -42,11 +53,19 @@ func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
 
 	var all []trunk
 	for rows.Next() {
-		var tr trunk
-		if err := rows.Scan(&tr.E164, &tr.Provider); err != nil {
+		var (
+			e164     string
+			trunkID  uuid.UUID
+			provType string
+		)
+		if err := rows.Scan(&e164, &trunkID, &provType); err != nil {
 			return nil, fmt.Errorf("scan trunk: %w", err)
 		}
-		all = append(all, tr)
+		all = append(all, trunk{
+			E164:         e164,
+			Gateway:      freeswitch.GatewayName(trunkID),
+			ProviderType: provType,
+		})
 	}
 	if len(all) == 0 {
 		return nil, nil

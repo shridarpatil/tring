@@ -122,23 +122,23 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 // ---- Numbers ------------------------------------------------------------
 
 type Number struct {
-	ID            uuid.UUID `json:"id"`
-	TenantID      uuid.UUID `json:"tenant_id"`
-	E164          string    `json:"e164"`
-	Type          string    `json:"type"`
-	Provider      string    `json:"provider"`
-	ProviderDIDID string    `json:"provider_did_id,omitempty"`
-	Priority      int       `json:"priority"`
-	Active        bool      `json:"active"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID            uuid.UUID  `json:"id"`
+	TenantID      uuid.UUID  `json:"tenant_id"`
+	E164          string     `json:"e164"`
+	Type          string     `json:"type"`
+	TrunkID       *uuid.UUID `json:"trunk_id"`
+	ProviderDIDID string     `json:"provider_did_id,omitempty"`
+	Priority      int        `json:"priority"`
+	Active        bool       `json:"active"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 type createNumberRequest struct {
-	E164          string `json:"e164"`
-	Type          string `json:"type"`
-	Provider      string `json:"provider"`
-	ProviderDIDID string `json:"provider_did_id"`
-	Priority      *int   `json:"priority,omitempty"`
+	E164          string     `json:"e164"`
+	Type          string     `json:"type"`
+	TrunkID       *uuid.UUID `json:"trunk_id"`
+	ProviderDIDID string     `json:"provider_did_id"`
+	Priority      *int       `json:"priority,omitempty"`
 }
 
 func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
@@ -148,14 +148,21 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.E164 == "" || req.Type == "" || req.Provider == "" {
-		writeError(w, http.StatusBadRequest, "e164, type, provider required")
+	if req.E164 == "" || req.Type == "" {
+		writeError(w, http.StatusBadRequest, "e164 and type are required")
 		return
 	}
 	switch req.Type {
 	case "inbound", "outbound", "masking":
 	default:
 		writeError(w, http.StatusBadRequest, "type must be inbound|outbound|masking")
+		return
+	}
+	// Outbound numbers MUST reference a trunk so the call has somewhere
+	// to land. Inbound/masking numbers can exist without one (the trunk
+	// is implicit — whoever sent the inbound INVITE).
+	if req.Type == "outbound" && req.TrunkID == nil {
+		writeError(w, http.StatusBadRequest, "trunk_id is required for outbound numbers")
 		return
 	}
 
@@ -166,14 +173,14 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 
 	var n Number
 	err := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO numbers (tenant_id, e164, type, provider, provider_did_id, priority)
+		INSERT INTO numbers (tenant_id, e164, type, trunk_id, provider_did_id, priority)
 		VALUES ($1, $2, $3::number_type, $4, NULLIF($5, ''), $6)
-		RETURNING id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), priority, active, created_at
-	`, t.ID, req.E164, req.Type, req.Provider, req.ProviderDIDID, priority).Scan(
-		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
+		RETURNING id, tenant_id, e164, type::text, trunk_id, COALESCE(provider_did_id, ''), priority, active, created_at
+	`, t.ID, req.E164, req.Type, req.TrunkID, req.ProviderDIDID, priority).Scan(
+		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if err != nil {
-		writeError(w, http.StatusConflict, "number already registered for this tenant")
+		writeError(w, http.StatusConflict, "number already registered for this tenant: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusCreated, n)
@@ -256,9 +263,9 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		SET priority = COALESCE($1, priority),
 		    active   = COALESCE($2, active)
 		WHERE id = $3 AND tenant_id = $4
-		RETURNING id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), priority, active, created_at
+		RETURNING id, tenant_id, e164, type::text, trunk_id, COALESCE(provider_did_id, ''), priority, active, created_at
 	`, req.Priority, req.Active, id, t.ID).Scan(
-		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
+		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "number not found")
@@ -321,7 +328,7 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, tenant_id, e164, type::text, provider, COALESCE(provider_did_id, ''), priority, active, created_at
+		SELECT id, tenant_id, e164, type::text, trunk_id, COALESCE(provider_did_id, ''), priority, active, created_at
 		FROM numbers
 		WHERE tenant_id = $1
 		ORDER BY type, priority ASC, created_at DESC
@@ -335,7 +342,7 @@ func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	numbers := []Number{}
 	for rows.Next() {
 		var n Number
-		if err := rows.Scan(&n.ID, &n.TenantID, &n.E164, &n.Type, &n.Provider, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
