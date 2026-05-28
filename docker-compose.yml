@@ -66,8 +66,15 @@ services:
       - "5434:5432"
     volumes:
       - tring-db-data:/var/lib/postgresql/data
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
-      - ./db/seed.sql:/docker-entrypoint-initdb.d/10-seed.sql:ro
+      # Schema is owned by the embedded golang-migrate (see
+      # internal/migrate/migrations/). The api applies migrations on
+      # startup against an empty DB. For dev seed data (predictable
+      # tenant + API key), run after first up:
+      #
+      #   docker exec -i tring-db psql -U tring -d tring < db/seed.sql
+      #
+      # For prod: docker compose run --rm api --seed-tenant "Your Org"
+      # to generate a fresh API key.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tring -d tring"]
       interval: 5s
