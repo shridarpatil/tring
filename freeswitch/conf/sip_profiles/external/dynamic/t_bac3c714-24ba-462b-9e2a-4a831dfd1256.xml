@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<include>
-  <gateway name="t_bac3c71424ba">
-    <param name="register" value="false"></param>
-    <param name="proxy" value="203.0.113.42"></param>
-    <param name="realm" value="203.0.113.42"></param>
-    <param name="caller-id-in-from" value="true"></param>
-  </gateway>
-</include>
