@@ -86,11 +86,15 @@ services:
   # host instead:  `docker compose stop api && go run ./cmd/api`.
 
   api:
+    # Pulls the published image by default. CI/CD pushes :develop on every
+    # main push and a versioned tag (:v0.1.0) on each release. Pin via
+    # `TRING_TAG=v0.1.0` in .env. Local source-tree dev: bypass with
+    # `docker compose up -d --build api`.
+    image: ghcr.io/shridarpatil/tring-api:${TRING_TAG:-develop}
     build:
       context: .
       args:
         CMD: api
-    image: tring-api:local
     container_name: tring-api
     network_mode: host
     # Run as the typical host UID so the bind-mounted gateway dir
@@ -132,11 +136,11 @@ services:
     restart: unless-stopped
 
   orchestrator:
+    image: ghcr.io/shridarpatil/tring-orchestrator:${TRING_TAG:-develop}
     build:
       context: .
       args:
         CMD: orchestrator
-    image: tring-orchestrator:local
     container_name: tring-orchestrator
     network_mode: host
     depends_on:
@@ -158,6 +162,9 @@ services:
   # Opt-in: not required for the dev stack — `docker compose up -d
   # sip-sim` brings it up alongside, or include it in regular `up`.
   sip-sim:
+    # Dev-only SIP simulator. Doesn't start on a plain `docker compose up`;
+    # bring it up explicitly with `docker compose --profile dev up -d`.
+    profiles: ["dev"]
     build:
       context: ./sim
     image: tring-sip-sim:local
