@@ -66,6 +66,13 @@ services:
       - ./freeswitch/conf/sip_profiles/external/airtel.xml:/etc/freeswitch/sip_profiles/external/airtel.xml:ro
       - ./freeswitch/conf/sip_profiles/external/jio.xml:/etc/freeswitch/sip_profiles/external/jio.xml:ro
       - ./freeswitch/conf/sip_profiles/external/tata.xml:/etc/freeswitch/sip_profiles/external/tata.xml:ro
+      # Custom external sofia profile — adds external/dynamic/*.xml to
+      # the gateway include list so UI-managed trunks are picked up on
+      # `sofia profile external rescan`.
+      - ./freeswitch/conf/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml:ro
+      # Dynamic gateway dir — Tring writes t_<uuid>.xml here, FS reads.
+      # RW because both containers share this host path.
+      - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
     # network_mode: host is simplest for SIP/RTP during dev.
     # Ports: 5060 (SIP), 5080 (external SIP), 8021 (ESL),
     #        7443 (WSS for WebRTC), 16384-32768 (RTP).
@@ -109,6 +116,11 @@ services:
     image: tring-api:local
     container_name: tring-api
     network_mode: host
+    # Run as the typical host UID so the bind-mounted gateway dir
+    # below is writable from inside the distroless container (the
+    # default `nonroot` UID 65532 would clash with a host dir owned
+    # by 1000). Override TRING_API_UID/GID for other host users.
+    user: "${TRING_API_UID:-1000}:${TRING_API_GID:-1000}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -134,6 +146,12 @@ services:
       - TRING_TURN_URL=${TRING_TURN_URL:-}
       - TRING_TURN_USERNAME=${TRING_TURN_USERNAME:-}
       - TRING_TURN_PASSWORD=${TRING_TURN_PASSWORD:-}
+    volumes:
+      # Shared with the freeswitch container — Tring writes UI-managed
+      # trunk XMLs (t_<uuid>.xml) here, FS reads them on profile rescan.
+      # Same host path mounted at the same container path so the Go code
+      # can write to /etc/freeswitch/... by default.
+      - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
     restart: unless-stopped
 
   orchestrator:
