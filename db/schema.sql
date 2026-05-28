@@ -62,7 +62,9 @@ CREATE TABLE numbers (
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     e164            TEXT NOT NULL,
     type            number_type NOT NULL,
-    provider        TEXT NOT NULL,           -- 'exotel', 'airtel', 'jio', 'tata', 'loopback'
+    -- Legacy column kept nullable for backfill compatibility — new code
+    -- uses numbers.trunk_id exclusively.
+    provider        TEXT,           -- 'exotel', 'airtel', 'jio', 'tata', 'loopback'
     provider_did_id TEXT,                    -- provider-side identifier
     priority        INT NOT NULL DEFAULT 100, -- lower = preferred; failover/manual use this ordering
     active          BOOLEAN NOT NULL DEFAULT true, -- manual kill switch; PATCH this off to take a trunk out of rotation without deleting
@@ -148,3 +150,69 @@ CREATE TABLE webhook_deliveries (
 );
 
 CREATE INDEX ON webhook_deliveries (webhook_id, created_at DESC);
+
+-- ─── IVR Flows ─────────────────────────────────────────────────────
+-- An IVR flow is a graph of nodes (greeting, menu, gather, transfer,
+-- http_callback, goto_flow, timing, hangup) connected by edges with
+-- named source handles (e.g. "digit:1", "timeout", "http:2xx"). The full
+-- graph is stored as JSONB in `definition` — the FreeSWITCH executor
+-- (Phase 3) walks it on inbound calls. Schema matches the IVRFlowData
+-- v2 shape used by the frontend (see web/src/api/types.ts).
+CREATE TABLE flows (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id        UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    description      TEXT NOT NULL DEFAULT '',
+    is_active        BOOLEAN NOT NULL DEFAULT true,
+    is_call_start    BOOLEAN NOT NULL DEFAULT false,
+    is_outgoing_end  BOOLEAN NOT NULL DEFAULT false,
+    definition       JSONB NOT NULL DEFAULT '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb,
+    welcome_audio_url TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX flows_tenant_name_idx ON flows (tenant_id, name);
+
+-- Inbound DIDs can point at a flow — when a call lands on the number,
+-- the executor enters this flow. NULL = no IVR; the dialplan falls back
+-- to whatever default routing applies.
+ALTER TABLE numbers
+    ADD COLUMN flow_id UUID REFERENCES flows(id) ON DELETE SET NULL;
+
+-- ─── SIP Trunks (per-tenant, UI-managed) ────────────────────────────
+-- Replaces the four hardcoded env-based gateways (EXOTEL/AIRTEL/JIO/TATA
+-- in vars.xml) with DB-backed, per-tenant trunk definitions. On change,
+-- Tring renders gateway XML to freeswitch/conf/sip_profiles/external/
+-- dynamic/ and rescans the external profile via ESL — zero downtime.
+--
+-- Two auth modes are supported, distinguished by the `register` flag:
+--   register=true:  classic SIP REGISTER (Exotel-style aggregators).
+--                   sip_username + sip_password + sip_realm are used.
+--   register=false: IP-authenticated (Tata-private-circuit style).
+--                   proxy_ip is the SBC IP; auth_acl_cidr is the SBC
+--                   CIDR used to allow inbound INVITEs.
+CREATE TABLE trunks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    -- provider_type drives caller-ID normalization in internal/provider
+    -- (india / loopback / etc). Distinct from `name`, a free-form label.
+    provider_type   TEXT NOT NULL DEFAULT 'generic',
+    sip_username    TEXT NOT NULL DEFAULT '',
+    sip_password    TEXT NOT NULL DEFAULT '',
+    sip_realm       TEXT NOT NULL DEFAULT '',
+    register        BOOLEAN NOT NULL DEFAULT false,
+    proxy_ip        TEXT NOT NULL DEFAULT '',
+    auth_acl_cidr   TEXT NOT NULL DEFAULT '',
+    active          BOOLEAN NOT NULL DEFAULT true,
+    extra_params    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX trunks_tenant_name_unique ON trunks (tenant_id, name);
+
+-- Numbers reference a specific trunk via trunk_id. The legacy `provider`
+-- string column stays for backwards compatibility — if trunk_id is set,
+-- routing prefers it; otherwise falls back to env-based provider gateways.
+ALTER TABLE numbers
+    ADD COLUMN trunk_id UUID REFERENCES trunks(id) ON DELETE SET NULL;
