@@ -32,6 +32,7 @@ sdk/js/dist/
 /docs/TATA_VPC_DEPLOY.md
 /docs/PHASE_2_DIAL_IN_OTP.md
 /docs/PHASE_3_IVR_EXECUTION.md
+/docs/PHASE_4_QUEUES_AGENTS.md
 
 # Runtime-rendered dynamic gateway XMLs. The api service writes these
 # from the trunks table; they're per-deployment, never committed.
