@@ -33,6 +33,10 @@ type Trunk struct {
 	ExtraParams   json.RawMessage `json:"extra_params"`
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
+	// Live state from sofia status — populated on responses, not in DB.
+	// Values: online | offline | connecting | not_loaded | unknown.
+	Status     string `json:"status,omitempty"`
+	StateRaw   string `json:"state_raw,omitempty"`   // raw FS state for debugging
 }
 
 type createTrunkRequest struct {
@@ -184,6 +188,30 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 		// Don't leak password in list responses.
 		tr.SIPPassword = ""
 		out = append(out, tr)
+	}
+	// Best-effort: enrich with live FS gateway state. If ESL is down
+	// (dev offline), trunks still list with status="unknown".
+	states, _ := s.fs.GatewayStatuses(r.Context())
+	for i := range out {
+		gw := freeswitch.GatewayName(out[i].ID)
+		raw := states[gw]
+		out[i].StateRaw = raw
+		out[i].Status = freeswitch.StatusFromState(raw, out[i].Register)
+
+		// For IP-auth trunks, sofia state is uninformative about peer
+		// reachability (NOREG even when the SBC is down). Probe with a
+		// SIP OPTIONS to find out for real. ~1s budget per probe; only
+		// runs when the trunk has a configured proxy and is "online"
+		// per state — flips to offline if the probe times out.
+		if !out[i].Register && out[i].ProxyIP != "" && out[i].Status == "online" {
+			ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
+			ok := freeswitch.OptionsPing(ctx, out[i].ProxyIP, 1*time.Second)
+			cancel()
+			if !ok {
+				out[i].Status = "offline"
+				out[i].StateRaw = raw + " (probe failed)"
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

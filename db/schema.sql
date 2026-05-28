@@ -62,7 +62,9 @@ CREATE TABLE numbers (
     tenant_id       UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     e164            TEXT NOT NULL,
     type            number_type NOT NULL,
-    provider        TEXT NOT NULL,           -- 'exotel', 'airtel', 'jio', 'tata', 'loopback'
+    -- Legacy column kept nullable for backfill compatibility — new code
+    -- uses numbers.trunk_id exclusively.
+    provider        TEXT,           -- 'exotel', 'airtel', 'jio', 'tata', 'loopback'
     provider_did_id TEXT,                    -- provider-side identifier
     priority        INT NOT NULL DEFAULT 100, -- lower = preferred; failover/manual use this ordering
     active          BOOLEAN NOT NULL DEFAULT true, -- manual kill switch; PATCH this off to take a trunk out of rotation without deleting

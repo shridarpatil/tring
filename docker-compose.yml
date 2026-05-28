@@ -151,6 +151,20 @@ services:
       - TRING_ESL_PASSWORD=${TRING_ESL_PASSWORD:-ClueCon}
     restart: unless-stopped
 
+  # Local SIP trunk simulator — stands in for the Tata SBC during dev.
+  # Listens on UDP/5070 as a SIPp UAS; answers every INVITE 200 OK so
+  # the full Tring → trunk signaling path can be exercised before the
+  # real circuit lands. See sim/README.md for the integration recipe.
+  # Opt-in: not required for the dev stack — `docker compose up -d
+  # sip-sim` brings it up alongside, or include it in regular `up`.
+  sip-sim:
+    build:
+      context: ./sim
+    image: tring-sip-sim:local
+    container_name: tring-sip-sim
+    network_mode: host
+    restart: unless-stopped
+
 volumes:
   freeswitch-sounds:
   tring-db-data:

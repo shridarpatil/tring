@@ -4,9 +4,19 @@
 //   register=false (Tata IP-auth style: proxy IP + SBC CIDR)
 // Saving any trunk triggers a server-side FreeSWITCH gateway re-render
 // + sofia profile rescan, so changes are live without restarting FS.
-import { ref, onMounted, computed } from "vue";
+// The list auto-refreshes every 10s so the online/offline badge stays
+// current as gateways register / time out.
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { api } from "../api/client";
 import type { Trunk } from "../api/types";
+
+const statusStyle: Record<string, { dot: string; label: string; text: string }> = {
+  online:      { dot: "bg-green-500",  text: "text-green-700",  label: "online" },
+  offline:     { dot: "bg-red-500",    text: "text-red-700",    label: "offline" },
+  connecting:  { dot: "bg-amber-500",  text: "text-amber-700",  label: "connecting" },
+  not_loaded:  { dot: "bg-gray-300",   text: "text-gray-500",   label: "not loaded" },
+  unknown:     { dot: "bg-gray-300",   text: "text-gray-500",   label: "unknown" },
+};
 
 const trunks = ref<Trunk[]>([]);
 const loading = ref(true);
@@ -125,7 +135,15 @@ async function reloadFS() {
   }
 }
 
-onMounted(load);
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+onMounted(() => {
+  load();
+  refreshTimer = setInterval(load, 10000);
+});
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer);
+});
 </script>
 
 <template>
@@ -288,6 +306,7 @@ onMounted(load);
           <tr>
             <th class="px-5 py-2 font-medium">Name</th>
             <th class="px-5 py-2 font-medium">Provider</th>
+            <th class="px-5 py-2 font-medium">Status</th>
             <th class="px-5 py-2 font-medium">Auth</th>
             <th class="px-5 py-2 font-medium">Endpoint</th>
             <th class="px-5 py-2 font-medium">Active</th>
@@ -298,6 +317,17 @@ onMounted(load);
           <tr v-for="t in trunks" :key="t.id" class="border-t border-gray-200">
             <td class="px-5 py-2 font-medium">{{ t.name }}</td>
             <td class="px-5 py-2 font-mono text-xs">{{ t.provider_type }}</td>
+            <td class="px-5 py-2">
+              <span class="inline-flex items-center gap-1.5">
+                <span
+                  :class="['h-2 w-2 rounded-full', statusStyle[t.status || 'unknown'].dot]"
+                  :title="t.state_raw || '(no FS state)'"
+                />
+                <span :class="['text-xs', statusStyle[t.status || 'unknown'].text]">
+                  {{ statusStyle[t.status || 'unknown'].label }}
+                </span>
+              </span>
+            </td>
             <td class="px-5 py-2 text-xs">
               <span v-if="t.register" class="text-purple-700">REGISTER</span>
               <span v-else class="text-amber-700">IP-auth</span>
@@ -323,7 +353,7 @@ onMounted(load);
             </td>
           </tr>
           <tr v-if="!loading && trunks.length === 0">
-            <td colspan="6" class="px-5 py-8 text-center text-gray-400">
+            <td colspan="7" class="px-5 py-8 text-center text-gray-400">
               No trunks yet — click <span class="font-medium">New trunk</span> to add one.
             </td>
           </tr>

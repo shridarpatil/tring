@@ -123,7 +123,14 @@ func renderGateway(g Gateway) ([]byte, error) {
 			xmlGatewayParam{Name: "realm", Value: realm},
 		)
 	}
-	params = append(params, xmlGatewayParam{Name: "caller-id-in-from", Value: "true"})
+	// SIP OPTIONS keepalive — sofia sends OPTIONS every N seconds; if
+	// the peer doesn't reply, the gateway state moves to FAIL_WAIT and
+	// the UI badge flips to offline. Without this, IP-auth gateways
+	// stay NOREG forever regardless of reachability.
+	params = append(params,
+		xmlGatewayParam{Name: "ping", Value: "25"},
+		xmlGatewayParam{Name: "caller-id-in-from", Value: "true"},
+	)
 
 	doc := xmlInclude{Gateway: xmlGateway{Name: g.Name, Params: params}}
 	out, err := xml.MarshalIndent(doc, "", "  ")

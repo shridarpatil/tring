@@ -21,7 +21,7 @@ export interface PhoneNumber {
   tenant_id: string;
   e164: string;
   type: string; // inbound | outbound | masking
-  provider: string;
+  trunk_id: string | null;
   provider_did_id: string;
   priority: number;
   active: boolean;
@@ -147,4 +147,7 @@ export interface Trunk {
   extra_params: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  // Live state from FS (sofia status). Populated on every API response.
+  status?: "online" | "offline" | "connecting" | "not_loaded" | "unknown";
+  state_raw?: string;
 }
