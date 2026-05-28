@@ -35,6 +35,7 @@ import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
 import "@vue-flow/minimap/dist/style.css";
 
+import { api } from "../../api/client";
 import GreetingNode from "../../components/calling/nodes/GreetingNode.vue";
 import MenuNode from "../../components/calling/nodes/MenuNode.vue";
 import GatherNode from "../../components/calling/nodes/GatherNode.vue";
@@ -205,19 +206,8 @@ function requestDeleteSelectedNode() {
   selectedNodeId.value = null;
 }
 
-// ─── Persistence (localStorage stub until backend lands) ────────────
-const STORAGE_KEY = "tring_flows_v1";
-
-function loadAllFlows(): Record<string, Flow> {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-  } catch {
-    return {};
-  }
-}
-function saveAllFlows(flows: Record<string, Flow>) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(flows));
-}
+// ─── Persistence (Tring API) ────────────────────────────────────────
+const availableFlows = ref<Flow[]>([]);
 
 function buildIVRFlowData(): IVRFlowData {
   return {
@@ -272,37 +262,32 @@ function loadFromIVRFlowData(d: IVRFlowData) {
   entryNodeId.value = d.entry_node;
 }
 
-const availableFlows = computed<Flow[]>(() => Object.values(loadAllFlows()));
-
 async function saveFlow() {
   saving.value = true;
   savedMsg.value = "";
-  const all = loadAllFlows();
-  const existing = all[flowId.value];
-  const now = new Date().toISOString();
-  const flow: Flow = {
-    id: flowId.value,
-    tenant_id: existing?.tenant_id || "local",
-    name: flowName.value || "Untitled flow",
-    is_active: isActive.value,
-    is_call_start: isCallStart.value,
-    is_outgoing_end: isOutgoingEnd.value,
-    definition: buildIVRFlowData(),
-    created_at: existing?.created_at || now,
-    updated_at: now,
-  };
-  all[flowId.value] = flow;
-  saveAllFlows(all);
-  await new Promise((r) => setTimeout(r, 200));
-  saving.value = false;
-  savedMsg.value = "Saved";
-  setTimeout(() => (savedMsg.value = ""), 1500);
+  try {
+    await api.patch<Flow>(`/v1/flows/${flowId.value}`, {
+      name: flowName.value || "Untitled flow",
+      is_active: isActive.value,
+      is_call_start: isCallStart.value,
+      is_outgoing_end: isOutgoingEnd.value,
+      definition: buildIVRFlowData(),
+    });
+    savedMsg.value = "Saved";
+    setTimeout(() => (savedMsg.value = ""), 1500);
+  } catch (e) {
+    savedMsg.value = e instanceof Error ? e.message : "save failed";
+  } finally {
+    saving.value = false;
+  }
 }
 
-onMounted(() => {
-  const all = loadAllFlows();
-  const f = all[flowId.value];
-  if (f) {
+onMounted(async () => {
+  try {
+    const [f, list] = await Promise.all([
+      api.get<Flow>(`/v1/flows/${flowId.value}`),
+      api.get<Flow[]>("/v1/flows"),
+    ]);
     flowName.value = f.name;
     isActive.value = f.is_active;
     isCallStart.value = f.is_call_start;
@@ -310,8 +295,9 @@ onMounted(() => {
     if (f.definition && f.definition.version === 2) {
       loadFromIVRFlowData(f.definition);
     }
-  } else {
-    flowName.value = "Untitled flow";
+    availableFlows.value = list;
+  } catch (e) {
+    savedMsg.value = e instanceof Error ? e.message : "load failed";
   }
 });
 

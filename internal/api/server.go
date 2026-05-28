@@ -143,6 +143,12 @@ func (s *Server) Router() http.Handler {
 			r.Get("/webhooks", s.handleListWebhooks)
 			r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
 			r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
+
+			r.Post("/flows", s.handleCreateFlow)
+			r.Get("/flows", s.handleListFlows)
+			r.Get("/flows/{id}", s.handleGetFlow)
+			r.Patch("/flows/{id}", s.handlePatchFlow)
+			r.Delete("/flows/{id}", s.handleDeleteFlow)
 		})
 
 		// SDK routes: JWT auth, scoped to the JWT's subject agent.

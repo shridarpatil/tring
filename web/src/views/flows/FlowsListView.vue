@@ -1,62 +1,51 @@
 <script setup lang="ts">
-// FlowsListView — list/create/delete IVR flows. localStorage stub until
-// the backend lands.
+// FlowsListView — list/create/delete IVR flows via the Tring API.
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { Plus, Trash2, ArrowRight } from "lucide-vue-next";
-import type { Flow, IVRFlowData } from "../../api/types";
+import { api } from "../../api/client";
+import type { Flow } from "../../api/types";
 
 const router = useRouter();
-const STORAGE_KEY = "tring_flows_v1";
 
 const flows = ref<Flow[]>([]);
 const showCreate = ref(false);
 const newName = ref("");
+const loading = ref(true);
+const error = ref("");
 
-function loadAll(): Record<string, Flow> {
+async function refresh() {
+  loading.value = true;
+  error.value = "";
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-  } catch {
-    return {};
+    flows.value = await api.get<Flow[]>("/v1/flows");
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "failed to load";
+  } finally {
+    loading.value = false;
   }
 }
-function saveAll(all: Record<string, Flow>) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-}
-function refresh() {
-  flows.value = Object.values(loadAll()).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-}
 
-function emptyDef(): IVRFlowData {
-  return { version: 2, nodes: [], edges: [], entry_node: "" };
-}
-
-function createFlow() {
+async function createFlow() {
   if (!newName.value.trim()) return;
-  const id = `flow_${Date.now()}`;
-  const now = new Date().toISOString();
-  const all = loadAll();
-  all[id] = {
-    id,
-    tenant_id: "local",
-    name: newName.value.trim(),
-    is_active: true,
-    is_call_start: false,
-    is_outgoing_end: false,
-    definition: emptyDef(),
-    created_at: now,
-    updated_at: now,
-  };
-  saveAll(all);
-  router.push({ name: "flow-editor", params: { id } });
+  error.value = "";
+  try {
+    const f = await api.post<Flow>("/v1/flows", { name: newName.value.trim() });
+    router.push({ name: "flow-editor", params: { id: f.id } });
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "create failed";
+  }
 }
 
-function deleteFlow(id: string) {
+async function deleteFlow(id: string) {
   if (!confirm("Delete this flow?")) return;
-  const all = loadAll();
-  delete all[id];
-  saveAll(all);
-  refresh();
+  error.value = "";
+  try {
+    await api.del(`/v1/flows/${id}`);
+    await refresh();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "delete failed";
+  }
 }
 
 onMounted(refresh);
@@ -147,9 +136,11 @@ onMounted(refresh);
       </table>
     </div>
 
+    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
     <p class="text-xs text-gray-400">
-      Flows are saved to your browser (localStorage) until the backend
-      endpoint lands. They won't sync to the server or to FreeSWITCH yet.
+      Flows persist via the API. The FreeSWITCH executor (Phase 3) is
+      not wired yet — saving doesn't yet make inbound calls run the
+      flow; the editor is fully functional for design.
     </p>
   </div>
 </template>
