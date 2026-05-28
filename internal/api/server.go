@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
 	"github.com/whatomate/tring/internal/webhook"
+	"github.com/whatomate/tring/internal/webui"
 )
 
 // Config bundles the dependencies an api.Server needs at construction time.
@@ -165,6 +167,41 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls", s.handleSDKCreateCall)
 		})
 	})
+
+	// Admin console (embedded Vue dist). Mounted only if the Vue app was
+	// actually built — backend-only deployments get a UI-less binary
+	// automatically (no flag needed, just don't run `npm run build`).
+	if uiFS, ok := webui.FS(); ok {
+		fileServer := http.FileServer(http.FS(uiFS))
+		// Strip "/admin" prefix so requests for /admin/assets/foo.js
+		// resolve to "assets/foo.js" within the embedded FS.
+		stripped := http.StripPrefix("/admin", fileServer)
+		// Catch-all: any /admin/* path that doesn't match a static file
+		// falls back to index.html so the Vue router (history mode) can
+		// own the URL space client-side.
+		r.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+		})
+		r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+			// If it's a known asset (has a file extension), serve it
+			// directly; otherwise serve index.html for SPA routing.
+			path := strings.TrimPrefix(req.URL.Path, "/admin/")
+			if path != "" {
+				if _, err := uiFS.Open(path); err == nil {
+					stripped.ServeHTTP(w, req)
+					return
+				}
+			}
+			indexHTML, err := uiFS.Open("index.html")
+			if err != nil {
+				http.Error(w, "UI not available", http.StatusNotFound)
+				return
+			}
+			defer indexHTML.Close()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = io.Copy(w, indexHTML)
+		})
+	}
 
 	return r
 }
