@@ -24,6 +24,7 @@ const routes: RouteRecordRaw[] = [
       { path: "calls", name: "calls", component: () => import("../views/CallsView.vue") },
       { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue") },
       { path: "flows", name: "flows", component: () => import("../views/flows/FlowsListView.vue") },
+      { path: "trunks", name: "trunks", component: () => import("../views/TrunksView.vue") },
       { path: "settings", name: "settings", component: () => import("../views/SettingsView.vue") },
     ],
   },

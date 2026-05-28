@@ -126,3 +126,25 @@ export interface Flow {
   created_at: string;
   updated_at: string;
 }
+
+// ─── SIP Trunks ──────────────────────────────────────────────────────
+// Per-tenant trunk config managed in the admin console. The server
+// renders these to FreeSWITCH gateway XML on every save and rescans
+// the sofia external profile so changes are picked up live.
+
+export interface Trunk {
+  id: string;
+  tenant_id: string;
+  name: string;
+  provider_type: string;
+  sip_username: string;
+  sip_password?: string; // only returned on create / get
+  sip_realm: string;
+  register: boolean;
+  proxy_ip: string;
+  auth_acl_cidr: string;
+  active: boolean;
+  extra_params: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}

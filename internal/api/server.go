@@ -149,6 +149,13 @@ func (s *Server) Router() http.Handler {
 			r.Get("/flows/{id}", s.handleGetFlow)
 			r.Patch("/flows/{id}", s.handlePatchFlow)
 			r.Delete("/flows/{id}", s.handleDeleteFlow)
+
+			r.Post("/trunks", s.handleCreateTrunk)
+			r.Get("/trunks", s.handleListTrunks)
+			r.Get("/trunks/{id}", s.handleGetTrunk)
+			r.Patch("/trunks/{id}", s.handlePatchTrunk)
+			r.Delete("/trunks/{id}", s.handleDeleteTrunk)
+			r.Post("/trunks/reload", s.handleReloadTrunks)
 		})
 
 		// SDK routes: JWT auth, scoped to the JWT's subject agent.
