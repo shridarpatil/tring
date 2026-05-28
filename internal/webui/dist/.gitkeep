@@ -1,3 +1,0 @@
-# Placeholder so go:embed has a matching file when the Vue dist hasn't
-# been built. Backend-only deploys (no `npm run build`) still compile;
-# webui.FS() returns (nil, false) and the /admin/* mount is skipped.
