@@ -14,6 +14,7 @@ const nav = [
   { to: "/agents", label: "Agents" },
   { to: "/numbers", label: "Numbers" },
   { to: "/calls", label: "Calls" },
+  { to: "/flows", label: "IVR Flows" },
   { to: "/webhooks", label: "Webhooks" },
   { to: "/settings", label: "Settings" },
 ];

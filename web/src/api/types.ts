@@ -68,3 +68,61 @@ export interface AgentToken {
   token: string;
   expires_at: string;
 }
+
+// ─── IVR / Flow types ────────────────────────────────────────────────
+// Mirrors Whatomate's IVRFlowData v2 schema so flows authored in Tring
+// remain interchangeable. Node config is open-ended per node type — see
+// the properties panel for the exact shape per type.
+
+export type IVRNodeType =
+  | "greeting"
+  | "menu"
+  | "gather"
+  | "http_callback"
+  | "transfer"
+  | "goto_flow"
+  | "timing"
+  | "hangup";
+
+export interface IVRNodePosition {
+  x: number;
+  y: number;
+}
+
+export interface IVRNode {
+  id: string;
+  type: IVRNodeType;
+  label: string;
+  position: IVRNodePosition;
+  config: Record<string, unknown>;
+}
+
+export interface IVREdge {
+  from: string;
+  to: string;
+  // Source handle: "default", "digit:1..9", "timeout", "max_retries",
+  // "http:2xx", "http:non2xx", "completed", "no_answer", "in_hours",
+  // "out_of_hours" — depends on node type.
+  condition: string;
+}
+
+export interface IVRFlowData {
+  version: 2;
+  nodes: IVRNode[];
+  edges: IVREdge[];
+  entry_node: string;
+}
+
+export interface Flow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  is_call_start: boolean;
+  is_outgoing_end: boolean;
+  definition: IVRFlowData;
+  welcome_audio_url?: string;
+  created_at: string;
+  updated_at: string;
+}

@@ -8,6 +8,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import("../views/LoginView.vue"),
   },
   {
+    // Flow editor is full-screen — sits outside AppLayout so it can use
+    // the whole viewport for the canvas.
+    path: "/flows/:id",
+    name: "flow-editor",
+    component: () => import("../views/flows/FlowEditorView.vue"),
+  },
+  {
     path: "/",
     component: () => import("../layouts/AppLayout.vue"),
     children: [
@@ -16,6 +23,7 @@ const routes: RouteRecordRaw[] = [
       { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue") },
       { path: "calls", name: "calls", component: () => import("../views/CallsView.vue") },
       { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue") },
+      { path: "flows", name: "flows", component: () => import("../views/flows/FlowsListView.vue") },
       { path: "settings", name: "settings", component: () => import("../views/SettingsView.vue") },
     ],
   },
