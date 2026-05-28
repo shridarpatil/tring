@@ -22,17 +22,11 @@ services:
       # consumes 2 ports (RTP + RTCP).
       - TRING_RTP_START_PORT=${TRING_RTP_START_PORT:-16384}
       - TRING_RTP_END_PORT=${TRING_RTP_END_PORT:-32768}
-      # Trunk credentials (Exotel/Airtel/Jio/Tata) are now managed via
-      # the admin console at /trunks — see internal/api/handlers_trunks.go.
-      # The previous EXOTEL_/AIRTEL_/JIO_/TATA_SIP_* env vars have been
-      # removed; FS picks up trunks from external/dynamic/t_*.xml instead.
-      #
-      # The TATA_SBC_* vars below are retained for the deploy/tata/ go-live
-      # overlay only — they're not used by UI-managed trunks, where each
-      # trunk's proxy_ip/auth_acl_cidr come from the DB row.
-      - TATA_SBC_IP=${TATA_SBC_IP:-}
-      - TATA_SBC_CIDR=${TATA_SBC_CIDR:-}
-      - TATA_SIP_LAN_IP=${TATA_SIP_LAN_IP:-}
+      # Trunk credentials (Exotel/Airtel/Jio/Tata, including IP-auth for
+      # the Tata private circuit) are managed via the admin console at
+      # /trunks — see internal/api/handlers_trunks.go. No trunk env vars
+      # are needed; FS picks up gateways from external/dynamic/t_*.xml,
+      # rendered by the api service on every trunk save + sofia rescan.
     volumes:
       - freeswitch-sounds:/usr/share/freeswitch/sounds
       # All bind mounts use :ro because the safarov/freeswitch entrypoint

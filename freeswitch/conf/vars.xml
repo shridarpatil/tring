@@ -334,13 +334,11 @@
   <X-PRE-PROCESS cmd="exec-set" data="rtp_start_port=sh -c 'echo ${TRING_RTP_START_PORT:-16384}'"/>
   <X-PRE-PROCESS cmd="exec-set" data="rtp_end_port=sh -c 'echo ${TRING_RTP_END_PORT:-32768}'"/>
 
-  <!-- Tata private-circuit (IP-auth) trunk vars. Empty in dev (the dev
-       gateway is register-based and doesn't reference them). At go-live,
-       TATA_SBC_IP / TATA_SBC_CIDR come from .env and the IP-auth gateway
-       (deploy/tata/tata.xml) + ACL (deploy/tata/acl.conf.xml) consume them.
-       See docs/TATA_VPC_DEPLOY.md. -->
-  <X-PRE-PROCESS cmd="exec-set" data="tata_sbc_ip=sh -c 'echo $TATA_SBC_IP'"/>
-  <X-PRE-PROCESS cmd="exec-set" data="tata_sbc_cidr=sh -c 'echo $TATA_SBC_CIDR'"/>
+  <!-- Tata private-circuit IP-auth + ACL are now managed via the admin
+       console at /trunks (handlers_trunks.go writes the gateway XML to
+       external/dynamic/). The previous TATA_SBC_IP / TATA_SBC_CIDR
+       preprocessor vars have been removed. -->
+
 
   <!-- unroll-loops
        Used to turn on sip loopback unrolling.
