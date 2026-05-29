@@ -27,7 +27,6 @@ const outputHandles = [
     :label="data?.label || 'Gather'"
     header-class="bg-blue-600"
     :output-handles="outputHandles"
-    :has-input="!data?.isEntryNode"
   >
     <template #icon><Hash class="w-4 h-4" /></template>
     <p class="truncate">{{ summary }}</p>

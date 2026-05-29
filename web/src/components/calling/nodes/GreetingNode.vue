@@ -23,7 +23,6 @@ const outputHandles = [{ id: "default", label: "next" }];
     :label="data?.label || 'Greeting'"
     header-class="bg-green-600"
     :output-handles="outputHandles"
-    :has-input="!data?.isEntryNode"
   >
     <template #icon><Volume2 class="w-4 h-4" /></template>
     <p class="truncate">{{ summary }}</p>

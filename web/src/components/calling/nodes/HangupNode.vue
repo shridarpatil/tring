@@ -12,7 +12,6 @@ defineProps<{ data: Record<string, any> }>();
     :label="data?.label || 'Hangup'"
     header-class="bg-red-600"
     :output-handles="[]"
-    :has-input="!data?.isEntryNode"
   >
     <template #icon><PhoneOff class="w-4 h-4" /></template>
     <p v-if="data?.config?.audio_file || data?.config?.greeting_text" class="truncate">

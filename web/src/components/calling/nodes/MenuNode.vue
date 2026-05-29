@@ -32,7 +32,6 @@ const outputHandles = computed(() => {
     :label="data?.label || 'Menu'"
     header-class="bg-purple-600"
     :output-handles="outputHandles"
-    :has-input="!data?.isEntryNode"
   >
     <template #icon><Grid3X3 class="w-4 h-4" /></template>
     <div v-if="options.length > 0" class="space-y-0.5">
