@@ -2,24 +2,32 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { auth } from "../stores/auth";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
+
+interface LoginResponse {
+  token: string;
+  expires_at: string;
+  tenant: { id: string; name: string; sip_domain: string };
+}
 
 const router = useRouter();
-const baseUrl = ref(auth.state.baseUrl);
-const apiKey = ref("");
+const email = ref("");
+const password = ref("");
 const error = ref("");
 const loading = ref(false);
 
 async function submit() {
   error.value = "";
   loading.value = true;
-  auth.login(baseUrl.value, apiKey.value);
   try {
-    await api.get("/v1/tenants/me"); // validates the key
+    const res = await api.post<LoginResponse>("/v1/console/login", {
+      email: email.value.trim(),
+      password: password.value,
+    });
+    auth.setSession(res.token, res.tenant);
     router.push({ name: "dashboard" });
   } catch (e) {
-    auth.logout();
-    error.value = e instanceof Error ? e.message : "sign-in failed";
+    error.value = e instanceof ApiError ? e.message : "sign-in failed";
   } finally {
     loading.value = false;
   }
@@ -37,23 +45,24 @@ async function submit() {
         <div class="text-sm text-gray-500">Console sign-in</div>
       </div>
       <label class="block">
-        <span class="text-sm font-medium text-gray-700">API base URL</span>
+        <span class="text-sm font-medium text-gray-700">Email</span>
         <input
-          v-model="baseUrl"
-          type="url"
+          v-model="email"
+          type="email"
           required
+          autocomplete="username"
           class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-          placeholder="http://localhost:8085"
+          placeholder="admin@tring.local"
         />
       </label>
       <label class="block">
-        <span class="text-sm font-medium text-gray-700">API key</span>
+        <span class="text-sm font-medium text-gray-700">Password</span>
         <input
-          v-model="apiKey"
+          v-model="password"
           type="password"
           required
+          autocomplete="current-password"
           class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-          placeholder="tk_live_…"
         />
       </label>
       <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
@@ -64,9 +73,6 @@ async function submit() {
       >
         {{ loading ? "Signing in…" : "Sign in" }}
       </button>
-      <p class="text-xs text-gray-400 text-center">
-        The key is stored in your browser and sent only to the Tring API.
-      </p>
     </form>
   </div>
 </template>

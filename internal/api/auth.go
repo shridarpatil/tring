@@ -23,21 +23,32 @@ type Tenant struct {
 	FailoverCauses   []string  `json:"failover_causes"`
 }
 
+// AuthRequired gates all /v1/* tenant-scoped routes on a console JWT
+// issued by /v1/console/login. Server-to-server callers (CRM backends)
+// will get their own credential mechanism later (service accounts);
+// v0 is console-only.
 func (s *Server) AuthRequired(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := bearerToken(r)
-		if key == "" {
-			writeError(w, http.StatusUnauthorized, "missing API key")
+		token := bearerToken(r)
+		if token == "" {
+			writeError(w, http.StatusUnauthorized, "missing credentials")
 			return
 		}
+
+		claims, err := s.parseConsoleToken(token)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+
 		var t Tenant
-		err := s.db.Pool.QueryRow(r.Context(),
+		err = s.db.Pool.QueryRow(r.Context(),
 			`SELECT id, name, sip_domain, outbound_strategy, failover_causes
-			 FROM tenants WHERE api_key_hash = $1`,
-			HashKey(key),
+			 FROM tenants WHERE id = $1`,
+			claims.TenantID,
 		).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid API key")
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
 		ctx := context.WithValue(r.Context(), tenantCtxKey, &t)

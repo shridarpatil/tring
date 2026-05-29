@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/whatomate/tring/internal/api"
+	"github.com/whatomate/tring/internal/bootstrap"
 	"github.com/whatomate/tring/internal/db"
 	tringmigrate "github.com/whatomate/tring/internal/migrate"
 )
@@ -70,6 +71,17 @@ func main() {
 		log.Fatalf("db: %v", err)
 	}
 	defer database.Close()
+
+	// Auto-seed the initial tenant + admin user from env on first boot
+	// against an empty database. No-op on every subsequent boot, and a
+	// no-op if the operator hasn't set the bootstrap env vars at all.
+	if err := bootstrap.Run(ctx, database, bootstrap.Config{
+		TenantName:    os.Getenv("TRING_BOOTSTRAP_TENANT"),
+		AdminEmail:    os.Getenv("TRING_ADMIN_EMAIL"),
+		AdminPassword: os.Getenv("TRING_ADMIN_PASSWORD"),
+	}); err != nil {
+		log.Fatalf("bootstrap: %v", err)
+	}
 
 	if *seed != "" {
 		if err := seedTenant(ctx, database, *seed); err != nil {

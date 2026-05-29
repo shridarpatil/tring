@@ -124,6 +124,11 @@ func (s *Server) Router() http.Handler {
 
 	r.Route("/v1", func(r chi.Router) {
 		// Tenant-scoped routes: API key auth, full access within the tenant.
+		// Public console-auth endpoint: takes email+password, returns a
+		// JWT. Lives outside the AuthRequired group because by definition
+		// the caller has no credentials yet.
+		r.Post("/console/login", s.handleConsoleLogin)
+
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)
 			r.Get("/tenants/me", s.handleGetMyTenant)
