@@ -56,7 +56,6 @@ const flowId = computed(() => route.params.id as string);
 
 const flowName = ref("");
 const isActive = ref(true);
-const isCallStart = ref(false);
 const isOutgoingEnd = ref(false);
 const saving = ref(false);
 
@@ -413,7 +412,6 @@ async function saveFlow() {
     await api.patch<Flow>(`/v1/flows/${flowId.value}`, {
       name: flowName.value || "Untitled flow",
       is_active: isActive.value,
-      is_call_start: isCallStart.value,
       is_outgoing_end: isOutgoingEnd.value,
       definition: buildIVRFlowData(),
     });
@@ -434,7 +432,6 @@ onMounted(async () => {
     ]);
     flowName.value = f.name;
     isActive.value = f.is_active;
-    isCallStart.value = f.is_call_start;
     isOutgoingEnd.value = f.is_outgoing_end;
     if (f.definition && f.definition.version === 2 && f.definition.nodes?.length) {
       loadFromIVRFlowData(f.definition);
@@ -469,15 +466,6 @@ onMounted(async () => {
       <label class="flex items-center gap-2 ml-2">
         <input v-model="isActive" type="checkbox" class="rounded" />
         <span class="text-xs whitespace-nowrap">Active</span>
-      </label>
-      <label class="flex items-center gap-2 ml-1">
-        <input
-          v-model="isCallStart"
-          type="checkbox"
-          :disabled="!isActive"
-          class="rounded"
-        />
-        <span class="text-xs whitespace-nowrap">Incoming Call Start</span>
       </label>
       <label class="flex items-center gap-2 ml-1">
         <input

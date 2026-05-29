@@ -92,7 +92,6 @@ onMounted(refresh);
           <tr>
             <th class="px-5 py-2 font-medium">Name</th>
             <th class="px-5 py-2 font-medium">Active</th>
-            <th class="px-5 py-2 font-medium">Call start</th>
             <th class="px-5 py-2 font-medium">Nodes</th>
             <th class="px-5 py-2 font-medium">Updated</th>
             <th class="px-5 py-2 font-medium"></th>
@@ -104,11 +103,6 @@ onMounted(refresh);
             <td class="px-5 py-2">
               <span :class="f.is_active ? 'text-green-600' : 'text-gray-400'">
                 {{ f.is_active ? "yes" : "no" }}
-              </span>
-            </td>
-            <td class="px-5 py-2">
-              <span :class="f.is_call_start ? 'text-green-600' : 'text-gray-400'">
-                {{ f.is_call_start ? "yes" : "—" }}
               </span>
             </td>
             <td class="px-5 py-2 text-gray-500">{{ f.definition?.nodes?.length || 0 }}</td>
