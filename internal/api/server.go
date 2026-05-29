@@ -156,6 +156,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/flows/{id}", s.handleGetFlow)
 			r.Patch("/flows/{id}", s.handlePatchFlow)
 			r.Delete("/flows/{id}", s.handleDeleteFlow)
+			r.Post("/flows/{id}/simulate", s.handleSimulateFlow)
 
 			r.Post("/trunks", s.handleCreateTrunk)
 			r.Get("/trunks", s.handleListTrunks)
