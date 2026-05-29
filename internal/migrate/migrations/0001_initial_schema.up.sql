@@ -215,3 +215,19 @@ CREATE UNIQUE INDEX trunks_tenant_name_unique ON trunks (tenant_id, name);
 -- routing prefers it; otherwise falls back to env-based provider gateways.
 ALTER TABLE numbers
     ADD COLUMN trunk_id UUID REFERENCES trunks(id) ON DELETE SET NULL;
+
+-- Console users — operators who log into the Vue admin console.
+-- Each user belongs to exactly one tenant (multi-tenant orgs get one
+-- user row per tenant they administer; v0 doesn't model cross-tenant
+-- access). password_hash is bcrypt (cost 10). Email is unique across
+-- the whole system, not per-tenant, to keep the login form a single
+-- field. Separate from `agents` (SIP identities) — a console operator
+-- is not a callable SIP endpoint.
+CREATE TABLE users (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_users_tenant ON users(tenant_id);
