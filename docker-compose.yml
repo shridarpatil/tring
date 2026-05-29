@@ -98,12 +98,6 @@ services:
     # `TRING_TAG=v0.1.0` in .env. Local source-tree dev: bypass with
     # `docker compose up -d --build api`.
     image: ghcr.io/shridarpatil/tring-api:${TRING_TAG:-develop}
-    # `missing` = use local image if present, only pull from GHCR if
-    # not. So `docker compose build api` (which tags the build as
-    # :develop via the image field above) wins over the registry on a
-    # subsequent plain `up -d`. Switch to `always` in CI to guarantee a
-    # fresh pull.
-    pull_policy: missing
     build:
       context: .
       args:
@@ -125,6 +119,14 @@ services:
       - TRING_DSN=${TRING_DSN:-postgres://tring:tring_dev@127.0.0.1:5434/tring}
       - TRING_JWT_SECRET=${TRING_JWT_SECRET:-tring_dev_jwt_secret_change_me_in_prod}
       - TRING_FS_BASIC_AUTH=${TRING_FS_BASIC_AUTH:-fs:fs_dev_secret_change_me_in_prod}
+      # First-boot auto-seed: creates a tenant + admin console user the
+      # first time the api starts against an empty database. Idempotent
+      # — subsequent boots are no-ops, changing these values does NOT
+      # rotate credentials (use the console's password-change flow).
+      # For prod, override these in .env with values you actually want.
+      - TRING_BOOTSTRAP_TENANT=${TRING_BOOTSTRAP_TENANT:-Default}
+      - TRING_ADMIN_EMAIL=${TRING_ADMIN_EMAIL:-admin@tring.local}
+      - TRING_ADMIN_PASSWORD=${TRING_ADMIN_PASSWORD:-tring_dev_change_me}
       # Empty TRING_WS_URL → API auto-detects the host's outbound IP and
       # uses ws://<that>:5066 (FreeSWITCH's plain-WS binding). Override
       # with wss://voice.yourdomain:7443 once you front FS with TLS.
@@ -150,7 +152,6 @@ services:
 
   orchestrator:
     image: ghcr.io/shridarpatil/tring-orchestrator:${TRING_TAG:-develop}
-    pull_policy: missing
     build:
       context: .
       args:
@@ -180,7 +181,6 @@ services:
     # bring it up explicitly with `docker compose --profile dev up -d`.
     profiles: ["dev"]
     image: tring-sip-sim:${TRING_TAG:-develop}
-    pull_policy: build
     build:
       context: ./sim
     container_name: tring-sip-sim

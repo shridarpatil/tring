@@ -10,13 +10,15 @@ export class ApiError extends Error {
   }
 }
 
+// Same-origin requests. The bundle is served by the Go api binary, so
+// "/v1/..." resolves to the same backend. No base-URL plumbing.
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const { baseUrl, apiKey } = auth.creds();
-  const res = await fetch(`${baseUrl}${path}`, {
+  const token = auth.token();
+  const res = await fetch(path, {
     method,
     headers: {
       "Content-Type": "application/json",
-      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
