@@ -22,6 +22,9 @@ export interface PhoneNumber {
   e164: string;
   type: string; // inbound | outbound | masking
   trunk_id: string | null;
+  // Flow attached to this DID for inbound IVR routing. null = calls
+  // skip the executor and fall through to the default dialplan.
+  flow_id: string | null;
   provider_did_id: string;
   priority: number;
   active: boolean;
