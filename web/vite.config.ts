@@ -16,5 +16,15 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // In dev (`npm run dev`) the Vue console runs on Vite's port, but
+    // the api client uses relative URLs so it can ride on the embedded
+    // mount in prod. Proxy the api paths to the Go binary on :8085 so
+    // both modes Just Work. Override TRING_DEV_API_URL if your api
+    // listens on a non-default host/port.
+    proxy: {
+      "/v1": process.env.TRING_DEV_API_URL || "http://localhost:8085",
+      "/fs": process.env.TRING_DEV_API_URL || "http://localhost:8085",
+      "/healthz": process.env.TRING_DEV_API_URL || "http://localhost:8085",
+    },
   },
 });
