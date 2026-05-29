@@ -161,7 +161,7 @@ onUnmounted(() => {
         </button>
         <button
           class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800"
-          @click="newTrunk(); showForm = !showForm"
+          @click="showForm ? (showForm = false) : newTrunk()"
         >
           {{ showForm ? "Cancel" : "New trunk" }}
         </button>
