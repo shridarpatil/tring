@@ -101,6 +101,7 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	uuidStr := ev.GetHeader("Unique-ID")
 	called := ev.GetHeader("Caller-Destination-Number")
 	caller := ev.GetHeader("Caller-Caller-ID-Number")
+	e.Logger.Printf("ivr: handler entry uuid=%s called=%s caller=%s", uuidStr, called, caller)
 
 	if uuidStr == "" || called == "" {
 		e.Logger.Printf("ivr: missing UUID or destination on inbound call")
@@ -122,10 +123,12 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	tenantID := resolved.TenantID
 	flow := *resolved.Flow
 
+	e.Logger.Printf("ivr: resolved flow for %s, answering", called)
 	if err := conn.AnswerCall(ctx, uuidStr); err != nil {
 		e.Logger.Printf("ivr: answer failed: %v", err)
 		return
 	}
+	e.Logger.Printf("ivr: answered, walking from entry node %s", flow.EntryNode)
 
 	state := &callState{
 		uuid:     uuidStr,
@@ -213,11 +216,13 @@ func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData
 		if !ok {
 			return fmt.Errorf("node %s not found", nodeID)
 		}
+		e.Logger.Printf("ivr: walk depth=%d node=%s type=%s", depth, node.ID, node.Type)
 
 		outcome, err := e.runNode(ctx, conn, node, st)
 		if err != nil {
 			return fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
 		}
+		e.Logger.Printf("ivr: walk node=%s outcome=%q", node.ID, outcome)
 		if outcome == "" {
 			// Terminal node (hangup) or executor explicitly ended.
 			return nil
@@ -297,11 +302,14 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 // ─── Node implementations (real) ────────────────────────────────────
 
 func (e *Executor) runGreeting(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
+	e.Logger.Printf("ivr: runGreeting node=%s config=%+v", node.ID, node.Config)
 	if file, ok := node.Config["audio_file"].(string); ok && file != "" {
+		e.Logger.Printf("ivr: playback file=%s (sync)", file)
 		_, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: file, Sync: true})
 		if err != nil {
 			return "", fmt.Errorf("playback: %w", err)
 		}
+		e.Logger.Printf("ivr: playback done")
 	} else if text, ok := node.Config["greeting_text"].(string); ok && text != "" {
 		_, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "speak", AppArgs: "flite|kal|" + text, Sync: true})
 		if err != nil {
