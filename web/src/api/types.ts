@@ -123,7 +123,6 @@ export interface Flow {
   name: string;
   description?: string;
   is_active: boolean;
-  is_call_start: boolean;
   is_outgoing_end: boolean;
   definition: IVRFlowData;
   welcome_audio_url?: string;

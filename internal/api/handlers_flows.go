@@ -22,7 +22,6 @@ type Flow struct {
 	Name            string          `json:"name"`
 	Description     string          `json:"description"`
 	IsActive        bool            `json:"is_active"`
-	IsCallStart     bool            `json:"is_call_start"`
 	IsOutgoingEnd   bool            `json:"is_outgoing_end"`
 	Definition      json.RawMessage `json:"definition"`
 	WelcomeAudioURL string          `json:"welcome_audio_url"`
@@ -34,7 +33,6 @@ type createFlowRequest struct {
 	Name            string          `json:"name"`
 	Description     string          `json:"description,omitempty"`
 	IsActive        *bool           `json:"is_active,omitempty"`
-	IsCallStart     *bool           `json:"is_call_start,omitempty"`
 	IsOutgoingEnd   *bool           `json:"is_outgoing_end,omitempty"`
 	Definition      json.RawMessage `json:"definition,omitempty"`
 	WelcomeAudioURL string          `json:"welcome_audio_url,omitempty"`
@@ -44,14 +42,13 @@ type patchFlowRequest struct {
 	Name            *string         `json:"name,omitempty"`
 	Description     *string         `json:"description,omitempty"`
 	IsActive        *bool           `json:"is_active,omitempty"`
-	IsCallStart     *bool           `json:"is_call_start,omitempty"`
 	IsOutgoingEnd   *bool           `json:"is_outgoing_end,omitempty"`
 	Definition      json.RawMessage `json:"definition,omitempty"`
 	WelcomeAudioURL *string         `json:"welcome_audio_url,omitempty"`
 }
 
 const flowSelectColumns = `
-	id, tenant_id, name, description, is_active, is_call_start, is_outgoing_end,
+	id, tenant_id, name, description, is_active, is_outgoing_end,
 	definition, welcome_audio_url, created_at, updated_at
 `
 
@@ -59,7 +56,7 @@ func scanFlow(scanner interface{ Scan(...interface{}) error }) (Flow, error) {
 	var f Flow
 	err := scanner.Scan(
 		&f.ID, &f.TenantID, &f.Name, &f.Description,
-		&f.IsActive, &f.IsCallStart, &f.IsOutgoingEnd,
+		&f.IsActive, &f.IsOutgoingEnd,
 		&f.Definition, &f.WelcomeAudioURL, &f.CreatedAt, &f.UpdatedAt,
 	)
 	return f, err
@@ -86,15 +83,15 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	row := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO flows (tenant_id, name, description, is_active, is_call_start, is_outgoing_end, definition, welcome_audio_url)
+		INSERT INTO flows (tenant_id, name, description, is_active, is_outgoing_end, definition, welcome_audio_url)
 		VALUES ($1, $2, $3,
-			COALESCE($4, true), COALESCE($5, false), COALESCE($6, false),
-			COALESCE($7::jsonb, '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb),
-			COALESCE(NULLIF($8, ''), '')
+			COALESCE($4, true), COALESCE($5, false),
+			COALESCE($6::jsonb, '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb),
+			COALESCE(NULLIF($7, ''), '')
 		)
 		RETURNING `+flowSelectColumns,
 		t.ID, req.Name, req.Description,
-		req.IsActive, req.IsCallStart, req.IsOutgoingEnd,
+		req.IsActive, req.IsOutgoingEnd,
 		def, req.WelcomeAudioURL,
 	)
 	f, err := scanFlow(row)
@@ -170,14 +167,13 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 			name             = COALESCE($1, name),
 			description      = COALESCE($2, description),
 			is_active        = COALESCE($3, is_active),
-			is_call_start    = COALESCE($4, is_call_start),
-			is_outgoing_end  = COALESCE($5, is_outgoing_end),
-			definition       = COALESCE($6::jsonb, definition),
-			welcome_audio_url = COALESCE($7, welcome_audio_url),
+			is_outgoing_end  = COALESCE($4, is_outgoing_end),
+			definition       = COALESCE($5::jsonb, definition),
+			welcome_audio_url = COALESCE($6, welcome_audio_url),
 			updated_at       = now()
-		WHERE id = $8 AND tenant_id = $9
+		WHERE id = $7 AND tenant_id = $8
 		RETURNING `+flowSelectColumns,
-		req.Name, req.Description, req.IsActive, req.IsCallStart, req.IsOutgoingEnd,
+		req.Name, req.Description, req.IsActive, req.IsOutgoingEnd,
 		def, req.WelcomeAudioURL, id, t.ID,
 	)
 	f, err := scanFlow(row)
