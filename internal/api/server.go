@@ -14,6 +14,7 @@ import (
 
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
+	"github.com/whatomate/tring/internal/orchestrator"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
 )
@@ -58,6 +59,11 @@ type Server struct {
 	// nextRoundRobin (see trunks.go).
 	rrMu sync.Mutex
 	rr   map[uuid.UUID]int
+
+	// Interactive IVR simulator sessions. In-memory, process-local,
+	// TTL'd on idle — they're a developer convenience, not durable
+	// state. See internal/orchestrator/sim_session.go.
+	simManager *orchestrator.SimManager
 }
 
 // iceServer matches the RTCIceServer JSON shape consumed by browsers.
@@ -80,6 +86,7 @@ func NewServer(cfg Config) *Server {
 		fs:          freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
 		notifier:    webhook.New(cfg.DB),
 		iceServers:  buildICEServers(cfg),
+		simManager:  orchestrator.NewSimManager(),
 	}
 }
 
@@ -157,6 +164,8 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/flows/{id}", s.handlePatchFlow)
 			r.Delete("/flows/{id}", s.handleDeleteFlow)
 			r.Post("/flows/{id}/simulate", s.handleSimulateFlow)
+			r.Post("/flows/{id}/simulate/start", s.handleSimulateStart)
+			r.Post("/flows/simulate/sessions/{sid}/input", s.handleSimulateInput)
 
 			r.Post("/trunks", s.handleCreateTrunk)
 			r.Get("/trunks", s.handleListTrunks)

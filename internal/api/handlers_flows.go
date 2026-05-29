@@ -258,3 +258,61 @@ func (s *Server) handleSimulateFlow(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+// handleSimulateStart begins an interactive session. The walker runs
+// until it hits a Menu/Gather (then pauses for input) or the flow ends.
+// Client receives a session_id to PATCH input into later.
+func (s *Server) handleSimulateStart(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var input orchestrator.SimInput
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+	var defJSON []byte
+	err = s.db.Pool.QueryRow(r.Context(),
+		`SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2`,
+		id, t.ID,
+	).Scan(&defJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "flow not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	snap, err := s.simManager.Start(defJSON, input)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}
+
+// handleSimulateInput resumes a paused session with the supplied DTMF.
+// 404 if the session was GC'd (idle past TTL) — the UI restarts in
+// that case.
+func (s *Server) handleSimulateInput(w http.ResponseWriter, r *http.Request) {
+	sid := chi.URLParam(r, "sid")
+	var body struct {
+		DTMF string `json:"dtmf"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	snap, err := s.simManager.Input(sid, body.DTMF)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
+}

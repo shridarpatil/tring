@@ -61,16 +61,16 @@ const isOutgoingEnd = ref(false);
 const saving = ref(false);
 
 // ─── Simulator panel ───────────────────────────────────────────────
-// Click "Test" → showSimPanel toggles a right-side drawer that posts
-// to /v1/flows/{id}/simulate and renders the returned trace. DTMF is
-// a comma-separated string for ergonomics ("1,2,*"); we split it on
-// commas and whitespace before sending to the backend.
+// Click "Test" → showSimPanel toggles a right-side drawer that drives
+// the flow interactively. Walker is server-side and pauses on every
+// Menu / Gather node, surfacing an awaiting_node with a prompt. The
+// UI then asks the operator for a digit and POSTs it back.
 const showSimPanel = ref(false);
-const simRunning = ref(false);
-const simDTMF = ref("");
+const simBusy = ref(false);
 const simCaller = ref("+10000000000");
-const simResult = ref<SimResult | null>(null);
+const simInput = ref("");
 const simError = ref("");
+const simSession = ref<SimSnapshot | null>(null);
 
 interface SimStep {
   node_id: string;
@@ -80,39 +80,63 @@ interface SimStep {
   dtmf_input?: string;
   outcome: string;
 }
-interface SimResult {
+interface AwaitingNode {
+  node_id: string;
+  node_type: string;
+  prompt?: string;
+}
+interface SimSnapshot {
+  session_id: string;
+  status: "awaiting_dtmf" | "ended" | "error";
   steps: SimStep[];
-  ended_at: string;
-  hangup_cause: string;
   vars: Record<string, string>;
+  awaiting_node?: AwaitingNode;
+  ended_at?: string;
+  hangup_cause?: string;
   error?: string;
 }
 
-async function runSimulation() {
-  simRunning.value = true;
+async function startSimulation() {
+  simBusy.value = true;
   simError.value = "";
-  simResult.value = null;
+  simSession.value = null;
+  simInput.value = "";
+  // Persist the on-canvas edits first so the simulator runs the version
+  // the operator can see. Failures during save don't block the run.
   try {
-    const dtmf = simDTMF.value
-      .split(/[,\s]+/)
-      .map((d) => d.trim())
-      .filter(Boolean);
-    // Save first so the trace reflects what's on the canvas right now,
-    // not the last persisted version. Skip in error paths so a broken
-    // unsaved canvas doesn't block the test.
-    try {
-      await saveFlow();
-    } catch {
-      /* surface the simulator's own error if save fails */
-    }
-    simResult.value = await api.post<SimResult>(`/v1/flows/${flowId.value}/simulate`, {
-      caller: simCaller.value || undefined,
-      dtmf: dtmf.length ? dtmf : undefined,
-    });
+    await saveFlow();
+  } catch {
+    /* fall through */
+  }
+  try {
+    simSession.value = await api.post<SimSnapshot>(
+      `/v1/flows/${flowId.value}/simulate/start`,
+      { caller: simCaller.value || undefined },
+    );
   } catch (e) {
-    simError.value = e instanceof Error ? e.message : "simulation failed";
+    simError.value = e instanceof Error ? e.message : "start failed";
   } finally {
-    simRunning.value = false;
+    simBusy.value = false;
+  }
+}
+
+async function sendSimInput() {
+  if (!simSession.value || simSession.value.status !== "awaiting_dtmf") return;
+  if (!simInput.value) return;
+  simBusy.value = true;
+  simError.value = "";
+  const sid = simSession.value.session_id;
+  const dtmf = simInput.value;
+  simInput.value = "";
+  try {
+    simSession.value = await api.post<SimSnapshot>(
+      `/v1/flows/simulate/sessions/${sid}/input`,
+      { dtmf },
+    );
+  } catch (e) {
+    simError.value = e instanceof Error ? e.message : "send failed";
+  } finally {
+    simBusy.value = false;
   }
 }
 const savedMsg = ref("");
@@ -561,38 +585,31 @@ onMounted(async () => {
             <span class="font-medium text-gray-700">Caller</span>
             <input
               v-model="simCaller"
-              class="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+              :disabled="simSession?.status === 'awaiting_dtmf'"
+              class="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-500"
             />
-          </label>
-          <label class="block text-xs">
-            <span class="font-medium text-gray-700">DTMF queue</span>
-            <input
-              v-model="simDTMF"
-              placeholder="1, 2, 5"
-              class="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm font-mono"
-            />
-            <span class="text-[10px] text-gray-400">
-              Comma-separated digits consumed by Menu / Gather nodes in order.
-            </span>
           </label>
           <button
-            :disabled="simRunning"
+            :disabled="simBusy"
             class="w-full bg-gray-900 text-white text-sm rounded-md py-1.5 hover:bg-gray-800 disabled:opacity-50"
-            @click="runSimulation"
+            @click="startSimulation"
           >
-            {{ simRunning ? "Running…" : "Run simulation" }}
+            {{
+              simSession ? (simBusy ? "Running…" : "Restart simulation") : (simBusy ? "Starting…" : "Start simulation")
+            }}
           </button>
           <p v-if="simError" class="text-xs text-red-600">{{ simError }}</p>
         </div>
 
         <div class="flex-1 overflow-auto p-4 text-xs">
-          <div v-if="!simResult" class="text-gray-400 text-center py-8">
-            Run the simulation to see the path the call would take.
+          <div v-if="!simSession" class="text-gray-400 text-center py-8">
+            Start a simulation. The walker pauses on every Menu / Gather and
+            asks for the next digit, just like a real call.
           </div>
           <div v-else>
             <ol class="space-y-2">
               <li
-                v-for="(step, idx) in simResult.steps"
+                v-for="(step, idx) in simSession.steps"
                 :key="idx"
                 class="border border-gray-200 rounded-md p-2"
               >
@@ -613,14 +630,52 @@ onMounted(async () => {
                 </div>
               </li>
             </ol>
-            <div class="mt-3 p-2 rounded-md bg-gray-50 text-gray-700">
-              <div><span class="font-medium">Ended at:</span> {{ simResult.ended_at }}</div>
-              <div><span class="font-medium">Hangup cause:</span> {{ simResult.hangup_cause }}</div>
-              <div v-if="Object.keys(simResult.vars).length">
-                <span class="font-medium">Vars:</span> {{ JSON.stringify(simResult.vars) }}
+
+            <!-- Live prompt for the paused node — Menu/Gather only. -->
+            <div
+              v-if="simSession.status === 'awaiting_dtmf' && simSession.awaiting_node"
+              class="mt-4 border-2 border-gray-900 rounded-md p-3 bg-gray-50"
+            >
+              <div class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+                Waiting at {{ simSession.awaiting_node.node_type }}
               </div>
-              <div v-if="simResult.error" class="text-red-600">
-                <span class="font-medium">Error:</span> {{ simResult.error }}
+              <div v-if="simSession.awaiting_node.prompt" class="text-gray-800 mb-2">
+                {{ simSession.awaiting_node.prompt }}
+              </div>
+              <form class="flex gap-2" @submit.prevent="sendSimInput">
+                <input
+                  v-model="simInput"
+                  autofocus
+                  placeholder="press a digit"
+                  class="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm font-mono"
+                />
+                <button
+                  type="submit"
+                  :disabled="simBusy || !simInput"
+                  class="bg-gray-900 text-white text-sm rounded-md px-3 py-1.5 hover:bg-gray-800 disabled:opacity-50"
+                >
+                  Send
+                </button>
+              </form>
+              <div class="mt-1 text-[10px] text-gray-400">
+                For Menu: a single digit (1-9, *, #). For Gather: the full sequence.
+              </div>
+            </div>
+
+            <!-- Ended state — flow finished or errored. -->
+            <div
+              v-else-if="simSession.status === 'ended' || simSession.status === 'error'"
+              class="mt-3 p-2 rounded-md bg-gray-50 text-gray-700"
+            >
+              <div><span class="font-medium">Ended at:</span> {{ simSession.ended_at }}</div>
+              <div>
+                <span class="font-medium">Hangup cause:</span> {{ simSession.hangup_cause }}
+              </div>
+              <div v-if="Object.keys(simSession.vars).length">
+                <span class="font-medium">Vars:</span> {{ JSON.stringify(simSession.vars) }}
+              </div>
+              <div v-if="simSession.error" class="text-red-600">
+                <span class="font-medium">Error:</span> {{ simSession.error }}
               </div>
             </div>
           </div>
