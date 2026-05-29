@@ -4,10 +4,11 @@
 // can stand alone.
 import { ref, onMounted } from "vue";
 import { api } from "../api/client";
-import type { PhoneNumber, Trunk } from "../api/types";
+import type { PhoneNumber, Trunk, Flow } from "../api/types";
 
 const numbers = ref<PhoneNumber[]>([]);
 const trunks = ref<Trunk[]>([]);
+const flows = ref<Flow[]>([]);
 const loading = ref(true);
 const error = ref("");
 
@@ -17,8 +18,12 @@ const form = ref<{
   e164: string;
   type: "inbound" | "outbound" | "masking";
   trunk_id: string;
+  // Flow assigned to inbound calls on this DID. Empty string = no
+  // flow; the create endpoint accepts a missing field as "no flow",
+  // so we just drop it from the body when empty.
+  flow_id: string;
   priority: number;
-}>({ e164: "", type: "outbound", trunk_id: "", priority: 100 });
+}>({ e164: "", type: "outbound", trunk_id: "", flow_id: "", priority: 100 });
 
 const types = ["outbound", "inbound", "masking"];
 
@@ -26,12 +31,14 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const [n, t] = await Promise.all([
+    const [n, t, f] = await Promise.all([
       api.get<PhoneNumber[]>("/v1/numbers"),
       api.get<Trunk[]>("/v1/trunks"),
+      api.get<Flow[]>("/v1/flows"),
     ]);
     numbers.value = n;
     trunks.value = t;
+    flows.value = f;
   } catch (e) {
     error.value = e instanceof Error ? e.message : "failed to load";
   } finally {
@@ -49,8 +56,9 @@ async function create() {
       priority: form.value.priority,
     };
     if (form.value.trunk_id) body.trunk_id = form.value.trunk_id;
+    if (form.value.flow_id) body.flow_id = form.value.flow_id;
     await api.post("/v1/numbers", body);
-    form.value = { e164: "", type: "outbound", trunk_id: "", priority: 100 };
+    form.value = { e164: "", type: "outbound", trunk_id: "", flow_id: "", priority: 100 };
     showForm.value = false;
     await load();
   } catch (e) {
@@ -64,6 +72,23 @@ async function toggleActive(n: PhoneNumber) {
   error.value = "";
   try {
     await api.patch(`/v1/numbers/${n.id}`, { active: !n.active });
+    await load();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "update failed";
+  }
+}
+
+// assignFlow drives the per-row Flow <select>: empty value means
+// explicit unassign (clear_flow=true), otherwise set the chosen flow.
+async function assignFlow(n: PhoneNumber, ev: Event) {
+  const newId = (ev.target as HTMLSelectElement).value;
+  error.value = "";
+  try {
+    if (newId === "") {
+      await api.patch(`/v1/numbers/${n.id}`, { clear_flow: true });
+    } else {
+      await api.patch(`/v1/numbers/${n.id}`, { flow_id: newId });
+    }
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "update failed";
@@ -95,7 +120,7 @@ onMounted(load);
 
     <form
       v-if="showForm"
-      class="bg-white rounded-xl border border-gray-200 p-5 grid sm:grid-cols-5 gap-4 items-end"
+      class="bg-white rounded-xl border border-gray-200 p-5 grid sm:grid-cols-6 gap-4 items-end"
       @submit.prevent="create"
     >
       <label class="block">
@@ -120,6 +145,15 @@ onMounted(load);
         </select>
       </label>
       <label class="block">
+        <span class="text-sm font-medium text-gray-700">Flow</span>
+        <select v-model="form.flow_id" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+          <option value="">— none —</option>
+          <option v-for="f in flows.filter((x) => x.is_active)" :key="f.id" :value="f.id">
+            {{ f.name }}
+          </option>
+        </select>
+      </label>
+      <label class="block">
         <span class="text-sm font-medium text-gray-700">Priority</span>
         <input v-model.number="form.priority" type="number" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
       </label>
@@ -135,6 +169,7 @@ onMounted(load);
             <th class="px-5 py-2 font-medium">Number</th>
             <th class="px-5 py-2 font-medium">Type</th>
             <th class="px-5 py-2 font-medium">Trunk</th>
+            <th class="px-5 py-2 font-medium">Flow</th>
             <th class="px-5 py-2 font-medium">Priority</th>
             <th class="px-5 py-2 font-medium">Active</th>
             <th class="px-5 py-2 font-medium"></th>
@@ -145,6 +180,16 @@ onMounted(load);
             <td class="px-5 py-2 font-mono">{{ n.e164 }}</td>
             <td class="px-5 py-2">{{ n.type }}</td>
             <td class="px-5 py-2 text-xs">{{ trunkName(n.trunk_id) }}</td>
+            <td class="px-5 py-2 text-xs">
+              <select
+                :value="n.flow_id || ''"
+                class="rounded-md border border-gray-300 px-2 py-1 text-xs bg-white"
+                @change="assignFlow(n, $event)"
+              >
+                <option value="">— none —</option>
+                <option v-for="f in flows" :key="f.id" :value="f.id">{{ f.name }}</option>
+              </select>
+            </td>
             <td class="px-5 py-2">{{ n.priority }}</td>
             <td class="px-5 py-2">
               <span :class="n.active ? 'text-green-600' : 'text-gray-400'">{{ n.active ? "yes" : "no" }}</span>
@@ -156,7 +201,7 @@ onMounted(load);
             </td>
           </tr>
           <tr v-if="!loading && numbers.length === 0">
-            <td colspan="6" class="px-5 py-6 text-center text-gray-400">No numbers registered</td>
+            <td colspan="7" class="px-5 py-6 text-center text-gray-400">No numbers registered</td>
           </tr>
         </tbody>
       </table>

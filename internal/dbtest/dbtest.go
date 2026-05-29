@@ -97,7 +97,7 @@ func Setup(t *testing.T) *Fixture {
 	// flushes everything that FKs into tenants too.
 	// `users` joins this list so the seeded console user gets cleared too.
 	_, err = d.Pool.Exec(ctx, `
-		TRUNCATE tenants, agents, numbers, calls, webhooks, webhook_deliveries, users
+		TRUNCATE tenants, agents, numbers, calls, webhooks, webhook_deliveries, users, flows, trunks
 		RESTART IDENTITY CASCADE;
 	`)
 	if err != nil {

@@ -20,6 +20,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/percipia/eslgo"
+
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/orchestrator"
 )
@@ -28,6 +30,11 @@ const (
 	defaultDSN         = "postgres://tring:tring_dev@localhost:5434/tring"
 	defaultESLAddr     = "127.0.0.1:8021"
 	defaultESLPassword = "ClueCon"
+	// IVR socket — the FreeSWITCH dialplan does
+	//   <action application="socket" data="127.0.0.1:8086 async full"/>
+	// for DIDs the operator wants to put through the flow builder. The
+	// executor's HandleInboundCall is registered as the handler.
+	defaultIVRAddr = ":8086"
 )
 
 func main() {
@@ -45,6 +52,21 @@ func main() {
 		envOr("TRING_ESL_ADDR", defaultESLAddr),
 		envOr("TRING_ESL_PASSWORD", defaultESLPassword),
 	)
+
+	// IVR executor — starts an outbound-ESL listener so FreeSWITCH can
+	// hand inbound calls to us via the dialplan's `socket` application.
+	// Lives in this same process so the orchestrator can reuse its DB
+	// pool. Listener runs in its own goroutine; it doesn't block the
+	// event-loop runner below.
+	ivrAddr := envOr("TRING_IVR_ADDR", defaultIVRAddr)
+	exec := orchestrator.NewExecutor(dbase)
+	go func() {
+		log.Printf("ivr executor listening on %s", ivrAddr)
+		if err := eslgo.ListenAndServe(ivrAddr, exec.HandleInboundCall); err != nil {
+			log.Printf("ivr listener exited: %v", err)
+		}
+	}()
+
 	log.Println("tring orchestrator starting")
 	if err := r.Run(ctx); err != nil {
 		log.Fatalf("run: %v", err)

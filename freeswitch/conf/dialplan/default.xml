@@ -13,6 +13,22 @@
 <include>
   <context name="default">
 
+    <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
+         listener BEFORE answering, so the executor decides whether to
+         answer/playback/bridge/etc. based on the flow attached to this
+         DID. If the destination has no flow_id, the executor hangs up
+         with NO_ROUTE_DESTINATION and the call continues down the rest
+         of the dialplan (which then handles authenticated-user calls,
+         echo/loopback test extensions, etc.).
+         async = events stream back without blocking dialplan parser;
+         full  = we get the full channel-data event (all headers) on
+                 the socket so the executor can read Caller-* fields. -->
+    <extension name="tring_ivr" continue="true">
+      <condition field="destination_number" expression="^\d+$">
+        <action application="socket" data="127.0.0.1:8086 async full"/>
+      </condition>
+    </extension>
+
     <extension name="unloop">
       <condition field="${unroll_loops}" expression="^true$"/>
       <condition field="${sip_looped_call}" expression="^true$">

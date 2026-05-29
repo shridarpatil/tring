@@ -108,41 +108,19 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 		return
 	}
 
-	// Look up the flow for this DID. Schema: numbers.flow_id → flows.id.
-	// Tenant scoping comes through numbers.tenant_id.
-	var (
-		tenantID uuid.UUID
-		flowID   *uuid.UUID
-		defJSON  []byte
-	)
-	row := e.DB.Pool.QueryRow(ctx, `
-		SELECT n.tenant_id, n.flow_id, COALESCE(f.definition::text, '')
-		FROM numbers n
-		LEFT JOIN flows f ON f.id = n.flow_id AND f.is_active
-		WHERE n.e164 = $1 AND n.type = 'inbound'
-	`, called)
-	if err := row.Scan(&tenantID, &flowID, &defJSON); err != nil {
+	resolved, err := e.resolveFlow(ctx, called)
+	if err != nil {
 		e.Logger.Printf("ivr: no flow for %s: %v", called, err)
 		_ = conn.HangupCall(ctx, uuidStr, "UNALLOCATED_NUMBER")
 		return
 	}
-	if flowID == nil || len(defJSON) == 0 {
+	if resolved.Flow == nil {
 		e.Logger.Printf("ivr: %s has no flow attached; hanging up", called)
 		_ = conn.HangupCall(ctx, uuidStr, "NORMAL_CLEARING")
 		return
 	}
-
-	var flow ivrFlowData
-	if err := json.Unmarshal(defJSON, &flow); err != nil {
-		e.Logger.Printf("ivr: bad flow JSON for %s: %v", called, err)
-		_ = conn.HangupCall(ctx, uuidStr, "TEMPORARY_FAILURE")
-		return
-	}
-	if flow.EntryNode == "" {
-		e.Logger.Printf("ivr: flow %s has no entry node", *flowID)
-		_ = conn.HangupCall(ctx, uuidStr, "TEMPORARY_FAILURE")
-		return
-	}
+	tenantID := resolved.TenantID
+	flow := *resolved.Flow
 
 	if err := conn.AnswerCall(ctx, uuidStr); err != nil {
 		e.Logger.Printf("ivr: answer failed: %v", err)
@@ -164,6 +142,53 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	// Best-effort hangup if the call's still up. Hangup nodes already do
 	// this; this catches paths that fall through (e.g. no outgoing edge).
 	_ = conn.HangupCall(ctx, uuidStr, "NORMAL_CLEARING")
+}
+
+// ResolvedFlow is what resolveFlow returns: the tenant that owns the
+// dialed DID plus the parsed flow definition, or Flow=nil when the
+// number exists but has no flow attached. Exported so the orchestrator
+// tests can exercise the lookup without a fake ESL connection.
+type ResolvedFlow struct {
+	TenantID uuid.UUID
+	Flow     *ivrFlowData
+}
+
+// resolveFlow looks up the inbound DID in `numbers`, joins to `flows`,
+// and parses the JSON definition. Returns:
+//
+//   - error              the number isn't registered (or the row scan failed)
+//   - (TenantID, nil)    number registered but has no active flow
+//   - (TenantID, &flow)  number registered with an active, valid flow
+//
+// Errors from JSON decoding or empty entry_node are returned so the
+// caller can pick a reject cause; lookup failures bubble pgx errors so
+// "not found" is distinguishable from "DB down".
+func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlow, error) {
+	var (
+		tenantID uuid.UUID
+		flowID   *uuid.UUID
+		defJSON  []byte
+	)
+	row := e.DB.Pool.QueryRow(ctx, `
+		SELECT n.tenant_id, n.flow_id, COALESCE(f.definition::text, '')
+		FROM numbers n
+		LEFT JOIN flows f ON f.id = n.flow_id AND f.is_active
+		WHERE n.e164 = $1 AND n.type = 'inbound'
+	`, called)
+	if err := row.Scan(&tenantID, &flowID, &defJSON); err != nil {
+		return nil, err
+	}
+	if flowID == nil || len(defJSON) == 0 {
+		return &ResolvedFlow{TenantID: tenantID}, nil
+	}
+	var flow ivrFlowData
+	if err := json.Unmarshal(defJSON, &flow); err != nil {
+		return nil, fmt.Errorf("bad flow JSON: %w", err)
+	}
+	if flow.EntryNode == "" {
+		return nil, fmt.Errorf("flow has no entry node")
+	}
+	return &ResolvedFlow{TenantID: tenantID, Flow: &flow}, nil
 }
 
 // callState is the per-call mutable state — variables gathered via

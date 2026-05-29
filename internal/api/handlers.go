@@ -127,6 +127,10 @@ type Number struct {
 	E164          string     `json:"e164"`
 	Type          string     `json:"type"`
 	TrunkID       *uuid.UUID `json:"trunk_id"`
+	// FlowID points at the IVR flow run for inbound calls to this DID
+	// (orchestrator's outbound-ESL listener looks it up on each call).
+	// nil = no IVR — calls fall through to the default dialplan.
+	FlowID        *uuid.UUID `json:"flow_id"`
 	ProviderDIDID string     `json:"provider_did_id,omitempty"`
 	Priority      int        `json:"priority"`
 	Active        bool       `json:"active"`
@@ -137,6 +141,7 @@ type createNumberRequest struct {
 	E164          string     `json:"e164"`
 	Type          string     `json:"type"`
 	TrunkID       *uuid.UUID `json:"trunk_id"`
+	FlowID        *uuid.UUID `json:"flow_id"`
 	ProviderDIDID string     `json:"provider_did_id"`
 	Priority      *int       `json:"priority,omitempty"`
 }
@@ -173,11 +178,11 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 
 	var n Number
 	err := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO numbers (tenant_id, e164, type, trunk_id, provider_did_id, priority)
-		VALUES ($1, $2, $3::number_type, $4, NULLIF($5, ''), $6)
-		RETURNING id, tenant_id, e164, type::text, trunk_id, COALESCE(provider_did_id, ''), priority, active, created_at
-	`, t.ID, req.E164, req.Type, req.TrunkID, req.ProviderDIDID, priority).Scan(
-		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
+		INSERT INTO numbers (tenant_id, e164, type, trunk_id, flow_id, provider_did_id, priority)
+		VALUES ($1, $2, $3::number_type, $4, $5, NULLIF($6, ''), $7)
+		RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
+	`, t.ID, req.E164, req.Type, req.TrunkID, req.FlowID, req.ProviderDIDID, priority).Scan(
+		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if err != nil {
 		writeError(w, http.StatusConflict, "number already registered for this tenant: "+err.Error())
@@ -189,6 +194,11 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 type patchNumberRequest struct {
 	Priority *int  `json:"priority,omitempty"`
 	Active   *bool `json:"active,omitempty"`
+	// FlowID is a tri-state: absent = no change, present-non-nil = set,
+	// present-and-null can't be expressed by *uuid.UUID alone, so we
+	// also carry a `clear_flow` flag for the explicit-unassign case.
+	FlowID    *uuid.UUID `json:"flow_id,omitempty"`
+	ClearFlow bool       `json:"clear_flow,omitempty"`
 }
 
 // handlePatchNumber updates a number's priority / active flag. Used to
@@ -214,8 +224,8 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.Priority == nil && req.Active == nil {
-		writeError(w, http.StatusBadRequest, "at least one of priority or active is required")
+	if req.Priority == nil && req.Active == nil && req.FlowID == nil && !req.ClearFlow {
+		writeError(w, http.StatusBadRequest, "at least one of priority, active, flow_id, or clear_flow is required")
 		return
 	}
 
@@ -257,15 +267,24 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// flow_id update semantics:
+	//   clear_flow=true   → SET flow_id = NULL  (unassign)
+	//   flow_id present   → SET flow_id = req.FlowID
+	//   neither           → keep existing
 	var n Number
 	err = s.db.Pool.QueryRow(r.Context(), `
 		UPDATE numbers
 		SET priority = COALESCE($1, priority),
-		    active   = COALESCE($2, active)
-		WHERE id = $3 AND tenant_id = $4
-		RETURNING id, tenant_id, e164, type::text, trunk_id, COALESCE(provider_did_id, ''), priority, active, created_at
-	`, req.Priority, req.Active, id, t.ID).Scan(
-		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
+		    active   = COALESCE($2, active),
+		    flow_id  = CASE
+		                  WHEN $3::boolean THEN NULL
+		                  WHEN $4::uuid IS NOT NULL THEN $4::uuid
+		                  ELSE flow_id
+		               END
+		WHERE id = $5 AND tenant_id = $6
+		RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
+	`, req.Priority, req.Active, req.ClearFlow, req.FlowID, id, t.ID).Scan(
+		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "number not found")
@@ -328,7 +347,7 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, tenant_id, e164, type::text, trunk_id, COALESCE(provider_did_id, ''), priority, active, created_at
+		SELECT id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
 		FROM numbers
 		WHERE tenant_id = $1
 		ORDER BY type, priority ASC, created_at DESC
@@ -342,7 +361,7 @@ func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	numbers := []Number{}
 	for rows.Next() {
 		var n Number
-		if err := rows.Scan(&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt); err != nil {
+		if err := rows.Scan(&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}

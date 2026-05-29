@@ -78,7 +78,11 @@ jobs:
           # The dbtest harness reads this; unset == skip DB-dependent tests.
           # DB name must contain "test" (guard against truncating real data).
           TRING_TEST_DSN: postgres://tring:tring_dev@127.0.0.1:5432/tring_test
-        run: go test -race -count=1 -timeout=60s ./...
+        # -p 1 serialises test-package execution. dbtest.Setup TRUNCATEs
+        # shared tables + inserts a fixed-sip-domain tenant; running two
+        # packages in parallel would have them race on the UNIQUE
+        # constraint. Cheap to keep serial — total runtime is small.
+        run: go test -race -p 1 -count=1 -timeout=90s ./...
 
   integration:
     name: FreeSWITCH integration

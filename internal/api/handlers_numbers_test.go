@@ -99,6 +99,119 @@ func TestPatchNumberDeactivateWithSpareSucceeds(t *testing.T) {
 	}
 }
 
+// ─── flow_id wiring on numbers ──────────────────────────────────────
+//
+// The IVR executor reads numbers.flow_id to find the flow to run on
+// inbound calls. These tests cover the three movements the operator
+// makes through the console: register a number with a flow attached,
+// assign a flow later via PATCH, and unassign via clear_flow.
+
+// seedFlow inserts a tenant-scoped flow row and returns its UUID.
+func seedFlow(t *testing.T, f *dbtest.Fixture, name string) string {
+	t.Helper()
+	var id string
+	err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO flows (tenant_id, name, definition, is_active)
+		VALUES ($1, $2, '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb, true)
+		RETURNING id
+	`, f.TenantID, name).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert flow: %v", err)
+	}
+	return id
+}
+
+func TestCreateNumberWithFlow(t *testing.T) {
+	f := dbtest.Setup(t)
+	flowID := seedFlow(t, f, "greeting-flow")
+	s := newTestServer(f)
+
+	body := `{"e164":"+918001112222","type":"inbound","flow_id":"` + flowID + `"}`
+	req := authedRequest(t, s, f, "POST", "/v1/numbers", body)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if got := out["flow_id"]; got != flowID {
+		t.Errorf("response flow_id = %v, want %s", got, flowID)
+	}
+}
+
+func TestPatchNumberAssignsFlow(t *testing.T) {
+	f := dbtest.Setup(t)
+	flowID := seedFlow(t, f, "assign-flow")
+	numID := insertInboundForHandlerTest(t, f, "+918002223333")
+	s := newTestServer(f)
+
+	req := authedRequest(t, s, f, "PATCH", "/v1/numbers/"+numID, `{"flow_id":"`+flowID+`"}`)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if got := out["flow_id"]; got != flowID {
+		t.Errorf("response flow_id = %v, want %s", got, flowID)
+	}
+}
+
+func TestPatchNumberClearFlowUnassigns(t *testing.T) {
+	f := dbtest.Setup(t)
+	flowID := seedFlow(t, f, "to-clear")
+	numID := insertInboundWithFlowForHandlerTest(t, f, "+918003334444", flowID)
+	s := newTestServer(f)
+
+	req := authedRequest(t, s, f, "PATCH", "/v1/numbers/"+numID, `{"clear_flow":true}`)
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if got := out["flow_id"]; got != nil {
+		t.Errorf("response flow_id = %v, want nil after clear_flow", got)
+	}
+}
+
+// insertInboundForHandlerTest seeds an unrelated inbound number so the
+// patch tests have something to target. Mirrors the outbound helper
+// above but skips the trunk/priority fluff.
+func insertInboundForHandlerTest(t *testing.T, f *dbtest.Fixture, e164 string) string {
+	t.Helper()
+	var id string
+	err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO numbers (tenant_id, e164, type, provider, priority, active)
+		VALUES ($1, $2, 'inbound', 'generic', 100, true)
+		RETURNING id
+	`, f.TenantID, e164).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert inbound: %v", err)
+	}
+	return id
+}
+
+func insertInboundWithFlowForHandlerTest(t *testing.T, f *dbtest.Fixture, e164, flowID string) string {
+	t.Helper()
+	var id string
+	err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO numbers (tenant_id, e164, type, provider, priority, active, flow_id)
+		VALUES ($1, $2, 'inbound', 'generic', 100, true, $3)
+		RETURNING id
+	`, f.TenantID, e164, flowID).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert inbound: %v", err)
+	}
+	return id
+}
+
 // TestAuthRequiredRejectsMissingToken covers the auth wall every
 // tenant-scoped request flows through.
 func TestAuthRequiredRejectsMissingToken(t *testing.T) {
