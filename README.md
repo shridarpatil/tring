@@ -20,37 +20,34 @@ The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, K
 | Browser SDK | Yes | Limited | Yes (sip.js wrapper) |
 | Per-tenant trunks | Yes | n/a | Planned (Phase 2) |
 
-## Quickstart (one command, fully containerized)
+## Quickstart (no clone)
 
 ```bash
-git clone https://github.com/shridarpatil/tring && cd tring
-docker compose up -d                  # All four services: API + orchestrator + FreeSWITCH + Postgres
+curl -fsSL https://raw.githubusercontent.com/shridarpatil/tring/main/install.sh | sh
+cd tring
+docker compose up -d                  # API + orchestrator + FreeSWITCH + Postgres
 ```
 
+The install script drops `docker-compose.yml`, `.env.example`, and the FreeSWITCH config files into a `tring/` directory. Override the dir with `TRING_DIR=/srv/tring` if you don't want it under the current path.
+
 That brings up:
-- `tring-api` — REST API on `:8085`
+- `tring-api` — REST API + admin console (`:8085`, console at `/admin/`)
 - `tring-orchestrator` — ESL event subscriber (writes CDRs, fires webhooks)
 - `tring-fs` — FreeSWITCH (`:5060` SIP, `:5066` plain WS, `:7443` WSS, `:8021` ESL)
 - `tring-db` — Postgres on `:5434` (moved off `:5432` to coexist with other local DBs)
 
 `docker compose logs -f` to tail everything. `docker compose down` to stop.
 
-For local dev with hot-reload on the Go services, `docker compose stop api orchestrator` then `make api` / `make orchestrator` (host `go run`).
-
-The dev seed creates a tenant with API key `tk_test_dev_local_only_change_me_in_prod`. Place your first call (loopback echo, no real trunk needed):
+If you want the source tree (to hack on the Go services or the Vue console), clone normally:
 
 ```bash
-KEY='tk_test_dev_local_only_change_me_in_prod'
-AGENT=$(curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents | jq -r '.[0].id // empty')
-# If no agent exists yet, create one:
-[ -z "$AGENT" ] && AGENT=$(curl -sS -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"sip_username":"alice","display_name":"Alice"}' \
-  http://localhost:8085/v1/agents | jq -r .id)
-
-curl -sS -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d "{\"agent_id\":\"$AGENT\",\"to\":\"9196\"}" \
-  http://localhost:8085/v1/calls | jq
+git clone https://github.com/shridarpatil/tring && cd tring
+docker compose up -d
 ```
+
+For local dev with hot-reload on the Go services, `docker compose stop api orchestrator` then `make api` / `make orchestrator` (host `go run`).
+
+The first `docker compose up` auto-seeds a tenant + an admin console user from `TRING_BOOTSTRAP_TENANT` / `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` in `.env` (defaults: `admin@tring.local` / `tring_dev_change_me`). Open `http://localhost:8085/admin/` and sign in.
 
 You'll get a `Call` row back with `status=ringing`. Once the agent's browser registers (see SDK below), the call actually rings.
 
