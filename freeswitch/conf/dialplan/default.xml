@@ -16,16 +16,18 @@
     <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
          listener BEFORE answering, so the executor decides whether to
          answer/playback/bridge/etc. based on the flow attached to this
-         DID. If the destination has no flow_id, the executor hangs up
-         with NO_ROUTE_DESTINATION and the call continues down the rest
-         of the dialplan (which then handles authenticated-user calls,
-         echo/loopback test extensions, etc.).
-         async = events stream back without blocking dialplan parser;
-         full  = we get the full channel-data event (all headers) on
-                 the socket so the executor can read Caller-* fields. -->
-    <extension name="tring_ivr" continue="true">
+         DID.
+         We use SYNCHRONOUS socket mode (no `async`): the dialplan
+         parser blocks here until the socket session ends, which keeps
+         the channel alive long enough for the orchestrator to read the
+         channel-data event, look up the flow, and drive the call.
+         `full` = ship the full channel-data event (all headers) on
+                  the socket so the executor can read Caller-* fields.
+         No `continue="true"` — if the orchestrator hangs up cleanly
+         the call ends here; no fall-through into demo extensions. -->
+    <extension name="tring_ivr">
       <condition field="destination_number" expression="^\d+$">
-        <action application="socket" data="127.0.0.1:8086 async full"/>
+        <action application="socket" data="127.0.0.1:8086 full"/>
       </condition>
     </extension>
 
