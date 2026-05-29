@@ -100,8 +100,24 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	signed, exp, err := s.IssueConsoleToken(userID, tenantID, email, consoleTokenTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "issue token")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, consoleLoginResponse{
+		Token:     signed,
+		ExpiresAt: exp,
+		Tenant:    t,
+	})
+}
+
+// IssueConsoleToken signs a console-audience JWT. Exported so tests can
+// mint authenticated requests without going through /v1/console/login.
+func (s *Server) IssueConsoleToken(userID, tenantID uuid.UUID, email string, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
-	exp := now.Add(consoleTokenTTL)
+	exp := now.Add(ttl)
 	claims := ConsoleClaims{
 		TenantID: tenantID,
 		Email:    email,
@@ -115,15 +131,9 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.jwtSecret)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "issue token")
-		return
+		return "", time.Time{}, err
 	}
-
-	writeJSON(w, http.StatusOK, consoleLoginResponse{
-		Token:     signed,
-		ExpiresAt: exp,
-		Tenant:    t,
-	})
+	return signed, exp, nil
 }
 
 // parseConsoleToken validates a Bearer JWT issued by handleConsoleLogin

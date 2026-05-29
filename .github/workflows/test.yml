@@ -11,6 +11,10 @@ name: Tests
 on:
   push:
     branches: [main]
+    # Tag pushes go through the same test gate before release.yml's
+    # responsibilities (GoReleaser binaries + version-tagged images)
+    # kick off in the `release` job at the bottom of this file.
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -52,18 +56,19 @@ jobs:
           go-version: "1.25"
           cache: true
 
-      - name: Apply schema
+      - name: Wait for Postgres
         env:
           PGPASSWORD: tring_dev
         run: |
-          # Wait for the service container to be reachable (the service
-          # health check covers the daemon, but the network path from this
-          # job step can take a second longer).
+          # Service health check covers the daemon; this loop covers the
+          # extra few seconds it takes for the network path from this job
+          # step to settle. Schema bootstrap happens inside dbtest.Setup
+          # (which runs the embedded golang-migrate up against this DB),
+          # so no `psql -f db/schema.sql` step is needed.
           for i in 1 2 3 4 5; do
             if pg_isready -h 127.0.0.1 -U tring -d tring_test; then break; fi
             sleep 2
           done
-          psql -h 127.0.0.1 -U tring -d tring_test -f db/schema.sql
 
       - name: go vet
         run: go vet ./...
@@ -123,3 +128,110 @@ jobs:
       - name: Dump FS logs on failure
         if: failure()
         run: docker compose logs freeswitch | tail -200
+
+  # ─── Publish phase ────────────────────────────────────────────────
+  # Two mutually-exclusive jobs handle publishing, both gated on the
+  # tests passing first:
+  #   - build-develop: main-branch pushes → :develop tag, multi-arch
+  #   - release:       v* tag pushes      → GoReleaser (binaries +
+  #                                          release notes + version-
+  #                                          tagged multi-arch images)
+
+  build-develop:
+    name: Build & push :develop
+    needs: [unit, integration]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [api, orchestrator]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push develop image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          build-args: |
+            CMD=${{ matrix.binary }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.binary }}:develop
+            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.binary }}:develop
+          cache-from: type=gha,scope=tring-${{ matrix.binary }}
+          cache-to: type=gha,mode=max,scope=tring-${{ matrix.binary }}
+
+  release:
+    name: Release (GoReleaser + version-tagged images)
+    needs: [unit, integration]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # GoReleaser creates the GitHub Release + uploads binaries
+      packages: write   # for ghcr.io
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so GoReleaser can build the changelog
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_ORG: ${{ secrets.DOCKERHUB_USERNAME }}
+          GITHUB_ORG: ${{ github.repository_owner }}

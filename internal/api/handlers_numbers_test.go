@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/whatomate/tring/internal/dbtest"
 )
@@ -29,13 +30,33 @@ func insertOutboundForHandlerTest(t *testing.T, f *dbtest.Fixture, e164 string, 
 
 // newTestServer builds an *api.Server wired to the fixture DB. The FS
 // client and notifier fields stay nil — the handlers under test in this
-// file don't call them.
-func newTestServer(f *dbtest.Fixture) http.Handler {
-	s := NewServer(Config{
+// file don't call them. Returning the *Server (rather than just the
+// router) lets tests mint console JWTs via s.IssueConsoleToken.
+func newTestServer(f *dbtest.Fixture) *Server {
+	return NewServer(Config{
 		DB:        f.DB,
 		JWTSecret: "test-secret",
 	})
-	return s.Router()
+}
+
+// authedRequest builds a PATCH/GET/etc. request pre-stamped with a
+// fresh console JWT for the fixture user. Centralises the token-mint
+// boilerplate so individual tests focus on the behaviour under test.
+func authedRequest(t *testing.T, s *Server, f *dbtest.Fixture, method, target, body string) *http.Request {
+	t.Helper()
+	tok, _, err := s.IssueConsoleToken(f.UserID, f.TenantID, f.UserEmail, time.Hour)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	var r *http.Request
+	if body != "" {
+		r = httptest.NewRequest(method, target, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+	} else {
+		r = httptest.NewRequest(method, target, nil)
+	}
+	r.Header.Set("Authorization", "Bearer "+tok)
+	return r
 }
 
 // TestPatchNumberLastActiveGuardrail is the headline test for the
@@ -44,13 +65,11 @@ func newTestServer(f *dbtest.Fixture) http.Handler {
 func TestPatchNumberLastActiveGuardrail(t *testing.T) {
 	f := dbtest.Setup(t)
 	id := insertOutboundForHandlerTest(t, f, "+918001234567", true)
-	srv := newTestServer(f)
+	s := newTestServer(f)
 
-	req := httptest.NewRequest("PATCH", "/v1/numbers/"+id, strings.NewReader(`{"active": false}`))
-	req.Header.Set("Authorization", "Bearer "+f.APIKey)
-	req.Header.Set("Content-Type", "application/json")
+	req := authedRequest(t, s, f, "PATCH", "/v1/numbers/"+id, `{"active": false}`)
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Errorf("status = %d, want 409 — deactivating last active trunk must be rejected", rec.Code)
@@ -63,13 +82,11 @@ func TestPatchNumberDeactivateWithSpareSucceeds(t *testing.T) {
 	f := dbtest.Setup(t)
 	primary := insertOutboundForHandlerTest(t, f, "+918001234567", true)
 	insertOutboundForHandlerTest(t, f, "+918007654321", true) // the spare
-	srv := newTestServer(f)
+	s := newTestServer(f)
 
-	req := httptest.NewRequest("PATCH", "/v1/numbers/"+primary, strings.NewReader(`{"active": false}`))
-	req.Header.Set("Authorization", "Bearer "+f.APIKey)
-	req.Header.Set("Content-Type", "application/json")
+	req := authedRequest(t, s, f, "PATCH", "/v1/numbers/"+primary, `{"active": false}`)
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -82,45 +99,44 @@ func TestPatchNumberDeactivateWithSpareSucceeds(t *testing.T) {
 	}
 }
 
-// TestAuthRequiredRejectsMissingKey covers the API-key auth wall — the
-// gateway every tenant-scoped request flows through.
-func TestAuthRequiredRejectsMissingKey(t *testing.T) {
+// TestAuthRequiredRejectsMissingToken covers the auth wall every
+// tenant-scoped request flows through.
+func TestAuthRequiredRejectsMissingToken(t *testing.T) {
 	f := dbtest.Setup(t)
-	srv := newTestServer(f)
+	s := newTestServer(f)
 
 	req := httptest.NewRequest("GET", "/v1/numbers", nil)
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("no key got %d, want 401", rec.Code)
+		t.Errorf("no token got %d, want 401", rec.Code)
 	}
 }
 
-func TestAuthRequiredRejectsBadKey(t *testing.T) {
+func TestAuthRequiredRejectsBadToken(t *testing.T) {
 	f := dbtest.Setup(t)
-	srv := newTestServer(f)
+	s := newTestServer(f)
 
 	req := httptest.NewRequest("GET", "/v1/numbers", nil)
-	req.Header.Set("Authorization", "Bearer tk_test_nonexistent")
+	req.Header.Set("Authorization", "Bearer not.a.real.jwt")
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("bad key got %d, want 401", rec.Code)
+		t.Errorf("bad token got %d, want 401", rec.Code)
 	}
 }
 
-// Sanity check: with the fixture's key the listing endpoint responds 200
-// and the body is a JSON array (`[]` when empty, not `null`).
-func TestListNumbersWithValidKey(t *testing.T) {
+// Sanity check: with a freshly-minted console JWT the listing endpoint
+// responds 200 and the body is a JSON array (`[]` when empty, not `null`).
+func TestListNumbersWithValidToken(t *testing.T) {
 	f := dbtest.Setup(t)
-	srv := newTestServer(f)
+	s := newTestServer(f)
 
-	req := httptest.NewRequest("GET", "/v1/numbers", nil)
-	req.Header.Set("Authorization", "Bearer "+f.APIKey)
+	req := authedRequest(t, s, f, "GET", "/v1/numbers", "")
 	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
