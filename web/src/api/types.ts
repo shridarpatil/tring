@@ -75,6 +75,7 @@ export interface AgentToken {
 // the properties panel for the exact shape per type.
 
 export type IVRNodeType =
+  | "start"
   | "greeting"
   | "menu"
   | "gather"

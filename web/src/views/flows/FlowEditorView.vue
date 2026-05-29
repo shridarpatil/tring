@@ -37,6 +37,7 @@ import "@vue-flow/minimap/dist/style.css";
 
 import { api } from "../../api/client";
 import GreetingNode from "../../components/calling/nodes/GreetingNode.vue";
+import StartNode from "../../components/calling/nodes/StartNode.vue";
 import MenuNode from "../../components/calling/nodes/MenuNode.vue";
 import GatherNode from "../../components/calling/nodes/GatherNode.vue";
 import HTTPCallbackNode from "../../components/calling/nodes/HTTPCallbackNode.vue";
@@ -61,6 +62,7 @@ const savedMsg = ref("");
 
 // Vue Flow custom node types
 const nodeTypes: Record<string, any> = {
+  start: markRaw(StartNode),
   greeting: markRaw(GreetingNode),
   menu: markRaw(MenuNode),
   gather: markRaw(GatherNode),
@@ -113,10 +115,30 @@ function onPaneClick() {
   selectedNodeId.value = null;
 }
 
-const entryNodeId = ref<string>("");
+// Every flow has exactly one Start node with this fixed ID. Pinning
+// the ID means we don't need to track "which node is the entry" in
+// reactive state — `entry_node` in the persisted flow always equals
+// START_NODE_ID, and the Start node's single "default" outgoing edge
+// is what the executor walks first.
+const START_NODE_ID = "node_start";
 let nodeCounter = 0;
 
+function ensureStartNode() {
+  if (nodes.value.some((n) => n.id === START_NODE_ID)) return;
+  addNodes([
+    {
+      id: START_NODE_ID,
+      type: "start",
+      position: { x: 80, y: 80 },
+      data: { label: "Start", config: {} },
+      deletable: false,
+    },
+  ]);
+}
+
 const defaultConfigs: Record<IVRNodeType, Record<string, any>> = {
+  // Start has no configurable settings — it's a pure passthrough.
+  start: {},
   greeting: { audio_file: "", greeting_text: "", interruptible: false },
   menu: { audio_file: "", greeting_text: "", timeout_seconds: 10, max_retries: 3, options: {} },
   gather: {
@@ -151,7 +173,6 @@ function addNodeFromPalette(type: IVRNodeType) {
     y: window.innerHeight / 2 - 100,
   });
   const id = `node_${Date.now()}_${nodeCounter++}`;
-  const isFirst = nodes.value.length === 0;
   addNodes([
     {
       id,
@@ -160,15 +181,28 @@ function addNodeFromPalette(type: IVRNodeType) {
       data: {
         label: type.replace("_", " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
         config: { ...(defaultConfigs[type] || {}) },
-        isEntryNode: isFirst,
       },
     },
   ]);
-  if (isFirst) entryNodeId.value = id;
 }
 
-// Connections: enforce single edge per source handle, add label with the
-// handle name so the path is readable.
+// Connection-validity rule, fed to <VueFlow :is-valid-connection="...">.
+// Vue Flow's default *should* already reject source→source, but be
+// explicit so this can't silently regress on a version bump:
+//
+//   - targetHandle must be the input handle ("input"), never an
+//     output handle id like "default" / "digit:1" / "timeout"
+//   - source and target nodes must differ (no self-loops)
+//
+// Returning false aborts the drop and the wire snaps back.
+function isValidConnection(c: { source: string; target: string; targetHandle?: string | null }) {
+  if (c.source === c.target) return false;
+  return c.targetHandle === "input";
+}
+
+// Connections: enforce single edge per source handle. The branch
+// identity is already visible on the node (handle label under each
+// output dot), so the connector itself stays unlabelled.
 onConnect((params) => {
   const existing = edges.value.filter(
     (e) => e.source === params.source && e.sourceHandle === params.sourceHandle,
@@ -180,7 +214,6 @@ onConnect((params) => {
       type: "default",
       animated: true,
       markerEnd: MarkerType.ArrowClosed,
-      label: params.sourceHandle || "default",
     },
   ]);
 });
@@ -197,12 +230,17 @@ function onUpdateNode(updated: any) {
 
 function requestDeleteSelectedNode() {
   if (!selectedNode.value) return;
+  // Start is the implicit entry point — every flow has exactly one.
+  // Hard-block its deletion rather than silently breaking the flow.
+  if (selectedNode.value.id === START_NODE_ID) {
+    alert("The Start node is the flow's entry point and can't be removed.");
+    return;
+  }
   if (!confirm(`Delete node "${selectedNode.value.data?.label || selectedNode.value.type}"?`))
     return;
   const id = selectedNode.value.id;
   removeNodes([selectedNode.value]);
   removeEdges(edges.value.filter((e) => e.source === id || e.target === id));
-  if (entryNodeId.value === id) entryNodeId.value = nodes.value[0]?.id || "";
   selectedNodeId.value = null;
 }
 
@@ -212,7 +250,9 @@ const availableFlows = ref<Flow[]>([]);
 function buildIVRFlowData(): IVRFlowData {
   return {
     version: 2,
-    entry_node: entryNodeId.value,
+    // Start is always the entry; the executor walks its single
+    // outgoing edge to find the real first step.
+    entry_node: START_NODE_ID,
     nodes: nodes.value.map((n) => ({
       id: n.id,
       type: (n.type || "greeting") as IVRNodeType,
@@ -237,11 +277,8 @@ function loadFromIVRFlowData(d: IVRFlowData) {
         id: n.id,
         type: n.type,
         position: n.position,
-        data: {
-          label: n.label,
-          config: n.config,
-          isEntryNode: n.id === d.entry_node,
-        },
+        data: { label: n.label, config: n.config },
+        deletable: n.type !== "start",
       },
     ]);
   }
@@ -255,11 +292,31 @@ function loadFromIVRFlowData(d: IVRFlowData) {
         type: "default",
         animated: true,
         markerEnd: MarkerType.ArrowClosed,
-        label: e.condition,
       },
     ]);
   }
-  entryNodeId.value = d.entry_node;
+  // Migration for flows saved before Start nodes existed: ensure one
+  // is present, and if the persisted entry_node points at a real node,
+  // wire Start → that node so the executor reaches it.
+  ensureStartNode();
+  if (d.entry_node && d.entry_node !== START_NODE_ID && nodes.value.find((n) => n.id === d.entry_node)) {
+    const alreadyWired = edges.value.some(
+      (e) => e.source === START_NODE_ID && e.target === d.entry_node,
+    );
+    if (!alreadyWired) {
+      addEdges([
+        {
+          id: `e_${START_NODE_ID}_default_${d.entry_node}`,
+          source: START_NODE_ID,
+          target: d.entry_node,
+          sourceHandle: "default",
+          type: "default",
+          animated: true,
+          markerEnd: MarkerType.ArrowClosed,
+        },
+      ]);
+    }
+  }
 }
 
 async function saveFlow() {
@@ -292,19 +349,16 @@ onMounted(async () => {
     isActive.value = f.is_active;
     isCallStart.value = f.is_call_start;
     isOutgoingEnd.value = f.is_outgoing_end;
-    if (f.definition && f.definition.version === 2) {
+    if (f.definition && f.definition.version === 2 && f.definition.nodes?.length) {
       loadFromIVRFlowData(f.definition);
+    } else {
+      // Empty flow — seed with just the Start node so the canvas isn't
+      // blank and the entry-point invariant always holds.
+      ensureStartNode();
     }
     availableFlows.value = list;
   } catch (e) {
     savedMsg.value = e instanceof Error ? e.message : "load failed";
-  }
-});
-
-// Keep the entry-node hint correct as nodes are added/removed.
-watch(nodes, (n) => {
-  if (!n.find((x) => x.id === entryNodeId.value)) {
-    entryNodeId.value = n[0]?.id || "";
   }
 });
 </script>
@@ -387,6 +441,7 @@ watch(nodes, (n) => {
             animated: true,
             markerEnd: MarkerType.ArrowClosed,
           }"
+          :is-valid-connection="isValidConnection"
           fit-view-on-init
           @node-click="onNodeClick"
           @pane-click="onPaneClick"

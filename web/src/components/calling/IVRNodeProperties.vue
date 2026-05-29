@@ -13,7 +13,6 @@ interface VueFlowNode {
   data?: {
     label?: string;
     config?: Record<string, any>;
-    isEntryNode?: boolean;
   };
   position?: { x: number; y: number };
 }

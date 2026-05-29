@@ -77,7 +77,7 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
       <span
         v-for="(handle, idx) in outputHandles"
         :key="'num-' + handle.id"
-        class="absolute text-[9px] font-bold text-gray-500 pointer-events-none"
+        class="absolute text-[9px] font-bold text-gray-500 pointer-events-none whitespace-nowrap"
         :style="{
           left:
             outputHandles.length === 1
@@ -86,7 +86,8 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
           bottom: '-18px',
           transform: 'translateX(-50%)',
         }"
-        >{{ idx + 1 }}</span
+        :title="handle.title || handle.label"
+        >{{ handle.label }}</span
       >
     </template>
     <template v-else-if="!outputHandles">

@@ -63,6 +63,7 @@ type ivrFlowData struct {
 }
 
 const (
+	nodeStart        = "start"
 	nodeGreeting     = "greeting"
 	nodeMenu         = "menu"
 	nodeGather       = "gather"
@@ -231,6 +232,11 @@ func findNextNode(flow *ivrFlowData, fromID, condition string) string {
 // call gracefully" — used by Hangup.
 func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
 	switch node.Type {
+	case nodeStart:
+		// No-op passthrough — the Start node is purely a UI anchor so
+		// flows have a fixed entry point. Walk to whatever's wired to
+		// its "default" output.
+		return "default", nil
 	case nodeGreeting:
 		return e.runGreeting(ctx, conn, node, st)
 	case nodeMenu:

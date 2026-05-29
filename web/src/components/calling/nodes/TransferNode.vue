@@ -23,7 +23,6 @@ const summary = computed(() => {
       { id: 'completed', label: 'completed' },
       { id: 'no_answer', label: 'no answer' },
     ]"
-    :has-input="!data?.isEntryNode"
   >
     <template #icon><Users class="w-4 h-4" /></template>
     <p class="truncate">{{ summary }}</p>
