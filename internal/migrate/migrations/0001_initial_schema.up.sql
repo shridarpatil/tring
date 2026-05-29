@@ -164,7 +164,6 @@ CREATE TABLE flows (
     name             TEXT NOT NULL,
     description      TEXT NOT NULL DEFAULT '',
     is_active        BOOLEAN NOT NULL DEFAULT true,
-    is_call_start    BOOLEAN NOT NULL DEFAULT false,
     is_outgoing_end  BOOLEAN NOT NULL DEFAULT false,
     definition       JSONB NOT NULL DEFAULT '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb,
     welcome_audio_url TEXT NOT NULL DEFAULT '',
