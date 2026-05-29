@@ -28,6 +28,7 @@ import {
   ExternalLink,
   Clock,
   PhoneOff,
+  PlayCircle,
 } from "lucide-vue-next";
 
 import "@vue-flow/core/dist/style.css";
@@ -58,6 +59,62 @@ const isActive = ref(true);
 const isCallStart = ref(false);
 const isOutgoingEnd = ref(false);
 const saving = ref(false);
+
+// ─── Simulator panel ───────────────────────────────────────────────
+// Click "Test" → showSimPanel toggles a right-side drawer that posts
+// to /v1/flows/{id}/simulate and renders the returned trace. DTMF is
+// a comma-separated string for ergonomics ("1,2,*"); we split it on
+// commas and whitespace before sending to the backend.
+const showSimPanel = ref(false);
+const simRunning = ref(false);
+const simDTMF = ref("");
+const simCaller = ref("+10000000000");
+const simResult = ref<SimResult | null>(null);
+const simError = ref("");
+
+interface SimStep {
+  node_id: string;
+  node_type: string;
+  action: string;
+  detail?: string;
+  dtmf_input?: string;
+  outcome: string;
+}
+interface SimResult {
+  steps: SimStep[];
+  ended_at: string;
+  hangup_cause: string;
+  vars: Record<string, string>;
+  error?: string;
+}
+
+async function runSimulation() {
+  simRunning.value = true;
+  simError.value = "";
+  simResult.value = null;
+  try {
+    const dtmf = simDTMF.value
+      .split(/[,\s]+/)
+      .map((d) => d.trim())
+      .filter(Boolean);
+    // Save first so the trace reflects what's on the canvas right now,
+    // not the last persisted version. Skip in error paths so a broken
+    // unsaved canvas doesn't block the test.
+    try {
+      await saveFlow();
+    } catch {
+      /* surface the simulator's own error if save fails */
+    }
+    simResult.value = await api.post<SimResult>(`/v1/flows/${flowId.value}/simulate`, {
+      caller: simCaller.value || undefined,
+      dtmf: dtmf.length ? dtmf : undefined,
+    });
+  } catch (e) {
+    simError.value = e instanceof Error ? e.message : "simulation failed";
+  } finally {
+    simRunning.value = false;
+  }
+}
 const savedMsg = ref("");
 
 // Vue Flow custom node types
@@ -289,6 +346,12 @@ function loadFromIVRFlowData(d: IVRFlowData) {
         source: e.from,
         target: e.to,
         sourceHandle: e.condition,
+        // Every node's input handle is hard-coded to id "input" in
+        // BaseNode.vue. Without targetHandle set, Vue Flow can't bind
+        // the edge end to the target node's input pin, so the edge
+        // renders as floating / hidden — which looked like "saves
+        // weren't persisting" on reload.
+        targetHandle: "input",
         type: "default",
         animated: true,
         markerEnd: MarkerType.ArrowClosed,
@@ -404,6 +467,13 @@ onMounted(async () => {
       <div class="flex-1" />
       <span v-if="savedMsg" class="text-xs text-green-600">{{ savedMsg }}</span>
       <button
+        class="text-sm rounded-md border border-gray-300 bg-white px-3 py-1.5 hover:bg-gray-50 flex items-center gap-1"
+        @click="showSimPanel = !showSimPanel"
+      >
+        <PlayCircle class="h-4 w-4" />
+        Test
+      </button>
+      <button
         :disabled="saving"
         class="bg-gray-900 text-white text-sm rounded-md px-3 py-1.5 hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1"
         @click="saveFlow"
@@ -453,6 +523,7 @@ onMounted(async () => {
       </div>
 
       <aside
+        v-if="!showSimPanel"
         class="w-[420px] min-w-0 border-l border-gray-200 bg-white shrink-0 flex flex-col overflow-hidden"
       >
         <IVRNodeProperties
@@ -465,6 +536,94 @@ onMounted(async () => {
         />
         <div v-else class="p-6 text-sm text-gray-400 text-center">
           Click a node to edit, or pick one from the palette above to add it.
+        </div>
+      </aside>
+
+      <!-- Simulator panel — opens in place of the properties panel
+           when the operator clicks "Test". POSTs to /v1/flows/{id}/simulate
+           and renders the returned step trace. No FreeSWITCH involved;
+           audio "plays" and HTTP "calls" are recorded as intent only. -->
+      <aside
+        v-else
+        class="w-[480px] min-w-0 border-l border-gray-200 bg-white shrink-0 flex flex-col overflow-hidden"
+      >
+        <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <PlayCircle class="h-4 w-4" />
+            <span class="font-medium text-sm">Simulator</span>
+          </div>
+          <button class="text-gray-500 hover:text-gray-900 text-sm" @click="showSimPanel = false">
+            Close
+          </button>
+        </div>
+        <div class="p-4 space-y-3 border-b border-gray-100">
+          <label class="block text-xs">
+            <span class="font-medium text-gray-700">Caller</span>
+            <input
+              v-model="simCaller"
+              class="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm"
+            />
+          </label>
+          <label class="block text-xs">
+            <span class="font-medium text-gray-700">DTMF queue</span>
+            <input
+              v-model="simDTMF"
+              placeholder="1, 2, 5"
+              class="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm font-mono"
+            />
+            <span class="text-[10px] text-gray-400">
+              Comma-separated digits consumed by Menu / Gather nodes in order.
+            </span>
+          </label>
+          <button
+            :disabled="simRunning"
+            class="w-full bg-gray-900 text-white text-sm rounded-md py-1.5 hover:bg-gray-800 disabled:opacity-50"
+            @click="runSimulation"
+          >
+            {{ simRunning ? "Running…" : "Run simulation" }}
+          </button>
+          <p v-if="simError" class="text-xs text-red-600">{{ simError }}</p>
+        </div>
+
+        <div class="flex-1 overflow-auto p-4 text-xs">
+          <div v-if="!simResult" class="text-gray-400 text-center py-8">
+            Run the simulation to see the path the call would take.
+          </div>
+          <div v-else>
+            <ol class="space-y-2">
+              <li
+                v-for="(step, idx) in simResult.steps"
+                :key="idx"
+                class="border border-gray-200 rounded-md p-2"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span class="font-mono text-[10px] text-gray-400">{{ idx + 1 }}</span>
+                  <span class="font-medium text-gray-800">{{ step.node_type }}</span>
+                  <span class="text-gray-400">·</span>
+                  <span class="text-gray-600">{{ step.action }}</span>
+                </div>
+                <div v-if="step.detail" class="mt-1 text-gray-600 break-all">
+                  {{ step.detail }}
+                </div>
+                <div v-if="step.dtmf_input" class="mt-1 font-mono text-gray-500">
+                  input: {{ step.dtmf_input }}
+                </div>
+                <div v-if="step.outcome" class="mt-1 text-[10px] text-gray-400">
+                  → {{ step.outcome }}
+                </div>
+              </li>
+            </ol>
+            <div class="mt-3 p-2 rounded-md bg-gray-50 text-gray-700">
+              <div><span class="font-medium">Ended at:</span> {{ simResult.ended_at }}</div>
+              <div><span class="font-medium">Hangup cause:</span> {{ simResult.hangup_cause }}</div>
+              <div v-if="Object.keys(simResult.vars).length">
+                <span class="font-medium">Vars:</span> {{ JSON.stringify(simResult.vars) }}
+              </div>
+              <div v-if="simResult.error" class="text-red-600">
+                <span class="font-medium">Error:</span> {{ simResult.error }}
+              </div>
+            </div>
+          </div>
         </div>
       </aside>
     </div>

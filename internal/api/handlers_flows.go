@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/whatomate/tring/internal/orchestrator"
 )
 
 // Flow mirrors the frontend's Flow shape (web/src/api/types.ts). The
@@ -209,4 +211,50 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSimulateFlow runs the flow through the pure-Go simulator and
+// returns a step trace. Nothing actually plays / dials / posts — see
+// internal/orchestrator/simulator.go for the recorded-vs-executed split.
+//
+// Operator can pre-stage DTMF, caller ID, vars, and a fake clock so the
+// trace is deterministic. Useful as a "Test flow" button in the editor.
+func (s *Server) handleSimulateFlow(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	var input orchestrator.SimInput
+	// Empty body is fine — default caller, no DTMF, etc. Only fail on
+	// a malformed body so a `POST /simulate` with no JSON Just Works.
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+	}
+
+	var defJSON []byte
+	err = s.db.Pool.QueryRow(r.Context(),
+		`SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2`,
+		id, t.ID,
+	).Scan(&defJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "flow not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+
+	result, err := orchestrator.SimulateFlow(defJSON, input)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
