@@ -45,6 +45,43 @@ export type TringEvent =
   | { type: "call:ended"; call: Call; cause?: string }
   | { type: "error"; error: Error };
 
+// ---- Guest (web-to-web customer) calling --------------------------------
+
+export interface GuestInitOpts {
+  /**
+   * Tenant public widget key (`pk_live_…`). Safe to embed in a public web
+   * page — it only authorizes minting a flow-pinned guest identity, never
+   * tenant access. Issued via GET /v1/guest-config.
+   */
+  publicKey: string;
+  /** Tring API base, e.g. "https://api.tring.io". */
+  apiBase: string;
+  /**
+   * Optional flow UUID to route this guest into. Omit to use the tenant's
+   * configured support flow (the common case).
+   */
+  flowId?: string;
+}
+
+/** /v1/sdk/guest-credentials response: SIP creds + the IVR dial target. */
+export interface GuestCredentialsResponse extends SipCredentialsResponse {
+  dial_target: string;
+}
+
+export type GuestCallStatus =
+  | "idle"
+  | "connecting"
+  | "ringing"
+  | "connected"
+  | "ended";
+
+export type GuestEvent =
+  | { type: "connecting" } // fetching creds / registering
+  | { type: "ringing" } // INVITE sent into the IVR, awaiting answer
+  | { type: "connected" } // IVR answered, media flowing
+  | { type: "ended"; reason?: string }
+  | { type: "error"; error: Error };
+
 export interface SipCredentialsResponse {
   sip_username: string;
   sip_password: string;
