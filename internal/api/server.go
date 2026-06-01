@@ -135,11 +135,17 @@ func (s *Server) Router() http.Handler {
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
 		r.Post("/console/login", s.handleConsoleLogin)
+		// Guest web-calling: public (only credential is the tenant's
+		// public widget key). Mints an ephemeral, flow-pinned SIP identity
+		// for a website visitor. See handlers_guest.go.
+		r.Post("/sdk/guest-credentials", s.handleGuestCredentials)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)
 			r.Get("/tenants/me", s.handleGetMyTenant)
 			r.Patch("/tenants/me", s.handlePatchMyTenant)
+			r.Get("/guest-config", s.handleGetGuestConfig)
+			r.Patch("/guest-config", s.handlePatchGuestConfig)
 			r.Post("/agents", s.handleCreateAgent)
 			r.Get("/agents", s.handleListAgents)
 			r.Get("/agents/{id}", s.handleGetAgent)

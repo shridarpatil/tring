@@ -109,7 +109,19 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 		return
 	}
 
-	resolved, err := e.resolveFlow(ctx, called)
+	// Two ways a flow gets resolved:
+	//   - guest web-call: the flow is pinned by the tring_flow_id channel
+	//     variable (set in the mod_xml_curl directory for guest_* users),
+	//     so there's no dialed DID to look up.
+	//   - PSTN/DID call: discover the flow from the dialed inbound number.
+	var resolved *ResolvedFlow
+	var err error
+	if fid := ev.GetHeader("variable_tring_flow_id"); fid != "" {
+		e.Logger.Printf("ivr: guest call, flow pinned to %s", fid)
+		resolved, err = e.resolveFlowByID(ctx, fid)
+	} else {
+		resolved, err = e.resolveFlow(ctx, called)
+	}
 	if err != nil {
 		e.Logger.Printf("ivr: no flow for %s: %v", called, err)
 		_ = conn.HangupCall(ctx, uuidStr, "UNALLOCATED_NUMBER")
@@ -182,6 +194,40 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 		return nil, err
 	}
 	if flowID == nil || len(defJSON) == 0 {
+		return &ResolvedFlow{TenantID: tenantID}, nil
+	}
+	var flow ivrFlowData
+	if err := json.Unmarshal(defJSON, &flow); err != nil {
+		return nil, fmt.Errorf("bad flow JSON: %w", err)
+	}
+	if flow.EntryNode == "" {
+		return nil, fmt.Errorf("flow has no entry node")
+	}
+	return &ResolvedFlow{TenantID: tenantID, Flow: &flow}, nil
+}
+
+// resolveFlowByID loads a flow directly by its UUID — the guest web-call
+// path, where the flow is pinned via the tring_flow_id channel variable
+// rather than discovered from a dialed DID. Mirrors resolveFlow's return
+// contract (error on lookup/parse failure; Flow=nil if the flow row exists
+// but is empty).
+func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*ResolvedFlow, error) {
+	fid, err := uuid.Parse(flowID)
+	if err != nil {
+		return nil, fmt.Errorf("bad flow id %q: %w", flowID, err)
+	}
+	var (
+		tenantID uuid.UUID
+		defJSON  []byte
+	)
+	row := e.DB.Pool.QueryRow(ctx, `
+		SELECT tenant_id, COALESCE(definition::text, '')
+		FROM flows WHERE id = $1 AND is_active
+	`, fid)
+	if err := row.Scan(&tenantID, &defJSON); err != nil {
+		return nil, err
+	}
+	if len(defJSON) == 0 {
 		return &ResolvedFlow{TenantID: tenantID}, nil
 	}
 	var flow ivrFlowData
