@@ -64,6 +64,10 @@ type Server struct {
 	// TTL'd on idle — they're a developer convenience, not durable
 	// state. See internal/orchestrator/sim_session.go.
 	simManager *orchestrator.SimManager
+
+	// Per-IP rate limiter for the public guest-credentials endpoint.
+	// Built once in NewServer so its window survives across requests.
+	guestMintLimiter func(http.Handler) http.Handler
 }
 
 // iceServer matches the RTCIceServer JSON shape consumed by browsers.
@@ -87,6 +91,9 @@ func NewServer(cfg Config) *Server {
 		notifier:    webhook.New(cfg.DB),
 		iceServers:  buildICEServers(cfg),
 		simManager:  orchestrator.NewSimManager(),
+		// Built once here (not in Router) so the window persists across
+		// requests regardless of how many times Router() is called.
+		guestMintLimiter: rateLimitByIP(guestMintRatePerMin, time.Minute),
 	}
 }
 
@@ -137,8 +144,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/console/login", s.handleConsoleLogin)
 		// Guest web-calling: public (only credential is the tenant's
 		// public widget key). Mints an ephemeral, flow-pinned SIP identity
-		// for a website visitor. See handlers_guest.go.
-		r.Post("/sdk/guest-credentials", s.handleGuestCredentials)
+		// for a website visitor. Per-IP rate limited; the handler also
+		// enforces an Origin allowlist + per-tenant concurrent cap. See
+		// handlers_guest.go.
+		r.With(s.guestMintLimiter).
+			Post("/sdk/guest-credentials", s.handleGuestCredentials)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)
