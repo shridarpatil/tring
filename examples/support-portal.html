@@ -25,8 +25,11 @@
     <p style="margin:.5rem 0">
       <code>curl -sS -H "Authorization: Bearer $CONSOLE_JWT" http://localhost:8085/v1/guest-config | jq -r .public_key</code>
     </p>
-    (Make sure the tenant has a <code>support_flow_id</code> set — PATCH <code>/v1/guest-config</code>
-    with <code>{"support_flow_id":"&lt;flow uuid&gt;"}</code>.)
+    (Make sure the tenant has a <code>support_flow_id</code> set AND this page's origin allowlisted —
+    PATCH <code>/v1/guest-config</code> with
+    <code>{"support_flow_id":"&lt;flow uuid&gt;","allowed_origins":["http://localhost:9999"]}</code>.
+    Without a matching <code>allowed_origins</code> entry the mint returns 403 — that's the
+    anti-key-theft guard.)
     <p style="margin:.75rem 0 0">
       <input id="pkInput" type="text" placeholder="paste pk_live_… here" />
       <button class="inline" id="loadBtn">Load widget</button>

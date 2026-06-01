@@ -12,8 +12,12 @@ import (
 	"github.com/whatomate/tring/internal/dbtest"
 )
 
+// testOrigin is the allowlisted origin the fixture tenant trusts; guest mint
+// requests must carry it as their Origin header.
+const testOrigin = "http://localhost:9999"
+
 // seedFlowAndPublicKey gives the fixture tenant a public widget key, an
-// active flow, and pins that flow as the tenant's support flow — the
+// active flow pinned as the support flow, and an Origin allowlist — the
 // minimum a guest needs to mint credentials. Returns (publicKey, flowID).
 func seedFlowAndPublicKey(t *testing.T, f *dbtest.Fixture) (string, string) {
 	t.Helper()
@@ -28,26 +32,35 @@ func seedFlowAndPublicKey(t *testing.T, f *dbtest.Fixture) (string, string) {
 	}
 	const pk = "pk_live_guesttest"
 	if _, err := f.DB.Pool.Exec(ctx, `
-		UPDATE tenants SET public_key = $1, support_flow_id = $2 WHERE id = $3
-	`, pk, flowID, f.TenantID); err != nil {
+		UPDATE tenants SET public_key = $1, support_flow_id = $2, allowed_origins = $3 WHERE id = $4
+	`, pk, flowID, []string{testOrigin}, f.TenantID); err != nil {
 		t.Fatalf("set public key: %v", err)
 	}
 	return pk, flowID
 }
 
+// mintReq builds a guest-credentials POST with the given public key and
+// Origin header. Pass origin="" to omit it.
+func mintReq(pk, origin string) *http.Request {
+	r := httptest.NewRequest("POST", "/v1/sdk/guest-credentials",
+		strings.NewReader(`{"public_key":"`+pk+`"}`))
+	r.Header.Set("Content-Type", "application/json")
+	if origin != "" {
+		r.Header.Set("Origin", origin)
+	}
+	return r
+}
+
 // TestGuestCredentialsMintsFlowPinnedSession is the headline test: a valid
-// public key yields SIP creds AND persists a guest_sessions row pinned to
-// the tenant's support flow with a future expiry (exercises make_interval).
+// public key + allowed Origin yields SIP creds AND persists a guest_sessions
+// row pinned to the support flow with a future expiry (exercises make_interval).
 func TestGuestCredentialsMintsFlowPinnedSession(t *testing.T) {
 	f := dbtest.Setup(t)
 	pk, flowID := seedFlowAndPublicKey(t, f)
 	s := newTestServer(f)
 
-	req := httptest.NewRequest("POST", "/v1/sdk/guest-credentials",
-		strings.NewReader(`{"public_key":"`+pk+`"}`))
-	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, mintReq(pk, testOrigin))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
@@ -63,8 +76,6 @@ func TestGuestCredentialsMintsFlowPinnedSession(t *testing.T) {
 		t.Errorf("dial_target = %q, want %q", resp.DialTarget, guestDialTarget)
 	}
 
-	// The session must exist, be pinned to the support flow, and not be
-	// already expired.
 	var (
 		gotFlow string
 		future  bool
@@ -83,20 +94,96 @@ func TestGuestCredentialsMintsFlowPinnedSession(t *testing.T) {
 	}
 }
 
-// TestGuestCredentialsRejectsUnknownKey: a bogus public key is 401, and no
-// session is created.
+// TestGuestCredentialsRejectsUnknownKey: a bogus public key is 401.
 func TestGuestCredentialsRejectsUnknownKey(t *testing.T) {
 	f := dbtest.Setup(t)
 	s := newTestServer(f)
 
-	req := httptest.NewRequest("POST", "/v1/sdk/guest-credentials",
-		strings.NewReader(`{"public_key":"pk_live_nope"}`))
-	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, req)
+	s.Router().ServeHTTP(rec, mintReq("pk_live_nope", testOrigin))
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+// TestGuestCredentialsRejectsDisallowedOrigin: valid key but an Origin not in
+// the tenant's allowlist is 403, and no session is created.
+func TestGuestCredentialsRejectsDisallowedOrigin(t *testing.T) {
+	f := dbtest.Setup(t)
+	pk, _ := seedFlowAndPublicKey(t, f)
+	s := newTestServer(f)
+
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, mintReq(pk, "https://evil.example.com"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for disallowed origin", rec.Code)
+	}
+	var n int
+	_ = f.DB.Pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM guest_sessions WHERE tenant_id = $1`, f.TenantID).Scan(&n)
+	if n != 0 {
+		t.Errorf("created %d sessions for a disallowed origin, want 0", n)
+	}
+}
+
+// TestGuestCredentialsRejectsMissingOrigin: fail-closed — no Origin header
+// (non-browser caller) is 403 even with a valid key.
+func TestGuestCredentialsRejectsMissingOrigin(t *testing.T) {
+	f := dbtest.Setup(t)
+	pk, _ := seedFlowAndPublicKey(t, f)
+	s := newTestServer(f)
+
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, mintReq(pk, "")) // no Origin
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for missing origin", rec.Code)
+	}
+}
+
+// TestGuestCredentialsConcurrentCap: once a tenant is at the live-session cap,
+// further mints are rejected 429.
+func TestGuestCredentialsConcurrentCap(t *testing.T) {
+	f := dbtest.Setup(t)
+	pk, flowID := seedFlowAndPublicKey(t, f)
+	s := newTestServer(f)
+
+	// Fill the tenant to the cap with live sessions.
+	if _, err := f.DB.Pool.Exec(context.Background(), `
+		INSERT INTO guest_sessions (tenant_id, sip_username, sip_password, flow_id, expires_at)
+		SELECT $1, 'guest_cap_' || g, 'pw', $2, now() + interval '15 min'
+		FROM generate_series(1, $3) g
+	`, f.TenantID, flowID, maxConcurrentGuestSessions); err != nil {
+		t.Fatalf("seed sessions: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, mintReq(pk, testOrigin))
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 at the concurrent cap; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGuestMintRateLimit: more than guestMintRatePerMin requests from one IP
+// in the window get a 429 from the rate-limit middleware.
+func TestGuestMintRateLimit(t *testing.T) {
+	f := dbtest.Setup(t)
+	pk, _ := seedFlowAndPublicKey(t, f)
+	s := newTestServer(f)
+
+	var got429 bool
+	for i := 0; i < guestMintRatePerMin+1; i++ {
+		rec := httptest.NewRecorder()
+		s.Router().ServeHTTP(rec, mintReq(pk, testOrigin))
+		if rec.Code == http.StatusTooManyRequests {
+			got429 = true
+		}
+	}
+	if !got429 {
+		t.Fatalf("expected a 429 after >%d requests from one IP", guestMintRatePerMin)
 	}
 }
 
@@ -108,19 +195,14 @@ func TestFSDirectoryGuestBranch(t *testing.T) {
 	pk, flowID := seedFlowAndPublicKey(t, f)
 	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", FSBasicAuth: "fs:secret"})
 
-	// Mint a guest session first.
-	mint := httptest.NewRequest("POST", "/v1/sdk/guest-credentials",
-		strings.NewReader(`{"public_key":"`+pk+`"}`))
-	mint.Header.Set("Content-Type", "application/json")
 	mintRec := httptest.NewRecorder()
-	s.Router().ServeHTTP(mintRec, mint)
+	s.Router().ServeHTTP(mintRec, mintReq(pk, testOrigin))
 	if mintRec.Code != http.StatusOK {
 		t.Fatalf("mint status = %d", mintRec.Code)
 	}
 	var creds guestCredentialsResponse
 	_ = json.Unmarshal(mintRec.Body.Bytes(), &creds)
 
-	// Now emulate FreeSWITCH's directory POST for that user.
 	form := url.Values{
 		"section": {"directory"},
 		"user":    {creds.SipUsername},
