@@ -28,7 +28,7 @@ const embedSnippet = computed(() => {
   const origin = window.location.origin;
   const pk = guest.value?.public_key || "pk_live_…";
   return (
-    `<script src="${origin}/support.js"\n` +
+    `<script src="${origin}/sdk/voice.js"\n` +
     `  data-api-base="${origin}"\n` +
     `  data-public-key="${pk}"><\/script>`
   );
@@ -244,7 +244,7 @@ onMounted(load);
           <pre class="bg-gray-900 text-gray-100 rounded-md p-3 text-xs overflow-x-auto"><code>{{ embedSnippet }}</code></pre>
           <button class="absolute top-2 right-2 text-xs bg-white/10 text-white rounded px-2 py-1 hover:bg-white/20" @click="copy(embedSnippet)">Copy</button>
         </div>
-        <span class="text-xs text-gray-400">Adjust the <code>src</code> to wherever you host the widget bundle.</span>
+        <span class="text-xs text-gray-400">The widget bundle is served by Tring at <code>/sdk/voice.js</code> — no CDN needed.</span>
       </div>
 
       <div class="flex items-center gap-3">

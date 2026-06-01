@@ -1,10 +1,15 @@
 # @tring/voice
 
-Drop-in browser voice SDK for the Tring CPaaS. Registers your agent with FreeSWITCH over WebRTC, places and receives calls. Three distribution forms from one build:
+Drop-in browser voice SDK for the Tring CPaaS — WebRTC calling on any web page, no SIP/FreeSWITCH knowledge needed. Built into a few bundles, all of which the **Tring API serves itself at `/sdk/*`** (so self-hosters need no CDN):
 
-- **Drop-in widget** (`dist/voice.iife.js`) — auto-binds `<button data-tring-call>` and renders a floating call panel. Zero JS required from the integrator.
-- **Bare SDK script tag** (`dist/tring.iife.js`) — exposes `window.Tring` for programmatic use.
-- **ES module** (`dist/tring.esm.js`) — `import Tring from '@tring/voice'` for bundlers.
+| Bundle | Served at | For |
+|---|---|---|
+| **`voice.js`** (`dist/voice.iife.js`) | `/sdk/voice.js` | **Website visitors** — a "Call" button on any public page drops the caller into your IVR over WebRTC, no account. Auth: tenant **public key** (`pk_live_…`). |
+| **`agent.js`** (`dist/agent.iife.js`) | `/sdk/agent.js` | **CRM agents** — auto-binds `<button data-tring-call>` and renders a floating call panel to place/receive calls. Auth: short-lived agent **JWT**. |
+| **`tring.js`** (`dist/tring.iife.js`) | `/sdk/tring.js` | Bare SDK — exposes `window.Tring` for programmatic use. |
+| **`tring.esm.js`** | — (npm) | `import Tring from '@tring/voice'` for bundlers. |
+
+> The widget is served from the same origin as your API, e.g. `https://your-tring-host/sdk/voice.js`. No `cdn.tring.io` dependency — point `src` at your own deployment.
 
 ## Quickstart — drop-in widget (the laziest possible integration)
 
@@ -19,8 +24,8 @@ Add **one script tag** to your CRM template. Buttons with `data-tring-call data-
   </tr>
 </table>
 
-<script src="https://cdn.tring.io/voice.js"
-        data-api-base="https://api.tring.io"
+<script src="https://your-tring-host/sdk/agent.js"
+        data-api-base="https://your-tring-host"
         data-token-url="/tring/token"></script>
 ```
 
@@ -33,12 +38,24 @@ You can also dial from a free-form input by pointing at it:
 <button data-tring-call data-to-target="#number">Call</button>
 ```
 
+## Website visitor calling (`voice.js`)
+
+Put voice on a public page so visitors call **into your IVR** — no login, no phone number. One tag:
+
+```html
+<script src="https://your-tring-host/sdk/voice.js"
+        data-api-base="https://your-tring-host"
+        data-public-key="pk_live_…"></script>
+```
+
+The `pk_live_…` **public key** is safe to embed (unlike the agent JWT/API key). It only works from the domains you allowlist in the console (**Settings → Guest web calling → Allowed domains**), which is what stops a stolen key from being used elsewhere. The visitor taps the floating "Call" button (or your own `<button data-tring-guest-call>`), gets an anonymous, flow-pinned identity, and lands in your IVR. See `examples/support-portal.html`.
+
 ## Programmatic use
 
 The browser needs a **short-lived JWT**, not the tenant API key. Your CRM's backend mints the JWT using `GET /v1/agents/<id>/token` (auth: tenant API key) and ships it to the browser.
 
 ```html
-<script src="https://cdn.tring.io/tring.js"></script>
+<script src="https://your-tring-host/sdk/tring.js"></script>
 <script>
   const tring = await Tring.init({
     token: 'eyJ...',                  // JWT from /v1/agents/<id>/token (5-min TTL)

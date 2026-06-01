@@ -17,6 +17,7 @@ import (
 	"github.com/whatomate/tring/internal/orchestrator"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
+	"github.com/whatomate/tring/internal/widget"
 )
 
 // Config bundles the dependencies an api.Server needs at construction time.
@@ -198,6 +199,18 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls", s.handleSDKCreateCall)
 		})
 	})
+
+	// Browser widget bundles (embedded). Served at /sdk/voice.js,
+	// /sdk/agent.js, /sdk/tring.js on the same origin as the API, so a
+	// self-hoster's embed snippet works with no CDN. Public, immutable,
+	// long-cacheable. Mounted only if `make sdk` populated the bundles.
+	if wFS, ok := widget.FS(); ok {
+		sdk := http.StripPrefix("/sdk/", http.FileServer(http.FS(wFS)))
+		r.Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Cache-Control", "public, max-age=3600")
+			sdk.ServeHTTP(w, req)
+		})
+	}
 
 	// Admin console (embedded Vue dist). Mounted only if the Vue app was
 	// actually built — backend-only deployments get a UI-less binary
