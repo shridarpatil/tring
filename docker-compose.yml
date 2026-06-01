@@ -47,6 +47,11 @@ services:
       # the gateway include list so UI-managed trunks are picked up on
       # `sofia profile external rescan`.
       - ./freeswitch/conf/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml:ro
+      # Override sofia's internal profile to disable the force-register-*
+      # params — see comment block in the file for why (multi-tenant
+      # depends on the SDK's From URI domain reaching /fs/directory
+      # un-rewritten).
+      - ./freeswitch/conf/sip_profiles/internal.xml:/etc/freeswitch/sip_profiles/internal.xml:ro
       # Dynamic gateway dir — Tring writes t_<uuid>.xml here, FS reads.
       # RW because both containers share this host path.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw

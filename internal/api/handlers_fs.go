@@ -4,10 +4,19 @@ import (
 	"encoding/xml"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+// fsDialString is the domain-level dial-string mod_xml_curl returns so
+// FreeSWITCH can construct a dial URI for `user/<id>@<domain>`. The
+// sofia_contact() lookup pulls the registered contact (incl. fs_path for
+// WebSocket NAT traversal). Without it, FS rejects originate with
+// MANDATORY_IE_MISSING even when the user is registered. Shared by the
+// agent and guest directory responses.
+const fsDialString = "{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})}"
 
 // FSBasicAuth gates the /fs/* endpoints with HTTP Basic Auth. The single
 // shared credential is configured per Tring deployment via
@@ -101,6 +110,16 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Guest web-callers register with an ephemeral `guest_*` SIP identity
+	// minted by POST /v1/sdk/guest-credentials. They resolve against
+	// guest_sessions (not agents) and are tagged user_class=guest + pinned
+	// to a flow, which the dialplan (tring_guest_ivr) and IVR executor use
+	// to keep them inside the IVR — a guest credential never bridges a trunk.
+	if strings.HasPrefix(user, "guest_") {
+		s.writeGuestDirectory(w, r, tenantID, domain, user)
+		return
+	}
+
 	var sipPassword string
 	var agentID uuid.UUID
 	err = s.db.Pool.QueryRow(r.Context(),
@@ -118,16 +137,8 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 			Name: "directory",
 			Domain: &fsDomain{
 				Name: domain,
-				// Domain-level dial-string tells FreeSWITCH how to
-				// construct a dial URI when something tries to call
-				// `user/<id>@<domain>`. The sofia_contact() lookup
-				// pulls the registered contact (including the
-				// `fs_path` for WebSocket NAT traversal). Without
-				// this param, FS rejects the originate with
-				// MANDATORY_IE_MISSING even when the user is
-				// registered.
 				Params: fsParams{Params: []fsKV{
-					{Name: "dial-string", Value: "{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})}"},
+					{Name: "dial-string", Value: fsDialString}, // see const fsDialString
 				}},
 				User: fsUser{
 					ID: user,
@@ -144,6 +155,51 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	writeFSXML(w, doc)
+}
+
+// writeGuestDirectory resolves an ephemeral guest SIP identity against
+// guest_sessions and returns its directory entry tagged user_class=guest
+// and tring_flow_id. FreeSWITCH applies these as channel variables when it
+// authenticates the guest's INVITE; the dialplan keys on user_class to
+// route the call into the IVR only, and the executor reads tring_flow_id to
+// pick the flow without a dialed DID. Expired or flow-less sessions 404.
+func (s *Server) writeGuestDirectory(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, domain, user string) {
+	var (
+		sipPassword string
+		flowID      *uuid.UUID
+	)
+	err := s.db.Pool.QueryRow(r.Context(), `
+		SELECT sip_password, flow_id FROM guest_sessions
+		WHERE tenant_id = $1 AND sip_username = $2 AND expires_at > now()
+	`, tenantID, user).Scan(&sipPassword, &flowID)
+	if err != nil || flowID == nil {
+		writeFSNotFound(w)
+		return
+	}
+	writeFSXML(w, fsDocument{
+		Type: "freeswitch/xml",
+		Section: &fsSection{
+			Name: "directory",
+			Domain: &fsDomain{
+				Name: domain,
+				Params: fsParams{Params: []fsKV{
+					{Name: "dial-string", Value: fsDialString},
+				}},
+				User: fsUser{
+					ID: user,
+					Params: fsParams{Params: []fsKV{
+						{Name: "password", Value: sipPassword},
+					}},
+					Variables: fsVariables{Variables: []fsKV{
+						{Name: "user_context", Value: "default"},
+						{Name: "user_class", Value: "guest"},
+						{Name: "tenant_id", Value: tenantID.String()},
+						{Name: "tring_flow_id", Value: flowID.String()},
+					}},
+				},
+			},
+		},
+	})
 }
 
 func writeFSNotFound(w http.ResponseWriter) {

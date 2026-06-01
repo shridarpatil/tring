@@ -117,12 +117,24 @@ function createPanel(): Panel {
   const root = document.createElement("div");
   root.id = PANEL_ID;
   root.setAttribute("data-state", "idle");
+  // Dialpad keys laid out as a real phone (1-2-3, 4-5-6, 7-8-9, *-0-#).
+  // Rendered as a 3-col grid so the visual matches what users tap on
+  // their phone. Only shown when the call is connected — sending DTMF
+  // before answer / after hangup is a no-op the SDK would silently
+  // swallow anyway.
+  const DTMF_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
+  const dtmfButtonsHTML = DTMF_KEYS.map(
+    (k) => `<button type="button" class="tring-dtmf" data-d="${k}">${k}</button>`,
+  ).join("");
+
   root.innerHTML = `
     <div class="tring-panel-row tring-panel-header">
       <span class="tring-panel-icon">📞</span>
       <span class="tring-panel-to"></span>
     </div>
     <div class="tring-panel-row tring-panel-status">Connecting…</div>
+    <div class="tring-panel-row tring-panel-dialed"></div>
+    <div class="tring-panel-row tring-panel-dialpad">${dtmfButtonsHTML}</div>
     <div class="tring-panel-row tring-panel-actions">
       <button type="button" class="tring-hangup">Hang up</button>
     </div>
@@ -130,17 +142,39 @@ function createPanel(): Panel {
 
   const toEl = root.querySelector<HTMLElement>(".tring-panel-to")!;
   const statusEl = root.querySelector<HTMLElement>(".tring-panel-status")!;
+  const dialedEl = root.querySelector<HTMLElement>(".tring-panel-dialed")!;
   const hangupBtn = root.querySelector<HTMLButtonElement>(".tring-hangup")!;
+  const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
 
   let active: Call | null = null;
+  let dialed = "";
+
   hangupBtn.addEventListener("click", async () => {
     if (active) await active.hangup();
+  });
+
+  // Event-delegate the dialpad so a single listener covers all 12 keys.
+  dialpadEl.addEventListener("click", async (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(
+      "button.tring-dtmf",
+    );
+    if (!btn || !active) return;
+    const digit = btn.dataset.d!;
+    dialed += digit;
+    dialedEl.textContent = dialed;
+    try {
+      await active.sendDTMF(digit);
+    } catch (e) {
+      console.warn("[tring] sendDTMF failed", e);
+    }
   });
 
   return {
     root,
     show(call, status) {
       active = call;
+      dialed = "";
+      dialedEl.textContent = "";
       toEl.textContent = call.to;
       statusEl.textContent = status;
       root.setAttribute("data-state", status);
@@ -157,6 +191,8 @@ function createPanel(): Panel {
     },
     hide() {
       active = null;
+      dialed = "";
+      dialedEl.textContent = "";
       root.classList.remove("tring-panel-visible");
     },
   };
@@ -198,6 +234,26 @@ function injectStyles(): void {
       font: inherit; cursor: pointer; width: 100%;
     }
     #${PANEL_ID} .tring-hangup:hover { background: #b91c1c; }
+    /* Dialpad is hidden until the call is connected. Sending DTMF
+       before answer would be a no-op on the FS side anyway. */
+    #${PANEL_ID} .tring-panel-dialpad {
+      display: none; grid-template-columns: repeat(3, 1fr); gap: .35rem;
+    }
+    #${PANEL_ID}[data-state="connected"] .tring-panel-dialpad { display: grid; }
+    #${PANEL_ID} .tring-dtmf {
+      background: #1f2937; color: #f9fafb; border: 1px solid #374151;
+      padding: .55rem 0; border-radius: 6px;
+      font: 16px/1 system-ui, sans-serif; font-weight: 600;
+      cursor: pointer;
+    }
+    #${PANEL_ID} .tring-dtmf:hover { background: #374151; }
+    #${PANEL_ID} .tring-dtmf:active { background: #4b5563; }
+    /* Echoes the digits the user has pressed so far — handy for
+       debugging "did I actually press 1 or did the touch miss?". */
+    #${PANEL_ID} .tring-panel-dialed {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #fbbf24; min-height: 1.2em; font-size: 13px;
+    }
   `;
   document.head.appendChild(style);
 }

@@ -26,13 +26,22 @@ const builds = [
     outfile: "dist/tring.esm.js",
     format: "esm",
   },
-  // voice.js — the drop-in widget. Auto-binds <button data-tring-call>
+  // voice.js — the drop-in agent widget. Auto-binds <button data-tring-call>
   // and renders the floating call panel on DOM ready, reading config
   // from its own <script> tag's data-* attributes.
   {
     ...shared,
     entryPoints: ["src/widget-entry.ts"],
     outfile: "dist/voice.iife.js",
+    format: "iife",
+  },
+  // support.js — the drop-in *guest* widget for customer-facing support
+  // pages. Auto-renders a "Call support" launcher + full-screen call UI;
+  // the visitor calls into the tenant's IVR over WebRTC with no account.
+  {
+    ...shared,
+    entryPoints: ["src/guest-entry.ts"],
+    outfile: "dist/support.iife.js",
     format: "iife",
   },
 ];

@@ -76,9 +76,19 @@
       <code>&lt;script src="voice.js"&gt;</code> tag injected after you paste a JWT below.
       In a real CRM, your backend mints and templates the JWT before the page is rendered.</p>
       <p>Mint a JWT against the running Tring API:</p>
-      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;">KEY='tk_test_dev_local_only_change_me_in_prod'
-AGENT=$(curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents | jq -r '.[0].id')
-curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/token | jq -r .token</pre>
+      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;"># 1. log in to the console with the bootstrap admin user
+CONSOLE=$(curl -sS -X POST http://localhost:8085/v1/console/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@tring.local","password":"tring_dev_change_me"}' \
+  | jq -r .token)
+
+# 2. pick an agent (or create one first via /admin/ → Agents)
+AGENT=$(curl -sS -H "Authorization: Bearer $CONSOLE" \
+  http://localhost:8085/v1/agents | jq -r '.[0].id')
+
+# 3. mint a short-lived SDK token for that agent — paste it below
+curl -sS -H "Authorization: Bearer $CONSOLE" \
+  http://localhost:8085/v1/agents/$AGENT/token | jq -r .token</pre>
       <div class="token-form">
         <input id="tokenInput" type="text" placeholder="Paste JWT here…" autocomplete="off" />
         <button id="loadBtn">Load voice.js</button>

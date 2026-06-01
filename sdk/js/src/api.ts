@@ -1,13 +1,40 @@
 // Thin REST client for the Tring backend. Only the two endpoints the SDK
 // needs: SIP credential fetch (during init) and call origination.
 
-import type { SipCredentialsResponse } from "./types";
+import type {
+  GuestCredentialsResponse,
+  SipCredentialsResponse,
+} from "./types";
 
 export class ApiClient {
   constructor(
     private readonly base: string,
-    private readonly token: string,
+    // Optional: the guest flow has no token (it authenticates with a
+    // public key instead), so the guest endpoint below ignores it.
+    private readonly token = "",
   ) {}
+
+  /**
+   * Mints an anonymous, flow-pinned guest SIP identity for a website
+   * visitor. Public endpoint — authorized by the tenant's *public* widget
+   * key, not a bearer token. Returns SIP creds plus the IVR dial target.
+   */
+  async fetchGuestCredentials(
+    publicKey: string,
+    flowId?: string,
+  ): Promise<GuestCredentialsResponse> {
+    const r = await fetch(`${this.base}/v1/sdk/guest-credentials`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ public_key: publicKey, flow_id: flowId }),
+    });
+    if (!r.ok) {
+      throw new Error(
+        `tring guest credentials failed: ${r.status} ${await r.text()}`,
+      );
+    }
+    return r.json();
+  }
 
   async fetchCredentials(): Promise<SipCredentialsResponse> {
     const r = await fetch(`${this.base}/v1/sdk/credentials`, {
