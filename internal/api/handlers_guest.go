@@ -160,7 +160,7 @@ func (s *Server) resolveGuestFlow(ctx context.Context, tenantID uuid.UUID, reque
 	if fallback != nil {
 		return *fallback, nil
 	}
-	return uuid.Nil, errors.New("no flow specified and tenant has no support flow configured")
+	return uuid.Nil, errors.New("guest calling is not enabled for this tenant — an operator must set a support flow in Settings")
 }
 
 // assertFlowUsable confirms a flow exists, belongs to the tenant, and is
