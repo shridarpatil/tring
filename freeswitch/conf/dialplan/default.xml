@@ -25,6 +25,22 @@
                   the socket so the executor can read Caller-* fields.
          No `continue="true"` — if the orchestrator hangs up cleanly
          the call ends here; no fall-through into demo extensions. -->
+    <!-- Tring guest web-calling — toll-fraud guard + IVR pin.
+         A guest (anonymous website visitor) registers with an ephemeral
+         `guest_*` SIP identity whose directory entry sets user_class=guest
+         and tring_flow_id (see internal/api/handlers_fs.go). This branch
+         matches on that class and routes the call straight to the IVR
+         socket REGARDLESS of what was dialed — so a guest credential can
+         only ever reach its pinned flow and can NEVER fall through to a
+         trunk bridge. Must come before tring_ivr (and any bridge logic).
+         The executor reads tring_flow_id to pick the flow. -->
+    <extension name="tring_guest_ivr">
+      <condition field="${user_class}" expression="^guest$">
+        <action application="socket" data="127.0.0.1:8086 full"/>
+        <!-- no continue: a guest call begins and ends in the IVR -->
+      </condition>
+    </extension>
+
     <extension name="tring_ivr">
       <condition field="destination_number" expression="^\d+$">
         <action application="socket" data="127.0.0.1:8086 full"/>
