@@ -110,6 +110,33 @@ export class TringGuest extends Emitter<GuestEvent> {
     }
   }
 
+  /**
+   * Send a DTMF digit (0-9, *, #) to the IVR mid-call. Prefers RFC 2833
+   * in-band tones (what WebRTC + FreeSWITCH `play_and_get_digits` expect);
+   * falls back to SIP INFO if the session description handler can't.
+   */
+  async sendDTMF(digit: string): Promise<void> {
+    const s = this.session;
+    if (!s) return;
+    const sdh = s.sessionDescriptionHandler as
+      | { sendDtmf?: (tone: string) => boolean }
+      | undefined;
+    if (sdh?.sendDtmf?.(digit)) return; // RFC 2833 succeeded
+    try {
+      await s.info({
+        requestOptions: {
+          body: {
+            contentDisposition: "render",
+            contentType: "application/dtmf-relay",
+            content: `Signal=${digit}\r\nDuration=160`,
+          },
+        },
+      });
+    } catch {
+      /* best-effort — a dead session swallows the digit */
+    }
+  }
+
   /** Mute/unmute the visitor's microphone. */
   async mute(muted: boolean): Promise<void> {
     if (this.sip && this.session) {

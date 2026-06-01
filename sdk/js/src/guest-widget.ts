@@ -48,6 +48,7 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
   // Wire UI controls back to the guest session.
   ui.onHangup(() => guest.hangup());
   ui.onMute(() => guest.toggleMute());
+  ui.onDigit((digit) => guest.sendDTMF(digit));
 
   const startCall = async () => {
     if (guest.inCall) return;
@@ -109,30 +110,60 @@ interface GuestUI {
   end(message: string): void;
   onHangup(fn: () => void): void;
   onMute(fn: () => boolean | void): void;
+  onDigit(fn: (digit: string) => void): void;
 }
 
 function createGuestUI(title: string): GuestUI {
   const root = document.createElement("div");
   root.id = UI_ID;
   root.setAttribute("data-state", "idle");
+  const DTMF_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
+  const KEY_SUB: Record<string, string> = {
+    "2": "ABC", "3": "DEF", "4": "GHI", "5": "JKL", "6": "MNO",
+    "7": "PQRS", "8": "TUV", "9": "WXYZ", "0": "+",
+  };
+  const keypadHTML = DTMF_KEYS.map(
+    (k) =>
+      `<button type="button" class="tring-guest-key" data-d="${k}">` +
+      `<span class="num">${k}</span><span class="sub">${KEY_SUB[k] ?? ""}</span></button>`,
+  ).join("");
+
+  // Inline SVGs so the controls look native with no asset dependency.
+  const micIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
+  const phoneIcon = `<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
+
   root.innerHTML = `
     <div class="tring-guest-card">
-      <div class="tring-guest-avatar">${escapeHtml(title.slice(0, 1).toUpperCase())}</div>
-      <div class="tring-guest-title">${escapeHtml(title)}</div>
-      <div class="tring-guest-sub">Connecting…</div>
+      <div class="tring-guest-top">
+        <div class="tring-guest-avatar">${escapeHtml(title.slice(0, 1).toUpperCase())}</div>
+        <div class="tring-guest-title">${escapeHtml(title)}</div>
+        <div class="tring-guest-sub">Connecting…</div>
+      </div>
+      <div class="tring-guest-mid">
+        <div class="tring-guest-dialed"></div>
+        <div class="tring-guest-keypad">${keypadHTML}</div>
+      </div>
       <div class="tring-guest-actions">
-        <button type="button" class="tring-guest-btn tring-guest-mute" aria-pressed="false">Mute</button>
-        <button type="button" class="tring-guest-btn tring-guest-end">End</button>
+        <button type="button" class="tring-guest-btn tring-guest-mute" aria-pressed="false">
+          <span class="tring-guest-ic">${micIcon}</span><span class="tring-guest-lbl">Mute</span>
+        </button>
+        <button type="button" class="tring-guest-btn tring-guest-end">
+          <span class="tring-guest-ic">${phoneIcon}</span><span class="tring-guest-lbl">End</span>
+        </button>
       </div>
     </div>`;
 
   const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
   const subEl = $(".tring-guest-sub");
+  const dialedEl = $(".tring-guest-dialed");
+  const keypadEl = $(".tring-guest-keypad");
   const muteBtn = $<HTMLButtonElement>(".tring-guest-mute");
+  const muteLbl = muteBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
   const endBtn = $<HTMLButtonElement>(".tring-guest-end");
 
   let tick: number | undefined;
   let startedAt = 0;
+  let dialed = "";
 
   const fmt = (ms: number) => {
     const t = Math.floor(ms / 1000);
@@ -144,7 +175,10 @@ function createGuestUI(title: string): GuestUI {
     root,
     open() {
       muteBtn.setAttribute("aria-pressed", "false");
-      muteBtn.textContent = "Mute";
+      muteBtn.classList.remove("is-active");
+      muteLbl.textContent = "Mute";
+      dialed = "";
+      dialedEl.textContent = "";
       subEl.textContent = "Connecting…";
       root.setAttribute("data-state", "connecting");
       root.classList.add("tring-guest-visible");
@@ -179,7 +213,21 @@ function createGuestUI(title: string): GuestUI {
         const muted = fn();
         const on = muted === true;
         muteBtn.setAttribute("aria-pressed", String(on));
-        muteBtn.textContent = on ? "Unmute" : "Mute";
+        muteBtn.classList.toggle("is-active", on);
+        muteLbl.textContent = on ? "Unmute" : "Mute";
+      });
+    },
+    onDigit(fn) {
+      // One delegated listener covers all 12 keys.
+      keypadEl.addEventListener("click", (ev) => {
+        const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>(
+          "button.tring-guest-key",
+        );
+        if (!btn) return;
+        const digit = btn.dataset.d!;
+        dialed += digit;
+        dialedEl.textContent = dialed;
+        fn(digit);
       });
     },
   };
@@ -254,33 +302,85 @@ function injectStyles(): void {
     .tring-guest-launcher:hover { background: #1d4ed8; }
     .tring-guest-launcher-icon { font-size: 18px; }
 
+    /* Full-screen native-style call sheet. Opaque so the host page
+       doesn't bleed through; safe-area insets respect the notch/home bar. */
     #${UI_ID} {
-      position: fixed; inset: 0; z-index: 999999;
-      display: none; place-items: center;
-      background: rgba(8,12,22,.93); backdrop-filter: blur(8px);
-      font: 16px/1.4 system-ui, sans-serif; color: #fff;
+      position: fixed; inset: 0; z-index: 999999; display: none;
+      background: linear-gradient(180deg, #243042 0%, #0b1220 100%);
+      font: 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
+      -webkit-tap-highlight-color: transparent;
     }
-    #${UI_ID}.tring-guest-visible { display: grid; }
-    #${UI_ID} .tring-guest-card { text-align: center; }
+    #${UI_ID}.tring-guest-visible { display: block; }
+    #${UI_ID} .tring-guest-card {
+      box-sizing: border-box; width: 100%; max-width: 460px; height: 100%;
+      margin: 0 auto; display: flex; flex-direction: column; align-items: center;
+      padding: max(3rem, env(safe-area-inset-top)) 1.5rem
+               max(1.75rem, env(safe-area-inset-bottom));
+    }
+
+    /* Caller block — upper third, like an incoming/active call. */
+    #${UI_ID} .tring-guest-top { margin-top: 7vh; text-align: center; }
     #${UI_ID} .tring-guest-avatar {
-      width: 96px; height: 96px; margin: 0 auto 1rem; border-radius: 50%;
-      background: #2563eb; display: grid; place-items: center; font-size: 40px;
+      width: 104px; height: 104px; margin: 0 auto 1.1rem; border-radius: 50%;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      display: grid; place-items: center; font-size: 44px; font-weight: 600;
+      box-shadow: 0 8px 30px rgba(37,99,235,.35);
     }
-    #${UI_ID} .tring-guest-title { font-size: 22px; font-weight: 600; }
+    #${UI_ID} .tring-guest-title { font-size: 28px; font-weight: 600; }
     #${UI_ID} .tring-guest-sub {
-      opacity: .8; margin-top: .3rem; font-variant-numeric: tabular-nums;
+      font-size: 17px; opacity: .6; margin-top: .35rem;
+      font-variant-numeric: tabular-nums;
     }
+
+    /* Middle — dialed digits + dialpad, fills the gap and centers. */
+    #${UI_ID} .tring-guest-mid {
+      flex: 1; width: 100%; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+    }
+    #${UI_ID} .tring-guest-dialed {
+      min-height: 1.4em; margin-bottom: 1rem; font-size: 26px;
+      letter-spacing: .15em; font-variant-numeric: tabular-nums;
+    }
+    /* Dialpad is visible by default once connected — no extra tap. */
+    #${UI_ID} .tring-guest-keypad {
+      display: none; grid-template-columns: repeat(3, 1fr);
+      gap: 1.1rem 1.8rem; width: min(80vw, 290px);
+    }
+    #${UI_ID}[data-state="connected"] .tring-guest-keypad { display: grid; }
+    #${UI_ID} .tring-guest-key {
+      aspect-ratio: 1; width: 100%; max-width: 76px; justify-self: center;
+      border: 0; border-radius: 50%; cursor: pointer; color: #fff;
+      background: rgba(255,255,255,.1);
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; transition: background .1s;
+    }
+    #${UI_ID} .tring-guest-key:active { background: rgba(255,255,255,.28); }
+    #${UI_ID} .tring-guest-key .num { font-size: 29px; font-weight: 500; line-height: 1; }
+    #${UI_ID} .tring-guest-key .sub {
+      font-size: 9px; letter-spacing: .12em; opacity: .65;
+      margin-top: 3px; min-height: 10px;
+    }
+
+    /* Bottom — circular call controls, like a native dialer. */
     #${UI_ID} .tring-guest-actions {
-      display: none; gap: 1rem; margin-top: 2.2rem; justify-content: center;
+      display: none; width: 100%; justify-content: center; gap: 3.5rem;
+      padding-top: 1.5rem;
     }
     #${UI_ID}[data-state="connected"] .tring-guest-actions { display: flex; }
     #${UI_ID} .tring-guest-btn {
-      border: 0; color: #fff; padding: .8rem 1.6rem; border-radius: 999px;
-      font: 15px system-ui, sans-serif; cursor: pointer;
+      background: none; border: 0; padding: 0; cursor: pointer; color: #fff;
+      display: flex; flex-direction: column; align-items: center; gap: .55rem;
+      font: 13px -apple-system, system-ui, sans-serif;
     }
-    #${UI_ID} .tring-guest-mute { background: #374151; }
-    #${UI_ID} .tring-guest-mute[aria-pressed="true"] { background: #b45309; }
-    #${UI_ID} .tring-guest-end { background: #dc2626; }
+    #${UI_ID} .tring-guest-ic {
+      width: 66px; height: 66px; border-radius: 50%;
+      display: grid; place-items: center;
+    }
+    #${UI_ID} .tring-guest-mute .tring-guest-ic { background: rgba(255,255,255,.15); }
+    #${UI_ID} .tring-guest-mute.is-active .tring-guest-ic { background: #fff; color: #111827; }
+    #${UI_ID} .tring-guest-end .tring-guest-ic { background: #ef4444; }
+    /* Rotate the phone glyph so End reads as "hang up". */
+    #${UI_ID} .tring-guest-end .tring-guest-ic svg { transform: rotate(135deg); }
   `;
   document.head.appendChild(style);
 }
