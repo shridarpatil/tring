@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Acme — Support (guest web calling demo)</title>
+  <style>
+    body { font: 15px/1.6 system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #111827; }
+    h1 { margin: 0 0 .25rem; }
+    .hint { color: #6b7280; font-size: 13px; margin: 0 0 2rem; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 1.5rem; margin-top: 1rem; }
+    .setup { background: #fef3c7; border: 1px solid #fbbf24; border-radius: 8px; padding: 1rem; margin: 1rem 0; font-size: 13px; }
+    .setup code { background: rgba(0,0,0,.06); padding: .1rem .3rem; border-radius: 3px; }
+    input[type=text] { font: inherit; padding: .4rem .5rem; width: 320px; border: 1px solid #d1d5db; border-radius: 6px; }
+    button.inline { font: inherit; padding: .45rem .9rem; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>🛟 Acme Help Center</h1>
+  <p class="hint">Customer-facing support page. The visitor has no account — they tap
+  <strong>Call support</strong> and land in our IVR over the internet (WebRTC). The only
+  voice code is one <code>&lt;script src="support.js"&gt;</code> at the bottom.</p>
+
+  <div class="setup">
+    <strong>Local dev setup:</strong> grab the tenant's public widget key, then load the widget.
+    <p style="margin:.5rem 0">
+      <code>curl -sS -H "Authorization: Bearer $CONSOLE_JWT" http://localhost:8085/v1/guest-config | jq -r .public_key</code>
+    </p>
+    (Make sure the tenant has a <code>support_flow_id</code> set — PATCH <code>/v1/guest-config</code>
+    with <code>{"support_flow_id":"&lt;flow uuid&gt;"}</code>.)
+    <p style="margin:.75rem 0 0">
+      <input id="pkInput" type="text" placeholder="paste pk_live_… here" />
+      <button class="inline" id="loadBtn">Load widget</button>
+    </p>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Still need help?</h3>
+    <p>Our team is one tap away — no phone number to dial, no hold music (well, maybe a little).</p>
+    <!-- This is the only call-related markup. With data-render-button="false"
+         on the script, the widget binds THIS button instead of drawing its own. -->
+    <button class="inline" data-tring-guest-call>📞 Talk to a human</button>
+  </div>
+
+  <script>
+    // Dev convenience: inject support.js with the pasted public key. In
+    // production you'd hardcode the <script> tag with data-public-key.
+    document.getElementById('loadBtn').addEventListener('click', () => {
+      const pk = document.getElementById('pkInput').value.trim();
+      if (!pk) { alert('paste a public key first'); return; }
+      const s = document.createElement('script');
+      s.src = '../sdk/js/dist/support.iife.js';
+      s.setAttribute('data-api-base', 'http://localhost:8085');
+      s.setAttribute('data-public-key', pk);
+      s.setAttribute('data-render-button', 'false'); // we provide our own button
+      document.body.appendChild(s);
+      document.getElementById('loadBtn').disabled = true;
+      document.getElementById('loadBtn').textContent = 'Widget loaded ✓';
+    });
+  </script>
+</body>
+</html>

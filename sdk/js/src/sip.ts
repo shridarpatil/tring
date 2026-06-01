@@ -85,6 +85,21 @@ export class SipAdapter {
     return inv;
   }
 
+  /**
+   * Mute/unmute the outbound audio track on a session. Flips the track's
+   * `enabled` flag — instant, with no SIP re-INVITE. No-op if the peer
+   * connection isn't up yet.
+   */
+  setMuted(session: Session, muted: boolean): void {
+    const pc = (session.sessionDescriptionHandler as any)?.peerConnection as
+      | RTCPeerConnection
+      | undefined;
+    if (!pc) return;
+    for (const sender of pc.getSenders()) {
+      if (sender.track?.kind === "audio") sender.track.enabled = !muted;
+    }
+  }
+
   async disconnect(): Promise<void> {
     try {
       await this.registerer?.unregister();
