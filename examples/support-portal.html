@@ -18,7 +18,7 @@
   <h1>🛟 Acme Help Center</h1>
   <p class="hint">Customer-facing support page. The visitor has no account — they tap
   <strong>Call support</strong> and land in our IVR over the internet (WebRTC). The only
-  voice code is one <code>&lt;script src="support.js"&gt;</code> at the bottom.</p>
+  voice code is one <code>&lt;script src="/sdk/voice.js"&gt;</code> at the bottom.</p>
 
   <div class="setup">
     <strong>Local dev setup:</strong> grab the tenant's public widget key, then load the widget.
@@ -45,16 +45,18 @@
   </div>
 
   <script>
-    // Dev convenience: inject support.js with the pasted public key. In
+    // Dev convenience: inject voice.js with the pasted public key. In
     // production you'd hardcode the <script> tag with data-public-key.
     document.getElementById('loadBtn').addEventListener('click', () => {
       const pk = document.getElementById('pkInput').value.trim();
       if (!pk) { alert('paste a public key first'); return; }
+      // The widget bundle is served by the Tring API itself at /sdk/voice.js
+      // (no CDN). Derive the API base from how this page was opened so the
+      // demo works via http://localhost:9999 or http://<lan-ip>:9999.
+      const apiBase = location.protocol + '//' + location.hostname + ':8085';
       const s = document.createElement('script');
-      s.src = '../sdk/js/dist/support.iife.js';
-      // Derive the API base from however this page was opened, so the demo
-      // works whether you use http://localhost:9999 or http://<lan-ip>:9999.
-      s.setAttribute('data-api-base', location.protocol + '//' + location.hostname + ':8085');
+      s.src = apiBase + '/sdk/voice.js';
+      s.setAttribute('data-api-base', apiBase);
       s.setAttribute('data-public-key', pk);
       s.setAttribute('data-render-button', 'false'); // we provide our own button
       document.body.appendChild(s);
