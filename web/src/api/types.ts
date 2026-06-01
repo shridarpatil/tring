@@ -130,6 +130,15 @@ export interface Flow {
   updated_at: string;
 }
 
+// Guest web-calling config (GET/PATCH /v1/guest-config). public_key goes in
+// the embed snippet; allowed_origins is the domain allowlist the public mint
+// endpoint enforces; support_flow_id is the flow guests land in.
+export interface GuestConfig {
+  public_key: string;
+  support_flow_id: string | null;
+  allowed_origins: string[];
+}
+
 // ─── SIP Trunks ──────────────────────────────────────────────────────
 // Per-tenant trunk config managed in the admin console. The server
 // renders these to FreeSWITCH gateway XML on every save and rescans
