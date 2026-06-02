@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/whatomate/tring/internal/dbtest"
+	"github.com/whatomate/tring/internal/queries"
 )
 
 // insertOutbound creates a trunk + an outbound number bound to it. Tests
@@ -34,15 +35,15 @@ func insertOutbound(t *testing.T, f *dbtest.Fixture, e164, provider string, prio
 }
 
 // newServerFor wires a minimal Server around the fixture DB. We don't need
-// the FS client or notifier — selectTrunks only touches s.db and s.rr*.
+// the FS client or notifier — selectTrunks only touches s.db, s.q, and s.rr*.
 func newServerFor(f *dbtest.Fixture) *Server {
-	return &Server{db: f.DB}
+	return &Server{db: f.DB, q: queries.MustLoad()}
 }
 
 func TestSelectTrunksFailoverReturnsAllByPriority(t *testing.T) {
 	f := dbtest.Setup(t)
 	insertOutbound(t, f, "+918001111111", "airtel", 100, true)
-	insertOutbound(t, f, "+918002222222", "jio", 50, true)   // lower priority wins
+	insertOutbound(t, f, "+918002222222", "jio", 50, true) // lower priority wins
 	insertOutbound(t, f, "+918003333333", "tata", 200, true)
 
 	s := newServerFor(f)

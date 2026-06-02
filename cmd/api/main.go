@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -15,28 +14,25 @@ import (
 
 	"github.com/whatomate/tring/internal/api"
 	"github.com/whatomate/tring/internal/bootstrap"
+	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	tringmigrate "github.com/whatomate/tring/internal/migrate"
+	"github.com/whatomate/tring/internal/queries"
 )
 
 // migrateRun is a tiny shim so the call site reads `migrateRun(...)`
 // rather than the long aliased package name everywhere.
 var migrateRun = tringmigrate.Run
 
-const (
-	defaultDSN         = "postgres://tring:tring_dev@localhost:5434/tring"
-	defaultJWT         = "tring_dev_jwt_secret_change_me_in_prod"
-	defaultFSAuth      = "fs:fs_dev_secret_change_me_in_prod"
-	defaultESLAddr     = "127.0.0.1:8021"
-	defaultESLPassword = "ClueCon"
-)
-
-// defaultWSURL is the URL the SDK uses for sip.js's WebSocket transport
-// against FreeSWITCH's plain-WS binding (port 5066). FreeSWITCH binds WS
-// to the host's local_ip_v4, not 127.0.0.1, so we auto-detect the
-// outbound IP rather than hardcoding "localhost". Override with
-// TRING_WS_URL=wss://voice.tring.io:7443 (or similar) for production.
-func defaultWSURL() string {
+// wsURL returns the WebSocket URL the SDK uses for sip.js's transport
+// against FreeSWITCH's plain-WS binding (port 5066). If configured (via
+// TRING_WS_URL, e.g. wss://voice.tring.io:7443 for production) it's used
+// as-is; otherwise we auto-detect the host's outbound IP, since FreeSWITCH
+// binds WS to local_ip_v4, not 127.0.0.1.
+func wsURL(configured string) string {
+	if configured != "" {
+		return configured
+	}
 	// "What's my outbound IP" canonical trick: dialing a UDP socket
 	// resolves the local IP that would be used for that route. No
 	// packet is actually sent. Falls back to 127.0.0.1 if the host
@@ -51,8 +47,11 @@ func defaultWSURL() string {
 }
 
 func main() {
-	addr := flag.String("addr", ":8085", "HTTP listen address")
-	dsn := flag.String("dsn", envOr("TRING_DSN", defaultDSN), "Postgres connection string")
+	// Config: defaults + TRING_* env (koanf). Flags below take precedence
+	// by defaulting to the resolved value, so flag > env > default.
+	k := config.Load()
+	addr := flag.String("addr", k.String("api_addr"), "HTTP listen address")
+	dsn := flag.String("dsn", k.String("dsn"), "Postgres connection string")
 	seed := flag.String("seed-tenant", "", "If set, creates a tenant with the given name, prints the API key, then exits")
 	flag.Parse()
 
@@ -76,9 +75,9 @@ func main() {
 	// against an empty database. No-op on every subsequent boot, and a
 	// no-op if the operator hasn't set the bootstrap env vars at all.
 	if err := bootstrap.Run(ctx, database, bootstrap.Config{
-		TenantName:    os.Getenv("TRING_BOOTSTRAP_TENANT"),
-		AdminEmail:    os.Getenv("TRING_ADMIN_EMAIL"),
-		AdminPassword: os.Getenv("TRING_ADMIN_PASSWORD"),
+		TenantName:    k.String("bootstrap_tenant"),
+		AdminEmail:    k.String("admin_email"),
+		AdminPassword: k.String("admin_password"),
 	}); err != nil {
 		log.Fatalf("bootstrap: %v", err)
 	}
@@ -94,15 +93,15 @@ func main() {
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
 			DB:           database,
-			JWTSecret:    envOr("TRING_JWT_SECRET", defaultJWT),
-			FSBasicAuth:  envOr("TRING_FS_BASIC_AUTH", defaultFSAuth),
-			WSURL:        envOr("TRING_WS_URL", defaultWSURL()),
-			ESLAddr:      envOr("TRING_ESL_ADDR", defaultESLAddr),
-			ESLPassword:  envOr("TRING_ESL_PASSWORD", defaultESLPassword),
-			STUNURL:      envOr("TRING_STUN_URL", "stun:stun.l.google.com:19302"),
-			TURNURL:      os.Getenv("TRING_TURN_URL"),
-			TURNUsername: os.Getenv("TRING_TURN_USERNAME"),
-			TURNPassword: os.Getenv("TRING_TURN_PASSWORD"),
+			JWTSecret:    k.String("jwt_secret"),
+			FSBasicAuth:  k.String("fs_basic_auth"),
+			WSURL:        wsURL(k.String("ws_url")),
+			ESLAddr:      k.String("esl_addr"),
+			ESLPassword:  k.String("esl_password"),
+			STUNURL:      k.String("stun_url"),
+			TURNURL:      k.String("turn_url"),
+			TURNUsername: k.String("turn_username"),
+			TURNPassword: k.String("turn_password"),
 		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -129,11 +128,8 @@ func seedTenant(ctx context.Context, database *db.DB, name string) error {
 	sipDomain := "t_" + strings.ToLower(strings.ReplaceAll(name, " ", "_")) + ".tring.local"
 
 	var id string
-	err = database.Pool.QueryRow(ctx, `
-		INSERT INTO tenants (name, api_key_hash, api_key_prefix, sip_domain)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, name, hash, prefix, sipDomain).Scan(&id)
+	err = database.Pool.QueryRow(ctx, queries.MustLoad().InsertTenant,
+		name, hash, prefix, sipDomain).Scan(&id)
 	if err != nil {
 		return fmt.Errorf("insert tenant: %w", err)
 	}
@@ -153,11 +149,4 @@ Use it as: Authorization: Bearer %s
 
 `, id, name, sipDomain, plaintext, plaintext)
 	return nil
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

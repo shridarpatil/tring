@@ -74,10 +74,8 @@ func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) 
 		supportFlow    *uuid.UUID
 		allowedOrigins []string
 	)
-	err := s.db.Pool.QueryRow(r.Context(), `
-		SELECT id, sip_domain, support_flow_id, allowed_origins
-		FROM tenants WHERE public_key = $1
-	`, req.PublicKey).Scan(&tenantID, &sipDomain, &supportFlow, &allowedOrigins)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTenantByPublicKey,
+		req.PublicKey).Scan(&tenantID, &sipDomain, &supportFlow, &allowedOrigins)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, "unknown public key")
 		return
@@ -104,13 +102,12 @@ func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) 
 
 	// Reap expired sessions lazily so the table stays bounded without a
 	// background worker. Cheap (indexed on expires_at) and best-effort.
-	_, _ = s.db.Pool.Exec(r.Context(), `DELETE FROM guest_sessions WHERE expires_at < now()`)
+	_, _ = s.db.Pool.Exec(r.Context(), s.q.DeleteExpiredGuestSessions)
 
 	// Per-tenant concurrent-session cap — the non-spoofable backstop against
 	// a flood exhausting DB rows / FreeSWITCH channels.
 	var active int
-	if err := s.db.Pool.QueryRow(r.Context(),
-		`SELECT count(*) FROM guest_sessions WHERE tenant_id = $1 AND expires_at > now()`,
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.CountActiveGuestSessions,
 		tenantID,
 	).Scan(&active); err != nil {
 		writeError(w, http.StatusInternalServerError, "session count failed")
@@ -123,10 +120,8 @@ func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) 
 
 	user := "guest_" + randToken(6)
 	pass := randToken(20)
-	_, err = s.db.Pool.Exec(r.Context(), `
-		INSERT INTO guest_sessions (tenant_id, sip_username, sip_password, flow_id, expires_at)
-		VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))
-	`, tenantID, user, pass, flowID, int(guestSessionTTL.Seconds()))
+	_, err = s.db.Pool.Exec(r.Context(), s.q.CreateGuestSession,
+		tenantID, user, pass, flowID, int(guestSessionTTL.Seconds()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session create failed")
 		return
@@ -167,9 +162,8 @@ func (s *Server) resolveGuestFlow(ctx context.Context, tenantID uuid.UUID, reque
 // active. Returns a caller-safe error otherwise.
 func (s *Server) assertFlowUsable(ctx context.Context, flowID, tenantID uuid.UUID) error {
 	var ok bool
-	err := s.db.Pool.QueryRow(ctx, `
-		SELECT true FROM flows WHERE id = $1 AND tenant_id = $2 AND is_active
-	`, flowID, tenantID).Scan(&ok)
+	err := s.db.Pool.QueryRow(ctx, s.q.FlowUsable,
+		flowID, tenantID).Scan(&ok)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return errors.New("flow not found or inactive")
 	}
@@ -194,10 +188,8 @@ type guestConfigResponse struct {
 func (s *Server) handleGetGuestConfig(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var resp guestConfigResponse
-	err := s.db.Pool.QueryRow(r.Context(), `
-		SELECT COALESCE(public_key, ''), support_flow_id, allowed_origins
-		FROM tenants WHERE id = $1
-	`, t.ID).Scan(&resp.PublicKey, &resp.SupportFlowID, &resp.AllowedOrigins)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig,
+		t.ID).Scan(&resp.PublicKey, &resp.SupportFlowID, &resp.AllowedOrigins)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -240,9 +232,7 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 			}
 			flowID = &fid
 		}
-		if _, err := s.db.Pool.Exec(r.Context(),
-			`UPDATE tenants SET support_flow_id = $1 WHERE id = $2`, flowID, t.ID,
-		); err != nil {
+		if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateSupportFlow, flowID, t.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "update failed")
 			return
 		}
@@ -258,9 +248,7 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 			}
 			normalized = append(normalized, n)
 		}
-		if _, err := s.db.Pool.Exec(r.Context(),
-			`UPDATE tenants SET allowed_origins = $1 WHERE id = $2`, normalized, t.ID,
-		); err != nil {
+		if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateAllowedOrigins, normalized, t.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "update failed")
 			return
 		}

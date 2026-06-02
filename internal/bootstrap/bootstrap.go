@@ -23,6 +23,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/queries"
 )
 
 // Config is everything the seed needs. All three fields are required
@@ -43,9 +44,10 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 	if cfg.TenantName == "" || cfg.AdminEmail == "" || cfg.AdminPassword == "" {
 		return nil
 	}
+	q := queries.MustLoad()
 
 	var count int
-	if err := database.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM tenants`).Scan(&count); err != nil {
+	if err := database.Pool.QueryRow(ctx, q.CountTenants).Scan(&count); err != nil {
 		return fmt.Errorf("bootstrap: count tenants: %w", err)
 	}
 	if count > 0 {
@@ -73,19 +75,13 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 	// the UNIQUE constraint stays happy across multi-tenant deploys.
 	apiKeySentinel := "deprecated-" + uuid.New().String()
 	var tenantID uuid.UUID
-	err = tx.QueryRow(ctx, `
-		INSERT INTO tenants (name, api_key_hash, api_key_prefix, sip_domain)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, cfg.TenantName, apiKeySentinel, "deprecated--", sipDomain).Scan(&tenantID)
+	err = tx.QueryRow(ctx, q.InsertTenant,
+		cfg.TenantName, apiKeySentinel, "deprecated--", sipDomain).Scan(&tenantID)
 	if err != nil {
 		return fmt.Errorf("bootstrap: insert tenant: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO users (tenant_id, email, password_hash)
-		VALUES ($1, $2, $3)
-	`, tenantID, email, string(hash)); err != nil {
+	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash)); err != nil {
 		return fmt.Errorf("bootstrap: insert user: %w", err)
 	}
 

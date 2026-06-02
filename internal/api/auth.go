@@ -42,9 +42,7 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		}
 
 		var t Tenant
-		err = s.db.Pool.QueryRow(r.Context(),
-			`SELECT id, name, sip_domain, outbound_strategy, failover_causes
-			 FROM tenants WHERE id = $1`,
+		err = s.db.Pool.QueryRow(r.Context(), s.q.GetTenant,
 			claims.TenantID,
 		).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
 		if err != nil {

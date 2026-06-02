@@ -20,20 +20,20 @@ import (
 )
 
 type Call struct {
-	ID            uuid.UUID  `json:"id"`
-	TenantID      uuid.UUID  `json:"tenant_id"`
-	Direction     string     `json:"direction"`
-	Status        string     `json:"status"`
-	FromNumber    string     `json:"from_number"`
-	ToNumber      string     `json:"to_number"`
-	AgentID       *uuid.UUID `json:"agent_id,omitempty"`
-	FSUUID        string     `json:"fs_uuid"`
-	StartedAt     time.Time  `json:"started_at"`
-	AnsweredAt    *time.Time `json:"answered_at,omitempty"`
-	EndedAt       *time.Time `json:"ended_at,omitempty"`
-	DurationSec   *int       `json:"duration_seconds,omitempty"`
-	HangupCause   *string    `json:"hangup_cause,omitempty"`
-	RecordingURL  *string    `json:"recording_url,omitempty"`
+	ID           uuid.UUID  `json:"id"`
+	TenantID     uuid.UUID  `json:"tenant_id"`
+	Direction    string     `json:"direction"`
+	Status       string     `json:"status"`
+	FromNumber   string     `json:"from_number"`
+	ToNumber     string     `json:"to_number"`
+	AgentID      *uuid.UUID `json:"agent_id,omitempty"`
+	FSUUID       string     `json:"fs_uuid"`
+	StartedAt    time.Time  `json:"started_at"`
+	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	DurationSec  *int       `json:"duration_seconds,omitempty"`
+	HangupCause  *string    `json:"hangup_cause,omitempty"`
+	RecordingURL *string    `json:"recording_url,omitempty"`
 }
 
 type createCallRequest struct {
@@ -111,8 +111,7 @@ func (s *Server) originateForAgent(
 	to string,
 ) (Call, int, error) {
 	var sipUsername string
-	err := s.db.Pool.QueryRow(ctx,
-		`SELECT sip_username FROM agents WHERE id = $1 AND tenant_id = $2`,
+	err := s.db.Pool.QueryRow(ctx, s.q.GetAgentSipUsername,
 		agentID, t.ID,
 	).Scan(&sipUsername)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -147,9 +146,7 @@ func (s *Server) originateForAgent(
 
 	sipDomain := t.SipDomain
 	if sipDomain == "" {
-		_ = s.db.Pool.QueryRow(ctx,
-			`SELECT sip_domain FROM tenants WHERE id = $1`, t.ID,
-		).Scan(&sipDomain)
+		_ = s.db.Pool.QueryRow(ctx, s.q.GetTenantSipDomain, t.ID).Scan(&sipDomain)
 	}
 	aLeg := fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
 
@@ -198,11 +195,8 @@ func (s *Server) originateForAgent(
 	outboundE164 := primaryDID
 
 	var c Call
-	err = s.db.Pool.QueryRow(ctx, `
-		INSERT INTO calls (tenant_id, direction, status, from_number, to_number, agent_id, fs_uuid, fs_job_uuid)
-		VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, $5, NULLIF($6,''))
-		RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, fs_uuid, started_at
-	`, t.ID, outboundE164, to, agentID, or.ChannelUUID, or.JobUUID).
+	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallOutbound,
+		t.ID, outboundE164, to, agentID, or.ChannelUUID, or.JobUUID).
 		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.FSUUID, &c.StartedAt)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
@@ -289,11 +283,8 @@ func (s *Server) originateBridge(
 	// from = agent (the party rung first), to = client (the destination).
 	// agent_id is NULL — this path bridges raw numbers, not a SIP agent.
 	var c Call
-	err = s.db.Pool.QueryRow(ctx, `
-		INSERT INTO calls (tenant_id, direction, status, from_number, to_number, fs_uuid, fs_job_uuid)
-		VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5,''))
-		RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, fs_uuid, started_at
-	`, t.ID, agentNorm, clientNorm, or.ChannelUUID, or.JobUUID).
+	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallBridge,
+		t.ID, agentNorm, clientNorm, or.ChannelUUID, or.JobUUID).
 		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.FSUUID, &c.StartedAt)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
@@ -335,12 +326,6 @@ const (
 	callsMaxLimit     = 200
 )
 
-const callSelectColumns = `
-	id, tenant_id, direction::text, status::text, from_number, to_number,
-	agent_id, fs_uuid, started_at, answered_at, ended_at,
-	duration_seconds, hangup_cause, recording_url
-`
-
 func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	var c Call
 	err := scanner.Scan(
@@ -358,10 +343,7 @@ func (s *Server) handleGetCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	row := s.db.Pool.QueryRow(r.Context(),
-		`SELECT `+callSelectColumns+` FROM calls WHERE id = $1 AND tenant_id = $2`,
-		id, t.ID,
-	)
+	row := s.db.Pool.QueryRow(r.Context(), s.q.GetCall, id, t.ID)
 	c, err := scanCall(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
@@ -386,19 +368,16 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		limit = callsMaxLimit
 	}
 
+	// Two static queries instead of string-building: the status filter just
+	// swaps which named query (and arg set) we use.
+	query := s.q.ListCalls
 	args := []interface{}{t.ID, limit}
-	q := `
-		SELECT ` + callSelectColumns + `
-		FROM calls
-		WHERE tenant_id = $1
-	`
 	if v := r.URL.Query().Get("status"); v != "" {
-		q += ` AND status = $3::call_status`
+		query = s.q.ListCallsByStatus
 		args = append(args, v)
 	}
-	q += ` ORDER BY started_at DESC LIMIT $2`
 
-	rows, err := s.db.Pool.Query(r.Context(), q, args...)
+	rows, err := s.db.Pool.Query(r.Context(), query, args...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return

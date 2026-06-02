@@ -47,11 +47,6 @@ type patchFlowRequest struct {
 	WelcomeAudioURL *string         `json:"welcome_audio_url,omitempty"`
 }
 
-const flowSelectColumns = `
-	id, tenant_id, name, description, is_active, is_outgoing_end,
-	definition, welcome_audio_url, created_at, updated_at
-`
-
 func scanFlow(scanner interface{ Scan(...interface{}) error }) (Flow, error) {
 	var f Flow
 	err := scanner.Scan(
@@ -82,14 +77,7 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 		def = req.Definition
 	}
 
-	row := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO flows (tenant_id, name, description, is_active, is_outgoing_end, definition, welcome_audio_url)
-		VALUES ($1, $2, $3,
-			COALESCE($4, true), COALESCE($5, false),
-			COALESCE($6::jsonb, '{"version":2,"nodes":[],"edges":[],"entry_node":""}'::jsonb),
-			COALESCE(NULLIF($7, ''), '')
-		)
-		RETURNING `+flowSelectColumns,
+	row := s.db.Pool.QueryRow(r.Context(), s.q.CreateFlow,
 		t.ID, req.Name, req.Description,
 		req.IsActive, req.IsOutgoingEnd,
 		def, req.WelcomeAudioURL,
@@ -104,9 +92,7 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	rows, err := s.db.Pool.Query(r.Context(),
-		`SELECT `+flowSelectColumns+` FROM flows WHERE tenant_id = $1 ORDER BY updated_at DESC`,
-		t.ID)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListFlows, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -131,9 +117,7 @@ func (s *Server) handleGetFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	row := s.db.Pool.QueryRow(r.Context(),
-		`SELECT `+flowSelectColumns+` FROM flows WHERE id = $1 AND tenant_id = $2`,
-		id, t.ID)
+	row := s.db.Pool.QueryRow(r.Context(), s.q.GetFlow, id, t.ID)
 	f, err := scanFlow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "flow not found")
@@ -162,17 +146,7 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 	if len(req.Definition) > 0 {
 		def = req.Definition
 	}
-	row := s.db.Pool.QueryRow(r.Context(), `
-		UPDATE flows SET
-			name             = COALESCE($1, name),
-			description      = COALESCE($2, description),
-			is_active        = COALESCE($3, is_active),
-			is_outgoing_end  = COALESCE($4, is_outgoing_end),
-			definition       = COALESCE($5::jsonb, definition),
-			welcome_audio_url = COALESCE($6, welcome_audio_url),
-			updated_at       = now()
-		WHERE id = $7 AND tenant_id = $8
-		RETURNING `+flowSelectColumns,
+	row := s.db.Pool.QueryRow(r.Context(), s.q.UpdateFlow,
 		req.Name, req.Description, req.IsActive, req.IsOutgoingEnd,
 		def, req.WelcomeAudioURL, id, t.ID,
 	)
@@ -195,9 +169,7 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(),
-		`DELETE FROM flows WHERE id = $1 AND tenant_id = $2`,
-		id, t.ID)
+	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteFlow, id, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
@@ -234,8 +206,7 @@ func (s *Server) handleSimulateFlow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var defJSON []byte
-	err = s.db.Pool.QueryRow(r.Context(),
-		`SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2`,
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetFlowDefinition,
 		id, t.ID,
 	).Scan(&defJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -273,8 +244,7 @@ func (s *Server) handleSimulateStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var defJSON []byte
-	err = s.db.Pool.QueryRow(r.Context(),
-		`SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2`,
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetFlowDefinition,
 		id, t.ID,
 	).Scan(&defJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
