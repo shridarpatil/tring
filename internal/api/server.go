@@ -17,6 +17,7 @@ import (
 	"github.com/whatomate/tring/internal/orchestrator"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
+	"github.com/whatomate/tring/internal/widget"
 )
 
 // Config bundles the dependencies an api.Server needs at construction time.
@@ -64,6 +65,10 @@ type Server struct {
 	// TTL'd on idle — they're a developer convenience, not durable
 	// state. See internal/orchestrator/sim_session.go.
 	simManager *orchestrator.SimManager
+
+	// Per-IP rate limiter for the public guest-credentials endpoint.
+	// Built once in NewServer so its window survives across requests.
+	guestMintLimiter func(http.Handler) http.Handler
 }
 
 // iceServer matches the RTCIceServer JSON shape consumed by browsers.
@@ -87,6 +92,9 @@ func NewServer(cfg Config) *Server {
 		notifier:    webhook.New(cfg.DB),
 		iceServers:  buildICEServers(cfg),
 		simManager:  orchestrator.NewSimManager(),
+		// Built once here (not in Router) so the window persists across
+		// requests regardless of how many times Router() is called.
+		guestMintLimiter: rateLimitByIP(guestMintRatePerMin, time.Minute),
 	}
 }
 
@@ -137,8 +145,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/console/login", s.handleConsoleLogin)
 		// Guest web-calling: public (only credential is the tenant's
 		// public widget key). Mints an ephemeral, flow-pinned SIP identity
-		// for a website visitor. See handlers_guest.go.
-		r.Post("/sdk/guest-credentials", s.handleGuestCredentials)
+		// for a website visitor. Per-IP rate limited; the handler also
+		// enforces an Origin allowlist + per-tenant concurrent cap. See
+		// handlers_guest.go.
+		r.With(s.guestMintLimiter).
+			Post("/sdk/guest-credentials", s.handleGuestCredentials)
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)
@@ -188,6 +199,24 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls", s.handleSDKCreateCall)
 		})
 	})
+
+	// Browser widget bundles (embedded). Served at /sdk/voice.js,
+	// /sdk/agent.js, /sdk/tring.js on the same origin as the API, so a
+	// self-hoster's embed snippet works with no CDN. Mounted only if
+	// `make sdk` populated the bundles.
+	//
+	// The paths are UNversioned, so we can't cache-forever (a deploy that
+	// updates a bundle would be invisible to browsers holding a stale copy).
+	// http.FileServer sets ETag/Last-Modified; "no-cache" tells the browser
+	// to revalidate every time — it still gets a cheap 304 when unchanged,
+	// but picks up a new bundle the instant we ship one.
+	if wFS, ok := widget.FS(); ok {
+		sdk := http.StripPrefix("/sdk/", http.FileServer(http.FS(wFS)))
+		r.Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			sdk.ServeHTTP(w, req)
+		})
+	}
 
 	// Admin console (embedded Vue dist). Mounted only if the Vue app was
 	// actually built — backend-only deployments get a UI-less binary

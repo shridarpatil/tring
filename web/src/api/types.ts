@@ -14,6 +14,8 @@ export interface Agent {
   sip_username: string;
   display_name: string;
   created_at: string;
+  // Live FreeSWITCH registration state, populated on list responses.
+  status?: "online" | "offline" | "unknown";
 }
 
 export interface PhoneNumber {
@@ -128,6 +130,15 @@ export interface Flow {
   welcome_audio_url?: string;
   created_at: string;
   updated_at: string;
+}
+
+// Guest web-calling config (GET/PATCH /v1/guest-config). public_key goes in
+// the embed snippet; allowed_origins is the domain allowlist the public mint
+// endpoint enforces; support_flow_id is the flow guests land in.
+export interface GuestConfig {
+  public_key: string;
+  support_flow_id: string | null;
+  allowed_origins: string[];
 }
 
 // ─── SIP Trunks ──────────────────────────────────────────────────────

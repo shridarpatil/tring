@@ -73,7 +73,7 @@
     <section class="panel" id="setup">
       <h2>Local demo setup</h2>
       <p>This page has zero JS of its own. The only voice-related bit is a single
-      <code>&lt;script src="voice.js"&gt;</code> tag injected after you paste a JWT below.
+      <code>&lt;script src="/sdk/agent.js"&gt;</code> tag injected after you paste a JWT below.
       In a real CRM, your backend mints and templates the JWT before the page is rendered.</p>
       <p>Mint a JWT against the running Tring API:</p>
       <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;"># 1. log in to the console with the bootstrap admin user
@@ -91,7 +91,7 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
   http://localhost:8085/v1/agents/$AGENT/token | jq -r .token</pre>
       <div class="token-form">
         <input id="tokenInput" type="text" placeholder="Paste JWT here…" autocomplete="off" />
-        <button id="loadBtn">Load voice.js</button>
+        <button id="loadBtn">Load agent.js</button>
       </div>
       <div class="toolbar" id="status" style="margin-top:0.75rem;">
         <span class="dot"></span> <span class="text">not loaded</span>
@@ -106,19 +106,19 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
         </thead>
         <tbody>
           <tr>
-            <td class="name">Aanya Sharma</td>
+            <td class="name">Alice Smith</td>
             <td class="phone">+91 98765-43210</td>
             <td class="phone">2 days ago</td>
             <td><button class="call-btn" data-tring-call data-to="+919876543210">📞 Call</button></td>
           </tr>
           <tr>
-            <td class="name">Rahul Patel</td>
+            <td class="name">Robert</td>
             <td class="phone">+91 88880-01122</td>
             <td class="phone">a week ago</td>
             <td><button class="call-btn" data-tring-call data-to="+918888001122">📞 Call</button></td>
           </tr>
           <tr>
-            <td class="name">Priya Iyer</td>
+            <td class="name">Bob</td>
             <td class="phone">+91 77001-23456</td>
             <td class="phone">3 weeks ago</td>
             <td><button class="call-btn" data-tring-call data-to="+917700123456">📞 Call</button></td>
@@ -141,7 +141,7 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
       <h2>What's happening under the hood</h2>
       <ul>
         <li>Each <em>Call</em> button has <code>data-tring-call data-to="…"</code> — that's the whole integration on the HTML side.</li>
-        <li><code>voice.js</code> fetches your agent's SIP credentials with the JWT, registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>, and listens for incoming INVITEs.</li>
+        <li><code>agent.js</code> fetches your agent's SIP credentials with the JWT, registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>, and listens for incoming INVITEs.</li>
         <li>Clicking Call posts to <code>/v1/sdk/calls</code>. Tring tells FreeSWITCH to ring the agent's browser; on answer, the call bridges to the destination via the configured trunk (loopback in dev, Exotel/Airtel/Jio/Tata in production).</li>
         <li>The floating panel in the bottom right shows ringing → connected → ended status with a single Hang up button. Pure CSS, no framework.</li>
       </ul>
@@ -159,13 +159,13 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
     $('loadBtn').addEventListener('click', () => {
       const token = $('tokenInput').value.trim();
       if (!token) { setStatus('error', 'paste a JWT first'); return; }
-      setStatus('connecting', 'loading voice.js…');
+      setStatus('connecting', 'loading agent.js…');
       const s = document.createElement('script');
-      s.src = '../sdk/js/dist/voice.iife.js';
+      s.src = 'http://localhost:8085/sdk/agent.js';
       s.setAttribute('data-api-base', 'http://localhost:8085');
       s.setAttribute('data-token', token);
-      s.onload = () => setStatus('ready', 'voice.js loaded — click any Call button');
-      s.onerror = () => setStatus('error', 'voice.js failed to load');
+      s.onload = () => setStatus('ready', 'agent.js loaded — click any Call button');
+      s.onerror = () => setStatus('error', 'agent.js failed to load');
       document.body.appendChild(s);
       $('loadBtn').disabled = true;
       $('loadBtn').textContent = 'Loaded';

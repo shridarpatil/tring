@@ -21,7 +21,7 @@
 <body>
   <h1>📇 Acme Sales — Customer Index</h1>
   <p class="hint">This page has zero JS of its own. The only voice-related bit is the single
-  <code>&lt;script src="voice.js"&gt;</code> at the bottom; the buttons are plain HTML.</p>
+  <code>&lt;script src="agent.js"&gt;</code> at the bottom; the buttons are plain HTML.</p>
 
   <div class="token-paste">
     <strong>Local dev setup:</strong> mint a JWT against the running Tring API and paste it here.
@@ -68,7 +68,7 @@ curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/
     Once you click <strong>Load widget</strong>, this page becomes effectively:
   </p>
   <pre style="background:#f3f4f6;padding:0.75rem;border-radius:4px;font-size:12px;">
-&lt;script src="https://cdn.tring.io/voice.js"
+&lt;script src="https://cdn.tring.io/agent.js"
         data-api-base="http://localhost:8085"
         data-token="..."&gt;
 &lt;/script&gt;</pre>
@@ -81,7 +81,7 @@ curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/
       const token = document.getElementById('tokenInput').value.trim();
       if (!token) { alert('paste a JWT first'); return; }
       const s = document.createElement('script');
-      s.src = '../dist/voice.iife.js';
+      s.src = '../dist/agent.iife.js';
       s.setAttribute('data-api-base', 'http://localhost:8085');
       s.setAttribute('data-token', token);
       document.body.appendChild(s);
