@@ -9,8 +9,8 @@ import (
 
 // TestSDKWidgetServed verifies the embedded browser bundles are served at
 // /sdk/<name>.js so a self-hoster's embed snippet works with no CDN. Needs
-// no DB — the route is gated only on the bundles having been built
-// (`make sdk`), which populates internal/widget/dist before `go test`.
+// no DB — but the bundles must be built first (`make sdk` / the Dockerfile
+// sdk stage). CI runs `make sdk` before `go test`; locally, run it once.
 func TestSDKWidgetServed(t *testing.T) {
 	s := NewServer(Config{JWTSecret: "test-secret"})
 	r := s.Router()
