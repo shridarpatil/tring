@@ -98,9 +98,7 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var tenantID uuid.UUID
-	err := s.db.Pool.QueryRow(r.Context(),
-		`SELECT id FROM tenants WHERE sip_domain = $1`, domain,
-	).Scan(&tenantID)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTenantIDBySipDomain, domain).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeFSNotFound(w)
 		return
@@ -122,8 +120,7 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 
 	var sipPassword string
 	var agentID uuid.UUID
-	err = s.db.Pool.QueryRow(r.Context(),
-		`SELECT id, sip_password FROM agents WHERE tenant_id = $1 AND sip_username = $2`,
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentCredentials,
 		tenantID, user,
 	).Scan(&agentID, &sipPassword)
 	if err != nil {
@@ -168,10 +165,8 @@ func (s *Server) writeGuestDirectory(w http.ResponseWriter, r *http.Request, ten
 		sipPassword string
 		flowID      *uuid.UUID
 	)
-	err := s.db.Pool.QueryRow(r.Context(), `
-		SELECT sip_password, flow_id FROM guest_sessions
-		WHERE tenant_id = $1 AND sip_username = $2 AND expires_at > now()
-	`, tenantID, user).Scan(&sipPassword, &flowID)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestSession,
+		tenantID, user).Scan(&sipPassword, &flowID)
 	if err != nil || flowID == nil {
 		writeFSNotFound(w)
 		return

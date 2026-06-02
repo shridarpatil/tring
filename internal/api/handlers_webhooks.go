@@ -47,11 +47,8 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var h Webhook
-	err := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO webhooks (tenant_id, url, secret, events)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, tenant_id, url, secret, events, created_at
-	`, t.ID, req.URL, req.Secret, req.Events).
+	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateWebhook,
+		t.ID, req.URL, req.Secret, req.Events).
 		Scan(&h.ID, &h.TenantID, &h.URL, &h.Secret, &h.Events, &h.CreatedAt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "insert webhook: "+err.Error())
@@ -62,10 +59,7 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, tenant_id, url, events, created_at
-		FROM webhooks WHERE tenant_id = $1 ORDER BY created_at DESC
-	`, t.ID)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListWebhooks, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -90,8 +84,7 @@ func (s *Server) handleDeleteWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(),
-		`DELETE FROM webhooks WHERE id = $1 AND tenant_id = $2`, id, t.ID)
+	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteWebhook, id, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
@@ -126,8 +119,7 @@ func (s *Server) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 	}
 	// Verify ownership.
 	var owner uuid.UUID
-	err = s.db.Pool.QueryRow(r.Context(),
-		`SELECT tenant_id FROM webhooks WHERE id = $1`, id).Scan(&owner)
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetWebhookOwner, id).Scan(&owner)
 	if errors.Is(err, pgx.ErrNoRows) || owner != t.ID {
 		writeError(w, http.StatusNotFound, "webhook not found")
 		return
@@ -136,13 +128,7 @@ func (s *Server) handleListDeliveries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "lookup failed")
 		return
 	}
-	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, webhook_id, event_type, status::text, attempts,
-		       last_error, response_status, delivered_at, created_at
-		FROM webhook_deliveries
-		WHERE webhook_id = $1
-		ORDER BY created_at DESC LIMIT 100
-	`, id)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListWebhookDeliveries, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return

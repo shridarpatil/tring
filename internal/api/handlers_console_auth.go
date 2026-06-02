@@ -64,8 +64,7 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		tenantID     uuid.UUID
 		passwordHash string
 	)
-	err := s.db.Pool.QueryRow(r.Context(),
-		`SELECT id, tenant_id, password_hash FROM users WHERE email = $1`,
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetUserByEmail,
 		email,
 	).Scan(&userID, &tenantID, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -90,9 +89,7 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	// console gets a consistent /v1/tenants/me-equivalent payload back
 	// from /login without a second round-trip.
 	var t Tenant
-	err = s.db.Pool.QueryRow(r.Context(),
-		`SELECT id, name, sip_domain, outbound_strategy, failover_causes
-		 FROM tenants WHERE id = $1`,
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetTenant,
 		tenantID,
 	).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
 	if err != nil {

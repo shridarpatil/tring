@@ -19,56 +19,51 @@ import (
 // FreeSWITCH gateway XML by internal/freeswitch.WriteGateway and picked
 // up via a sofia profile rescan on save.
 type Trunk struct {
-	ID            uuid.UUID       `json:"id"`
-	TenantID      uuid.UUID       `json:"tenant_id"`
-	Name          string          `json:"name"`
-	ProviderType  string          `json:"provider_type"`
-	SIPUsername   string          `json:"sip_username"`
-	SIPPassword   string          `json:"sip_password,omitempty"` // omitted on list responses
-	SIPRealm      string          `json:"sip_realm"`
-	Register      bool            `json:"register"`
-	ProxyIP       string          `json:"proxy_ip"`
-	AuthACLCIDR   string          `json:"auth_acl_cidr"`
-	Active        bool            `json:"active"`
-	ExtraParams   json.RawMessage `json:"extra_params"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	ID           uuid.UUID       `json:"id"`
+	TenantID     uuid.UUID       `json:"tenant_id"`
+	Name         string          `json:"name"`
+	ProviderType string          `json:"provider_type"`
+	SIPUsername  string          `json:"sip_username"`
+	SIPPassword  string          `json:"sip_password,omitempty"` // omitted on list responses
+	SIPRealm     string          `json:"sip_realm"`
+	Register     bool            `json:"register"`
+	ProxyIP      string          `json:"proxy_ip"`
+	AuthACLCIDR  string          `json:"auth_acl_cidr"`
+	Active       bool            `json:"active"`
+	ExtraParams  json.RawMessage `json:"extra_params"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
 	// Live state from sofia status — populated on responses, not in DB.
 	// Values: online | offline | connecting | not_loaded | unknown.
-	Status     string `json:"status,omitempty"`
-	StateRaw   string `json:"state_raw,omitempty"`   // raw FS state for debugging
+	Status   string `json:"status,omitempty"`
+	StateRaw string `json:"state_raw,omitempty"` // raw FS state for debugging
 }
 
 type createTrunkRequest struct {
-	Name          string          `json:"name"`
-	ProviderType  string          `json:"provider_type,omitempty"`
-	SIPUsername   string          `json:"sip_username,omitempty"`
-	SIPPassword   string          `json:"sip_password,omitempty"`
-	SIPRealm      string          `json:"sip_realm,omitempty"`
-	Register      *bool           `json:"register,omitempty"`
-	ProxyIP       string          `json:"proxy_ip,omitempty"`
-	AuthACLCIDR   string          `json:"auth_acl_cidr,omitempty"`
-	Active        *bool           `json:"active,omitempty"`
-	ExtraParams   json.RawMessage `json:"extra_params,omitempty"`
+	Name         string          `json:"name"`
+	ProviderType string          `json:"provider_type,omitempty"`
+	SIPUsername  string          `json:"sip_username,omitempty"`
+	SIPPassword  string          `json:"sip_password,omitempty"`
+	SIPRealm     string          `json:"sip_realm,omitempty"`
+	Register     *bool           `json:"register,omitempty"`
+	ProxyIP      string          `json:"proxy_ip,omitempty"`
+	AuthACLCIDR  string          `json:"auth_acl_cidr,omitempty"`
+	Active       *bool           `json:"active,omitempty"`
+	ExtraParams  json.RawMessage `json:"extra_params,omitempty"`
 }
 
 type patchTrunkRequest struct {
-	Name          *string         `json:"name,omitempty"`
-	ProviderType  *string         `json:"provider_type,omitempty"`
-	SIPUsername   *string         `json:"sip_username,omitempty"`
-	SIPPassword   *string         `json:"sip_password,omitempty"`
-	SIPRealm      *string         `json:"sip_realm,omitempty"`
-	Register      *bool           `json:"register,omitempty"`
-	ProxyIP       *string         `json:"proxy_ip,omitempty"`
-	AuthACLCIDR   *string         `json:"auth_acl_cidr,omitempty"`
-	Active        *bool           `json:"active,omitempty"`
-	ExtraParams   json.RawMessage `json:"extra_params,omitempty"`
+	Name         *string         `json:"name,omitempty"`
+	ProviderType *string         `json:"provider_type,omitempty"`
+	SIPUsername  *string         `json:"sip_username,omitempty"`
+	SIPPassword  *string         `json:"sip_password,omitempty"`
+	SIPRealm     *string         `json:"sip_realm,omitempty"`
+	Register     *bool           `json:"register,omitempty"`
+	ProxyIP      *string         `json:"proxy_ip,omitempty"`
+	AuthACLCIDR  *string         `json:"auth_acl_cidr,omitempty"`
+	Active       *bool           `json:"active,omitempty"`
+	ExtraParams  json.RawMessage `json:"extra_params,omitempty"`
 }
-
-const trunkSelectColumns = `
-	id, tenant_id, name, provider_type, sip_username, sip_password, sip_realm,
-	register, proxy_ip, auth_acl_cidr, active, extra_params, created_at, updated_at
-`
 
 func scanTrunk(scanner interface{ Scan(...interface{}) error }) (Trunk, error) {
 	var t Trunk
@@ -103,8 +98,7 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 // the tenant, then triggers a sofia profile rescan. Called after any
 // trunk create/update/delete so FreeSWITCH state matches the DB.
 func (s *Server) rerenderAllGateways(ctx context.Context) error {
-	rows, err := s.db.Pool.Query(ctx,
-		`SELECT `+trunkSelectColumns+` FROM trunks WHERE active`)
+	rows, err := s.db.Pool.Query(ctx, s.q.ListActiveTrunks)
 	if err != nil {
 		return err
 	}
@@ -146,16 +140,7 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 	if len(req.ExtraParams) > 0 {
 		extra = req.ExtraParams
 	}
-	row := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO trunks (
-			tenant_id, name, provider_type, sip_username, sip_password, sip_realm,
-			register, proxy_ip, auth_acl_cidr, active, extra_params
-		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			COALESCE($7, false), $8, $9, COALESCE($10, true),
-			COALESCE($11::jsonb, '{}'::jsonb)
-		)
-		RETURNING `+trunkSelectColumns,
+	row := s.db.Pool.QueryRow(r.Context(), s.q.CreateTrunk,
 		t.ID, req.Name, req.ProviderType, req.SIPUsername, req.SIPPassword, req.SIPRealm,
 		req.Register, req.ProxyIP, req.AuthACLCIDR, req.Active, extra,
 	)
@@ -170,9 +155,7 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	rows, err := s.db.Pool.Query(r.Context(),
-		`SELECT `+trunkSelectColumns+` FROM trunks WHERE tenant_id = $1 ORDER BY name`,
-		t.ID)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListTrunks, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -223,9 +206,7 @@ func (s *Server) handleGetTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	row := s.db.Pool.QueryRow(r.Context(),
-		`SELECT `+trunkSelectColumns+` FROM trunks WHERE id = $1 AND tenant_id = $2`,
-		id, t.ID)
+	row := s.db.Pool.QueryRow(r.Context(), s.q.GetTrunk, id, t.ID)
 	tr, err := scanTrunk(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "trunk not found")
@@ -254,21 +235,7 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 	if len(req.ExtraParams) > 0 {
 		extra = req.ExtraParams
 	}
-	row := s.db.Pool.QueryRow(r.Context(), `
-		UPDATE trunks SET
-			name          = COALESCE($1, name),
-			provider_type = COALESCE($2, provider_type),
-			sip_username  = COALESCE($3, sip_username),
-			sip_password  = COALESCE($4, sip_password),
-			sip_realm     = COALESCE($5, sip_realm),
-			register      = COALESCE($6, register),
-			proxy_ip      = COALESCE($7, proxy_ip),
-			auth_acl_cidr = COALESCE($8, auth_acl_cidr),
-			active        = COALESCE($9, active),
-			extra_params  = COALESCE($10::jsonb, extra_params),
-			updated_at    = now()
-		WHERE id = $11 AND tenant_id = $12
-		RETURNING `+trunkSelectColumns,
+	row := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTrunk,
 		req.Name, req.ProviderType, req.SIPUsername, req.SIPPassword, req.SIPRealm,
 		req.Register, req.ProxyIP, req.AuthACLCIDR, req.Active, extra,
 		id, t.ID,
@@ -293,9 +260,7 @@ func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(),
-		`DELETE FROM trunks WHERE id = $1 AND tenant_id = $2`,
-		id, t.ID)
+	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteTrunk, id, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return

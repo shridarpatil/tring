@@ -16,49 +16,38 @@ package main
 import (
 	"context"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/percipia/eslgo"
 
+	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/orchestrator"
-)
-
-const (
-	defaultDSN         = "postgres://tring:tring_dev@localhost:5434/tring"
-	defaultESLAddr     = "127.0.0.1:8021"
-	defaultESLPassword = "ClueCon"
-	// IVR socket — the FreeSWITCH dialplan does
-	//   <action application="socket" data="127.0.0.1:8086 async full"/>
-	// for DIDs the operator wants to put through the flow builder. The
-	// executor's HandleInboundCall is registered as the handler.
-	defaultIVRAddr = ":8086"
 )
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	dbase, err := db.Connect(ctx, envOr("TRING_DSN", defaultDSN))
+	// Config: defaults + TRING_* env (koanf).
+	k := config.Load()
+
+	dbase, err := db.Connect(ctx, k.String("dsn"))
 	if err != nil {
 		log.Fatalf("db: %v", err)
 	}
 	defer dbase.Close()
 
-	r := orchestrator.New(
-		dbase,
-		envOr("TRING_ESL_ADDR", defaultESLAddr),
-		envOr("TRING_ESL_PASSWORD", defaultESLPassword),
-	)
+	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password"))
 
 	// IVR executor — starts an outbound-ESL listener so FreeSWITCH can
-	// hand inbound calls to us via the dialplan's `socket` application.
-	// Lives in this same process so the orchestrator can reuse its DB
-	// pool. Listener runs in its own goroutine; it doesn't block the
-	// event-loop runner below.
-	ivrAddr := envOr("TRING_IVR_ADDR", defaultIVRAddr)
+	// hand inbound calls to us via the dialplan's `socket` application
+	//   <action application="socket" data="127.0.0.1:8086 async full"/>
+	// for DIDs the operator wants to put through the flow builder. Lives
+	// in this same process so the orchestrator can reuse its DB pool;
+	// runs in its own goroutine and doesn't block the event-loop runner.
+	ivrAddr := k.String("ivr_addr")
 	exec := orchestrator.NewExecutor(dbase)
 	go func() {
 		log.Printf("ivr executor listening on %s", ivrAddr)
@@ -71,11 +60,4 @@ func main() {
 	if err := r.Run(ctx); err != nil {
 		log.Fatalf("run: %v", err)
 	}
-}
-
-func envOr(k, fallback string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return fallback
 }

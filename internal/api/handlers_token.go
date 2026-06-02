@@ -30,8 +30,7 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sipUsername string
-	err = s.db.Pool.QueryRow(r.Context(),
-		`SELECT sip_username FROM agents WHERE id = $1 AND tenant_id = $2`,
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentSipUsername,
 		id, t.ID,
 	).Scan(&sipUsername)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -75,11 +74,8 @@ func (s *Server) handleSDKCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var creds sipCreds
-	err = s.db.Pool.QueryRow(r.Context(), `
-		SELECT a.sip_username, a.sip_password, t.sip_domain
-		FROM agents a JOIN tenants t ON t.id = a.tenant_id
-		WHERE a.id = $1 AND a.tenant_id = $2
-	`, agentID, c.TenantID).Scan(&creds.SipUsername, &creds.SipPassword, &creds.SipDomain)
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentSipCreds,
+		agentID, c.TenantID).Scan(&creds.SipUsername, &creds.SipPassword, &creds.SipDomain)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
