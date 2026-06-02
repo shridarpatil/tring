@@ -26,26 +26,17 @@ type trunk struct {
 // from this tenant, respecting tenants.outbound_strategy:
 //
 //   - failover    → return all active trunks, lowest-priority first;
-//                   caller pipe-joins them in &bridge(...) and FS rolls
-//                   over according to continue_on_fail.
+//     caller pipe-joins them in &bridge(...) and FS rolls
+//     over according to continue_on_fail.
 //   - manual      → return only the lowest-priority active trunk. Operator
-//                   uses PATCH /v1/numbers/{id} to flip `active` and
-//                   thereby switch primary.
+//     uses PATCH /v1/numbers/{id} to flip `active` and
+//     thereby switch primary.
 //   - round_robin → return one trunk; cycle via in-memory counter so
-//                   successive calls land on successive trunks.
+//     successive calls land on successive trunks.
 //   - load_based  → reserved; returns 501.
 //   - empty list  → fine — caller falls back to the dev loopback path.
 func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
-	rows, err := s.db.Pool.Query(ctx, `
-		SELECT n.e164, tk.id, tk.provider_type
-		FROM numbers n
-		JOIN trunks tk ON tk.id = n.trunk_id
-		WHERE n.tenant_id = $1
-		  AND n.type = 'outbound'
-		  AND n.active
-		  AND tk.active
-		ORDER BY n.priority ASC, n.created_at ASC
-	`, t.ID)
+	rows, err := s.db.Pool.Query(ctx, s.q.SelectOutboundTrunks, t.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list outbound trunks: %w", err)
 	}

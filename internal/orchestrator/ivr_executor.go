@@ -32,6 +32,7 @@ import (
 	"github.com/percipia/eslgo/command/call"
 
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/queries"
 )
 
 // ─── Flow data model (matches the frontend / API JSON shape) ────────
@@ -82,11 +83,12 @@ const (
 // no per-call state.
 type Executor struct {
 	DB     *db.DB
+	Q      *queries.Queries
 	Logger *log.Logger
 }
 
 func NewExecutor(d *db.DB) *Executor {
-	return &Executor{DB: d, Logger: log.Default()}
+	return &Executor{DB: d, Q: queries.MustLoad(), Logger: log.Default()}
 }
 
 // HandleInboundCall is the outbound-socket callback FreeSWITCH calls
@@ -191,12 +193,7 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 		flowID   *uuid.UUID
 		defJSON  []byte
 	)
-	row := e.DB.Pool.QueryRow(ctx, `
-		SELECT n.tenant_id, n.flow_id, COALESCE(f.definition::text, '')
-		FROM numbers n
-		LEFT JOIN flows f ON f.id = n.flow_id AND f.is_active
-		WHERE n.e164 = $1 AND n.type = 'inbound'
-	`, called)
+	row := e.DB.Pool.QueryRow(ctx, e.Q.ResolveInboundFlow, called)
 	if err := row.Scan(&tenantID, &flowID, &defJSON); err != nil {
 		return nil, err
 	}
@@ -219,8 +216,7 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 func (e *Executor) expireGuestSession(sipUser string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	tag, err := e.DB.Pool.Exec(ctx,
-		`DELETE FROM guest_sessions WHERE sip_username = $1`, sipUser)
+	tag, err := e.DB.Pool.Exec(ctx, e.Q.ExpireGuestSession, sipUser)
 	if err != nil {
 		e.Logger.Printf("ivr: failed to expire guest session %s: %v", sipUser, err)
 		return
@@ -244,10 +240,7 @@ func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*Resolve
 		tenantID uuid.UUID
 		defJSON  []byte
 	)
-	row := e.DB.Pool.QueryRow(ctx, `
-		SELECT tenant_id, COALESCE(definition::text, '')
-		FROM flows WHERE id = $1 AND is_active
-	`, fid)
+	row := e.DB.Pool.QueryRow(ctx, e.Q.GetActiveFlowByID, fid)
 	if err := row.Scan(&tenantID, &defJSON); err != nil {
 		return nil, err
 	}
@@ -460,9 +453,7 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 // presence filtering is needed. Returns "" when the tenant has no agents.
 func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantID uuid.UUID) (string, error) {
 	var domain string
-	if err := e.DB.Pool.QueryRow(ctx,
-		`SELECT sip_domain FROM tenants WHERE id = $1`, tenantID,
-	).Scan(&domain); err != nil {
+	if err := e.DB.Pool.QueryRow(ctx, e.Q.GetTenantSipDomain, tenantID).Scan(&domain); err != nil {
 		return "", err
 	}
 
@@ -470,8 +461,7 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 		return fmt.Sprintf("user/%s@%s", sip, domain), nil
 	}
 
-	rows, err := e.DB.Pool.Query(ctx,
-		`SELECT sip_username FROM agents WHERE tenant_id = $1`, tenantID)
+	rows, err := e.DB.Pool.Query(ctx, e.Q.ListAgentSipUsernames, tenantID)
 	if err != nil {
 		return "", err
 	}

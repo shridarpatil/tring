@@ -15,6 +15,7 @@ import (
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
 	"github.com/whatomate/tring/internal/orchestrator"
+	"github.com/whatomate/tring/internal/queries"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
 	"github.com/whatomate/tring/internal/widget"
@@ -44,6 +45,7 @@ type Config struct {
 
 type Server struct {
 	db          *db.DB
+	q           *queries.Queries // named SQL loaded from queries.sql at startup
 	jwtSecret   []byte
 	fsBasicUser string
 	fsBasicPass string
@@ -84,6 +86,7 @@ func NewServer(cfg Config) *Server {
 	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
 	return &Server{
 		db:          cfg.DB,
+		q:           queries.MustLoad(),
 		jwtSecret:   []byte(cfg.JWTSecret),
 		fsBasicUser: user,
 		fsBasicPass: pass,

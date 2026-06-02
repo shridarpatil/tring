@@ -23,11 +23,13 @@ import (
 	"github.com/percipia/eslgo"
 
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/queries"
 	"github.com/whatomate/tring/internal/webhook"
 )
 
 type Runner struct {
 	db          *db.DB
+	q           *queries.Queries
 	notifier    *webhook.Notifier
 	eslAddr     string
 	eslPassword string
@@ -36,6 +38,7 @@ type Runner struct {
 func New(d *db.DB, addr, password string) *Runner {
 	return &Runner{
 		db:          d,
+		q:           queries.MustLoad(),
 		notifier:    webhook.New(d),
 		eslAddr:     addr,
 		eslPassword: password,
@@ -136,13 +139,7 @@ func (r *Runner) onBackgroundJob(ctx context.Context, e *eslgo.Event) {
 	}
 	cause := strings.TrimSpace(strings.TrimPrefix(body, "-ERR"))
 	var fsUUID string
-	err := r.db.Pool.QueryRow(ctx, `
-		UPDATE calls
-		SET status='failed'::call_status, ended_at=now(),
-		    duration_seconds=0, hangup_cause=$1
-		WHERE fs_job_uuid=$2 AND status='ringing'::call_status
-		RETURNING fs_uuid
-	`, cause, jobUUID).Scan(&fsUUID)
+	err := r.db.Pool.QueryRow(ctx, r.q.FailCallByJob, cause, jobUUID).Scan(&fsUUID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return // not a Tring originate, or already settled
 	}
@@ -163,11 +160,7 @@ func (r *Runner) onAnswer(ctx context.Context, e *eslgo.Event) {
 	}
 	// Only flip rows that are still ringing — protects against out-of-order
 	// or replayed events.
-	tag, err := r.db.Pool.Exec(ctx, `
-		UPDATE calls
-		SET status = 'answered'::call_status, answered_at = now()
-		WHERE fs_uuid = $1 AND status = 'ringing'::call_status
-	`, fsUUID)
+	tag, err := r.db.Pool.Exec(ctx, r.q.MarkCallAnswered, fsUUID)
 	if err != nil {
 		log.Printf("orchestrator: answer update for %s: %v", fsUUID, err)
 		return
@@ -194,9 +187,7 @@ func (r *Runner) onHangup(ctx context.Context, e *eslgo.Event) {
 		answeredAt *time.Time
 		status     string
 	)
-	err := r.db.Pool.QueryRow(ctx, `
-		SELECT started_at, answered_at, status::text FROM calls WHERE fs_uuid = $1
-	`, uuid).Scan(&startedAt, &answeredAt, &status)
+	err := r.db.Pool.QueryRow(ctx, r.q.GetCallSettlement, uuid).Scan(&startedAt, &answeredAt, &status)
 	if err != nil {
 		// Not a Tring-tracked call (e.g., registration probe). Ignore quietly.
 		return
@@ -218,12 +209,7 @@ func (r *Runner) onHangup(ctx context.Context, e *eslgo.Event) {
 		dur = int(now.Sub(startedAt).Seconds())
 	}
 
-	_, err = r.db.Pool.Exec(ctx, `
-		UPDATE calls
-		SET status = $1::call_status, ended_at = now(),
-		    duration_seconds = $2, hangup_cause = $3
-		WHERE fs_uuid = $4 AND status NOT IN ('ended','failed')
-	`, finalStatus, dur, nullIfEmpty(cause), uuid)
+	_, err = r.db.Pool.Exec(ctx, r.q.SettleCall, finalStatus, dur, nullIfEmpty(cause), uuid)
 	if err != nil {
 		log.Printf("orchestrator: hangup update for %s: %v", uuid, err)
 		return
@@ -239,23 +225,16 @@ func (r *Runner) onHangup(ctx context.Context, e *eslgo.Event) {
 // notifier can scope its lookup.
 func (r *Runner) loadCallPayload(ctx context.Context, fsUUID string) (uuid.UUID, map[string]interface{}, bool) {
 	var (
-		id, tenantID                                            uuid.UUID
-		direction, status, fromNumber, toNumber, jobUUID, fsID  string
-		hangupCause                                             *string
-		recordingURL                                            *string
-		agentID                                                 *uuid.UUID
-		startedAt                                               time.Time
-		answeredAt, endedAt                                     *time.Time
-		duration                                                *int
+		id, tenantID                                           uuid.UUID
+		direction, status, fromNumber, toNumber, jobUUID, fsID string
+		hangupCause                                            *string
+		recordingURL                                           *string
+		agentID                                                *uuid.UUID
+		startedAt                                              time.Time
+		answeredAt, endedAt                                    *time.Time
+		duration                                               *int
 	)
-	err := r.db.Pool.QueryRow(ctx, `
-		SELECT id, tenant_id, direction::text, status::text,
-		       from_number, to_number, agent_id,
-		       fs_uuid, COALESCE(fs_job_uuid,''),
-		       started_at, answered_at, ended_at,
-		       duration_seconds, hangup_cause, recording_url
-		FROM calls WHERE fs_uuid = $1
-	`, fsUUID).Scan(&id, &tenantID, &direction, &status,
+	err := r.db.Pool.QueryRow(ctx, r.q.GetCallPayload, fsUUID).Scan(&id, &tenantID, &direction, &status,
 		&fromNumber, &toNumber, &agentID,
 		&fsID, &jobUUID,
 		&startedAt, &answeredAt, &endedAt,
