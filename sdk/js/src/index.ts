@@ -6,6 +6,7 @@ export { TringGuest } from "./guest";
 export type {
   Call,
   CallStatus,
+  CallDirection,
   InitOpts,
   TringEvent,
   SipCredentialsResponse,

@@ -33,11 +33,21 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   const panel = createPanel();
   document.body.appendChild(panel.root);
 
-  const tring = await Tring.init({ token, apiBase: opts.apiBase });
+  // autoAnswer:false so a call bridged TO this agent (e.g. an IVR transfer)
+  // rings with Accept/Decline instead of snapping on. The agent's own
+  // outbound leg still auto-answers (the SDK forces that for outbound).
+  const tring = await Tring.init({
+    token,
+    apiBase: opts.apiBase,
+    autoAnswer: false,
+  });
 
   tring.on("registered", () => panel.setStatus("idle", "ready"));
   tring.on("unregistered", () => panel.setStatus("idle", "disconnected"));
-  tring.on("call:ringing", ({ call }) => panel.show(call, "ringing"));
+  tring.on("call:ringing", ({ call }) => {
+    if (call.direction === "inbound") panel.showIncoming(call);
+    else panel.show(call, "ringing");
+  });
   tring.on("call:answered", ({ call }) => panel.setActive(call, "connected"));
   tring.on("call:ended", () => panel.hide());
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
@@ -108,6 +118,7 @@ function resolveDestination(btn: HTMLButtonElement): string {
 interface Panel {
   root: HTMLElement;
   show(call: Call, status: string): void;
+  showIncoming(call: Call): void;
   setActive(call: Call, status: string): void;
   setStatus(state: string, text: string): void;
   hide(): void;
@@ -135,6 +146,10 @@ function createPanel(): Panel {
     <div class="tring-panel-row tring-panel-status">Connecting…</div>
     <div class="tring-panel-row tring-panel-dialed"></div>
     <div class="tring-panel-row tring-panel-dialpad">${dtmfButtonsHTML}</div>
+    <div class="tring-panel-row tring-panel-incoming">
+      <button type="button" class="tring-accept">Accept</button>
+      <button type="button" class="tring-decline">Decline</button>
+    </div>
     <div class="tring-panel-row tring-panel-actions">
       <button type="button" class="tring-hangup">Hang up</button>
     </div>
@@ -145,11 +160,22 @@ function createPanel(): Panel {
   const dialedEl = root.querySelector<HTMLElement>(".tring-panel-dialed")!;
   const hangupBtn = root.querySelector<HTMLButtonElement>(".tring-hangup")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
+  const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
+  const declineBtn = root.querySelector<HTMLButtonElement>(".tring-decline")!;
 
+  const ringer = new Ringer();
   let active: Call | null = null;
   let dialed = "";
 
   hangupBtn.addEventListener("click", async () => {
+    if (active) await active.hangup();
+  });
+  acceptBtn.addEventListener("click", async () => {
+    ringer.stop();
+    if (active) await active.accept();
+  });
+  declineBtn.addEventListener("click", async () => {
+    ringer.stop();
     if (active) await active.hangup();
   });
 
@@ -180,8 +206,19 @@ function createPanel(): Panel {
       root.setAttribute("data-state", status);
       root.classList.add("tring-panel-visible");
     },
+    showIncoming(call) {
+      active = call;
+      dialed = "";
+      dialedEl.textContent = "";
+      toEl.textContent = call.displayName || call.to || "Unknown caller";
+      statusEl.textContent = "Incoming call";
+      root.setAttribute("data-state", "incoming");
+      root.classList.add("tring-panel-visible");
+      ringer.start();
+    },
     setActive(call, status) {
       active = call;
+      ringer.stop();
       statusEl.textContent = status;
       root.setAttribute("data-state", status);
     },
@@ -190,12 +227,52 @@ function createPanel(): Panel {
       root.setAttribute("data-state", state);
     },
     hide() {
+      ringer.stop();
       active = null;
       dialed = "";
       dialedEl.textContent = "";
       root.classList.remove("tring-panel-visible");
     },
   };
+}
+
+// Ringer — a short WebAudio ring loop for incoming calls. No asset to ship.
+// Browsers may block audio until a user gesture; the agent has the page
+// focused, and worst case the ring is silent while the visual still rings.
+class Ringer {
+  private ctx: AudioContext | null = null;
+  private timer: number | undefined;
+
+  start(): void {
+    try {
+      this.ctx = new AudioContext();
+      void this.ctx.resume();
+    } catch {
+      return;
+    }
+    const beep = () => {
+      if (!this.ctx) return;
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.frequency.value = 480;
+      g.gain.value = 0.1;
+      o.connect(g);
+      g.connect(this.ctx.destination);
+      o.start();
+      o.stop(this.ctx.currentTime + 0.4);
+    };
+    beep();
+    this.timer = window.setInterval(beep, 1200);
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+    void this.ctx?.close().catch(() => {});
+    this.ctx = null;
+  }
 }
 
 function injectStyles(): void {
@@ -226,8 +303,23 @@ function injectStyles(): void {
       color: #9ca3af; font-size: 12px;
     }
     #${PANEL_ID}[data-state="ringing"] .tring-panel-status { color: #fbbf24; }
+    #${PANEL_ID}[data-state="incoming"] .tring-panel-status { color: #34d399; }
     #${PANEL_ID}[data-state="connected"] .tring-panel-status { color: #34d399; }
     #${PANEL_ID}[data-state="error"] .tring-panel-status { color: #f87171; }
+    /* Accept/Decline shown only while an inbound call is ringing; the
+       hang-up button is hidden then (you can't hang up what you haven't
+       picked up). */
+    #${PANEL_ID} .tring-panel-incoming { display: none; gap: .5rem; }
+    #${PANEL_ID}[data-state="incoming"] .tring-panel-incoming { display: flex; }
+    #${PANEL_ID}[data-state="incoming"] .tring-panel-actions { display: none; }
+    #${PANEL_ID} .tring-accept, #${PANEL_ID} .tring-decline {
+      flex: 1; border: none; padding: .5rem .75rem; border-radius: 6px;
+      font: inherit; cursor: pointer; color: white;
+    }
+    #${PANEL_ID} .tring-accept { background: #16a34a; }
+    #${PANEL_ID} .tring-accept:hover { background: #15803d; }
+    #${PANEL_ID} .tring-decline { background: #dc2626; }
+    #${PANEL_ID} .tring-decline:hover { background: #b91c1c; }
     #${PANEL_ID} .tring-hangup {
       background: #dc2626; color: white; border: none;
       padding: .5rem .75rem; border-radius: 6px;

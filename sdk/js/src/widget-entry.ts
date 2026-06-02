@@ -1,14 +1,14 @@
-// Auto-init entry for the drop-in <script> bundle (voice.iife.js).
+// Auto-init entry for the drop-in <script> bundle (agent.iife.js).
 //
 // Reads config from its own <script> tag's data-* attributes:
 //
-//   <script src=".../voice.js"
+//   <script src=".../sdk/agent.js"
 //           data-api-base="https://api.tring.io"
 //           data-token="<jwt>" />
 //
 // or with a refresh endpoint:
 //
-//   <script src=".../voice.js"
+//   <script src=".../sdk/agent.js"
 //           data-api-base="https://api.tring.io"
 //           data-token-url="/tring/token" />
 //

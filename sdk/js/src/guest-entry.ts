@@ -1,8 +1,9 @@
-// Auto-init entry for the drop-in guest <script> bundle (support.iife.js).
+// Auto-init entry for the visitor web-calling widget. Built as
+// dist/voice.iife.js and served by the API at /sdk/voice.js.
 //
-// Drop one tag on a public support page; no JS required:
+// Drop one tag on any public page; no JS required:
 //
-//   <script src=".../support.js"
+//   <script src=".../sdk/voice.js"
 //           data-api-base="https://api.tring.io"
 //           data-public-key="pk_live_…"
 //           data-flow-id="<uuid>"        // optional; else tenant default

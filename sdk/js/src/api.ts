@@ -29,9 +29,16 @@ export class ApiClient {
       body: JSON.stringify({ public_key: publicKey, flow_id: flowId }),
     });
     if (!r.ok) {
-      throw new Error(
-        `tring guest credentials failed: ${r.status} ${await r.text()}`,
-      );
+      // Surface the server's plain-English {error} (e.g. "guest calling is
+      // not enabled…") rather than a raw "failed: 400 {…}" blob.
+      let msg = `request failed (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j && typeof j.error === "string") msg = j.error;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(msg);
     }
     return r.json();
   }

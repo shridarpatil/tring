@@ -31,6 +31,26 @@ COPY web/ ./
 # path holds index.html + the hashed assets/ tree.
 RUN npm run build
 
+# ---- browser widget build ------------------------------------------------
+# Builds the drop-in JS widgets (voice.js / agent.js / tring.js). Their
+# bundles are embedded by the Go build below and served at /sdk/* on the
+# same origin as the API, so self-hosters need no CDN. The orchestrator
+# binary doesn't import internal/widget, so the bytes don't reach its image.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS sdk
+
+WORKDIR /sdk
+COPY sdk/js/package.json sdk/js/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+COPY sdk/js/ ./
+# Build, then copy each drop-in bundle to its served name under /widget-dist.
+RUN npm run build && \
+    mkdir -p /widget-dist && \
+    cp dist/voice.iife.js /widget-dist/voice.js && \
+    cp dist/agent.iife.js /widget-dist/agent.js && \
+    cp dist/tring.iife.js /widget-dist/tring.js
+
 # ---- Go build stage ------------------------------------------------------
 # --platform=$BUILDPLATFORM pins the builder to the *runner's* native arch
 # (always amd64 on a stock GitHub runner). Combined with GOARCH=$TARGETARCH
@@ -58,6 +78,10 @@ COPY . .
 # will include index.html + assets; the orchestrator binary doesn't
 # import internal/webui so it pays nothing.
 COPY --from=web /internal/webui/dist /src/internal/webui/dist
+
+# Drop the compiled widget bundles into the embed source dir so the api
+# binary serves them at /sdk/*. Overwrites the .gitkeep placeholder.
+COPY --from=sdk /widget-dist /src/internal/widget/dist
 
 # -s -w strips DWARF + symbol tables; saves ~30% binary size.
 # Trimpath removes absolute paths from binaries (reproducibility +

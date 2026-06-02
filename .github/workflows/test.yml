@@ -73,6 +73,19 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: sdk/js/package-lock.json
+
+      - name: Build widget bundles
+        # The browser bundles are embedded by internal/widget and served at
+        # /sdk/*. TestSDKWidgetServed needs them present at compile time, so
+        # build them before `go test` (mirrors the Dockerfile's sdk stage).
+        run: make sdk
+
       - name: go test
         env:
           # The dbtest harness reads this; unset == skip DB-dependent tests.

@@ -109,6 +109,13 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 		return
 	}
 
+	// Single-use guest credentials: when this call ends, expire the guest
+	// session so the minted SIP credential can't be replayed for another
+	// call. (Set by the mod_xml_curl directory for guest_* users.)
+	if gu := ev.GetHeader("variable_tring_guest_session"); gu != "" {
+		defer e.expireGuestSession(gu)
+	}
+
 	// Two ways a flow gets resolved:
 	//   - guest web-call: the flow is pinned by the tring_flow_id channel
 	//     variable (set in the mod_xml_curl directory for guest_* users),
@@ -204,6 +211,23 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 		return nil, fmt.Errorf("flow has no entry node")
 	}
 	return &ResolvedFlow{TenantID: tenantID, Flow: &flow}, nil
+}
+
+// expireGuestSession deletes a guest_sessions row once its single call has
+// ended, enforcing single-use credentials. Uses a fresh short context
+// because the call's context is already cancelled when the call ends.
+func (e *Executor) expireGuestSession(sipUser string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	tag, err := e.DB.Pool.Exec(ctx,
+		`DELETE FROM guest_sessions WHERE sip_username = $1`, sipUser)
+	if err != nil {
+		e.Logger.Printf("ivr: failed to expire guest session %s: %v", sipUser, err)
+		return
+	}
+	if tag.RowsAffected() > 0 {
+		e.Logger.Printf("ivr: expired single-use guest session %s", sipUser)
+	}
 }
 
 // resolveFlowByID loads a flow directly by its UUID — the guest web-call
@@ -403,21 +427,67 @@ func (e *Executor) runMenu(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 }
 
 func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
-	agent := stringFromConfig(node.Config, "agent_number")
-	if agent == "" {
+	bridgeTo, err := e.agentBridgeTarget(ctx, node, st.tenantID)
+	if err != nil {
+		e.Logger.Printf("ivr: transfer target lookup failed: %v", err)
 		return "no_answer", nil
 	}
-	// TODO: pick a trunk via selectTrunks(); hardcoded to loopback here.
-	bridgeTo := fmt.Sprintf("loopback/%s", agent)
+	if bridgeTo == "" {
+		e.Logger.Printf("ivr: transfer node has no agents to ring (tenant=%s)", st.tenantID)
+		return "no_answer", nil
+	}
+	e.Logger.Printf("ivr: transfer bridging to %s", bridgeTo)
+
+	// Label the caller so the agent's incoming-call screen shows something
+	// meaningful (web visitors have no real caller-id).
+	_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "effective_caller_id_name", Value: "Web Caller", Sync: true})
+
 	if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: bridgeTo, Sync: true}); err != nil {
 		return "", fmt.Errorf("bridge: %w", err)
 	}
-	// Branch on bridge result via channel var ${last_bridge_hangup_cause}.
+	// Branch on bridge result via channel var ${originate_disposition}.
 	cause, _ := getChannelVar(ctx, conn, st.uuid, "originate_disposition")
 	if strings.Contains(cause, "ANSWER") || strings.Contains(cause, "SUCCESS") {
 		return "completed", nil
 	}
 	return "no_answer", nil
+}
+
+// agentBridgeTarget builds the bridge dial-string for a Transfer node. If the
+// node names a specific agent (config.agent_sip), ring just that one;
+// otherwise ring ALL of the tenant's agents simultaneously (comma-joined —
+// first to answer wins). Unregistered agents simply fail their leg, so no
+// presence filtering is needed. Returns "" when the tenant has no agents.
+func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantID uuid.UUID) (string, error) {
+	var domain string
+	if err := e.DB.Pool.QueryRow(ctx,
+		`SELECT sip_domain FROM tenants WHERE id = $1`, tenantID,
+	).Scan(&domain); err != nil {
+		return "", err
+	}
+
+	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
+		return fmt.Sprintf("user/%s@%s", sip, domain), nil
+	}
+
+	rows, err := e.DB.Pool.Query(ctx,
+		`SELECT sip_username FROM agents WHERE tenant_id = $1`, tenantID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var targets []string
+	for rows.Next() {
+		var sip string
+		if err := rows.Scan(&sip); err != nil {
+			return "", err
+		}
+		targets = append(targets, fmt.Sprintf("user/%s@%s", sip, domain))
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	return strings.Join(targets, ","), nil // comma = simultaneous ring
 }
 
 func (e *Executor) runHangup(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
