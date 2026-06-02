@@ -5,7 +5,7 @@
 // node-type config blocks cover all 8 IVR node types.
 import { computed, ref, watch } from "vue";
 import { Trash2, Volume2, Grid3X3, Hash, Globe, Users, ExternalLink, Clock, PhoneOff, Plus, X } from "lucide-vue-next";
-import type { IVRNodeType, Flow } from "../../api/types";
+import type { IVRNodeType, Flow, Agent } from "../../api/types";
 
 interface VueFlowNode {
   id: string;
@@ -21,6 +21,7 @@ const props = defineProps<{
   node: VueFlowNode;
   currentFlowId?: string;
   availableFlows?: Flow[];
+  availableAgents?: Agent[];
 }>();
 
 const emit = defineEmits<{
@@ -424,17 +425,31 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── TRANSFER ──────────────────────────────────────────── -->
       <template v-if="node.type === 'transfer'">
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Agent phone number</span>
-          <input
-            v-model="config.agent_number"
-            type="tel"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-            placeholder="+919876543210"
-          />
-          <span class="text-[11px] text-gray-400"
-            >Rings this number via the trunk; bridges on answer.</span
+          <span class="text-xs font-medium text-gray-700">Transfer to</span>
+          <select
+            v-model="config.agent_sip"
+            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           >
+            <option value="">All available agents (ring everyone)</option>
+            <option
+              v-for="a in availableAgents"
+              :key="a.id"
+              :value="a.sip_username"
+            >
+              {{ a.display_name || a.sip_username }}
+            </option>
+          </select>
+          <span class="text-[11px] text-gray-400">
+            Rings the registered agent(s) over WebRTC; bridges to the first who
+            answers. "All available agents" rings everyone at once.
+          </span>
         </label>
+        <p
+          v-if="!availableAgents || !availableAgents.length"
+          class="text-[11px] text-amber-600"
+        >
+          No agents yet — add one under <strong>Agents</strong> first.
+        </p>
         <label class="block">
           <span class="text-xs font-medium text-gray-700">Ring timeout (s)</span>
           <input

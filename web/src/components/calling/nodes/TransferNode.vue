@@ -9,9 +9,8 @@ const props = defineProps<{ data: Record<string, any> }>();
 
 const summary = computed(() => {
   const c = props.data?.config || {};
-  if (c.agent_number) return `→ ${c.agent_number}`;
-  if (c.team_id) return `team: ${c.team_id}`;
-  return "No destination";
+  if (c.agent_sip) return `→ agent ${c.agent_sip}`;
+  return "→ all agents";
 });
 </script>
 
