@@ -115,11 +115,22 @@ export class Tring extends Emitter<TringEvent> {
 
   private handleInvitation(inv: Invitation): void {
     this.currentSession = inv;
+    // A pending call() means WE originated — this INVITE is the agent's own
+    // leg of an outbound call. No pending call means a call was bridged TO
+    // the agent (e.g. an IVR transfer) — a genuine inbound call to answer.
+    const outbound = !!this.pendingCall;
     const to = this.pendingCall?.to ?? inv.remoteIdentity.uri.user ?? "";
 
     const call: Call = {
       to,
+      direction: outbound ? "outbound" : "inbound",
+      displayName: inv.remoteIdentity.displayName || undefined,
       status: "ringing" as CallStatus,
+      accept: async () => {
+        if (inv.state === SessionState.Initial) {
+          await inv.accept();
+        }
+      },
       hangup: async () => {
         const s = inv.state;
         if (s === SessionState.Established) await inv.bye();
@@ -157,7 +168,10 @@ export class Tring extends Emitter<TringEvent> {
       }
     });
 
-    if (this.autoAnswer) {
+    // Auto-answer the agent's OWN outbound leg always; auto-answer a true
+    // inbound call only when autoAnswer is on. With autoAnswer off, an
+    // inbound call stays ringing until the UI calls accept().
+    if (outbound || this.autoAnswer) {
       inv.accept().catch((err) => {
         this.emit({ type: "error", error: err as Error });
       });
