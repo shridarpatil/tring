@@ -25,17 +25,28 @@ export interface InitOpts {
 export interface Call {
   /** Tring call id (matches `calls.id` in the backend). */
   id?: string;
-  /** Destination as supplied to `call(to)`. */
+  /** Destination as supplied to `call(to)`, or the caller for inbound. */
   to: string;
+  /**
+   * `outbound` = the agent placed this call (their own leg auto-answers);
+   * `inbound` = a call was bridged TO the agent (e.g. an IVR transfer) and,
+   * unless autoAnswer is on, waits for `accept()`.
+   */
+  direction: CallDirection;
+  /** Display name of the remote party, when known (e.g. "Web Caller"). */
+  displayName?: string;
   /** Current state. */
   status: CallStatus;
-  /** Hang up this call. */
+  /** Answer an inbound call. No-op for an already-answered call. */
+  accept(): Promise<void>;
+  /** Hang up (or, while still ringing, reject) this call. */
   hangup(): Promise<void>;
   /** Send a DTMF digit (0-9, *, #) mid-call. */
   sendDTMF(digit: string): Promise<void>;
 }
 
 export type CallStatus = "ringing" | "connected" | "ended";
+export type CallDirection = "inbound" | "outbound";
 
 export type TringEvent =
   | { type: "registered" }

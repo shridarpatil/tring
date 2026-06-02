@@ -195,6 +195,9 @@ func (s *Server) writeGuestDirectory(w http.ResponseWriter, r *http.Request, ten
 						{Name: "user_class", Value: "guest"},
 						{Name: "tenant_id", Value: tenantID.String()},
 						{Name: "tring_flow_id", Value: flowID.String()},
+						// Carry the session username so the executor can expire
+						// it when the call ends — single-use credentials.
+						{Name: "tring_guest_session", Value: user},
 					}},
 				},
 			},
