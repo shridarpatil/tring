@@ -61,11 +61,8 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var a Agent
-	err = s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO agents (tenant_id, sip_username, sip_password, display_name)
-		VALUES ($1, $2, $3, NULLIF($4, ''))
-		RETURNING id, tenant_id, sip_username, sip_password, COALESCE(display_name, ''), created_at
-	`, t.ID, req.SipUsername, sipPassword, req.DisplayName).Scan(
+	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
+		t.ID, req.SipUsername, sipPassword, req.DisplayName).Scan(
 		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.CreatedAt,
 	)
 	if err != nil {
@@ -77,12 +74,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), created_at
-		FROM agents
-		WHERE tenant_id = $1
-		ORDER BY created_at DESC
-	`, t.ID)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListAgents, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -124,11 +116,8 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var a Agent
-	err = s.db.Pool.QueryRow(r.Context(), `
-		SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), created_at
-		FROM agents
-		WHERE id = $1 AND tenant_id = $2
-	`, id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.CreatedAt)
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgent,
+		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -143,11 +132,11 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 // ---- Numbers ------------------------------------------------------------
 
 type Number struct {
-	ID            uuid.UUID  `json:"id"`
-	TenantID      uuid.UUID  `json:"tenant_id"`
-	E164          string     `json:"e164"`
-	Type          string     `json:"type"`
-	TrunkID       *uuid.UUID `json:"trunk_id"`
+	ID       uuid.UUID  `json:"id"`
+	TenantID uuid.UUID  `json:"tenant_id"`
+	E164     string     `json:"e164"`
+	Type     string     `json:"type"`
+	TrunkID  *uuid.UUID `json:"trunk_id"`
 	// FlowID points at the IVR flow run for inbound calls to this DID
 	// (orchestrator's outbound-ESL listener looks it up on each call).
 	// nil = no IVR — calls fall through to the default dialplan.
@@ -198,11 +187,8 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var n Number
-	err := s.db.Pool.QueryRow(r.Context(), `
-		INSERT INTO numbers (tenant_id, e164, type, trunk_id, flow_id, provider_did_id, priority)
-		VALUES ($1, $2, $3::number_type, $4, $5, NULLIF($6, ''), $7)
-		RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
-	`, t.ID, req.E164, req.Type, req.TrunkID, req.FlowID, req.ProviderDIDID, priority).Scan(
+	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateNumber,
+		t.ID, req.E164, req.Type, req.TrunkID, req.FlowID, req.ProviderDIDID, priority).Scan(
 		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if err != nil {
@@ -257,8 +243,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	if req.Active != nil && !*req.Active {
 		var rowType string
 		var rowActive bool
-		err := s.db.Pool.QueryRow(r.Context(),
-			`SELECT type::text, active FROM numbers WHERE id = $1 AND tenant_id = $2`,
+		err := s.db.Pool.QueryRow(r.Context(), s.q.GetNumberTypeActive,
 			id, t.ID,
 		).Scan(&rowType, &rowActive)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -271,10 +256,8 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		}
 		if rowType == "outbound" && rowActive {
 			var otherActive int
-			err = s.db.Pool.QueryRow(r.Context(), `
-				SELECT COUNT(*) FROM numbers
-				WHERE tenant_id = $1 AND type = 'outbound' AND active AND id != $2
-			`, t.ID, id).Scan(&otherActive)
+			err = s.db.Pool.QueryRow(r.Context(), s.q.CountOtherActiveOutbound,
+				t.ID, id).Scan(&otherActive)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
 				return
@@ -293,18 +276,8 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	//   flow_id present   → SET flow_id = req.FlowID
 	//   neither           → keep existing
 	var n Number
-	err = s.db.Pool.QueryRow(r.Context(), `
-		UPDATE numbers
-		SET priority = COALESCE($1, priority),
-		    active   = COALESCE($2, active),
-		    flow_id  = CASE
-		                  WHEN $3::boolean THEN NULL
-		                  WHEN $4::uuid IS NOT NULL THEN $4::uuid
-		                  ELSE flow_id
-		               END
-		WHERE id = $5 AND tenant_id = $6
-		RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
-	`, req.Priority, req.Active, req.ClearFlow, req.FlowID, id, t.ID).Scan(
+	err = s.db.Pool.QueryRow(r.Context(), s.q.UpdateNumber,
+		req.Priority, req.Active, req.ClearFlow, req.FlowID, id, t.ID).Scan(
 		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -350,13 +323,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var out Tenant
-	err := s.db.Pool.QueryRow(r.Context(), `
-		UPDATE tenants
-		SET outbound_strategy = COALESCE($1, outbound_strategy),
-		    failover_causes   = COALESCE($2::TEXT[], failover_causes)
-		WHERE id = $3
-		RETURNING id, name, sip_domain, outbound_strategy, failover_causes
-	`, req.OutboundStrategy, causes, t.ID).
+	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
+		req.OutboundStrategy, causes, t.ID).
 		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
@@ -367,12 +335,7 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListNumbers(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	rows, err := s.db.Pool.Query(r.Context(), `
-		SELECT id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
-		FROM numbers
-		WHERE tenant_id = $1
-		ORDER BY type, priority ASC, created_at DESC
-	`, t.ID)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListNumbers, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return

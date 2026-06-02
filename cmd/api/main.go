@@ -17,6 +17,7 @@ import (
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	tringmigrate "github.com/whatomate/tring/internal/migrate"
+	"github.com/whatomate/tring/internal/queries"
 )
 
 // migrateRun is a tiny shim so the call site reads `migrateRun(...)`
@@ -127,11 +128,8 @@ func seedTenant(ctx context.Context, database *db.DB, name string) error {
 	sipDomain := "t_" + strings.ToLower(strings.ReplaceAll(name, " ", "_")) + ".tring.local"
 
 	var id string
-	err = database.Pool.QueryRow(ctx, `
-		INSERT INTO tenants (name, api_key_hash, api_key_prefix, sip_domain)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, name, hash, prefix, sipDomain).Scan(&id)
+	err = database.Pool.QueryRow(ctx, queries.MustLoad().InsertTenant,
+		name, hash, prefix, sipDomain).Scan(&id)
 	if err != nil {
 		return fmt.Errorf("insert tenant: %w", err)
 	}

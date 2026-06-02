@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/queries"
 )
 
 // Event names accepted by webhook subscribers. Kept as constants so handler
@@ -44,12 +45,14 @@ const (
 
 type Notifier struct {
 	db   *db.DB
+	q    *queries.Queries
 	http *http.Client
 }
 
 func New(d *db.DB) *Notifier {
 	return &Notifier{
 		db:   d,
+		q:    queries.MustLoad(),
 		http: &http.Client{Timeout: 10 * time.Second},
 	}
 }
@@ -70,12 +73,7 @@ type envelope struct {
 // surface to the caller — webhooks must not block the originating call
 // flow.
 func (n *Notifier) Emit(ctx context.Context, tenantID uuid.UUID, eventType string, data interface{}) {
-	rows, err := n.db.Pool.Query(ctx, `
-		SELECT id, url, secret, events
-		FROM webhooks
-		WHERE tenant_id = $1
-		  AND (cardinality(events) = 0 OR $2 = ANY(events))
-	`, tenantID, eventType)
+	rows, err := n.db.Pool.Query(ctx, n.q.ListWebhookSubscribers, tenantID, eventType)
 	if err != nil {
 		log.Printf("webhook: lookup %s for tenant %s: %v", eventType, tenantID, err)
 		return
@@ -112,10 +110,8 @@ func (n *Notifier) Emit(ctx context.Context, tenantID uuid.UUID, eventType strin
 			log.Printf("webhook: marshal: %v", err)
 			continue
 		}
-		err = n.db.Pool.QueryRow(ctx, `
-			INSERT INTO webhook_deliveries (webhook_id, event_type, payload)
-			VALUES ($1, $2, $3) RETURNING id
-		`, tgt.HookID, eventType, payloadBytes).Scan(&deliveryID)
+		err = n.db.Pool.QueryRow(ctx, n.q.InsertWebhookDelivery,
+			tgt.HookID, eventType, payloadBytes).Scan(&deliveryID)
 		if err != nil {
 			log.Printf("webhook: insert delivery: %v", err)
 			continue
@@ -198,33 +194,23 @@ func sign(secret string, ts int64, body []byte) string {
 }
 
 func (n *Notifier) recordAttempt(id uuid.UUID, attempts, status int, errStr string) {
-	_, err := n.db.Pool.Exec(context.Background(), `
-		UPDATE webhook_deliveries
-		SET attempts = $1, response_status = NULLIF($2, 0), last_error = NULLIF($3, '')
-		WHERE id = $4
-	`, attempts, status, errStr, id)
+	_, err := n.db.Pool.Exec(context.Background(), n.q.UpdateDeliveryAttempt,
+		attempts, status, errStr, id)
 	if err != nil {
 		log.Printf("webhook: record attempt %s: %v", id, err)
 	}
 }
 
 func (n *Notifier) markDelivered(id uuid.UUID, status int) {
-	_, err := n.db.Pool.Exec(context.Background(), `
-		UPDATE webhook_deliveries
-		SET status='success', delivered_at=now(), response_status=$1, last_error=NULL
-		WHERE id=$2
-	`, status, id)
+	_, err := n.db.Pool.Exec(context.Background(), n.q.MarkDeliverySuccess, status, id)
 	if err != nil {
 		log.Printf("webhook: mark delivered %s: %v", id, err)
 	}
 }
 
 func (n *Notifier) markExhausted(id uuid.UUID, lastStatus int, lastErr string) {
-	_, err := n.db.Pool.Exec(context.Background(), `
-		UPDATE webhook_deliveries
-		SET status='exhausted', response_status=NULLIF($1,0), last_error=NULLIF($2,'')
-		WHERE id=$3
-	`, lastStatus, lastErr, id)
+	_, err := n.db.Pool.Exec(context.Background(), n.q.MarkDeliveryExhausted,
+		lastStatus, lastErr, id)
 	if err != nil {
 		log.Printf("webhook: mark exhausted %s: %v", id, err)
 	}
