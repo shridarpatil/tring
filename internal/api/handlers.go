@@ -9,6 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/whatomate/tring/internal/freeswitch"
 )
 
 // Ensure pgx errors are reachable in PATCH endpoints below.
@@ -29,6 +31,10 @@ type Agent struct {
 	SipPassword string    `json:"sip_password,omitempty"`
 	DisplayName string    `json:"display_name,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+	// Status is live FreeSWITCH registration state — "online" when the
+	// agent is registered (WebRTC/SIP), "offline" otherwise, "unknown" if
+	// FreeSWITCH couldn't be reached. Populated on list responses.
+	Status string `json:"status,omitempty"`
 }
 
 type createAgentRequest struct {
@@ -92,6 +98,21 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		}
 		agents = append(agents, a)
 	}
+
+	// Enrich with live registration status (one ESL call). Fail-soft: if
+	// FreeSWITCH is unreachable, mark "unknown" rather than erroring the list.
+	regs, regErr := s.fs.RegisteredUsers(r.Context())
+	for i := range agents {
+		switch {
+		case regErr != nil:
+			agents[i].Status = "unknown"
+		case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)]:
+			agents[i].Status = "online"
+		default:
+			agents[i].Status = "offline"
+		}
+	}
+
 	writeJSON(w, http.StatusOK, agents)
 }
 
