@@ -202,12 +202,18 @@ func (s *Server) Router() http.Handler {
 
 	// Browser widget bundles (embedded). Served at /sdk/voice.js,
 	// /sdk/agent.js, /sdk/tring.js on the same origin as the API, so a
-	// self-hoster's embed snippet works with no CDN. Public, immutable,
-	// long-cacheable. Mounted only if `make sdk` populated the bundles.
+	// self-hoster's embed snippet works with no CDN. Mounted only if
+	// `make sdk` populated the bundles.
+	//
+	// The paths are UNversioned, so we can't cache-forever (a deploy that
+	// updates a bundle would be invisible to browsers holding a stale copy).
+	// http.FileServer sets ETag/Last-Modified; "no-cache" tells the browser
+	// to revalidate every time — it still gets a cheap 304 when unchanged,
+	// but picks up a new bundle the instant we ship one.
 	if wFS, ok := widget.FS(); ok {
 		sdk := http.StripPrefix("/sdk/", http.FileServer(http.FS(wFS)))
 		r.Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
-			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("Cache-Control", "no-cache")
 			sdk.ServeHTTP(w, req)
 		})
 	}
