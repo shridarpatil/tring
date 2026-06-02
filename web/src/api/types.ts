@@ -14,6 +14,8 @@ export interface Agent {
   sip_username: string;
   display_name: string;
   created_at: string;
+  // Live FreeSWITCH registration state, populated on list responses.
+  status?: "online" | "offline" | "unknown";
 }
 
 export interface PhoneNumber {
