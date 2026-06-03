@@ -45,6 +45,14 @@ type Queries struct {
 	GetAgentSipUsername string `query:"get-agent-sip-username"`
 	CreateCallOutbound  string `query:"create-call-outbound"`
 	CreateCallBridge    string `query:"create-call-bridge"`
+	CreateCallInbound   string `query:"create-call-inbound"`
+	SetCallIVRPath      string `query:"set-call-ivr-path"`
+	SetCallAgent        string `query:"set-call-agent"`
+	GetAgentBySIP       string `query:"get-agent-by-sip"`
+
+	UpdateGuestRequireBackendMint string `query:"update-guest-require-backend-mint"`
+	GetCallTenant       string `query:"get-call-tenant"`
+	GetCallAgentLabel   string `query:"get-call-agent-label"`
 	GetCall             string `query:"get-call"`
 	ListCalls           string `query:"list-calls"`
 	ListCallsByStatus   string `query:"list-calls-by-status"`

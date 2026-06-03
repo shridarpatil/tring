@@ -169,6 +169,10 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/tenants/me", s.handlePatchMyTenant)
 			r.Get("/guest-config", s.handleGetGuestConfig)
 			r.Patch("/guest-config", s.handlePatchGuestConfig)
+			// API-key mint: integrator backend mints guest creds with a
+			// trusted client_ref (the verified logged-in caller). The public
+			// /sdk/guest-credentials never accepts client_ref.
+			r.Post("/guest-credentials", s.handleAuthGuestCredentials)
 			r.Post("/agents", s.handleCreateAgent)
 			r.Get("/agents", s.handleListAgents)
 			r.Get("/agents/{id}", s.handleGetAgent)
@@ -260,6 +264,13 @@ func (s *Server) Router() http.Handler {
 				return
 			}
 			defer indexHTML.Close()
+			// index.html references content-hashed asset bundles, so it MUST
+			// revalidate on every load — otherwise a browser keeps a cached
+			// index pointing at a stale bundle after a deploy and silently
+			// shows the old UI. The hashed assets themselves are immutable, so
+			// the FileServer's ETag/Last-Modified handles them. (Mirrors the
+			// /sdk no-cache fix.)
+			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.Copy(w, indexHTML)
 		})
