@@ -90,9 +90,6 @@ type Queries struct {
 	DeleteFlow        string `query:"delete-flow"`
 	GetFlowDefinition string `query:"get-flow-definition"`
 
-	// ---- api: agent token / sdk credentials ----
-	GetAgentSipCreds string `query:"get-agent-sip-creds"`
-
 	// ---- api: webhooks ----
 	CreateWebhook         string `query:"create-webhook"`
 	ListWebhooks          string `query:"list-webhooks"`

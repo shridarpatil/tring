@@ -295,11 +295,6 @@ SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2;
 -- agent token / sdk credentials
 -- ===========================================================================
 
--- name: get-agent-sip-creds
-SELECT a.sip_username, a.sip_password, t.sip_domain
-FROM agents a JOIN tenants t ON t.id = a.tenant_id
-WHERE a.id = $1 AND a.tenant_id = $2;
-
 -- ===========================================================================
 -- webhooks
 -- ===========================================================================
