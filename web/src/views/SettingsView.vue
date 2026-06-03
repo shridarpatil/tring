@@ -18,6 +18,7 @@ const flows = ref<Flow[]>([]);
 const allowedOrigins = ref<string[]>([]);
 const newOrigin = ref("");
 const supportFlowId = ref("");
+const requireBackendMint = ref(false);
 const guestSaving = ref(false);
 const guestSaved = ref(false);
 const guestError = ref("");
@@ -93,6 +94,7 @@ async function load() {
     flows.value = fl;
     allowedOrigins.value = [...g.allowed_origins];
     supportFlowId.value = g.support_flow_id || "";
+    requireBackendMint.value = g.guest_require_backend_mint;
   } catch (e) {
     guestError.value = e instanceof Error ? e.message : "failed to load guest config";
   }
@@ -122,9 +124,11 @@ async function saveGuest() {
     guest.value = await api.patch<GuestConfig>("/v1/guest-config", {
       support_flow_id: supportFlowId.value,
       allowed_origins: allowedOrigins.value,
+      guest_require_backend_mint: requireBackendMint.value,
     });
     allowedOrigins.value = [...guest.value.allowed_origins];
     supportFlowId.value = guest.value.support_flow_id || "";
+    requireBackendMint.value = guest.value.guest_require_backend_mint;
     guestSaved.value = true;
   } catch (e) {
     guestError.value = e instanceof Error ? e.message : "save failed";
@@ -236,6 +240,21 @@ onMounted(load);
           <button class="text-sm border rounded-md px-3 py-2 hover:bg-gray-50" @click="addOrigin">Add</button>
         </div>
       </div>
+
+      <!-- Backend-mint policy -->
+      <label class="flex items-start gap-2">
+        <input type="checkbox" v-model="requireBackendMint" class="mt-1" />
+        <span>
+          <span class="text-sm font-medium text-gray-700">Require backend-minted credentials</span>
+          <span class="block text-xs text-gray-400">
+            Disables the public browser mint (returns 403). Guest credentials must
+            be minted server-side via your backend (<code>POST /v1/guest-credentials</code>
+            with the API key) so every caller is attributable. Use the
+            <code>data-credentials-url</code> widget option. Leave off for anonymous,
+            no-backend embedding.
+          </span>
+        </span>
+      </label>
 
       <!-- Embed snippet -->
       <div>

@@ -27,6 +27,8 @@ type Call struct {
 	FromNumber   string     `json:"from_number"`
 	ToNumber     string     `json:"to_number"`
 	AgentID      *uuid.UUID `json:"agent_id,omitempty"`
+	AgentName    *string    `json:"agent_name,omitempty"` // display_name|sip of the handling agent
+	ClientRef    *string    `json:"client_ref,omitempty"` // embedder-supplied caller identity (vs guest_*)
 	FSUUID       string     `json:"fs_uuid"`
 	StartedAt    time.Time  `json:"started_at"`
 	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
@@ -34,6 +36,12 @@ type Call struct {
 	DurationSec  *int       `json:"duration_seconds,omitempty"`
 	HangupCause  *string    `json:"hangup_cause,omitempty"`
 	RecordingURL *string    `json:"recording_url,omitempty"`
+	// IVRPath is the recorded IVR journey for inbound/IVR calls — an ordered
+	// JSON array of steps (node, DTMF pressed, transfer target, outcome).
+	// Passed through verbatim from the calls.ivr_path JSONB column; empty
+	// array for outbound calls. Shape: see orchestrator.SimStep / the
+	// console's IvrStep type.
+	IVRPath json.RawMessage `json:"ivr_path,omitempty"`
 }
 
 type createCallRequest struct {
@@ -328,11 +336,18 @@ const (
 
 func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	var c Call
+	// Scan the jsonb ivr_path into a plain []byte, then hand it to the
+	// RawMessage field — pgx returns jsonb as raw bytes and we pass them
+	// through to the client unchanged.
+	var ivrPath []byte
 	err := scanner.Scan(
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
 		&c.AgentID, &c.FSUUID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
-		&c.DurationSec, &c.HangupCause, &c.RecordingURL,
+		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef,
 	)
+	if len(ivrPath) > 0 {
+		c.IVRPath = ivrPath
+	}
 	return c, err
 }
 

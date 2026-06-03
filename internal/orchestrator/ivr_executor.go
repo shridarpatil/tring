@@ -175,20 +175,31 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	tenantID := resolved.TenantID
 	flow := *resolved.Flow
 
+	state := &callState{
+		uuid:      uuidStr,
+		tenantID:  tenantID,
+		caller:    caller,
+		called:    called,
+		clientRef: ev.GetHeader("variable_tring_client_ref"),
+		vars:      map[string]string{},
+	}
+
+	// Log the inbound/IVR call (incl. guest web calls) so it shows in the
+	// call log — previously only the outbound path wrote a calls row. The
+	// global event loop (runner.go) then settles it (answered/ended/
+	// duration/webhooks) by fs_uuid, same as outbound. Insert while still
+	// ringing, before answering, so the CHANNEL_ANSWER from AnswerCall finds
+	// the row to flip. Best-effort: never block the call on a logging error.
+	e.recordInboundCall(ctx, state)
+	// Persist the IVR path on the way out, even if walk errors mid-flow.
+	defer e.saveIVRPath(state)
+
 	e.Logger.Printf("ivr: resolved flow for %s, answering", called)
 	if err := conn.AnswerCall(ctx, uuidStr); err != nil {
 		e.Logger.Printf("ivr: answer failed: %v", err)
 		return
 	}
 	e.Logger.Printf("ivr: answered, walking from entry node %s", flow.EntryNode)
-
-	state := &callState{
-		uuid:     uuidStr,
-		tenantID: tenantID,
-		caller:   caller,
-		called:   called,
-		vars:     map[string]string{},
-	}
 
 	if err := e.walk(ctx, conn, &flow, flow.EntryNode, state); err != nil {
 		e.Logger.Printf("ivr: walk error: %v", err)
@@ -255,6 +266,43 @@ func (e *Executor) expireGuestSession(sipUser string) {
 	}
 	if tag.RowsAffected() > 0 {
 		e.Logger.Printf("ivr: expired single-use guest session %s", sipUser)
+	}
+}
+
+// recordInboundCall inserts a calls row for an inbound/IVR call so it appears
+// in the call log. The orchestrator's global event loop settles it
+// (answered/ended/duration/webhooks) by fs_uuid afterwards. Best-effort: a
+// failure is logged and the call proceeds — logging must never break a call.
+func (e *Executor) recordInboundCall(ctx context.Context, st *callState) {
+	var id uuid.UUID
+	err := e.DB.Pool.QueryRow(ctx, e.Q.CreateCallInbound,
+		st.tenantID, st.caller, st.called, st.uuid, st.clientRef,
+	).Scan(&id)
+	if err != nil {
+		e.Logger.Printf("ivr: failed to record inbound call (uuid=%s): %v", st.uuid, err)
+		return
+	}
+	e.Logger.Printf("ivr: recorded inbound call %s (uuid=%s)", id, st.uuid)
+}
+
+// saveIVRPath persists the recorded IVR journey to the call's ivr_path column,
+// matched by FreeSWITCH channel UUID. Called from a defer, so it uses a fresh
+// short context (the call's context is cancelled once the call ends).
+// Best-effort: the column defaults to '[]', so a missed write just shows an
+// empty path in the log.
+func (e *Executor) saveIVRPath(st *callState) {
+	if len(st.steps) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	b, err := json.Marshal(st.steps)
+	if err != nil {
+		e.Logger.Printf("ivr: marshal ivr_path (uuid=%s): %v", st.uuid, err)
+		return
+	}
+	if _, err := e.DB.Pool.Exec(ctx, e.Q.SetCallIVRPath, string(b), st.uuid); err != nil {
+		e.Logger.Printf("ivr: save ivr_path (uuid=%s): %v", st.uuid, err)
 	}
 }
 
@@ -346,11 +394,37 @@ func parseFlowDef(defJSON []byte) (*ivrFlowData, error) {
 // callState is the per-call mutable state — variables gathered via
 // Gather nodes, the caller/callee identifiers, and tenant context.
 type callState struct {
-	uuid     string
-	tenantID uuid.UUID
-	caller   string
-	called   string
-	vars     map[string]string
+	uuid      string
+	tenantID  uuid.UUID
+	caller    string
+	called    string
+	clientRef string // embedder-supplied caller identity (tring_client_ref)
+	vars      map[string]string
+
+	// steps is the recorded IVR journey (one SimStep per node walked),
+	// persisted to calls.ivr_path so the call log shows the path taken.
+	// Reuses the simulator's step shape so the live path and the Test-panel
+	// trace render identically.
+	steps []SimStep
+	// Per-node scratch the node handlers fill in (action/detail/pressed
+	// digit); walk() reads them to build the step, then clears them before
+	// the next node. Keeps runNode's (outcome, error) signature unchanged.
+	stepAction string
+	stepDetail string
+	stepDTMF   string
+}
+
+// recordStep appends one step to the IVR journey from the scratch fields the
+// node handler set plus the resolved outcome.
+func (st *callState) recordStep(node *ivrNode, outcome string) {
+	st.steps = append(st.steps, SimStep{
+		NodeID:    node.ID,
+		NodeType:  node.Type,
+		Action:    st.stepAction,
+		Detail:    st.stepDetail,
+		DTMFInput: st.stepDTMF,
+		Outcome:   outcome,
+	})
 }
 
 // walk runs the node identified by nodeID, then follows the outgoing
@@ -367,11 +441,16 @@ func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData
 		}
 		e.Logger.Printf("ivr: walk depth=%d node=%s type=%s", depth, node.ID, node.Type)
 
+		// Clear per-node scratch; the handler fills it in, then we record
+		// one step from it below (after the outcome is known).
+		st.stepAction, st.stepDetail, st.stepDTMF = "", "", ""
 		outcome, err := e.runNode(ctx, conn, node, st)
 		if err != nil {
+			st.recordStep(node, "error")
 			return fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
 		}
 		e.Logger.Printf("ivr: walk node=%s outcome=%q", node.ID, outcome)
+		st.recordStep(node, outcome)
 		if outcome == "" {
 			// Terminal node (hangup) or executor explicitly ended.
 			return nil
@@ -415,6 +494,7 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 		// No-op passthrough — the Start node is purely a UI anchor so
 		// flows have a fixed entry point. Walk to whatever's wired to
 		// its "default" output.
+		st.stepAction = "passthrough"
 		return "default", nil
 	case nodeGreeting:
 		return e.runGreeting(ctx, conn, node, st)
@@ -453,6 +533,7 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 func (e *Executor) runGreeting(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
 	e.Logger.Printf("ivr: runGreeting node=%s config=%+v", node.ID, node.Config)
 	if file, ok := node.Config["audio_file"].(string); ok && file != "" {
+		st.stepAction, st.stepDetail = "play_audio", file
 		e.Logger.Printf("ivr: playback file=%s (sync)", file)
 		_, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: file, Sync: true})
 		if err != nil {
@@ -460,6 +541,7 @@ func (e *Executor) runGreeting(ctx context.Context, conn *eslgo.Conn, node *ivrN
 		}
 		e.Logger.Printf("ivr: playback done")
 	} else if text, ok := node.Config["greeting_text"].(string); ok && text != "" {
+		st.stepAction, st.stepDetail = "speak", text
 		_, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "speak", AppArgs: "flite|kal|" + text, Sync: true})
 		if err != nil {
 			return "", fmt.Errorf("speak: %w", err)
@@ -495,7 +577,9 @@ func (e *Executor) runMenu(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 		return "", fmt.Errorf("play_and_get_digits: %w", err)
 	}
 
+	st.stepAction = "prompt_dtmf"
 	digit, err := getChannelVar(ctx, conn, st.uuid, "ivr_choice")
+	st.stepDTMF = digit // recorded even when empty (timeout) or invalid
 	if err != nil || digit == "" {
 		return "timeout", nil
 	}
@@ -506,7 +590,17 @@ func (e *Executor) runMenu(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 }
 
 func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
-	bridgeTo, err := e.agentBridgeTarget(ctx, node, st.tenantID)
+	// Record the target for the call log: the specific agent if one is
+	// pinned, otherwise "all agents" (ring-all). The outcome (completed /
+	// no_answer) is filled in by walk from this function's return.
+	st.stepAction = "transfer"
+	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
+		st.stepDetail = sip
+	} else {
+		st.stepDetail = "all agents"
+	}
+
+	bridgeTo, sips, err := e.agentBridgeTarget(ctx, node, st.tenantID)
 	if err != nil {
 		e.Logger.Printf("ivr: transfer target lookup failed: %v", err)
 		return "no_answer", nil
@@ -524,49 +618,86 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: bridgeTo, Sync: true}); err != nil {
 		return "", fmt.Errorf("bridge: %w", err)
 	}
-	// Branch on bridge result via channel var ${originate_disposition}.
-	cause, _ := getChannelVar(ctx, conn, st.uuid, "originate_disposition")
-	if strings.Contains(cause, "ANSWER") || strings.Contains(cause, "SUCCESS") {
+	// Source of truth for "did an agent answer" is the CHANNEL_BRIDGE event
+	// (handled in runner.go), which stamps calls.agent_id with the answering
+	// agent during the bridge. We read it back here rather than probing a
+	// post-bridge channel variable — the latter is unreliable for web callers
+	// (e.g. if the guest hangs up first, the A-leg is gone and the read fails,
+	// which is exactly the "answered but logged no_answer" bug). A fresh
+	// context is used because the call's ctx may already be cancelled.
+	_ = sips
+	if label := e.answeredAgentLabel(st.uuid); label != "" {
+		st.stepDetail = label // show the agent who answered in the IVR path
 		return "completed", nil
 	}
 	return "no_answer", nil
+}
+
+// answeredAgentLabel returns the display label of the agent attributed to this
+// call (stamped by the CHANNEL_BRIDGE handler), or "" if none answered. Uses a
+// fresh short context so it works even after the call's ctx is cancelled.
+func (e *Executor) answeredAgentLabel(fsUUID string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var label string
+	if err := e.DB.Pool.QueryRow(ctx, e.Q.GetCallAgentLabel, fsUUID).Scan(&label); err != nil {
+		return ""
+	}
+	return label
 }
 
 // agentBridgeTarget builds the bridge dial-string for a Transfer node. If the
 // node names a specific agent (config.agent_sip), ring just that one;
 // otherwise ring ALL of the tenant's agents simultaneously (comma-joined —
 // first to answer wins). Unregistered agents simply fail their leg, so no
-// presence filtering is needed. Returns "" when the tenant has no agents.
-func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantID uuid.UUID) (string, error) {
+// presence filtering is needed. Returns ("", nil, nil) when the tenant has no
+// agents. The second return value is the candidate SIP usernames, in the same
+// order as the dial-string legs — used after the bridge to attribute which
+// agent actually answered.
+func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantID uuid.UUID) (string, []string, error) {
 	var domain string
 	if err := e.DB.Pool.QueryRow(ctx, e.Q.GetTenantSipDomain, tenantID).Scan(&domain); err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
-		return fmt.Sprintf("user/%s@%s", sip, domain), nil
+		return agentLeg(sip, domain), []string{sip}, nil
 	}
 
 	rows, err := e.DB.Pool.Query(ctx, e.Q.ListAgentSipUsernames, tenantID)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer rows.Close()
-	var targets []string
+	var (
+		targets []string
+		sips    []string
+	)
 	for rows.Next() {
 		var sip string
 		if err := rows.Scan(&sip); err != nil {
-			return "", err
+			return "", nil, err
 		}
-		targets = append(targets, fmt.Sprintf("user/%s@%s", sip, domain))
+		sips = append(sips, sip)
+		targets = append(targets, agentLeg(sip, domain))
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return strings.Join(targets, ","), nil // comma = simultaneous ring
+	return strings.Join(targets, ","), sips, nil // comma = simultaneous ring
+}
+
+// agentLeg builds one bridge dial-string leg for an agent, tagging it with a
+// `tring_agent` channel variable. When the agent answers, the CHANNEL_BRIDGE
+// event lets the orchestrator read this variable off the answered B-leg and
+// attribute the call to that agent — reliable even for a ring-all where we
+// otherwise wouldn't know which of N legs picked up.
+func agentLeg(sip, domain string) string {
+	return fmt.Sprintf("[tring_agent=%s]user/%s@%s", sip, sip, domain)
 }
 
 func (e *Executor) runHangup(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
+	st.stepAction = "hangup"
 	// Optional goodbye audio before hangup.
 	if file, ok := node.Config["audio_file"].(string); ok && file != "" {
 		_, _ = conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: file, Sync: true})

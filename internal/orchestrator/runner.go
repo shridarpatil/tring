@@ -99,7 +99,7 @@ func (r *Runner) runOnce(ctx context.Context) error {
 		// cancelled mid-flight if the parent ctx flips. Bound separately.
 		dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		r.handleEvent(dbCtx, e)
+		r.handleEvent(dbCtx, conn, e)
 	})
 
 	select {
@@ -110,15 +110,54 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	}
 }
 
-func (r *Runner) handleEvent(ctx context.Context, e *eslgo.Event) {
+func (r *Runner) handleEvent(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event) {
 	switch e.GetName() {
 	case "CHANNEL_ANSWER":
 		r.onAnswer(ctx, e)
 	case "CHANNEL_HANGUP_COMPLETE":
 		r.onHangup(ctx, e)
+	case "CHANNEL_BRIDGE":
+		r.onBridge(ctx, conn, e)
 	case "BACKGROUND_JOB":
 		r.onBackgroundJob(ctx, e)
 	}
+}
+
+// onBridge attributes an answered IVR transfer to the specific agent who
+// picked up. CHANNEL_BRIDGE fires exactly when two legs connect and carries
+// both leg UUIDs; the answering agent leg was tagged with a `tring_agent`
+// channel variable when the transfer dialed it (see agentLeg). We read that
+// off the B-leg (alive at bridge time) and stamp calls.agent_id on the A-leg's
+// call row. This is the reliable signal — far better than probing post-bridge
+// channel variables, which race with whichever leg hangs up first.
+func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event) {
+	aLeg := e.GetHeader("Bridge-A-Unique-ID")
+	bLeg := e.GetHeader("Bridge-B-Unique-ID")
+	if aLeg == "" || bLeg == "" {
+		return
+	}
+	// Scope to a Tring call; ErrNoRows means this bridge isn't ours.
+	var tenantID uuid.UUID
+	if err := r.db.Pool.QueryRow(ctx, r.q.GetCallTenant, aLeg).Scan(&tenantID); err != nil {
+		return
+	}
+	sip, _ := getChannelVar(ctx, conn, bLeg, "tring_agent")
+	if sip == "" {
+		return // bridged leg isn't a tagged agent leg (e.g. not a transfer)
+	}
+	var (
+		agentID uuid.UUID
+		label   string
+	)
+	if err := r.db.Pool.QueryRow(ctx, r.q.GetAgentBySIP, tenantID, sip).Scan(&agentID, &label); err != nil {
+		log.Printf("orchestrator: bridge agent lookup %q failed: %v", sip, err)
+		return
+	}
+	if _, err := r.db.Pool.Exec(ctx, r.q.SetCallAgent, agentID, aLeg); err != nil {
+		log.Printf("orchestrator: stamp agent on %s: %v", aLeg, err)
+		return
+	}
+	log.Printf("orchestrator: call %s answered by agent %s (%s)", aLeg, sip, label)
 }
 
 // onBackgroundJob settles call rows whose bgapi originate failed before any

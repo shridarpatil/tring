@@ -164,12 +164,28 @@ func (s *Server) writeGuestDirectory(w http.ResponseWriter, r *http.Request, ten
 	var (
 		sipPassword string
 		flowID      *uuid.UUID
+		clientRef   string
 	)
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestSession,
-		tenantID, user).Scan(&sipPassword, &flowID)
+		tenantID, user).Scan(&sipPassword, &flowID, &clientRef)
 	if err != nil || flowID == nil {
 		writeFSNotFound(w)
 		return
+	}
+	vars := []fsKV{
+		{Name: "user_context", Value: "default"},
+		{Name: "user_class", Value: "guest"},
+		{Name: "tenant_id", Value: tenantID.String()},
+		{Name: "tring_flow_id", Value: flowID.String()},
+		// Carry the session username so the executor can expire it when the
+		// call ends — single-use credentials.
+		{Name: "tring_guest_session", Value: user},
+	}
+	// When the embedder identified the caller (e.g. a logged-in support
+	// portal), carry it onto the channel so the executor records the client
+	// on the call row instead of the anonymous guest_* identity.
+	if clientRef != "" {
+		vars = append(vars, fsKV{Name: "tring_client_ref", Value: clientRef})
 	}
 	writeFSXML(w, fsDocument{
 		Type: "freeswitch/xml",
@@ -185,15 +201,7 @@ func (s *Server) writeGuestDirectory(w http.ResponseWriter, r *http.Request, ten
 					Params: fsParams{Params: []fsKV{
 						{Name: "password", Value: sipPassword},
 					}},
-					Variables: fsVariables{Variables: []fsKV{
-						{Name: "user_context", Value: "default"},
-						{Name: "user_class", Value: "guest"},
-						{Name: "tenant_id", Value: tenantID.String()},
-						{Name: "tring_flow_id", Value: flowID.String()},
-						// Carry the session username so the executor can expire
-						// it when the call ends — single-use credentials.
-						{Name: "tring_guest_session", Value: user},
-					}},
+					Variables: fsVariables{Variables: vars},
 				},
 			},
 		},
