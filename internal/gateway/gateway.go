@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/emiago/sipgo/sip"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/whatomate/tring/internal/cache"
@@ -279,6 +280,24 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID, clientRef string
 	g.log.Printf("gateway: bridge — FS leg up (FS RTP %s)", leg.FSRTPAddr)
 
 	teardown := g.relay(pc, toBrowser, leg, nil)
+
+	// When the IVR/flow ends, FreeSWITCH hangs up the visitor leg with a SIP
+	// BYE (routed to our client dialog by OnBye in fsuas.go). The RTP socket
+	// and the browser pc both stay open, so nothing in the relay notices —
+	// watch the dialog and tear the bridge down when it ends, or the browser
+	// keeps streaming to a dead leg ("client call still running").
+	if leg.session != nil {
+		go func() {
+			for st := range leg.session.StateRead() {
+				if st == sip.DialogStateEnded {
+					g.log.Printf("gateway: visitor leg ended (FS BYE) — tearing down bridge")
+					teardown()
+					return
+				}
+			}
+		}()
+	}
+
 	answer, err := g.negotiateAnswer(pc, offerSDP)
 	if err != nil {
 		teardown()
