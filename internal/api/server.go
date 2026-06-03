@@ -16,6 +16,7 @@ import (
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
 	"github.com/whatomate/tring/internal/orchestrator"
+	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queries"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
@@ -70,7 +71,8 @@ type Server struct {
 	wsURL       string
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
-	cache       *cache.Cache // shared Redis; used to invalidate cached IVR flows
+	cache       *cache.Cache    // shared Redis; used to invalidate cached IVR flows
+	presence    *presence.Store // agent online status published by the gateway
 
 	// agentTransport / agentGateway: how an agent's own call leg is routed
 	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
@@ -121,6 +123,7 @@ func NewServer(cfg Config) *Server {
 		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
 		notifier:         webhook.New(cfg.DB),
 		cache:            cfg.Cache,
+		presence:         presence.New(cfg.Cache),
 		agentTransport:   cfg.AgentTransport,
 		agentGateway:     cfg.AgentGateway,
 		gatewayPublicURL: cfg.GatewayPublicURL,

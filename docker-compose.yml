@@ -228,6 +228,9 @@ services:
       - TRING_GATEWAY_ADDR=${TRING_GATEWAY_ADDR:-:8087}
       # Shared with the API so the gateway validates the SAME agent tokens.
       - TRING_JWT_SECRET=${TRING_JWT_SECRET:-tring_dev_jwt_secret_change_me_in_prod}
+      # Same Redis as api/orchestrator — the gateway publishes agent presence
+      # here (online badge + IVR transfer ring-only-connected). Empty = off.
+      - TRING_REDIS_ADDR=${TRING_REDIS_ADDR:-127.0.0.1:6379}
       # IP advertised to FS (SIP+RTP) and to browsers (host ICE candidate).
       # 127.0.0.1 only works for same-host browsers — set this to the host's
       # LAN/public IP for real clients (and TRING_PUBLIC_IP for cloud/NAT).

@@ -12,6 +12,7 @@ package gateway
 // is fsuas.go.
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net"
@@ -22,6 +23,8 @@ import (
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
+
+	"github.com/whatomate/tring/internal/presence"
 )
 
 // agentKey identifies an agent uniquely across tenants. sip is the agent's SIP
@@ -230,7 +233,28 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	g.log.Printf("gateway: agent online %s/%s", s.key.tenant, s.key.sip)
 	_ = s.send(agentMsg{Type: msgReady})
 
+	// Publish presence to Redis (read by the API badge + orchestrator transfer)
+	// and keep it fresh while the socket is up; it ages out within TTL of a
+	// disconnect/crash. No-op when Redis is disabled.
+	bg := context.Background()
+	g.presence.MarkOnline(bg, s.key.tenant, s.key.sip)
+	stopRefresh := make(chan struct{})
+	go func() {
+		t := time.NewTicker(presence.RefreshInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopRefresh:
+				return
+			case <-t.C:
+				g.presence.MarkOnline(bg, s.key.tenant, s.key.sip)
+			}
+		}
+	}()
+
 	defer func() {
+		close(stopRefresh)
+		g.presence.Offline(bg, s.key.tenant, s.key.sip)
 		g.agents.remove(s)
 		s.close()
 		g.log.Printf("gateway: agent offline %s/%s", s.key.tenant, s.key.sip)

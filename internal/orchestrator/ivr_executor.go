@@ -34,6 +34,7 @@ import (
 
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queries"
 )
 
@@ -659,20 +660,37 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 		return "", nil, err
 	}
 	defer rows.Close()
-	var (
-		targets []string
-		sips    []string
-	)
+	var sips []string
 	for rows.Next() {
 		var sip string
 		if err := rows.Scan(&sip); err != nil {
 			return "", nil, err
 		}
 		sips = append(sips, sip)
-		targets = append(targets, e.agentLeg(sip, domain, tenantID.String()))
 	}
 	if err := rows.Err(); err != nil {
 		return "", nil, err
+	}
+
+	// With the gateway transport, an agent leg always reaches the gateway (it's
+	// always up) and 480s if that agent isn't connected — so ringing offline
+	// agents just wastes a leg. When presence is available, ring only agents
+	// currently connected to the gateway. (Presence disabled / legacy SIP
+	// transport → ring all, as before; FS fails unregistered legs itself.)
+	pres := presence.New(e.Cache)
+	if e.AgentTransport == "gateway" && pres.Enabled() {
+		online := sips[:0]
+		for _, sip := range sips {
+			if pres.IsOnline(ctx, tenantID.String(), sip) {
+				online = append(online, sip)
+			}
+		}
+		sips = online
+	}
+
+	targets := make([]string, 0, len(sips))
+	for _, sip := range sips {
+		targets = append(targets, e.agentLeg(sip, domain, tenantID.String()))
 	}
 	return strings.Join(targets, ","), sips, nil // comma = simultaneous ring
 }

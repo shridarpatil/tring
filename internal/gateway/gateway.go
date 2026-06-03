@@ -20,6 +20,9 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+
+	"github.com/whatomate/tring/internal/cache"
+	"github.com/whatomate/tring/internal/presence"
 )
 
 // Config controls ICE/media behaviour. ICE servers (STUN/TURN) are handed to
@@ -44,7 +47,10 @@ type Config struct {
 	// AgentRingTimeout bounds how long an inbound agent leg rings before the
 	// gateway gives FS a 408 (the browser never accepted). Zero → 45s default.
 	AgentRingTimeout time.Duration
-	Logger           *log.Logger
+	// Cache (Redis) backs agent presence so the API/orchestrator can see which
+	// agents are connected. nil = presence disabled (no Redis).
+	Cache  *cache.Cache
+	Logger *log.Logger
 }
 
 type ICEServer struct {
@@ -56,11 +62,12 @@ type ICEServer struct {
 // Gateway holds the shared pion API (media engine + setting engine) so every
 // PeerConnection is built with the same codecs/port range.
 type Gateway struct {
-	cfg    Config
-	api    *webrtc.API
-	fs     *fsClient      // nil = standalone echo mode
-	agents *agentRegistry // online agents' signaling WebSockets (M4b)
-	log    *log.Logger
+	cfg      Config
+	api      *webrtc.API
+	fs       *fsClient       // nil = standalone echo mode
+	agents   *agentRegistry  // online agents' signaling WebSockets (M4b)
+	presence *presence.Store // publishes agent presence to Redis (M5)
+	log      *log.Logger
 }
 
 // New builds a Gateway: registers Opus + telephone-event (DTMF), scopes the
@@ -106,10 +113,11 @@ func New(cfg Config) (*Gateway, error) {
 	}
 
 	g := &Gateway{
-		cfg:    cfg,
-		api:    webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
-		agents: newAgentRegistry(),
-		log:    cfg.Logger,
+		cfg:      cfg,
+		api:      webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
+		agents:   newAgentRegistry(),
+		presence: presence.New(cfg.Cache),
+		log:      cfg.Logger,
 	}
 	if cfg.FS != nil {
 		fc, err := newFSClient(*cfg.FS, g.log)
