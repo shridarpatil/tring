@@ -33,9 +33,12 @@ var defaults = map[string]any{
 	"api_addr":      ":8085",
 	"ivr_addr":      ":8086",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
-	"gateway_addr":     ":8087",
-	"gateway_udp_min":  10000,
-	"gateway_udp_max":  10100,
+	// gateway_public_url is the browser-reachable base URL of the gateway the
+	// API hands to visitors in a mint response (override per environment).
+	"gateway_public_url": "http://localhost:8087",
+	"gateway_addr":       ":8087",
+	"gateway_udp_min":    10000,
+	"gateway_udp_max":    10100,
 	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
 	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
 	"gateway_sip_port":  5090,

@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,27 +14,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// guestSessionTTL bounds how long an ephemeral guest SIP identity is valid.
-// Long enough for a customer to navigate an IVR and hold a call; short
-// enough that a leaked credential expires fast. An in-progress call
-// continues past expiry (FreeSWITCH already authed the channel) — the TTL
-// only gates *new* registration / directory-auth lookups.
-const guestSessionTTL = 15 * time.Minute
-
-// maxConcurrentGuestSessions caps live (unexpired) guest sessions per tenant.
-// The non-spoofable backstop against minting floods exhausting DB rows or
-// FreeSWITCH channels. Generous for legit traffic, tight against abuse.
-const maxConcurrentGuestSessions = 100
+// gatewayCallTokenTTL bounds how long a minted gateway call token is valid —
+// long enough for the visitor's browser to set up the WebRTC call, short
+// enough that a leaked token expires fast. The gateway consumes it at offer
+// time; an established call continues past expiry.
+const gatewayCallTokenTTL = 2 * time.Minute
 
 // guestMintRatePerMin is the per-IP request cap on the public mint endpoint.
 const guestMintRatePerMin = 10
-
-// guestDialTarget is the SIP user the guest SDK sends its INVITE to. The
-// value is irrelevant to routing — the dialplan routes any user_class=guest
-// call to the IVR regardless — but a stable, obviously-non-numeric target
-// keeps logs readable and avoids colliding with the numeric-DID tring_ivr
-// extension.
-const guestDialTarget = "ivr"
 
 type guestCredentialsRequest struct {
 	PublicKey string `json:"public_key"`
@@ -48,17 +33,18 @@ type guestCredentialsRequest struct {
 // proved tenant ownership with the API key — unlike the public browser mint,
 // which never accepts it (a browser-supplied identity would be spoofable).
 type authGuestCredentialsRequest struct {
-	FlowID    string `json:"flow_id"`   // optional; falls back to tenant.support_flow_id
+	FlowID    string `json:"flow_id"`    // optional; falls back to tenant.support_flow_id
 	ClientRef string `json:"client_ref"` // the verified caller identity, e.g. a CRM client id
 }
 
+// guestCredentialsResponse gives a visitor's browser everything it needs to
+// place the call straight at the media gateway (ADR-001): the gateway URL, the
+// pinned flow, a short-lived call token, and ICE servers. No SIP.
 type guestCredentialsResponse struct {
-	SipUsername string      `json:"sip_username"`
-	SipPassword string      `json:"sip_password"`
-	SipDomain   string      `json:"sip_domain"`
-	WSURL       string      `json:"ws_url"`
-	ICEServers  []iceServer `json:"ice_servers"`
-	DialTarget  string      `json:"dial_target"`
+	GatewayURL string      `json:"gateway_url"`
+	FlowID     string      `json:"flow_id"`
+	Token      string      `json:"token"`
+	ICEServers []iceServer `json:"ice_servers"`
 }
 
 // handleGuestCredentials mints a short-lived, anonymous SIP identity for a
@@ -114,7 +100,7 @@ func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) 
 
 	// Public path never trusts a caller-supplied identity — pass "" so a
 	// browser can't forge client_ref. The authenticated mint below sets it.
-	s.mintGuestSession(w, r, tenantID, sipDomain, supportFlow, req.FlowID, "")
+	s.mintGatewayCall(w, r, tenantID, supportFlow, req.FlowID, "")
 }
 
 // handleAuthGuestCredentials mints guest call credentials for an
@@ -146,54 +132,32 @@ func (s *Server) handleAuthGuestCredentials(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "tenant config lookup failed")
 		return
 	}
-	s.mintGuestSession(w, r, t.ID, t.SipDomain, supportFlow, req.FlowID, req.ClientRef)
+	s.mintGatewayCall(w, r, t.ID, supportFlow, req.FlowID, req.ClientRef)
 }
 
-// mintGuestSession is the shared core: resolve the flow, enforce the
-// per-tenant concurrent cap, create the ephemeral session (optionally tagged
-// with a trusted clientRef), and return SIP credentials. Both the public and
-// the API-key mints call it; only the latter passes a non-empty clientRef.
-func (s *Server) mintGuestSession(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, sipDomain string, supportFlow *uuid.UUID, requestedFlow, clientRef string) {
+// mintGatewayCall is the shared core: resolve the flow and issue a short-lived
+// gateway call token the visitor's browser presents to the media gateway. Both
+// the public and the API-key mints call it; only the latter passes a non-empty
+// clientRef (the trusted, attributable caller identity). No SIP session — the
+// gateway dials FreeSWITCH itself (ADR-001).
+func (s *Server) mintGatewayCall(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, supportFlow *uuid.UUID, requestedFlow, clientRef string) {
 	flowID, err := s.resolveGuestFlow(r.Context(), tenantID, requestedFlow, supportFlow)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Reap expired sessions lazily so the table stays bounded without a
-	// background worker. Cheap (indexed on expires_at) and best-effort.
-	_, _ = s.db.Pool.Exec(r.Context(), s.q.DeleteExpiredGuestSessions)
-
-	// Per-tenant concurrent-session cap — the non-spoofable backstop against
-	// a flood exhausting DB rows / FreeSWITCH channels.
-	var active int
-	if err := s.db.Pool.QueryRow(r.Context(), s.q.CountActiveGuestSessions,
-		tenantID,
-	).Scan(&active); err != nil {
-		writeError(w, http.StatusInternalServerError, "session count failed")
-		return
-	}
-	if active >= maxConcurrentGuestSessions {
-		writeError(w, http.StatusTooManyRequests, "too many active guest sessions")
-		return
-	}
-
-	user := "guest_" + randToken(6)
-	pass := randToken(20)
-	if _, err := s.db.Pool.Exec(r.Context(), s.q.CreateGuestSession,
-		tenantID, user, pass, flowID, int(guestSessionTTL.Seconds()), clientRef,
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, "session create failed")
+	token, _, err := s.IssueGatewayCallToken(tenantID, flowID.String(), clientRef, gatewayCallTokenTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "token issue failed")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, guestCredentialsResponse{
-		SipUsername: user,
-		SipPassword: pass,
-		SipDomain:   sipDomain,
-		WSURL:       s.wsURL,
-		ICEServers:  s.iceServers,
-		DialTarget:  guestDialTarget,
+		GatewayURL: s.gatewayPublicURL,
+		FlowID:     flowID.String(),
+		Token:      token,
+		ICEServers: s.iceServers,
 	})
 }
 
@@ -359,11 +323,4 @@ func normalizeOrigin(s string) (string, error) {
 		return "", fmt.Errorf("origin %q must be scheme://host[:port] with no path", s)
 	}
 	return u.Scheme + "://" + u.Host, nil
-}
-
-// randToken returns a lowercase hex string of n random bytes (2n chars).
-func randToken(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }

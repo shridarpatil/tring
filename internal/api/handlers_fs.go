@@ -4,7 +4,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -108,16 +107,6 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Guest web-callers register with an ephemeral `guest_*` SIP identity
-	// minted by POST /v1/sdk/guest-credentials. They resolve against
-	// guest_sessions (not agents) and are tagged user_class=guest + pinned
-	// to a flow, which the dialplan (tring_guest_ivr) and IVR executor use
-	// to keep them inside the IVR — a guest credential never bridges a trunk.
-	if strings.HasPrefix(user, "guest_") {
-		s.writeGuestDirectory(w, r, tenantID, domain, user)
-		return
-	}
-
 	var sipPassword string
 	var agentID uuid.UUID
 	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentCredentials,
@@ -152,60 +141,6 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	writeFSXML(w, doc)
-}
-
-// writeGuestDirectory resolves an ephemeral guest SIP identity against
-// guest_sessions and returns its directory entry tagged user_class=guest
-// and tring_flow_id. FreeSWITCH applies these as channel variables when it
-// authenticates the guest's INVITE; the dialplan keys on user_class to
-// route the call into the IVR only, and the executor reads tring_flow_id to
-// pick the flow without a dialed DID. Expired or flow-less sessions 404.
-func (s *Server) writeGuestDirectory(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, domain, user string) {
-	var (
-		sipPassword string
-		flowID      *uuid.UUID
-		clientRef   string
-	)
-	err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestSession,
-		tenantID, user).Scan(&sipPassword, &flowID, &clientRef)
-	if err != nil || flowID == nil {
-		writeFSNotFound(w)
-		return
-	}
-	vars := []fsKV{
-		{Name: "user_context", Value: "default"},
-		{Name: "user_class", Value: "guest"},
-		{Name: "tenant_id", Value: tenantID.String()},
-		{Name: "tring_flow_id", Value: flowID.String()},
-		// Carry the session username so the executor can expire it when the
-		// call ends — single-use credentials.
-		{Name: "tring_guest_session", Value: user},
-	}
-	// When the embedder identified the caller (e.g. a logged-in support
-	// portal), carry it onto the channel so the executor records the client
-	// on the call row instead of the anonymous guest_* identity.
-	if clientRef != "" {
-		vars = append(vars, fsKV{Name: "tring_client_ref", Value: clientRef})
-	}
-	writeFSXML(w, fsDocument{
-		Type: "freeswitch/xml",
-		Section: &fsSection{
-			Name: "directory",
-			Domain: &fsDomain{
-				Name: domain,
-				Params: fsParams{Params: []fsKV{
-					{Name: "dial-string", Value: fsDialString},
-				}},
-				User: fsUser{
-					ID: user,
-					Params: fsParams{Params: []fsKV{
-						{Name: "password", Value: sipPassword},
-					}},
-					Variables: fsVariables{Variables: vars},
-				},
-			},
-		},
-	})
 }
 
 func writeFSNotFound(w http.ResponseWriter) {

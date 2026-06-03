@@ -167,11 +167,6 @@ SELECT id FROM tenants WHERE sip_domain = $1;
 -- name: get-agent-credentials
 SELECT id, sip_password FROM agents WHERE tenant_id = $1 AND sip_username = $2;
 
--- name: get-guest-session
--- Ephemeral guest SIP identity, only valid while unexpired and flow-pinned.
-SELECT sip_password, flow_id, COALESCE(client_ref, '') FROM guest_sessions
-WHERE tenant_id = $1 AND sip_username = $2 AND expires_at > now();
-
 -- ===========================================================================
 -- console auth
 -- ===========================================================================
@@ -191,16 +186,6 @@ FROM tenants WHERE id = $1;
 -- name: get-tenant-by-public-key
 SELECT id, sip_domain, support_flow_id, allowed_origins, guest_require_backend_mint
 FROM tenants WHERE public_key = $1;
-
--- name: delete-expired-guest-sessions
-DELETE FROM guest_sessions WHERE expires_at < now();
-
--- name: count-active-guest-sessions
-SELECT count(*) FROM guest_sessions WHERE tenant_id = $1 AND expires_at > now();
-
--- name: create-guest-session
-INSERT INTO guest_sessions (tenant_id, sip_username, sip_password, flow_id, expires_at, client_ref)
-VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5), NULLIF($6, ''));
 
 -- name: flow-usable
 -- True iff the flow exists, belongs to the tenant, and is active.
@@ -432,10 +417,6 @@ FROM calls WHERE fs_uuid = $1;
 SELECT n.tenant_id, n.flow_id
 FROM numbers n
 WHERE n.e164 = $1 AND n.type = 'inbound';
-
--- name: expire-guest-session
--- Single-use guest credential: drop the session once its call ends.
-DELETE FROM guest_sessions WHERE sip_username = $1;
 
 -- name: get-active-flow-by-id
 -- Guest web-call path: flow pinned by UUID via tring_flow_id channel var.

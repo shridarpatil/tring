@@ -9,30 +9,6 @@ import (
 	"github.com/whatomate/tring/internal/dbtest"
 )
 
-// TestExpireGuestSession: single-use credentials — once a guest call ends,
-// the session row is deleted so the credential can't be replayed.
-func TestExpireGuestSession(t *testing.T) {
-	f := dbtest.Setup(t)
-	ctx := context.Background()
-	const sip = "guest_singleuse"
-	_, err := f.DB.Pool.Exec(ctx, `
-		INSERT INTO guest_sessions (tenant_id, sip_username, sip_password, expires_at)
-		VALUES ($1, $2, 'pw', now() + interval '15 min')
-	`, f.TenantID, sip)
-	if err != nil {
-		t.Fatalf("seed guest_session: %v", err)
-	}
-
-	NewExecutor(f.DB).expireGuestSession(sip)
-
-	var n int
-	_ = f.DB.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM guest_sessions WHERE sip_username = $1`, sip).Scan(&n)
-	if n != 0 {
-		t.Errorf("guest session not expired: %d rows remain, want 0", n)
-	}
-}
-
 func seedAgent(t *testing.T, f *dbtest.Fixture, sip string) {
 	t.Helper()
 	_, err := f.DB.Pool.Exec(context.Background(), `

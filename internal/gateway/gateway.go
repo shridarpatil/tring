@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,22 +61,6 @@ type Gateway struct {
 	fs     *fsClient      // nil = standalone echo mode
 	agents *agentRegistry // online agents' signaling WebSockets (M4b)
 	log    *log.Logger
-}
-
-// authOffer enforces the offer-endpoint auth policy. Returns ok=false (and
-// writes the 401) when a token is required but missing/invalid. When auth is
-// disabled it's a no-op pass.
-func (g *Gateway) authOffer(w http.ResponseWriter, r *http.Request) bool {
-	if !g.cfg.RequireAuth {
-		return true
-	}
-	claims, err := validateToken(bearer(r), g.cfg.JWTSecret)
-	if err != nil {
-		http.Error(w, `{"error":"invalid or missing token"}`, http.StatusUnauthorized)
-		return false
-	}
-	g.log.Printf("gateway: authed offer tenant=%s sip_user=%s", claims.TenantID, claims.SipUsername)
-	return true
 }
 
 // New builds a Gateway: registers Opus + telephone-event (DTMF), scopes the
@@ -149,7 +132,7 @@ func (g *Gateway) TestFSLeg(ctx context.Context) (int, error) {
 	if g.fs == nil {
 		return 0, errors.New("FreeSWITCH bridge not configured")
 	}
-	leg, err := g.fs.dial(ctx, "") // default flow/target — dev check
+	leg, err := g.fs.dial(ctx, "", "") // default flow/target — dev check
 	if err != nil {
 		return 0, err
 	}
@@ -270,7 +253,7 @@ func (g *Gateway) Echo(ctx context.Context, offerSDP string) (string, error) {
 // here and relayed as plain RTP to FS, and FS's RTP is relayed back to the
 // browser. Opus passes through (no transcoding) since both legs negotiate it.
 // Returns the answer SDP. Falls back to Echo if FS isn't configured.
-func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, error) {
+func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID, clientRef string) (string, error) {
 	if g.fs == nil {
 		return g.Echo(ctx, offerSDP)
 	}
@@ -280,7 +263,7 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, 
 	}
 
 	// Establish the FreeSWITCH leg up front so it's ready before we answer.
-	leg, err := g.fs.dial(ctx, flowID)
+	leg, err := g.fs.dial(ctx, flowID, clientRef)
 	if err != nil {
 		_ = pc.Close()
 		return "", fmt.Errorf("fs dial: %w", err)

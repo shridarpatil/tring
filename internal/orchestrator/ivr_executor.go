@@ -155,17 +155,10 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 		return
 	}
 
-	// Single-use guest credentials: when this call ends, expire the guest
-	// session so the minted SIP credential can't be replayed for another
-	// call. (Set by the mod_xml_curl directory for guest_* users.)
-	if gu := ev.GetHeader("variable_tring_guest_session"); gu != "" {
-		defer e.expireGuestSession(gu)
-	}
-
 	// Two ways a flow gets resolved:
-	//   - guest web-call: the flow is pinned by the tring_flow_id channel
-	//     variable (set in the mod_xml_curl directory for guest_* users),
-	//     so there's no dialed DID to look up.
+	//   - web call (visitor or agent): the flow is pinned by the tring_flow_id
+	//     channel variable (set by the gwflow dialplan extension from the
+	//     gateway's X-Tring-Flow-Id header), so there's no dialed DID to look up.
 	//   - PSTN/DID call: discover the flow from the dialed inbound number.
 	var resolved *ResolvedFlow
 	var err error
@@ -264,22 +257,6 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 		return nil, err
 	}
 	return &ResolvedFlow{TenantID: tenantID, Flow: flow}, nil
-}
-
-// expireGuestSession deletes a guest_sessions row once its single call has
-// ended, enforcing single-use credentials. Uses a fresh short context
-// because the call's context is already cancelled when the call ends.
-func (e *Executor) expireGuestSession(sipUser string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	tag, err := e.DB.Pool.Exec(ctx, e.Q.ExpireGuestSession, sipUser)
-	if err != nil {
-		e.Logger.Printf("ivr: failed to expire guest session %s: %v", sipUser, err)
-		return
-	}
-	if tag.RowsAffected() > 0 {
-		e.Logger.Printf("ivr: expired single-use guest session %s", sipUser)
-	}
 }
 
 // recordInboundCall inserts a calls row for an inbound/IVR call so it appears
