@@ -58,7 +58,12 @@ func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	bind := fmt.Sprintf("%s:%d", cfg.AdvertIP, cfg.SIPPort)
+	// Listen on ALL interfaces, not just AdvertIP. FreeSWITCH originates agent
+	// legs through the `tring-gw` gateway whose proxy is tring_gateway_sip
+	// (default 127.0.0.1:5090); binding only AdvertIP would miss INVITEs sent
+	// to 127.0.0.1. Via/Contact host stays AdvertIP (below) for the visitor
+	// leg's digest realm, so both directions work without a per-host vars.xml edit.
+	bind := fmt.Sprintf(":%d", cfg.SIPPort)
 	// Use ONLY WithClientHostname (sets Via/Contact host = AdvertIP for FS's
 	// digest realm) and let the UAC REUSE the UAS listener socket: sipgo's
 	// transport defaults to ConnectionReuse=true, and the client takes its Via
