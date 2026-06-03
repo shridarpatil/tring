@@ -32,6 +32,17 @@ var defaults = map[string]any{
 	"stun_url":      "stun:stun.l.google.com:19302",
 	"api_addr":      ":8085",
 	"ivr_addr":      ":8086",
+	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
+	"gateway_addr":     ":8087",
+	"gateway_udp_min":  10000,
+	"gateway_udp_max":  10100,
+	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
+	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
+	"gateway_sip_port":  5090,
+	"fs_sip_addr":       "127.0.0.1:5060",
+	"fs_auth_user":      "1000",
+	"fs_auth_pass":      "1234",
+	"fs_target":         "9999", // dialplan extension the gateway calls (echo for the POC)
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
