@@ -157,6 +157,18 @@ export interface GuestConfig {
   guest_require_backend_mint: boolean;
 }
 
+// Tenant API key. `key` (plaintext) is present only in the create response,
+// shown once; the list returns prefix + status only.
+export interface ApiKey {
+  id: string;
+  name: string;
+  key?: string;
+  key_prefix: string;
+  created_at: string;
+  last_used_at?: string;
+  revoked: boolean;
+}
+
 // ─── SIP Trunks ──────────────────────────────────────────────────────
 // Per-tenant trunk config managed in the admin console. The server
 // renders these to FreeSWITCH gateway XML on every save and rescans

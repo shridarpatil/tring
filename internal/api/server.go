@@ -183,6 +183,12 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/tenants/me", s.handlePatchMyTenant)
 			r.Get("/guest-config", s.handleGetGuestConfig)
 			r.Patch("/guest-config", s.handlePatchGuestConfig)
+			// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
+			// manages these with the console JWT; the issued keys then auth
+			// server-to-server callers via AuthRequired.
+			r.Post("/api-keys", s.handleCreateAPIKey)
+			r.Get("/api-keys", s.handleListAPIKeys)
+			r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
 			// API-key mint: integrator backend mints guest creds with a
 			// trusted client_ref (the verified logged-in caller). The public
 			// /sdk/guest-credentials never accepts client_ref.

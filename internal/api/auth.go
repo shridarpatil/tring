@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -23,10 +24,10 @@ type Tenant struct {
 	FailoverCauses   []string  `json:"failover_causes"`
 }
 
-// AuthRequired gates all /v1/* tenant-scoped routes on a console JWT
-// issued by /v1/console/login. Server-to-server callers (CRM backends)
-// will get their own credential mechanism later (service accounts);
-// v0 is console-only.
+// AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API
+// key (`tk_live_…`, for server-to-server CRM backends) or a console JWT
+// issued by /v1/console/login (for the admin console). Both resolve to the
+// owning tenant, stashed in the request context.
 func (s *Server) AuthRequired(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
@@ -35,16 +36,27 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 			return
 		}
 
-		claims, err := s.parseConsoleToken(token)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid credentials")
-			return
+		var tenantID uuid.UUID
+		if strings.HasPrefix(token, "tk_") {
+			// Tenant API key: look up its hash; reject if unknown/revoked.
+			id, ok := s.tenantForAPIKey(r.Context(), token)
+			if !ok {
+				writeError(w, http.StatusUnauthorized, "invalid credentials")
+				return
+			}
+			tenantID = id
+		} else {
+			claims, err := s.parseConsoleToken(token)
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "invalid credentials")
+				return
+			}
+			tenantID = claims.TenantID
 		}
 
 		var t Tenant
-		err = s.db.Pool.QueryRow(r.Context(), s.q.GetTenant,
-			claims.TenantID,
-		).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
+		err := s.db.Pool.QueryRow(r.Context(), s.q.GetTenant, tenantID).
+			Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
@@ -52,6 +64,24 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), tenantCtxKey, &t)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// tenantForAPIKey resolves a presented API key to its tenant by hash,
+// rejecting unknown or revoked keys. On success it best-effort stamps
+// last_used_at (fire-and-forget, own context) so a slow write never delays
+// the request.
+func (s *Server) tenantForAPIKey(ctx context.Context, plaintext string) (uuid.UUID, bool) {
+	hash := HashKey(plaintext)
+	var tenantID uuid.UUID
+	if err := s.db.Pool.QueryRow(ctx, s.q.ResolveAPIKeyTenant, hash).Scan(&tenantID); err != nil {
+		return uuid.Nil, false
+	}
+	go func() {
+		bg, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _ = s.db.Pool.Exec(bg, s.q.TouchAPIKey, hash)
+	}()
+	return tenantID, true
 }
 
 func tenantFromCtx(ctx context.Context) *Tenant {
