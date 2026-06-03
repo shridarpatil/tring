@@ -13,6 +13,19 @@
 <include>
   <context name="default">
 
+    <!-- WebRTC media gateway (ADR-001) POC target: the pion gateway SIP-dials
+         9999 to validate the browser→gateway→FreeSWITCH bridge against a plain
+         echo. Milestone 2b points the gateway at the real IVR DID instead. -->
+    <extension name="tring_gateway_echo">
+      <condition field="destination_number" expression="^9999$">
+        <action application="answer"/>
+        <!-- Echo target for the gateway bridge POC: the browser hears itself
+             through browser→gateway→FreeSWITCH→gateway→browser. M3 points the
+             gateway at a real IVR DID instead. -->
+        <action application="echo"/>
+      </condition>
+    </extension>
+
     <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
          listener BEFORE answering, so the executor decides whether to
          answer/playback/bridge/etc. based on the flow attached to this
