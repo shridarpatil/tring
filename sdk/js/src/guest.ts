@@ -30,7 +30,7 @@ export class TringGuest extends Emitter<GuestEvent> {
 
   constructor(private readonly opts: GuestInitOpts) {
     super();
-    this.api = new ApiClient(opts.apiBase);
+    this.api = new ApiClient(opts.apiBase ?? "");
   }
 
   get isMuted(): boolean {
@@ -52,10 +52,19 @@ export class TringGuest extends Emitter<GuestEvent> {
 
     let creds: GuestCredentialsResponse;
     try {
-      creds = await this.api.fetchGuestCredentials(
-        this.opts.publicKey,
-        this.opts.flowId,
-      );
+      if (this.opts.fetchCredentials) {
+        // Programmatic bring-your-own-credentials.
+        creds = await this.opts.fetchCredentials();
+      } else if (this.opts.credentialsUrl) {
+        // Trusted path: creds come from the integrator's own backend.
+        creds = await this.api.fetchCredentialsFromURL(this.opts.credentialsUrl);
+      } else {
+        // Anonymous-visitor path: Tring's public mint (no caller identity).
+        creds = await this.api.fetchGuestCredentials(
+          this.opts.publicKey ?? "",
+          this.opts.flowId,
+        );
+      }
     } catch (e) {
       this.emit({ type: "error", error: e as Error });
       throw e;

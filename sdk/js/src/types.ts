@@ -62,16 +62,34 @@ export interface GuestInitOpts {
   /**
    * Tenant public widget key (`pk_live_…`). Safe to embed in a public web
    * page — it only authorizes minting a flow-pinned guest identity, never
-   * tenant access. Issued via GET /v1/guest-config.
+   * tenant access. Issued via GET /v1/guest-config. Required for the
+   * anonymous-visitor flow; omit when using credentialsUrl/fetchCredentials.
    */
-  publicKey: string;
-  /** Tring API base, e.g. "https://api.tring.io". */
-  apiBase: string;
+  publicKey?: string;
+  /** Tring API base, e.g. "https://api.tring.io". Used for the public mint. */
+  apiBase?: string;
   /**
    * Optional flow UUID to route this guest into. Omit to use the tenant's
    * configured support flow (the common case).
    */
   flowId?: string;
+  /**
+   * Bring-your-own-credentials (the trusted, logged-in-caller flow). A URL on
+   * YOUR backend that returns a GuestCredentialsResponse — the creds your
+   * backend obtained from Tring's authenticated mint
+   * (`POST /v1/guest-credentials` with the tenant API key + a verified
+   * `client_ref`). Fetched with `credentials: "include"` so your session
+   * cookie authenticates the caller. When set, the public mint
+   * (publicKey/apiBase) is bypassed, so the caller identity can't be spoofed
+   * from the browser.
+   */
+  credentialsUrl?: string;
+  /**
+   * Programmatic alternative to credentialsUrl: return the credentials
+   * yourself (fetch them however you like). Takes precedence over
+   * credentialsUrl and the public mint.
+   */
+  fetchCredentials?: () => Promise<GuestCredentialsResponse>;
 }
 
 /** /v1/sdk/guest-credentials response: SIP creds + the IVR dial target. */
