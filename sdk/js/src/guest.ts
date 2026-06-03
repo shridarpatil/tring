@@ -15,6 +15,7 @@ import { SessionState, type Inviter } from "sip.js";
 
 import { ApiClient } from "./api";
 import { Emitter } from "./events";
+import { GatewayAdapter } from "./gateway";
 import { SipAdapter } from "./sip";
 import type {
   GuestCredentialsResponse,
@@ -26,6 +27,7 @@ export class TringGuest extends Emitter<GuestEvent> {
   private readonly api: ApiClient;
   private sip: SipAdapter | null = null;
   private session: Inviter | null = null;
+  private gw: GatewayAdapter | null = null;
   private muted = false;
 
   constructor(private readonly opts: GuestInitOpts) {
@@ -38,7 +40,7 @@ export class TringGuest extends Emitter<GuestEvent> {
   }
 
   get inCall(): boolean {
-    return this.session !== null;
+    return this.session !== null || this.gw !== null;
   }
 
   /**
@@ -47,7 +49,15 @@ export class TringGuest extends Emitter<GuestEvent> {
    * `error`) if credential mint or media setup fails.
    */
   async call(): Promise<void> {
-    if (this.session) return; // already in a call — ignore double taps
+    if (this.inCall) return; // already in a call — ignore double taps
+
+    // Preferred path: raw WebRTC straight to the media gateway (ADR-001).
+    if (this.opts.gatewayUrl) {
+      await this.callViaGateway(this.opts.gatewayUrl);
+      return;
+    }
+
+    // Legacy path: SIP-over-WSS via minted credentials (removed in M5).
     this.emit({ type: "connecting" });
 
     let creds: GuestCredentialsResponse;
@@ -100,8 +110,43 @@ export class TringGuest extends Emitter<GuestEvent> {
     }
   }
 
+  // callViaGateway runs the raw-WebRTC path: peer with the media gateway,
+  // which bridges into the (private) IVR flow. No SIP, no credential mint.
+  private async callViaGateway(gatewayUrl: string): Promise<void> {
+    this.emit({ type: "connecting" });
+    const gw = new GatewayAdapter();
+    this.gw = gw;
+    this.muted = false;
+    try {
+      await gw.start({
+        gatewayUrl,
+        flowId: this.opts.flowId,
+        token: this.opts.token,
+        iceServers: this.opts.iceServers,
+        onState: (state) => {
+          if (state === "ringing") this.emit({ type: "ringing" });
+          else if (state === "connected") this.emit({ type: "connected" });
+          else if (state === "ended") {
+            this.emit({ type: "ended" });
+            void this.cleanup();
+          }
+        },
+      });
+    } catch (e) {
+      this.emit({ type: "error", error: e as Error });
+      await this.cleanup();
+      throw e;
+    }
+  }
+
   /** Hang up (or cancel a not-yet-answered) call. Safe to call any time. */
   async hangup(): Promise<void> {
+    if (this.gw) {
+      await this.gw.stop();
+      this.emit({ type: "ended" });
+      await this.cleanup();
+      return;
+    }
     const s = this.session;
     if (!s) return;
     try {
@@ -125,6 +170,10 @@ export class TringGuest extends Emitter<GuestEvent> {
    * falls back to SIP INFO if the session description handler can't.
    */
   async sendDTMF(digit: string): Promise<void> {
+    if (this.gw) {
+      await this.gw.sendDTMF(digit);
+      return;
+    }
     const s = this.session;
     if (!s) return;
     const sdh = s.sessionDescriptionHandler as
@@ -148,6 +197,11 @@ export class TringGuest extends Emitter<GuestEvent> {
 
   /** Mute/unmute the visitor's microphone. */
   async mute(muted: boolean): Promise<void> {
+    if (this.gw) {
+      this.gw.setMuted(muted);
+      this.muted = muted;
+      return;
+    }
     if (this.sip && this.session) {
       this.sip.setMuted(this.session, muted);
       this.muted = muted;
@@ -166,6 +220,9 @@ export class TringGuest extends Emitter<GuestEvent> {
     this.muted = false;
     const sip = this.sip;
     this.sip = null;
+    const gw = this.gw;
+    this.gw = null;
     await sip?.disconnect().catch(() => {});
+    await gw?.stop().catch(() => {});
   }
 }

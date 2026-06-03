@@ -82,9 +82,14 @@ type fsLeg struct {
 	closeOnce sync.Once
 }
 
-// dial INVITEs the configured target, authenticates, and returns the live leg
-// with a bound RTP socket and FS's RTP address. Caller must Close it.
-func (f *fsClient) dial(ctx context.Context) (*fsLeg, error) {
+// dial INVITEs the target, authenticates, and returns the live leg with a bound
+// RTP socket and FS's RTP address. flowID, when non-empty, overrides the
+// configured default flow (the SDK supplies it per call) so the call pins to
+// that IVR flow. Caller must Close the returned leg.
+func (f *fsClient) dial(ctx context.Context, flowID string) (*fsLeg, error) {
+	if flowID == "" {
+		flowID = f.cfg.FlowID
+	}
 	// Bind the gateway RTP socket first so we can advertise its port in the SDP.
 	rtp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(f.cfg.AdvertIP), Port: 0})
 	if err != nil {
@@ -102,9 +107,9 @@ func (f *fsClient) dial(ctx context.Context) (*fsLeg, error) {
 	// (echo/DID). FreeSWITCH exposes X-… headers as ${sip_h_X-…}.
 	dest := f.cfg.Target
 	headers := []sip.Header{sip.NewHeader("Content-Type", "application/sdp")}
-	if f.cfg.FlowID != "" {
+	if flowID != "" {
 		dest = gwFlowExtension
-		headers = append(headers, sip.NewHeader("X-Tring-Flow-Id", f.cfg.FlowID))
+		headers = append(headers, sip.NewHeader("X-Tring-Flow-Id", flowID))
 	}
 	recipient := sip.Uri{User: dest, Host: host, Port: port}
 

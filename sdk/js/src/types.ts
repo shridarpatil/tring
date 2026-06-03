@@ -60,6 +60,24 @@ export type TringEvent =
 
 export interface GuestInitOpts {
   /**
+   * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001). When
+   * set, the visitor peers directly with the gateway over raw WebRTC and never
+   * touches SIP/WSS or FreeSWITCH — the preferred web-calling path. Combine
+   * with `flowId` to pin the call to an IVR flow. When omitted, the SDK falls
+   * back to the legacy SIP-over-WSS path via minted credentials.
+   */
+  gatewayUrl?: string;
+  /**
+   * ICE servers for the gateway WebRTC path. Optional — defaults to a public
+   * STUN server. Provide TURN entries for visitors behind symmetric NAT.
+   */
+  iceServers?: RTCIceServer[];
+  /**
+   * Optional agent/guest token, sent as a bearer to the gateway when it
+   * requires auth. Anonymous visitor calls leave this unset.
+   */
+  token?: string;
+  /**
    * Tenant public widget key (`pk_live_…`). Safe to embed in a public web
    * page — it only authorizes minting a flow-pinned guest identity, never
    * tenant access. Issued via GET /v1/guest-config. Required for the
