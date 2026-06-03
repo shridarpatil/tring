@@ -43,6 +43,28 @@ export class ApiClient {
     return r.json();
   }
 
+  /**
+   * Bring-your-own-credentials: fetch a GuestCredentialsResponse from the
+   * integrator's OWN backend (which obtained it from Tring's authenticated
+   * mint with a trusted client_ref). Sent with `credentials: "include"` so
+   * the integrator's session cookie authenticates the request. Bypasses
+   * Tring's public mint entirely — the trusted path for logged-in callers.
+   */
+  async fetchCredentialsFromURL(url: string): Promise<GuestCredentialsResponse> {
+    const r = await fetch(url, { credentials: "include" });
+    if (!r.ok) {
+      let msg = `credentials request failed (${r.status})`;
+      try {
+        const j = await r.json();
+        if (j && typeof j.error === "string") msg = j.error;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(msg);
+    }
+    return r.json();
+  }
+
   async fetchCredentials(): Promise<SipCredentialsResponse> {
     const r = await fetch(`${this.base}/v1/sdk/credentials`, {
       headers: { Authorization: `Bearer ${this.token}` },

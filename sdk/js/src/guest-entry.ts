@@ -10,6 +10,15 @@
 //           data-button-label="Call us"  // optional
 //   ></script>
 //
+// For a LOGGED-IN caller whose identity you want on the call log, skip the
+// public key and point the widget at your own backend, which returns the
+// credentials it minted via Tring's authenticated endpoint (with a trusted
+// client_ref):
+//
+//   <script src=".../sdk/voice.js"
+//           data-credentials-url="/api/tring/guest-credentials"
+//   ></script>
+//
 // Renders a floating "Call support" launcher + full-screen call UI. To use
 // your own button instead, add data-render-button="false" and put
 // `<button data-tring-guest-call>` anywhere on the page.
@@ -20,7 +29,9 @@ import { TringGuest } from "./guest";
 function findOwnScript(): HTMLScriptElement | null {
   const cs = document.currentScript as HTMLScriptElement | null;
   if (cs && cs.tagName === "SCRIPT") return cs;
-  const candidates = document.querySelectorAll("script[data-public-key]");
+  const candidates = document.querySelectorAll(
+    "script[data-public-key], script[data-credentials-url]",
+  );
   return (candidates[candidates.length - 1] as HTMLScriptElement) ?? null;
 }
 
@@ -28,20 +39,25 @@ function start() {
   const s = findOwnScript();
   if (!s) {
     console.error(
-      "[tring-guest] could not find own <script> tag (needs data-public-key)",
+      "[tring-guest] could not find own <script> tag (needs data-public-key or data-credentials-url)",
     );
     return;
   }
   const apiBase =
     s.getAttribute("data-api-base") || s.getAttribute("data-api") || "";
   const publicKey = s.getAttribute("data-public-key") || "";
-  if (!apiBase || !publicKey) {
-    console.error("[tring-guest] data-api-base and data-public-key are required");
+  const credentialsUrl = s.getAttribute("data-credentials-url") || "";
+  // Either bring your own credentials (trusted), or use the public mint.
+  if (!credentialsUrl && (!apiBase || !publicKey)) {
+    console.error(
+      "[tring-guest] provide data-credentials-url, or data-api-base + data-public-key",
+    );
     return;
   }
   bootstrapGuest({
-    apiBase,
-    publicKey,
+    apiBase: apiBase || undefined,
+    publicKey: publicKey || undefined,
+    credentialsUrl: credentialsUrl || undefined,
     flowId: s.getAttribute("data-flow-id") || undefined,
     buttonLabel: s.getAttribute("data-button-label") || undefined,
     title: s.getAttribute("data-title") || undefined,
