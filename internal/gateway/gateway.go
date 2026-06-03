@@ -141,7 +141,7 @@ func (g *Gateway) TestFSLeg(ctx context.Context) (int, error) {
 	if g.fs == nil {
 		return 0, errors.New("FreeSWITCH bridge not configured")
 	}
-	leg, err := g.fs.dial(ctx)
+	leg, err := g.fs.dial(ctx, "") // default flow/target — dev check
 	if err != nil {
 		return 0, err
 	}
@@ -262,7 +262,7 @@ func (g *Gateway) Echo(ctx context.Context, offerSDP string) (string, error) {
 // here and relayed as plain RTP to FS, and FS's RTP is relayed back to the
 // browser. Opus passes through (no transcoding) since both legs negotiate it.
 // Returns the answer SDP. Falls back to Echo if FS isn't configured.
-func (g *Gateway) Bridge(ctx context.Context, offerSDP string) (string, error) {
+func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, error) {
 	if g.fs == nil {
 		return g.Echo(ctx, offerSDP)
 	}
@@ -284,7 +284,7 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP string) (string, error) {
 	}
 
 	// Establish the FreeSWITCH leg up front so it's ready before we answer.
-	leg, err := g.fs.dial(ctx)
+	leg, err := g.fs.dial(ctx, flowID)
 	if err != nil {
 		_ = pc.Close()
 		return "", fmt.Errorf("fs dial: %w", err)

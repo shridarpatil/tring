@@ -30,7 +30,7 @@ function findOwnScript(): HTMLScriptElement | null {
   const cs = document.currentScript as HTMLScriptElement | null;
   if (cs && cs.tagName === "SCRIPT") return cs;
   const candidates = document.querySelectorAll(
-    "script[data-public-key], script[data-credentials-url]",
+    "script[data-public-key], script[data-credentials-url], script[data-gateway-url]",
   );
   return (candidates[candidates.length - 1] as HTMLScriptElement) ?? null;
 }
@@ -39,7 +39,7 @@ function start() {
   const s = findOwnScript();
   if (!s) {
     console.error(
-      "[tring-guest] could not find own <script> tag (needs data-public-key or data-credentials-url)",
+      "[tring-guest] could not find own <script> tag (needs data-gateway-url, data-public-key, or data-credentials-url)",
     );
     return;
   }
@@ -47,10 +47,12 @@ function start() {
     s.getAttribute("data-api-base") || s.getAttribute("data-api") || "";
   const publicKey = s.getAttribute("data-public-key") || "";
   const credentialsUrl = s.getAttribute("data-credentials-url") || "";
-  // Either bring your own credentials (trusted), or use the public mint.
-  if (!credentialsUrl && (!apiBase || !publicKey)) {
+  const gatewayUrl = s.getAttribute("data-gateway-url") || "";
+  // Gateway path (preferred), bring-your-own-credentials (trusted), or the
+  // public mint — any one is sufficient.
+  if (!gatewayUrl && !credentialsUrl && (!apiBase || !publicKey)) {
     console.error(
-      "[tring-guest] provide data-credentials-url, or data-api-base + data-public-key",
+      "[tring-guest] provide data-gateway-url, data-credentials-url, or data-api-base + data-public-key",
     );
     return;
   }
@@ -58,6 +60,7 @@ function start() {
     apiBase: apiBase || undefined,
     publicKey: publicKey || undefined,
     credentialsUrl: credentialsUrl || undefined,
+    gatewayUrl: gatewayUrl || undefined,
     flowId: s.getAttribute("data-flow-id") || undefined,
     buttonLabel: s.getAttribute("data-button-label") || undefined,
     title: s.getAttribute("data-title") || undefined,

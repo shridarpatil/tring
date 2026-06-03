@@ -8,6 +8,9 @@ import (
 
 type offerRequest struct {
 	SDP string `json:"sdp"`
+	// FlowID pins this call to an IVR flow (overrides the gateway's default).
+	// The SDK supplies it so the flow is chosen per call, not per deployment.
+	FlowID string `json:"flow_id"`
 }
 
 type answerResponse struct {
@@ -54,7 +57,7 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Bridge into FreeSWITCH when configured; otherwise standalone echo (M1).
-	answer, err := g.Bridge(r.Context(), req.SDP)
+	answer, err := g.Bridge(r.Context(), req.SDP, req.FlowID)
 	if err != nil {
 		g.log.Printf("gateway: offer failed: %v", err)
 		http.Error(w, `{"error":"negotiation failed"}`, http.StatusInternalServerError)
