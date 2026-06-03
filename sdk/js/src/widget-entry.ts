@@ -46,6 +46,7 @@ function readOpts() {
     apiBase,
     token: s.getAttribute("data-token") || undefined,
     tokenUrl: s.getAttribute("data-token-url") || undefined,
+    gatewayUrl: s.getAttribute("data-gateway-url") || undefined,
   };
 }
 

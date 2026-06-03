@@ -17,6 +17,12 @@ export interface WidgetOpts {
   tokenUrl?: string;
   /** Tring API base, e.g. https://api.tring.io. */
   apiBase: string;
+  /**
+   * Media gateway base URL (ADR-001 M4b). When set, the agent uses raw
+   * WebRTC via the gateway instead of sip.js over WSS. Omit for the legacy
+   * SIP path.
+   */
+  gatewayUrl?: string;
 }
 
 const PANEL_ID = "tring-call-panel";
@@ -39,6 +45,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   const tring = await Tring.init({
     token,
     apiBase: opts.apiBase,
+    gatewayUrl: opts.gatewayUrl,
     autoAnswer: false,
   });
 
