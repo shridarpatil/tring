@@ -42,7 +42,15 @@ func (g *Gateway) registerFSUAS() {
 	f := g.fs
 	f.srv.OnInvite(g.handleFSInvite)
 	f.srv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = f.ds.ReadAck(req, tx) })
-	f.srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = f.ds.ReadBye(req, tx) })
+	// A BYE can be for a UAS dialog (agent leg, FS→gateway) or a UAC dialog
+	// (visitor leg, gateway→FS). Try the server cache first, then the client
+	// cache. Routing the visitor BYE to the client dialog is what ends its
+	// StateRead() stream → the Bridge tears down (see gateway.go).
+	f.srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		if err := f.ds.ReadBye(req, tx); err != nil {
+			_ = f.dc.ReadBye(req, tx)
+		}
+	})
 }
 
 // handleFSInvite bridges one FS-delivered agent leg to the agent's browser.
