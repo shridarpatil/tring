@@ -102,7 +102,7 @@ type fsLeg struct {
 // RTP socket and FS's RTP address. flowID, when non-empty, overrides the
 // configured default flow (the SDK supplies it per call) so the call pins to
 // that IVR flow. Caller must Close the returned leg.
-func (f *fsClient) dial(ctx context.Context, flowID string) (*fsLeg, error) {
+func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, error) {
 	if flowID == "" {
 		flowID = f.cfg.FlowID
 	}
@@ -126,6 +126,11 @@ func (f *fsClient) dial(ctx context.Context, flowID string) (*fsLeg, error) {
 	if flowID != "" {
 		dest = gwFlowExtension
 		headers = append(headers, sip.NewHeader("X-Tring-Flow-Id", flowID))
+		// Trusted caller identity (from the gateway call token) — the dialplan
+		// maps it to tring_client_ref so the IVR executor records it on the CDR.
+		if clientRef != "" {
+			headers = append(headers, sip.NewHeader("X-Tring-Client-Ref", clientRef))
+		}
 	}
 	recipient := sip.Uri{User: dest, Host: host, Port: port}
 

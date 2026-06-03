@@ -51,16 +51,31 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !g.authOffer(w, r) {
-		return
-	}
 	var req offerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SDP == "" {
 		http.Error(w, `{"error":"sdp required"}`, http.StatusBadRequest)
 		return
 	}
+
+	// A gateway call token (from the API's guest mint) pins the flow server-
+	// side and may carry a trusted client_ref — both override anything the
+	// browser put in the body. Anonymous callers post no token and supply
+	// flow_id in the body; RequireAuth makes the token mandatory.
+	flowID, clientRef := req.FlowID, ""
+	if raw := bearer(r); raw != "" {
+		claims, err := validateGatewayCallToken(raw, g.cfg.JWTSecret)
+		if err != nil {
+			http.Error(w, `{"error":"invalid or expired call token"}`, http.StatusUnauthorized)
+			return
+		}
+		flowID, clientRef = claims.FlowID, claims.ClientRef
+	} else if g.cfg.RequireAuth {
+		http.Error(w, `{"error":"call token required"}`, http.StatusUnauthorized)
+		return
+	}
+
 	// Bridge into FreeSWITCH when configured; otherwise standalone echo (M1).
-	answer, err := g.Bridge(r.Context(), req.SDP, req.FlowID)
+	answer, err := g.Bridge(r.Context(), req.SDP, flowID, clientRef)
 	if err != nil {
 		g.log.Printf("gateway: offer failed: %v", err)
 		http.Error(w, `{"error":"negotiation failed"}`, http.StatusInternalServerError)

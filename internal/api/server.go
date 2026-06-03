@@ -50,6 +50,10 @@ type Config struct {
 	AgentTransport string
 	AgentGateway   string
 
+	// GatewayPublicURL is the browser-reachable base URL of the media gateway,
+	// returned to visitors in a guest mint response (ADR-001 M5).
+	GatewayPublicURL string
+
 	// Cache is the shared Redis cache. The API uses it only to invalidate
 	// flow definitions the orchestrator caches (handlers_flows.go). May be
 	// nil — invalidation becomes a no-op (the orchestrator then relies on
@@ -72,6 +76,9 @@ type Server struct {
 	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
 	agentTransport string
 	agentGateway   string
+	// gatewayPublicURL: browser-reachable gateway base URL, returned to
+	// visitors in a guest mint response.
+	gatewayPublicURL string
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
 	// handed to the guest mint. Empty slice == "no ICE servers configured",
@@ -105,19 +112,20 @@ type iceServer struct {
 func NewServer(cfg Config) *Server {
 	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
 	return &Server{
-		db:             cfg.DB,
-		q:              queries.MustLoad(),
-		jwtSecret:      []byte(cfg.JWTSecret),
-		fsBasicUser:    user,
-		fsBasicPass:    pass,
-		wsURL:          cfg.WSURL,
-		fs:             freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		notifier:       webhook.New(cfg.DB),
-		cache:          cfg.Cache,
-		agentTransport: cfg.AgentTransport,
-		agentGateway:   cfg.AgentGateway,
-		iceServers:     buildICEServers(cfg),
-		simManager:     orchestrator.NewSimManager(),
+		db:               cfg.DB,
+		q:                queries.MustLoad(),
+		jwtSecret:        []byte(cfg.JWTSecret),
+		fsBasicUser:      user,
+		fsBasicPass:      pass,
+		wsURL:            cfg.WSURL,
+		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
+		notifier:         webhook.New(cfg.DB),
+		cache:            cfg.Cache,
+		agentTransport:   cfg.AgentTransport,
+		agentGateway:     cfg.AgentGateway,
+		gatewayPublicURL: cfg.GatewayPublicURL,
+		iceServers:       buildICEServers(cfg),
+		simManager:       orchestrator.NewSimManager(),
 		// Built once here (not in Router) so the window persists across
 		// requests regardless of how many times Router() is called.
 		guestMintLimiter: rateLimitByIP(guestMintRatePerMin, time.Minute),
@@ -169,11 +177,10 @@ func (s *Server) Router() http.Handler {
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
 		r.Post("/console/login", s.handleConsoleLogin)
-		// Guest web-calling: public (only credential is the tenant's
-		// public widget key). Mints an ephemeral, flow-pinned SIP identity
-		// for a website visitor. Per-IP rate limited; the handler also
-		// enforces an Origin allowlist + per-tenant concurrent cap. See
-		// handlers_guest.go.
+		// Guest web-calling: public (only credential is the tenant's public
+		// widget key). Mints a short-lived, flow-pinned gateway call token for
+		// a website visitor (ADR-001 M5). Per-IP rate limited; the handler also
+		// enforces an Origin allowlist. See handlers_guest.go.
 		r.With(s.guestMintLimiter).
 			Post("/sdk/guest-credentials", s.handleGuestCredentials)
 

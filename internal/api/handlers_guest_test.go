@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 
@@ -18,7 +17,7 @@ const testOrigin = "http://localhost:9999"
 
 // seedFlowAndPublicKey gives the fixture tenant a public widget key, an
 // active flow pinned as the support flow, and an Origin allowlist — the
-// minimum a guest needs to mint credentials. Returns (publicKey, flowID).
+// minimum a guest needs to mint a gateway call token. Returns (publicKey, flowID).
 func seedFlowAndPublicKey(t *testing.T, f *dbtest.Fixture) (string, string) {
 	t.Helper()
 	ctx := context.Background()
@@ -51,10 +50,10 @@ func mintReq(pk, origin string) *http.Request {
 	return r
 }
 
-// TestGuestCredentialsMintsFlowPinnedSession is the headline test: a valid
-// public key + allowed Origin yields SIP creds AND persists a guest_sessions
-// row pinned to the support flow with a future expiry (exercises make_interval).
-func TestGuestCredentialsMintsFlowPinnedSession(t *testing.T) {
+// TestGuestCredentialsMintsGatewayToken is the headline test: a valid public
+// key + allowed Origin yields the gateway URL, the pinned flow, and a verifiable
+// gateway call token (anonymous → no client_ref). No SIP, no guest_sessions.
+func TestGuestCredentialsMintsGatewayToken(t *testing.T) {
 	f := dbtest.Setup(t)
 	pk, flowID := seedFlowAndPublicKey(t, f)
 	s := newTestServer(f)
@@ -69,28 +68,21 @@ func TestGuestCredentialsMintsFlowPinnedSession(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if !strings.HasPrefix(resp.SipUsername, "guest_") {
-		t.Errorf("sip_username = %q, want guest_ prefix", resp.SipUsername)
+	if resp.GatewayURL == "" {
+		t.Error("gateway_url is empty")
 	}
-	if resp.DialTarget != guestDialTarget {
-		t.Errorf("dial_target = %q, want %q", resp.DialTarget, guestDialTarget)
+	if resp.FlowID != flowID {
+		t.Errorf("flow_id = %q, want %q", resp.FlowID, flowID)
 	}
-
-	var (
-		gotFlow string
-		future  bool
-	)
-	err := f.DB.Pool.QueryRow(context.Background(), `
-		SELECT flow_id, expires_at > now() FROM guest_sessions WHERE sip_username = $1
-	`, resp.SipUsername).Scan(&gotFlow, &future)
+	claims, err := s.ParseGatewayCallToken(resp.Token)
 	if err != nil {
-		t.Fatalf("guest_sessions lookup: %v", err)
+		t.Fatalf("returned token doesn't validate: %v", err)
 	}
-	if gotFlow != flowID {
-		t.Errorf("session flow_id = %q, want %q", gotFlow, flowID)
+	if claims.FlowID != flowID {
+		t.Errorf("token flow_id = %q, want %q", claims.FlowID, flowID)
 	}
-	if !future {
-		t.Error("expires_at is not in the future — make_interval TTL wrong")
+	if claims.ClientRef != "" {
+		t.Errorf("public mint must not set client_ref, got %q", claims.ClientRef)
 	}
 }
 
@@ -108,7 +100,7 @@ func TestGuestCredentialsRejectsUnknownKey(t *testing.T) {
 }
 
 // TestGuestCredentialsRejectsDisallowedOrigin: valid key but an Origin not in
-// the tenant's allowlist is 403, and no session is created.
+// the tenant's allowlist is 403.
 func TestGuestCredentialsRejectsDisallowedOrigin(t *testing.T) {
 	f := dbtest.Setup(t)
 	pk, _ := seedFlowAndPublicKey(t, f)
@@ -119,12 +111,6 @@ func TestGuestCredentialsRejectsDisallowedOrigin(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 for disallowed origin", rec.Code)
-	}
-	var n int
-	_ = f.DB.Pool.QueryRow(context.Background(),
-		`SELECT count(*) FROM guest_sessions WHERE tenant_id = $1`, f.TenantID).Scan(&n)
-	if n != 0 {
-		t.Errorf("created %d sessions for a disallowed origin, want 0", n)
 	}
 }
 
@@ -143,30 +129,6 @@ func TestGuestCredentialsRejectsMissingOrigin(t *testing.T) {
 	}
 }
 
-// TestGuestCredentialsConcurrentCap: once a tenant is at the live-session cap,
-// further mints are rejected 429.
-func TestGuestCredentialsConcurrentCap(t *testing.T) {
-	f := dbtest.Setup(t)
-	pk, flowID := seedFlowAndPublicKey(t, f)
-	s := newTestServer(f)
-
-	// Fill the tenant to the cap with live sessions.
-	if _, err := f.DB.Pool.Exec(context.Background(), `
-		INSERT INTO guest_sessions (tenant_id, sip_username, sip_password, flow_id, expires_at)
-		SELECT $1, 'guest_cap_' || g, 'pw', $2, now() + interval '15 min'
-		FROM generate_series(1, $3) g
-	`, f.TenantID, flowID, maxConcurrentGuestSessions); err != nil {
-		t.Fatalf("seed sessions: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	s.Router().ServeHTTP(rec, mintReq(pk, testOrigin))
-
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want 429 at the concurrent cap; body=%s", rec.Code, rec.Body.String())
-	}
-}
-
 // TestGuestMintRateLimit: more than guestMintRatePerMin requests from one IP
 // in the window get a 429 from the rate-limit middleware.
 func TestGuestMintRateLimit(t *testing.T) {
@@ -175,7 +137,7 @@ func TestGuestMintRateLimit(t *testing.T) {
 	s := newTestServer(f)
 
 	var got429 bool
-	for i := 0; i < guestMintRatePerMin+1; i++ {
+	for range guestMintRatePerMin + 1 {
 		rec := httptest.NewRecorder()
 		s.Router().ServeHTTP(rec, mintReq(pk, testOrigin))
 		if rec.Code == http.StatusTooManyRequests {
@@ -184,47 +146,5 @@ func TestGuestMintRateLimit(t *testing.T) {
 	}
 	if !got429 {
 		t.Fatalf("expected a 429 after >%d requests from one IP", guestMintRatePerMin)
-	}
-}
-
-// TestFSDirectoryGuestBranch: once a guest session exists, the mod_xml_curl
-// directory lookup for that username returns user_class=guest and the
-// pinned tring_flow_id — the variables the dialplan + executor rely on.
-func TestFSDirectoryGuestBranch(t *testing.T) {
-	f := dbtest.Setup(t)
-	pk, flowID := seedFlowAndPublicKey(t, f)
-	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", FSBasicAuth: "fs:secret"})
-
-	mintRec := httptest.NewRecorder()
-	s.Router().ServeHTTP(mintRec, mintReq(pk, testOrigin))
-	if mintRec.Code != http.StatusOK {
-		t.Fatalf("mint status = %d", mintRec.Code)
-	}
-	var creds guestCredentialsResponse
-	_ = json.Unmarshal(mintRec.Body.Bytes(), &creds)
-
-	form := url.Values{
-		"section": {"directory"},
-		"user":    {creds.SipUsername},
-		"domain":  {f.SIPDomain},
-	}
-	dir := httptest.NewRequest("POST", "/fs/directory", strings.NewReader(form.Encode()))
-	dir.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	dir.SetBasicAuth("fs", "secret")
-	dirRec := httptest.NewRecorder()
-	s.Router().ServeHTTP(dirRec, dir)
-
-	if dirRec.Code != http.StatusOK {
-		t.Fatalf("directory status = %d; body=%s", dirRec.Code, dirRec.Body.String())
-	}
-	body := dirRec.Body.String()
-	for _, want := range []string{
-		`name="user_class" value="guest"`,
-		`name="tring_flow_id" value="` + flowID + `"`,
-		`name="password"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("directory XML missing %q\n--- body ---\n%s", want, body)
-		}
 	}
 }
