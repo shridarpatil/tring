@@ -54,10 +54,11 @@ type ICEServer struct {
 // Gateway holds the shared pion API (media engine + setting engine) so every
 // PeerConnection is built with the same codecs/port range.
 type Gateway struct {
-	cfg Config
-	api *webrtc.API
-	fs  *fsClient // nil = standalone echo mode
-	log *log.Logger
+	cfg    Config
+	api    *webrtc.API
+	fs     *fsClient      // nil = standalone echo mode
+	agents *agentRegistry // online agents' signaling WebSockets (M4b)
+	log    *log.Logger
 }
 
 // authOffer enforces the offer-endpoint auth policy. Returns ok=false (and
@@ -119,9 +120,10 @@ func New(cfg Config) (*Gateway, error) {
 	}
 
 	g := &Gateway{
-		cfg: cfg,
-		api: webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
-		log: cfg.Logger,
+		cfg:    cfg,
+		api:    webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
+		agents: newAgentRegistry(),
+		log:    cfg.Logger,
 	}
 	if cfg.FS != nil {
 		fc, err := newFSClient(context.Background(), *cfg.FS, g.log)

@@ -29,6 +29,9 @@ func (g *Gateway) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/webrtc/offer", g.handleOffer)
+	// Agent presence + incoming-call signaling WebSocket (M4b). Agents hold
+	// this open while online; FS-delivered agent legs ring the browser over it.
+	mux.HandleFunc("/agent/ws", g.handleAgentWS)
 	// Dev-only: headless verification of the FreeSWITCH leg (milestone 2a).
 	mux.HandleFunc("/fsleg/test", func(w http.ResponseWriter, r *http.Request) {
 		n, err := g.TestFSLeg(r.Context())
