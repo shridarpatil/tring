@@ -103,10 +103,36 @@ type incomingCall struct {
 	offer  chan string   // browser's WebRTC offer SDP (it accepted)
 	closed chan struct{} // browser rejected / hung up / disconnected
 	once   sync.Once
+
+	// teardown tears down the live media bridge once the call is established.
+	// nil while still ringing (the SIP UAS is waiting on offer/closed); set by
+	// the UAS after the bridge is up so a browser hangup ends the FS leg too.
+	mu       sync.Mutex
+	teardown func()
 }
 
 func (ic *incomingCall) end() {
 	ic.once.Do(func() { close(ic.closed) })
+}
+
+// setTeardown registers how to tear down the established bridge.
+func (ic *incomingCall) setTeardown(fn func()) {
+	ic.mu.Lock()
+	ic.teardown = fn
+	ic.mu.Unlock()
+}
+
+// fireTeardown runs the bridge teardown if the call is established; returns
+// false if it was still ringing (no teardown set yet).
+func (ic *incomingCall) fireTeardown() bool {
+	ic.mu.Lock()
+	fn := ic.teardown
+	ic.mu.Unlock()
+	if fn == nil {
+		return false
+	}
+	fn()
+	return true
 }
 
 // agentSession is one online agent's WebSocket. Writes are serialized; reads run
@@ -183,7 +209,11 @@ func (s *agentSession) dispatch(m agentMsg) {
 		ic := s.pending[m.CallID]
 		s.mu.Unlock()
 		if ic != nil {
-			ic.end()
+			// Established call → tear the bridge down (which BYEs the FS leg).
+			// Still ringing → unblock the UAS select so it rejects the INVITE.
+			if !ic.fireTeardown() {
+				ic.end()
+			}
 		}
 	default:
 		s.log.Printf("gateway: agent %s/%s sent unknown msg %q", s.key.tenant, s.key.sip, m.Type)

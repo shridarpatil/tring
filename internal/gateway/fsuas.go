@@ -115,6 +115,10 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		defer cancel()
 		_ = dlg.Bye(ctx)
 	})
+	// Let a browser-side hangup (WS "hangup") tear down this live bridge — the
+	// relay's pc-state watcher only catches a slow ICE failure, so without this
+	// the FS leg would linger after the agent hangs up. Idempotent via once.
+	ic.setTeardown(teardown)
 
 	// Negotiate the browser leg (their offer → our answer) and hand the answer
 	// back over the WebSocket.
