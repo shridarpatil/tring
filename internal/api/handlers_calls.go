@@ -110,6 +110,20 @@ func (s *Server) handleSDKCreateCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// agentALeg builds the FreeSWITCH dial string for an agent's own call leg.
+// With the default "sip" transport the agent registers to FS directly, so the
+// leg is user/<sip>@<domain>. With "gateway" the leg is routed to the media
+// gateway as a SIP endpoint (ADR-001 M4b) carrying the tenant id as a SIP
+// header, so the gateway resolves the right browser and the agent never speaks
+// SIP. The IVR transfer path mirrors this in internal/orchestrator.
+func (s *Server) agentALeg(sipUsername, sipDomain, tenantID string) string {
+	if s.agentTransport == "gateway" {
+		return fmt.Sprintf("[sip_h_X-Tring-Tenant=%s]sofia/gateway/%s/%s",
+			tenantID, s.agentGateway, sipUsername)
+	}
+	return fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
+}
+
 // originateForAgent is the shared originate path used by both the tenant-
 // scoped and JWT-scoped handlers. Returns (call, http_status_on_error, err).
 func (s *Server) originateForAgent(
@@ -156,7 +170,7 @@ func (s *Server) originateForAgent(
 	if sipDomain == "" {
 		_ = s.db.Pool.QueryRow(ctx, s.q.GetTenantSipDomain, t.ID).Scan(&sipDomain)
 	}
-	aLeg := fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
+	aLeg := s.agentALeg(sipUsername, sipDomain, t.ID.String())
 
 	// Build BLegs. Each entry presents that trunk's own DID as caller-ID
 	// via per-leg `[var=val]` prefix, so a roll-over from Airtel→Jio

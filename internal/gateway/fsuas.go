@@ -21,9 +21,16 @@ import (
 	"github.com/emiago/sipgo/sip"
 )
 
-// agentRingTimeout bounds how long an inbound agent leg rings before the gateway
-// gives FS a 408 (the browser never accepted).
-const agentRingTimeout = 45 * time.Second
+// defaultAgentRingTimeout applies when Config.AgentRingTimeout is unset.
+const defaultAgentRingTimeout = 45 * time.Second
+
+// ringTimeout returns the configured agent ring timeout, or the default.
+func (g *Gateway) ringTimeout() time.Duration {
+	if g.cfg.AgentRingTimeout > 0 {
+		return g.cfg.AgentRingTimeout
+	}
+	return defaultAgentRingTimeout
+}
 
 // tenantHeader carries the tenant id on an FS→gateway agent INVITE so the
 // gateway can disambiguate agents whose SIP usernames collide across tenants.
@@ -77,7 +84,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		sess.finishIncoming(ic.id)
 		_ = dlg.Respond(sip.StatusBusyHere, "Declined", nil)
 		return
-	case <-time.After(agentRingTimeout):
+	case <-time.After(g.ringTimeout()):
 		sess.finishIncoming(ic.id)
 		_ = dlg.Respond(sip.StatusRequestTimeout, "No Answer", nil)
 		return

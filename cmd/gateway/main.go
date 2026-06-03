@@ -6,7 +6,8 @@
 // bridges media into a PRIVATE FreeSWITCH. Milestone 1 = loopback echo.
 //
 // Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL/_USERNAME/_PASSWORD,
-//      TRING_PUBLIC_IP, TRING_GATEWAY_UDP_MIN/_MAX.
+//
+//	TRING_PUBLIC_IP, TRING_GATEWAY_UDP_MIN/_MAX.
 package main
 
 import (
@@ -51,14 +52,15 @@ func main() {
 	}
 
 	gw, err := gateway.New(gateway.Config{
-		ICEServers: ice,
-		UDPPortMin: uint16(k.Int("gateway_udp_min")),
-		UDPPortMax: uint16(k.Int("gateway_udp_max")),
-		PublicIP:    k.String("public_ip"),
-		RelayOnly:   k.Bool("turn_relay_only"),
-		FS:          fs,
-		JWTSecret:   []byte(k.String("jwt_secret")),
-		RequireAuth: k.Bool("gateway_require_auth"),
+		ICEServers:       ice,
+		UDPPortMin:       uint16(k.Int("gateway_udp_min")),
+		UDPPortMax:       uint16(k.Int("gateway_udp_max")),
+		PublicIP:         k.String("public_ip"),
+		RelayOnly:        k.Bool("turn_relay_only"),
+		FS:               fs,
+		JWTSecret:        []byte(k.String("jwt_secret")),
+		RequireAuth:      k.Bool("gateway_require_auth"),
+		AgentRingTimeout: time.Duration(k.Int("gateway_agent_ring_timeout")) * time.Second,
 	})
 	if err != nil {
 		log.Fatalf("gateway: %v", err)

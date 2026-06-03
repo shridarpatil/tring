@@ -47,6 +47,10 @@ services:
       # the gateway include list so UI-managed trunks are picked up on
       # `sofia profile external rescan`.
       - ./freeswitch/conf/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml:ro
+      # Static gateway pointing at the Tring media gateway (agent_transport=
+      # gateway; ADR-001 M4b). Picked up by external.xml's external/*.xml
+      # include. :ro so the entrypoint can't clobber it.
+      - ./freeswitch/conf/sip_profiles/external/tring-gw.xml:/etc/freeswitch/sip_profiles/external/tring-gw.xml:ro
       # Override sofia's internal profile to disable the force-register-*
       # params — see comment block in the file for why (multi-tenant
       # depends on the SDK's From URI domain reaching /fs/directory

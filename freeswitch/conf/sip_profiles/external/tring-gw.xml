@@ -1,0 +1,23 @@
+<include>
+  <!--
+    tring-gw — the Tring media gateway as a SIP endpoint (ADR-001 M4b).
+
+    When agent_transport=gateway, the API/orchestrator route an agent's own
+    call leg to `sofia/gateway/tring-gw/<sip>` instead of `user/<sip>`. FS
+    sends the INVITE here (no registration); the media gateway answers, finds
+    the agent's browser WebSocket, and bridges WebRTC ↔ RTP. The tenant id
+    rides an X-Tring-Tenant SIP header the gateway uses to resolve the agent.
+
+    $${tring_gateway_sip} is set in vars.xml (host:port the gateway's SIP UAS
+    listens on — TRING_GATEWAY_ADVERT_IP:TRING_GATEWAY_SIP_PORT). Override it
+    per environment; in dev the gateway runs on the host so it must be the
+    host IP reachable from the FS container, not 127.0.0.1.
+  -->
+  <gateway name="tring-gw">
+    <param name="register" value="false"/>
+    <param name="proxy" value="$${tring_gateway_sip}"/>
+    <param name="realm" value="$${tring_gateway_sip}"/>
+    <param name="caller-id-in-from" value="true"/>
+    <param name="ping" value="0"/>
+  </gateway>
+</include>

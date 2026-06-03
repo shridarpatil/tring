@@ -47,6 +47,16 @@ var defaults = map[string]any{
 	// Require a valid agent token on /webrtc/offer. Off during the rebuild
 	// (echo test is token-less); on once the SDK sends tokens (M4/M5).
 	"gateway_require_auth": false,
+	// agent_transport routes the agent's own call leg. "sip" (default) keeps
+	// agents registering to FS directly (user/<sip>); "gateway" routes the leg
+	// to the media gateway as a SIP endpoint so agents speak WebRTC, never SIP
+	// (ADR-001 M4b). agent_gateway is the FreeSWITCH gateway name that points
+	// at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
+	"agent_transport": "sip",
+	"agent_gateway":   "tring-gw",
+	// How long (seconds) an inbound agent leg rings at the gateway before it
+	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
+	"gateway_agent_ring_timeout": 45,
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.

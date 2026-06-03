@@ -42,7 +42,10 @@ type Config struct {
 	// the SDK sends tokens (M4/M5).
 	JWTSecret   []byte
 	RequireAuth bool
-	Logger      *log.Logger
+	// AgentRingTimeout bounds how long an inbound agent leg rings before the
+	// gateway gives FS a 408 (the browser never accepted). Zero → 45s default.
+	AgentRingTimeout time.Duration
+	Logger           *log.Logger
 }
 
 type ICEServer struct {
