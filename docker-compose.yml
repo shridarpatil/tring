@@ -205,6 +205,53 @@ services:
       - TRING_ESL_PASSWORD=${TRING_ESL_PASSWORD:-ClueCon}
     restart: unless-stopped
 
+  # WebRTC media gateway (ADR-001). Browsers peer with this over raw WebRTC
+  # (HTTPS signaling on :8087); it bridges media into the PRIVATE FreeSWITCH —
+  # browsers never touch SIP or FS directly. host networking so the UDP RTP
+  # range + SIP UAS exchange media with FS and browsers without NAT hairpinning
+  # (same reason FS uses it).
+  gateway:
+    image: ghcr.io/shridarpatil/tring-gateway:${TRING_TAG:-develop}
+    build:
+      context: .
+      args:
+        CMD: gateway
+    container_name: tring-gateway
+    network_mode: host
+    depends_on:
+      freeswitch:
+        condition: service_started
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - TRING_GATEWAY_ADDR=${TRING_GATEWAY_ADDR:-:8087}
+      # Shared with the API so the gateway validates the SAME agent tokens.
+      - TRING_JWT_SECRET=${TRING_JWT_SECRET:-tring_dev_jwt_secret_change_me_in_prod}
+      # IP advertised to FS (SIP+RTP) and to browsers (host ICE candidate).
+      # 127.0.0.1 only works for same-host browsers — set this to the host's
+      # LAN/public IP for real clients (and TRING_PUBLIC_IP for cloud/NAT).
+      - TRING_GATEWAY_ADVERT_IP=${TRING_GATEWAY_ADVERT_IP:-127.0.0.1}
+      - TRING_GATEWAY_SIP_PORT=${TRING_GATEWAY_SIP_PORT:-5090}
+      - TRING_PUBLIC_IP=${TRING_PUBLIC_IP:-}
+      # The private FreeSWITCH the gateway bridges into.
+      - TRING_FS_SIP_ADDR=${TRING_FS_SIP_ADDR:-127.0.0.1:5060}
+      - TRING_FS_AUTH_USER=${TRING_FS_AUTH_USER:-1000}
+      - TRING_FS_AUTH_PASS=${TRING_FS_AUTH_PASS:-1234}
+      # Default IVR flow for token-less visitor calls that don't pass one.
+      - TRING_FS_FLOW_ID=${TRING_FS_FLOW_ID:-}
+      # WebRTC ICE — same knobs as the API. Self-host a STUN/TURN to avoid
+      # browsers calling out to Google's public STUN.
+      - TRING_STUN_URL=${TRING_STUN_URL:-stun:stun.l.google.com:19302}
+      - TRING_TURN_URL=${TRING_TURN_URL:-}
+      - TRING_TURN_USERNAME=${TRING_TURN_USERNAME:-}
+      - TRING_TURN_PASSWORD=${TRING_TURN_PASSWORD:-}
+      # Require a valid agent token on /webrtc/offer. Off in dev; flip on once
+      # the SDK ships tokens (M5 cutover).
+      - TRING_GATEWAY_REQUIRE_AUTH=${TRING_GATEWAY_REQUIRE_AUTH:-false}
+      - TRING_GATEWAY_AGENT_RING_TIMEOUT=${TRING_GATEWAY_AGENT_RING_TIMEOUT:-45}
+    restart: unless-stopped
+
   # Local SIP trunk simulator — stands in for the Tata SBC during dev.
   # Listens on UDP/5070 as a SIPp UAS; answers every INVITE 200 OK so
   # the full Tring → trunk signaling path can be exercised before the
