@@ -74,8 +74,8 @@ type Server struct {
 	agentGateway   string
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
-	// returned verbatim by /v1/sdk/credentials. Empty slice == "no ICE
-	// servers configured", which is valid (works on LANs).
+	// handed to the guest mint. Empty slice == "no ICE servers configured",
+	// which is valid (works on LANs).
 	iceServers []iceServer
 
 	// Round-robin trunk selection state. Lazily initialised in
@@ -231,7 +231,6 @@ func (s *Server) Router() http.Handler {
 		// SDK routes: JWT auth, scoped to the JWT's subject agent.
 		r.Group(func(r chi.Router) {
 			r.Use(s.JWTAuthRequired)
-			r.Get("/sdk/credentials", s.handleSDKCredentials)
 			r.Post("/sdk/calls", s.handleSDKCreateCall)
 		})
 	})
