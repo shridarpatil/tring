@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
 	"github.com/whatomate/tring/internal/orchestrator"
@@ -41,6 +42,12 @@ type Config struct {
 	TURNURL      string
 	TURNUsername string
 	TURNPassword string
+
+	// Cache is the shared Redis cache. The API uses it only to invalidate
+	// flow definitions the orchestrator caches (handlers_flows.go). May be
+	// nil — invalidation becomes a no-op (the orchestrator then relies on
+	// the TTL, or is itself uncached).
+	Cache *cache.Cache
 }
 
 type Server struct {
@@ -52,6 +59,7 @@ type Server struct {
 	wsURL       string
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
+	cache       *cache.Cache // shared Redis; used to invalidate cached IVR flows
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
 	// returned verbatim by /v1/sdk/credentials. Empty slice == "no ICE
@@ -93,6 +101,7 @@ func NewServer(cfg Config) *Server {
 		wsURL:       cfg.WSURL,
 		fs:          freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
 		notifier:    webhook.New(cfg.DB),
+		cache:       cfg.Cache,
 		iceServers:  buildICEServers(cfg),
 		simManager:  orchestrator.NewSimManager(),
 		// Built once here (not in Router) so the window persists across

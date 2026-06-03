@@ -14,6 +14,7 @@ import (
 
 	"github.com/whatomate/tring/internal/api"
 	"github.com/whatomate/tring/internal/bootstrap"
+	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	tringmigrate "github.com/whatomate/tring/internal/migrate"
@@ -89,6 +90,15 @@ func main() {
 		return
 	}
 
+	// Shared Redis cache. The API only uses it to invalidate IVR flow
+	// definitions the orchestrator caches — must point at the SAME Redis as
+	// the orchestrator. Optional: log-and-disable if unreachable.
+	flowCache, err := cache.New(k.String("redis_addr"))
+	if err != nil {
+		log.Printf("cache: redis unavailable (%v) — flow-cache invalidation disabled", err)
+	}
+	defer flowCache.Close()
+
 	srv := &http.Server{
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
@@ -102,6 +112,7 @@ func main() {
 			TURNURL:      k.String("turn_url"),
 			TURNUsername: k.String("turn_username"),
 			TURNPassword: k.String("turn_password"),
+			Cache:        flowCache,
 		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
