@@ -208,12 +208,20 @@ func (s *agentSession) dispatch(m agentMsg) {
 		s.mu.Lock()
 		ic := s.pending[m.CallID]
 		s.mu.Unlock()
-		if ic != nil {
-			// Established call → tear the bridge down (which BYEs the FS leg).
-			// Still ringing → unblock the UAS select so it rejects the INVITE.
-			if !ic.fireTeardown() {
-				ic.end()
-			}
+		if ic == nil {
+			s.log.Printf("gateway: agent %s/%s %s for unknown call %q (no pending bridge)",
+				s.key.tenant, s.key.sip, m.Type, m.CallID)
+			return
+		}
+		// Established call → tear the bridge down (which BYEs the FS leg).
+		// Still ringing → unblock the UAS select so it rejects the INVITE.
+		if ic.fireTeardown() {
+			s.log.Printf("gateway: agent %s/%s %s — tearing down bridge for call %s",
+				s.key.tenant, s.key.sip, m.Type, m.CallID)
+		} else {
+			s.log.Printf("gateway: agent %s/%s %s while ringing — declining call %s",
+				s.key.tenant, s.key.sip, m.Type, m.CallID)
+			ic.end()
 		}
 	default:
 		s.log.Printf("gateway: agent %s/%s sent unknown msg %q", s.key.tenant, s.key.sip, m.Type)
