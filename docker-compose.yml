@@ -246,8 +246,10 @@ services:
       - TRING_TURN_URL=${TRING_TURN_URL:-}
       - TRING_TURN_USERNAME=${TRING_TURN_USERNAME:-}
       - TRING_TURN_PASSWORD=${TRING_TURN_PASSWORD:-}
-      # Require a valid agent token on /webrtc/offer. Off in dev; flip on once
-      # the SDK ships tokens (M5 cutover).
+      # Require a token on the /webrtc/offer (visitor) endpoint. Off by design:
+      # anonymous visitors call token-less (flow-pinned, can't reach a trunk).
+      # The agent path always authenticates (/agent/ws). Turn on only to
+      # disallow anonymous visitor calls.
       - TRING_GATEWAY_REQUIRE_AUTH=${TRING_GATEWAY_REQUIRE_AUTH:-false}
       - TRING_GATEWAY_AGENT_RING_TIMEOUT=${TRING_GATEWAY_AGENT_RING_TIMEOUT:-45}
     restart: unless-stopped

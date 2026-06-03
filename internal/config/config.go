@@ -44,15 +44,19 @@ var defaults = map[string]any{
 	"fs_auth_pass":      "1234",
 	"fs_target":         "9999", // fallback dialplan extension (echo) when no flow is pinned
 	"fs_flow_id":        "",     // pin a WebRTC call to this IVR flow (no DID); empty → fs_target
-	// Require a valid agent token on /webrtc/offer. Off during the rebuild
-	// (echo test is token-less); on once the SDK sends tokens (M4/M5).
+	// Require a valid agent token on the /webrtc/offer (visitor) endpoint.
+	// Default off BY DESIGN: anonymous website visitors post there token-less
+	// for public "call us" calls, which are flow-pinned and can't reach a trunk.
+	// The agent path is unaffected — /agent/ws ALWAYS authenticates the agent
+	// JWT. Turn this on only for deployments that disallow anonymous visitors.
 	"gateway_require_auth": false,
-	// agent_transport routes the agent's own call leg. "sip" (default) keeps
-	// agents registering to FS directly (user/<sip>); "gateway" routes the leg
-	// to the media gateway as a SIP endpoint so agents speak WebRTC, never SIP
-	// (ADR-001 M4b). agent_gateway is the FreeSWITCH gateway name that points
-	// at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
-	"agent_transport": "sip",
+	// agent_transport routes the agent's own call leg. "gateway" (default since
+	// the M5 cutover) routes the leg to the media gateway as a SIP endpoint so
+	// agents speak WebRTC, never SIP (ADR-001); "sip" is the legacy mode where
+	// agents register to FS directly (user/<sip>) — kept for migrations but the
+	// SDK no longer supports it. agent_gateway is the FreeSWITCH gateway name
+	// pointing at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
+	"agent_transport": "gateway",
 	"agent_gateway":   "tring-gw",
 	// How long (seconds) an inbound agent leg rings at the gateway before it
 	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
