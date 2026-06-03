@@ -126,11 +126,14 @@ func New(cfg Config) (*Gateway, error) {
 		log:    cfg.Logger,
 	}
 	if cfg.FS != nil {
-		fc, err := newFSClient(context.Background(), *cfg.FS, g.log)
+		fc, err := newFSClient(*cfg.FS, g.log)
 		if err != nil {
 			return nil, fmt.Errorf("fs client: %w", err)
 		}
 		g.fs = fc
+		// Register the UAS handlers (FS-delivered agent legs) BEFORE serving.
+		g.registerFSUAS()
+		fc.serve(context.Background())
 		g.log.Printf("gateway: FreeSWITCH bridge enabled → %s (target %s)", cfg.FS.SIPAddr, cfg.FS.Target)
 	}
 	return g, nil
@@ -268,21 +271,9 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, 
 	if g.fs == nil {
 		return g.Echo(ctx, offerSDP)
 	}
-	pc, err := g.newPeerConnection()
+	pc, toBrowser, err := g.newBridgePC()
 	if err != nil {
 		return "", err
-	}
-
-	// Track we send FS's audio to the browser on (added before negotiation).
-	toBrowser, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "fs")
-	if err != nil {
-		_ = pc.Close()
-		return "", fmt.Errorf("local track: %w", err)
-	}
-	if _, err := pc.AddTrack(toBrowser); err != nil {
-		_ = pc.Close()
-		return "", fmt.Errorf("add track: %w", err)
 	}
 
 	// Establish the FreeSWITCH leg up front so it's ready before we answer.
@@ -293,6 +284,42 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, 
 	}
 	g.log.Printf("gateway: bridge — FS leg up (FS RTP %s)", leg.FSRTPAddr)
 
+	teardown := g.relay(pc, toBrowser, leg, nil)
+	answer, err := g.negotiateAnswer(pc, offerSDP)
+	if err != nil {
+		teardown()
+		return "", err
+	}
+	return answer, nil
+}
+
+// newBridgePC builds a PeerConnection with one outbound Opus track that the
+// gateway writes FS audio onto (added before negotiation). Shared by the
+// visitor (UAC) and agent (UAS) bridge paths.
+func (g *Gateway) newBridgePC() (*webrtc.PeerConnection, *webrtc.TrackLocalStaticRTP, error) {
+	pc, err := g.newPeerConnection()
+	if err != nil {
+		return nil, nil, err
+	}
+	toBrowser, err := webrtc.NewTrackLocalStaticRTP(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "fs")
+	if err != nil {
+		_ = pc.Close()
+		return nil, nil, fmt.Errorf("local track: %w", err)
+	}
+	if _, err := pc.AddTrack(toBrowser); err != nil {
+		_ = pc.Close()
+		return nil, nil, fmt.Errorf("add track: %w", err)
+	}
+	return pc, toBrowser, nil
+}
+
+// relay wires the bidirectional media bridge between a browser PeerConnection
+// and an FS RTP leg and returns an idempotent teardown. onClose, if non-nil,
+// runs once inside teardown (after the pc/leg are closed) — the agent path uses
+// it to BYE the SIP dialog and notify the browser. The caller negotiates the pc
+// (SetRemote/Local) afterwards via negotiateAnswer.
+func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalStaticRTP, leg *fsLeg, onClose func()) func() {
 	var (
 		once          sync.Once
 		stop          = make(chan struct{})
@@ -304,6 +331,9 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, 
 			close(stop)
 			leg.Close()
 			_ = pc.Close()
+			if onClose != nil {
+				onClose()
+			}
 		})
 	}
 
@@ -387,23 +417,24 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID string) (string, 
 			teardown()
 		}
 	})
+	return teardown
+}
 
+// negotiateAnswer applies the browser's offer to pc and returns the gateway's
+// answer SDP once ICE gathering completes.
+func (g *Gateway) negotiateAnswer(pc *webrtc.PeerConnection, offerSDP string) (string, error) {
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offerSDP}); err != nil {
-		teardown()
 		return "", fmt.Errorf("set remote: %w", err)
 	}
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
-		teardown()
 		return "", fmt.Errorf("create answer: %w", err)
 	}
 	if err := pc.SetLocalDescription(answer); err != nil {
-		teardown()
 		return "", fmt.Errorf("set local: %w", err)
 	}
 	desc, err := g.waitForICE(pc, 10*time.Second)
 	if err != nil {
-		teardown()
 		return "", err
 	}
 	return desc.SDP, nil
