@@ -21,7 +21,22 @@
   voice code is one <code>&lt;script src="/sdk/voice.js"&gt;</code> at the bottom.</p>
 
   <div class="setup">
-    <strong>Local dev setup:</strong> grab the tenant's public widget key, then load the widget.
+    <strong>Gateway path (recommended) — direct WebRTC, no SIP, no mint.</strong>
+    The visitor's browser peers straight with the Tring media gateway (ADR-001);
+    FreeSWITCH stays private. Point the widget at the gateway and the IVR flow to
+    land in — no public key, no <code>allowed_origins</code> mint guard.
+    <p style="margin:.5rem 0 0">
+      <input id="gwInput" type="text" placeholder="gateway URL (default http://localhost:8087)" />
+    </p>
+    <p style="margin:.5rem 0 0">
+      <input id="flowInput" type="text" placeholder="flow id (uuid) — the IVR to land in" />
+      <button class="inline" id="loadGwBtn">Load widget (gateway)</button>
+    </p>
+  </div>
+
+  <div class="setup" style="background:#eef2ff;border-color:#c7d2fe">
+    <strong>Legacy path — SIP-over-WSS via the public mint.</strong>
+    Grab the tenant's public widget key, then load the widget.
     <p style="margin:.5rem 0">
       <code>curl -sS -H "Authorization: Bearer $CONSOLE_JWT" http://localhost:8085/v1/guest-config | jq -r .public_key</code>
     </p>
@@ -45,23 +60,42 @@
   </div>
 
   <script>
-    // Dev convenience: inject voice.js with the pasted public key. In
-    // production you'd hardcode the <script> tag with data-public-key.
-    document.getElementById('loadBtn').addEventListener('click', () => {
-      const pk = document.getElementById('pkInput').value.trim();
-      if (!pk) { alert('paste a public key first'); return; }
-      // The widget bundle is served by the Tring API itself at /sdk/voice.js
-      // (no CDN). Derive the API base from how this page was opened so the
-      // demo works via http://localhost:9999 or http://<lan-ip>:9999.
-      const apiBase = location.protocol + '//' + location.hostname + ':8085';
+    // The widget bundle is served by the Tring API itself at /sdk/voice.js
+    // (no CDN). Derive the API base from how this page was opened so the
+    // demo works via http://localhost:9999 or http://<lan-ip>:9999.
+    const apiBase = location.protocol + '//' + location.hostname + ':8085';
+
+    function loadWidget(extraAttrs, btn) {
       const s = document.createElement('script');
       s.src = apiBase + '/sdk/voice.js';
       s.setAttribute('data-api-base', apiBase);
-      s.setAttribute('data-public-key', pk);
       s.setAttribute('data-render-button', 'false'); // we provide our own button
+      for (const [k, v] of Object.entries(extraAttrs)) s.setAttribute(k, v);
       document.body.appendChild(s);
-      document.getElementById('loadBtn').disabled = true;
-      document.getElementById('loadBtn').textContent = 'Widget loaded ✓';
+      // Once one path is loaded, disable both load buttons.
+      for (const id of ['loadGwBtn', 'loadBtn']) {
+        const b = document.getElementById(id);
+        b.disabled = true;
+      }
+      btn.textContent = 'Widget loaded ✓';
+    }
+
+    // Gateway path (recommended): direct WebRTC to the media gateway. No mint,
+    // no public key — just the gateway URL + the IVR flow to land in.
+    document.getElementById('loadGwBtn').addEventListener('click', () => {
+      const gw = document.getElementById('gwInput').value.trim()
+        || (location.protocol + '//' + location.hostname + ':8087');
+      const flow = document.getElementById('flowInput').value.trim();
+      if (!flow) { alert('enter the flow id to land in'); return; }
+      loadWidget({ 'data-gateway-url': gw, 'data-flow-id': flow },
+        document.getElementById('loadGwBtn'));
+    });
+
+    // Legacy path: inject voice.js with the pasted public key (SIP mint).
+    document.getElementById('loadBtn').addEventListener('click', () => {
+      const pk = document.getElementById('pkInput').value.trim();
+      if (!pk) { alert('paste a public key first'); return; }
+      loadWidget({ 'data-public-key': pk }, document.getElementById('loadBtn'));
     });
   </script>
 </body>
