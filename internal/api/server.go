@@ -43,6 +43,13 @@ type Config struct {
 	TURNUsername string
 	TURNPassword string
 
+	// AgentTransport routes the agent's own call leg: "sip" (agent registers
+	// to FS directly) or "gateway" (leg routed to the media gateway as a SIP
+	// endpoint; ADR-001 M4b). AgentGateway is the FS gateway name used for the
+	// latter. Defaults supplied by internal/config.
+	AgentTransport string
+	AgentGateway   string
+
 	// Cache is the shared Redis cache. The API uses it only to invalidate
 	// flow definitions the orchestrator caches (handlers_flows.go). May be
 	// nil — invalidation becomes a no-op (the orchestrator then relies on
@@ -60,6 +67,11 @@ type Server struct {
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
 	cache       *cache.Cache // shared Redis; used to invalidate cached IVR flows
+
+	// agentTransport / agentGateway: how an agent's own call leg is routed
+	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
+	agentTransport string
+	agentGateway   string
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
 	// returned verbatim by /v1/sdk/credentials. Empty slice == "no ICE
@@ -93,17 +105,19 @@ type iceServer struct {
 func NewServer(cfg Config) *Server {
 	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
 	return &Server{
-		db:          cfg.DB,
-		q:           queries.MustLoad(),
-		jwtSecret:   []byte(cfg.JWTSecret),
-		fsBasicUser: user,
-		fsBasicPass: pass,
-		wsURL:       cfg.WSURL,
-		fs:          freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		notifier:    webhook.New(cfg.DB),
-		cache:       cfg.Cache,
-		iceServers:  buildICEServers(cfg),
-		simManager:  orchestrator.NewSimManager(),
+		db:             cfg.DB,
+		q:              queries.MustLoad(),
+		jwtSecret:      []byte(cfg.JWTSecret),
+		fsBasicUser:    user,
+		fsBasicPass:    pass,
+		wsURL:          cfg.WSURL,
+		fs:             freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
+		notifier:       webhook.New(cfg.DB),
+		cache:          cfg.Cache,
+		agentTransport: cfg.AgentTransport,
+		agentGateway:   cfg.AgentGateway,
+		iceServers:     buildICEServers(cfg),
+		simManager:     orchestrator.NewSimManager(),
 		// Built once here (not in Router) so the window persists across
 		// requests regardless of how many times Router() is called.
 		guestMintLimiter: rateLimitByIP(guestMintRatePerMin, time.Minute),

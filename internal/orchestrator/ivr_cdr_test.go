@@ -107,8 +107,20 @@ func TestSaveIVRPathPersists(t *testing.T) {
 // agentLeg tags each ringing leg with a tring_agent variable so the
 // CHANNEL_BRIDGE handler can attribute the answer.
 func TestAgentLegTagsSIP(t *testing.T) {
-	if got := agentLeg("alice", "d.tring.local"); got != "[tring_agent=alice]user/alice@d.tring.local" {
+	e := &Executor{} // default "sip" transport
+	if got := e.agentLeg("alice", "d.tring.local", "t1"); got != "[tring_agent=alice]user/alice@d.tring.local" {
 		t.Errorf("agentLeg = %q", got)
+	}
+}
+
+// With the "gateway" transport the leg routes to the media gateway as a SIP
+// endpoint and carries the tenant id as a SIP header (ADR-001 M4b).
+func TestAgentLegGatewayTransport(t *testing.T) {
+	e := (&Executor{}).WithAgentTransport("gateway", "tring-gw")
+	got := e.agentLeg("alice", "d.tring.local", "t1")
+	want := "[tring_agent=alice,sip_h_X-Tring-Tenant=t1]sofia/gateway/tring-gw/alice"
+	if got != want {
+		t.Errorf("agentLeg = %q, want %q", got, want)
 	}
 }
 

@@ -63,6 +63,11 @@
   <X-PRE-PROCESS cmd="set" data="domain_name=$${domain}"/>
   <X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
   <X-PRE-PROCESS cmd="set" data="use_profile=external"/>
+  <!-- Tring media gateway SIP endpoint (ADR-001 M4b). Where FS sends agent
+       legs when agent_transport=gateway (see external/tring-gw.xml). In dev the
+       gateway runs on the host, so override this to the host IP reachable from
+       this container (e.g. 10.10.81.237:5090), not 127.0.0.1. -->
+  <X-PRE-PROCESS cmd="set" data="tring_gateway_sip=127.0.0.1:5090"/>
   <!-- Trunk credentials are now managed via the admin console at /trunks.
        Each trunk row in the `trunks` table renders to
        external/dynamic/t_<uuid>.xml on save; `sofia profile external

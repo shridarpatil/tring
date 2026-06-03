@@ -109,6 +109,11 @@ type Executor struct {
 	// Cache holds resolved flow definitions (cache-aside, 1h TTL). May be
 	// nil — caching disabled, every resolve reads the DB. Set via WithCache.
 	Cache *cache.Cache
+	// AgentTransport / AgentGateway mirror the API: how an agent's bridge leg
+	// is routed ("sip" → user/<sip>; "gateway" → the media gateway as a SIP
+	// endpoint, ADR-001 M4b). Set via WithAgentTransport. Empty = "sip".
+	AgentTransport string
+	AgentGateway   string
 }
 
 func NewExecutor(d *db.DB) *Executor {
@@ -119,6 +124,14 @@ func NewExecutor(d *db.DB) *Executor {
 // executor for chaining. Passing a nil cache leaves caching disabled.
 func (e *Executor) WithCache(c *cache.Cache) *Executor {
 	e.Cache = c
+	return e
+}
+
+// WithAgentTransport sets how agent bridge legs are routed and returns the
+// executor for chaining. Empty transport leaves the default ("sip").
+func (e *Executor) WithAgentTransport(transport, gateway string) *Executor {
+	e.AgentTransport = transport
+	e.AgentGateway = gateway
 	return e
 }
 
@@ -661,7 +674,7 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 	}
 
 	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
-		return agentLeg(sip, domain), []string{sip}, nil
+		return e.agentLeg(sip, domain, tenantID.String()), []string{sip}, nil
 	}
 
 	rows, err := e.DB.Pool.Query(ctx, e.Q.ListAgentSipUsernames, tenantID)
@@ -679,7 +692,7 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 			return "", nil, err
 		}
 		sips = append(sips, sip)
-		targets = append(targets, agentLeg(sip, domain))
+		targets = append(targets, e.agentLeg(sip, domain, tenantID.String()))
 	}
 	if err := rows.Err(); err != nil {
 		return "", nil, err
@@ -692,7 +705,16 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 // event lets the orchestrator read this variable off the answered B-leg and
 // attribute the call to that agent — reliable even for a ring-all where we
 // otherwise wouldn't know which of N legs picked up.
-func agentLeg(sip, domain string) string {
+//
+// With the "gateway" transport the leg is routed to the media gateway as a SIP
+// endpoint (carrying the tenant id as a SIP header) instead of user/<sip>, so
+// agents speak WebRTC and never register SIP (ADR-001 M4b). Mirrors
+// (*api.Server).agentALeg.
+func (e *Executor) agentLeg(sip, domain, tenantID string) string {
+	if e.AgentTransport == "gateway" {
+		return fmt.Sprintf("[tring_agent=%s,sip_h_X-Tring-Tenant=%s]sofia/gateway/%s/%s",
+			sip, tenantID, e.AgentGateway, sip)
+	}
 	return fmt.Sprintf("[tring_agent=%s]user/%s@%s", sip, sip, domain)
 }
 
