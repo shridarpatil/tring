@@ -51,3 +51,7 @@ sdk/js/dist/
 
 # stray go build output
 /gateway
+
+# Python demo caches
+__pycache__/
+*.pyc

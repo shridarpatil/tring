@@ -51,6 +51,12 @@ type Queries struct {
 	GetAgentBySIP       string `query:"get-agent-by-sip"`
 
 	UpdateGuestRequireBackendMint string `query:"update-guest-require-backend-mint"`
+
+	CreateAPIKey        string `query:"create-api-key"`
+	ListAPIKeys         string `query:"list-api-keys"`
+	RevokeAPIKey        string `query:"revoke-api-key"`
+	ResolveAPIKeyTenant string `query:"resolve-api-key-tenant"`
+	TouchAPIKey         string `query:"touch-api-key"`
 	GetCallTenant       string `query:"get-call-tenant"`
 	GetCallAgentLabel   string `query:"get-call-agent-label"`
 	GetCall             string `query:"get-call"`
