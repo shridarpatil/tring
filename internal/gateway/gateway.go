@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,8 +35,14 @@ type Config struct {
 	RelayOnly bool
 	// FS, when set, enables the FreeSWITCH bridge (the gateway SIP-dials FS).
 	// nil keeps the gateway in standalone echo mode (milestone 1).
-	FS     *FSConfig
-	Logger *log.Logger
+	FS *FSConfig
+	// JWTSecret validates the agent token on /webrtc/offer (shared with the
+	// API). RequireAuth gates whether a valid token is mandatory — kept off
+	// during the rebuild so the echo test works token-less; flipped on once
+	// the SDK sends tokens (M4/M5).
+	JWTSecret   []byte
+	RequireAuth bool
+	Logger      *log.Logger
 }
 
 type ICEServer struct {
@@ -51,6 +58,22 @@ type Gateway struct {
 	api *webrtc.API
 	fs  *fsClient // nil = standalone echo mode
 	log *log.Logger
+}
+
+// authOffer enforces the offer-endpoint auth policy. Returns ok=false (and
+// writes the 401) when a token is required but missing/invalid. When auth is
+// disabled it's a no-op pass.
+func (g *Gateway) authOffer(w http.ResponseWriter, r *http.Request) bool {
+	if !g.cfg.RequireAuth {
+		return true
+	}
+	claims, err := validateToken(bearer(r), g.cfg.JWTSecret)
+	if err != nil {
+		http.Error(w, `{"error":"invalid or missing token"}`, http.StatusUnauthorized)
+		return false
+	}
+	g.log.Printf("gateway: authed offer tenant=%s sip_user=%s", claims.TenantID, claims.SipUsername)
+	return true
 }
 
 // New builds a Gateway: registers Opus + telephone-event (DTMF), scopes the
@@ -322,12 +345,15 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP string) (string, error) {
 	// re-marshalling gives FS a clean Opus stream (PT stays 111, matches).
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		g.log.Printf("gateway: bridge — browser track arrived (%s)", remote.Codec().MimeType)
-		// Rewrite the payload type to the one FS negotiated on its leg
-		// (fsLegOpusPT). The browser may send Opus at a different dynamic PT
-		// (Firefox uses 109, Chrome 111); FS rejects any PT that isn't its
-		// own ("Invalid Packet … PT:NN ignored") so echo never hears us. The
-		// browser's seq/timestamp/SSRC are valid WebRTC, so we keep them; we
-		// only strip extensions FS didn't negotiate and fix the PT.
+		// The browser sends two payload types on the audio track: Opus (its
+		// negotiated PT — Firefox 109, Chrome 111) and telephone-event for
+		// DTMF (another dynamic PT). FS rejects any PT that isn't the one IT
+		// negotiated, so we must remap PER CODEC: Opus → FS's Opus PT, DTMF →
+		// FS's telephone-event PT. A blanket rewrite to Opus would turn DTMF
+		// into noise and IVR menus wouldn't register key presses. Browser
+		// seq/timestamp/SSRC are valid WebRTC — keep them; just strip the
+		// extensions FS didn't negotiate and fix the PT.
+		browserOpusPT := uint8(remote.Codec().PayloadType)
 		for {
 			pkt, _, err := remote.ReadRTP()
 			if err != nil {
@@ -336,7 +362,12 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP string) (string, error) {
 			pkt.Header.Extension = false
 			pkt.Header.ExtensionProfile = 0
 			pkt.Header.Extensions = nil
-			pkt.Header.PayloadType = leg.OpusPT
+			if uint8(pkt.Header.PayloadType) == browserOpusPT {
+				pkt.Header.PayloadType = leg.OpusPT
+			} else {
+				// Anything else on the audio track is telephone-event (DTMF).
+				pkt.Header.PayloadType = leg.DTMFPT
+			}
 			raw, err := pkt.Marshal()
 			if err != nil {
 				continue

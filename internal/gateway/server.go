@@ -45,6 +45,9 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !g.authOffer(w, r) {
+		return
+	}
 	var req offerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SDP == "" {
 		http.Error(w, `{"error":"sdp required"}`, http.StatusBadRequest)

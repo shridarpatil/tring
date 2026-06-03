@@ -22,6 +22,15 @@
   <p id="state" style="font-family:monospace"></p>
   <audio id="remote" autoplay></audio>
 
+  <!-- DTMF dialpad: sends RFC-4733 telephone-event via RTCDTMFSender. Use it
+       against a menu/gather flow to verify DTMF survives the gateway→FS PT
+       remap. -->
+  <div id="pad" style="display:none;margin-top:1rem">
+    <span style="font-size:.85rem;color:#666">DTMF:</span>
+    <span id="keys"></span>
+    <span id="sent" style="font-family:monospace;margin-left:.5rem"></span>
+  </div>
+
   <script>
     const $ = (id) => document.getElementById(id);
     let pc;
@@ -38,7 +47,12 @@
       pc.ontrack = (e) => { $("remote").srcObject = e.streams[0]; };
 
       const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+      let dtmfSender = null;
+      mic.getTracks().forEach((t) => {
+        const sender = pc.addTrack(t, mic);
+        if (sender.dtmf) dtmfSender = sender.dtmf; // RTCDTMFSender for the audio track
+      });
+      buildDialpad(dtmfSender);
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -60,10 +74,26 @@
       $("stop").disabled = false;
     }
 
+    function buildDialpad(dtmf) {
+      const keys = $("keys");
+      keys.innerHTML = "";
+      if (!dtmf) { $("pad").style.display = "none"; return; }
+      "123456789*0#".split("").forEach((d) => {
+        const b = document.createElement("button");
+        b.textContent = d;
+        b.style.cssText = "width:2rem;height:2rem;margin:.1rem";
+        b.onclick = () => { dtmf.insertDTMF(d); $("sent").textContent += d; };
+        keys.appendChild(b);
+      });
+      $("pad").style.display = "block";
+    }
+
     function stop() {
       pc && pc.close();
       $("start").disabled = false;
       $("stop").disabled = true;
+      $("pad").style.display = "none";
+      $("sent").textContent = "";
       $("state").textContent = "stopped";
     }
 

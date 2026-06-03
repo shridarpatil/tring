@@ -44,6 +44,7 @@ func main() {
 			AuthUser: k.String("fs_auth_user"),
 			AuthPass: k.String("fs_auth_pass"),
 			Target:   k.String("fs_target"),
+			FlowID:   k.String("fs_flow_id"),
 			AdvertIP: k.String("gateway_advert_ip"),
 			SIPPort:  k.Int("gateway_sip_port"),
 		}
@@ -53,9 +54,11 @@ func main() {
 		ICEServers: ice,
 		UDPPortMin: uint16(k.Int("gateway_udp_min")),
 		UDPPortMax: uint16(k.Int("gateway_udp_max")),
-		PublicIP:   k.String("public_ip"),
-		RelayOnly:  k.Bool("turn_relay_only"),
-		FS:         fs,
+		PublicIP:    k.String("public_ip"),
+		RelayOnly:   k.Bool("turn_relay_only"),
+		FS:          fs,
+		JWTSecret:   []byte(k.String("jwt_secret")),
+		RequireAuth: k.Bool("gateway_require_auth"),
 	})
 	if err != nil {
 		log.Fatalf("gateway: %v", err)

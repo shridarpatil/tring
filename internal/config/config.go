@@ -42,7 +42,11 @@ var defaults = map[string]any{
 	"fs_sip_addr":       "127.0.0.1:5060",
 	"fs_auth_user":      "1000",
 	"fs_auth_pass":      "1234",
-	"fs_target":         "9999", // dialplan extension the gateway calls (echo for the POC)
+	"fs_target":         "9999", // fallback dialplan extension (echo) when no flow is pinned
+	"fs_flow_id":        "",     // pin a WebRTC call to this IVR flow (no DID); empty → fs_target
+	// Require a valid agent token on /webrtc/offer. Off during the rebuild
+	// (echo test is token-less); on once the SDK sends tokens (M4/M5).
+	"gateway_require_auth": false,
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.

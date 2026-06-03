@@ -16,6 +16,18 @@
     <!-- WebRTC media gateway (ADR-001) POC target: the pion gateway SIP-dials
          9999 to validate the browser→gateway→FreeSWITCH bridge against a plain
          echo. Milestone 2b points the gateway at the real IVR DID instead. -->
+    <!-- WebRTC gateway, flow-pinned (no DID): the pion gateway INVITEs
+         'gwflow' with an X-Tring-Flow-Id header. We copy it to tring_flow_id
+         and hand to the IVR socket, where the executor runs that flow via
+         resolveFlowByID — exactly like a guest web call, just sourced from the
+         gateway instead of a guest_* registration. -->
+    <extension name="tring_gateway_flow">
+      <condition field="destination_number" expression="^gwflow$">
+        <action application="set" data="tring_flow_id=${sip_h_X-Tring-Flow-Id}"/>
+        <action application="socket" data="127.0.0.1:8086 full"/>
+      </condition>
+    </extension>
+
     <extension name="tring_gateway_echo">
       <condition field="destination_number" expression="^9999$">
         <action application="answer"/>
