@@ -37,14 +37,19 @@ type FSConfig struct {
 const gwFlowExtension = "gwflow"
 
 // fsClient owns the shared sipgo stack (one UA + client + server listener),
-// reused for every call leg. Built once in gateway.New when FS is configured.
+// reused for every call leg. It is both a UAC toward FS (visitor path: the
+// gateway dials FS) and a UAS (agent path: FS dials the gateway). Built once in
+// gateway.New when FS is configured.
 type fsClient struct {
-	cfg FSConfig
-	dc  *sipgo.DialogClientCache
-	log *log.Logger
+	cfg  FSConfig
+	srv  *sipgo.Server
+	dc   *sipgo.DialogClientCache // UAC dialogs (gateway → FS)
+	ds   *sipgo.DialogServerCache // UAS dialogs (FS → gateway, agent legs)
+	bind string
+	log  *log.Logger
 }
 
-func newFSClient(ctx context.Context, cfg FSConfig, logger *log.Logger) (*fsClient, error) {
+func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
 	// The UA hostname drives the From header domain (defaults to "localhost").
 	// FreeSWITCH's auto_from challenge realm derives from it, so it MUST be the
 	// directory domain where the auth user lives, or FS looks up the user under
@@ -62,13 +67,24 @@ func newFSClient(ctx context.Context, cfg FSConfig, logger *log.Logger) (*fsClie
 	if err != nil {
 		return nil, err
 	}
-	// Listen so responses + in-dialog requests (BYE from FS) are received.
-	go func() { _ = srv.ListenAndServe(ctx, "udp", bind) }()
-
 	// From/Contact user must be the directory user we digest-auth as, or FS
 	// rejects the INVITE (403) — it authenticates against the From user.
 	contact := sip.ContactHeader{Address: sip.Uri{User: cfg.AuthUser, Host: cfg.AdvertIP, Port: cfg.SIPPort}}
-	return &fsClient{cfg: cfg, dc: sipgo.NewDialogClientCache(client, contact), log: logger}, nil
+	return &fsClient{
+		cfg:  cfg,
+		srv:  srv,
+		dc:   sipgo.NewDialogClientCache(client, contact),
+		ds:   sipgo.NewDialogServerCache(client, contact),
+		bind: bind,
+		log:  logger,
+	}, nil
+}
+
+// serve starts the SIP listener. Call AFTER any UAS handlers are registered on
+// f.srv so inbound INVITEs (agent legs) are dispatched. The listener also
+// receives UAC in-dialog requests (BYE from FS).
+func (f *fsClient) serve(ctx context.Context) {
+	go func() { _ = f.srv.ListenAndServe(ctx, "udp", f.bind) }()
 }
 
 // fsLeg is one established call into FreeSWITCH: a UDP RTP socket bound on the
@@ -98,7 +114,7 @@ func (f *fsClient) dial(ctx context.Context, flowID string) (*fsLeg, error) {
 	localPort := rtp.LocalAddr().(*net.UDPAddr).Port
 	f.log.Printf("gateway: our RTP socket on %s:%d (advertised to FS)", f.cfg.AdvertIP, localPort)
 
-	offer := buildSDP(f.cfg.AdvertIP, localPort)
+	offer := buildSDP(f.cfg.AdvertIP, localPort, 111, 101)
 	host, portStr, _ := net.SplitHostPort(f.cfg.SIPAddr)
 	port, _ := strconv.Atoi(portStr)
 
@@ -150,25 +166,31 @@ func (f *fsClient) dial(ctx context.Context, flowID string) (*fsLeg, error) {
 
 func (l *fsLeg) Close() {
 	l.closeOnce.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = l.session.Bye(ctx)
+		// The UAC (visitor) leg owns a client dialog to BYE; the UAS (agent)
+		// leg's SIP dialog is owned elsewhere, so session is nil here.
+		if l.session != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = l.session.Bye(ctx)
+		}
 		_ = l.RTP.Close()
 	})
 }
 
-// buildSDP offers Opus (passthrough from the browser leg) + telephone-event DTMF.
-func buildSDP(ip string, port int) string {
+// buildSDP describes an Opus + telephone-event (DTMF) audio stream on the given
+// port. As a UAC offer the gateway picks the PTs (111/101); as a UAS answer it
+// MUST echo the PTs FreeSWITCH offered, so they're parameters.
+func buildSDP(ip string, port int, opusPT, dtmfPT uint8) string {
 	return strings.Join([]string{
 		"v=0",
 		fmt.Sprintf("o=tring 0 0 IN IP4 %s", ip),
 		"s=tring-gateway",
 		fmt.Sprintf("c=IN IP4 %s", ip),
 		"t=0 0",
-		fmt.Sprintf("m=audio %d RTP/AVP 111 101", port),
-		"a=rtpmap:111 opus/48000/2",
-		"a=rtpmap:101 telephone-event/8000",
-		"a=fmtp:101 0-16",
+		fmt.Sprintf("m=audio %d RTP/AVP %d %d", port, opusPT, dtmfPT),
+		fmt.Sprintf("a=rtpmap:%d opus/48000/2", opusPT),
+		fmt.Sprintf("a=rtpmap:%d telephone-event/8000", dtmfPT),
+		fmt.Sprintf("a=fmtp:%d 0-16", dtmfPT),
 		"a=ptime:20",
 		"a=sendrecv",
 		"",
