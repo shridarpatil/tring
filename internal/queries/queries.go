@@ -103,7 +103,7 @@ type Queries struct {
 	GetCallPayload    string `query:"get-call-payload"`
 
 	// ---- orchestrator: IVR executor (ivr_executor.go) ----
-	ResolveInboundFlow    string `query:"resolve-inbound-flow"`
+	ResolveInboundNumber  string `query:"resolve-inbound-number"`
 	ExpireGuestSession    string `query:"expire-guest-session"`
 	GetActiveFlowByID     string `query:"get-active-flow-by-id"`
 	ListAgentSipUsernames string `query:"list-agent-sip-usernames"`
