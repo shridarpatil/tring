@@ -99,6 +99,13 @@ curl -sS -H "Authorization: Bearer $AUTH" \
         <input id="tokenInput" type="text" placeholder="Paste JWT here…" autocomplete="off" />
         <button id="loadBtn">Load agent.js</button>
       </div>
+      <p style="margin:.5rem 0 0">Transport: leave the gateway URL set to use raw
+      WebRTC via the media gateway (recommended — no SIP in the browser); clear it
+      to fall back to the legacy sip.js/WSS path.</p>
+      <div class="token-form">
+        <input id="gwInput" type="text" value="http://localhost:8087"
+          placeholder="gateway URL (blank = legacy SIP)" autocomplete="off" />
+      </div>
       <div class="toolbar" id="status" style="margin-top:0.75rem;">
         <span class="dot"></span> <span class="text">not loaded</span>
       </div>
@@ -147,8 +154,8 @@ curl -sS -H "Authorization: Bearer $AUTH" \
       <h2>What's happening under the hood</h2>
       <ul>
         <li>Each <em>Call</em> button has <code>data-tring-call data-to="…"</code> — that's the whole integration on the HTML side.</li>
-        <li><code>agent.js</code> fetches your agent's SIP credentials with the JWT, registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>, and listens for incoming INVITEs.</li>
-        <li><em>Coming next (ADR-001 M4b):</em> agents move onto the same raw-WebRTC media gateway the visitor widget already uses — no SIP in the browser, FreeSWITCH stays private. Server-side routing (<code>agent_transport=gateway</code>) is in place; the agent SDK transport is the remaining piece.</li>
+        <li><strong>Gateway transport (default above, ADR-001 M4b):</strong> <code>agent.js</code> opens one WebSocket to the media gateway (<code>/agent/ws</code>) with the JWT for presence + incoming-call signaling, then peers over raw WebRTC. No SIP in the browser; FreeSWITCH stays private. Requires the gateway running and <code>agent_transport=gateway</code> on the server.</li>
+        <li><em>Legacy transport (clear the gateway URL):</em> <code>agent.js</code> fetches the agent's SIP credentials with the JWT and registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>.</li>
         <li>Clicking Call posts to <code>/v1/sdk/calls</code>. Tring tells FreeSWITCH to ring the agent's browser; on answer, the call bridges to the destination via the configured trunk (loopback in dev, Exotel/Airtel/Jio/Tata in production).</li>
         <li>The floating panel in the bottom right shows ringing → connected → ended status with a single Hang up button. Pure CSS, no framework.</li>
       </ul>
@@ -171,6 +178,9 @@ curl -sS -H "Authorization: Bearer $AUTH" \
       s.src = 'http://localhost:8085/sdk/agent.js';
       s.setAttribute('data-api-base', 'http://localhost:8085');
       s.setAttribute('data-token', token);
+      // Raw-WebRTC gateway transport when a gateway URL is set; else sip.js.
+      const gw = $('gwInput').value.trim();
+      if (gw) s.setAttribute('data-gateway-url', gw);
       s.onload = () => setStatus('ready', 'agent.js loaded — click any Call button');
       s.onerror = () => setStatus('error', 'agent.js failed to load');
       document.body.appendChild(s);

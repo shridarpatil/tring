@@ -20,6 +20,20 @@ export interface InitOpts {
    * automatically? Default: true. Set false to gate on a UI confirm.
    */
   autoAnswer?: boolean;
+
+  /**
+   * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001 M4b).
+   * When set, the agent peers with the gateway over raw WebRTC (a WebSocket
+   * for signaling + presence) instead of SIP-over-WSS to FreeSWITCH — the
+   * agent never speaks SIP and FreeSWITCH stays private. When omitted, the
+   * SDK falls back to the legacy sip.js path.
+   */
+  gatewayUrl?: string;
+  /**
+   * ICE servers for the gateway WebRTC path. Optional — defaults to a public
+   * STUN server. Provide TURN entries for agents behind symmetric NAT.
+   */
+  iceServers?: RTCIceServer[];
 }
 
 export interface Call {
