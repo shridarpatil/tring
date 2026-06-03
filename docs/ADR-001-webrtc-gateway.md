@@ -1,9 +1,23 @@
 # ADR-001: pion WebRTC gateway in front of a private FreeSWITCH
 
-- **Status:** Proposed (gated on the bridge POC — see `docs/POC_PION_FS_BRIDGE.md`)
+- **Status:** Accepted — implemented (M1–M5 shipped 2026-06-03). The pion↔FS
+  bridge POC is proven and the cutover is complete: both visitor and agent web
+  calling run through `cmd/gateway` over raw WebRTC, and sip.js / SIP-over-WSS
+  has been removed from the SDK and server. Implementation notes live in
+  `CLAUDE.md` (§"WebRTC media gateway"). Media still wants end-to-end live
+  validation against a deployed gateway (sandbox can't exercise UDP/WebRTC).
 - **Date:** 2026-06-03
 - **Deciders:** Tring core
 - **Related:** `docs/WEB_CALL_FLOW.md`, `docs/EDGE_DEPLOYMENT.md`
+
+### Milestones (all complete)
+
+- **M1** — gateway scaffold + browser WebRTC echo.
+- **M2** — gateway↔FreeSWITCH bridge (the keystone): browser ↔ gateway ↔ private FS, real Opus audio.
+- **M3** — auth + DTMF-aware bridging + flow-pinned routing (no DID).
+- **M4** — visitor SDK off sip.js (`GatewayAdapter`).
+- **M4b** — agent SDK off sip.js (presence WebSocket + gateway SIP UAS for inbound agent legs).
+- **M5** — cutover: sip.js removed; `agent_transport=gateway` default; visitor gateway call token (flow + trusted `client_ref`); guest SIP sessions dropped; gateway shipped as a compose service.
 
 ## Context
 
