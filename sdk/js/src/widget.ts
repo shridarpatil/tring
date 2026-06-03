@@ -18,9 +18,8 @@ export interface WidgetOpts {
   /** Tring API base, e.g. https://api.tring.io. */
   apiBase: string;
   /**
-   * Media gateway base URL (ADR-001 M4b). When set, the agent uses raw
-   * WebRTC via the gateway instead of sip.js over WSS. Omit for the legacy
-   * SIP path.
+   * Media gateway base URL (ADR-001 M4b). The agent connects over raw WebRTC
+   * via the gateway. Required.
    */
   gatewayUrl?: string;
 }

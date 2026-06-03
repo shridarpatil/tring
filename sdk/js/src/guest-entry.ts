@@ -4,16 +4,14 @@
 // Drop one tag on any public page; no JS required:
 //
 //   <script src=".../sdk/voice.js"
-//           data-api-base="https://api.tring.io"
-//           data-public-key="pk_live_…"
-//           data-flow-id="<uuid>"        // optional; else tenant default
-//           data-button-label="Call us"  // optional
+//           data-gateway-url="https://gw.tring.io"
+//           data-flow-id="<uuid>"         // the IVR flow to land in
+//           data-button-label="Call us"   // optional
 //   ></script>
 //
-// For a LOGGED-IN caller whose identity you want on the call log, skip the
-// public key and point the widget at your own backend, which returns the
-// credentials it minted via Tring's authenticated endpoint (with a trusted
-// client_ref):
+// For a LOGGED-IN caller whose identity you want on the call log, point the
+// widget at your own backend, which returns the gateway connection details
+// (gateway_url + flow_id, optional token/ICE) for the verified caller:
 //
 //   <script src=".../sdk/voice.js"
 //           data-credentials-url="/api/tring/guest-credentials"
@@ -30,7 +28,7 @@ function findOwnScript(): HTMLScriptElement | null {
   const cs = document.currentScript as HTMLScriptElement | null;
   if (cs && cs.tagName === "SCRIPT") return cs;
   const candidates = document.querySelectorAll(
-    "script[data-public-key], script[data-credentials-url], script[data-gateway-url]",
+    "script[data-gateway-url], script[data-credentials-url]",
   );
   return (candidates[candidates.length - 1] as HTMLScriptElement) ?? null;
 }
@@ -39,26 +37,20 @@ function start() {
   const s = findOwnScript();
   if (!s) {
     console.error(
-      "[tring-guest] could not find own <script> tag (needs data-gateway-url, data-public-key, or data-credentials-url)",
+      "[tring-guest] could not find own <script> tag (needs data-gateway-url or data-credentials-url)",
     );
     return;
   }
-  const apiBase =
-    s.getAttribute("data-api-base") || s.getAttribute("data-api") || "";
-  const publicKey = s.getAttribute("data-public-key") || "";
   const credentialsUrl = s.getAttribute("data-credentials-url") || "";
   const gatewayUrl = s.getAttribute("data-gateway-url") || "";
-  // Gateway path (preferred), bring-your-own-credentials (trusted), or the
-  // public mint — any one is sufficient.
-  if (!gatewayUrl && !credentialsUrl && (!apiBase || !publicKey)) {
+  // Gateway URL (anonymous path) or a backend credentials URL (trusted path).
+  if (!gatewayUrl && !credentialsUrl) {
     console.error(
-      "[tring-guest] provide data-gateway-url, data-credentials-url, or data-api-base + data-public-key",
+      "[tring-guest] provide data-gateway-url (+ data-flow-id) or data-credentials-url",
     );
     return;
   }
   bootstrapGuest({
-    apiBase: apiBase || undefined,
-    publicKey: publicKey || undefined,
     credentialsUrl: credentialsUrl || undefined,
     gatewayUrl: gatewayUrl || undefined,
     flowId: s.getAttribute("data-flow-id") || undefined,

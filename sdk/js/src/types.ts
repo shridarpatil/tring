@@ -23,10 +23,9 @@ export interface InitOpts {
 
   /**
    * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001 M4b).
-   * When set, the agent peers with the gateway over raw WebRTC (a WebSocket
-   * for signaling + presence) instead of SIP-over-WSS to FreeSWITCH — the
-   * agent never speaks SIP and FreeSWITCH stays private. When omitted, the
-   * SDK falls back to the legacy sip.js path.
+   * The agent peers with the gateway over raw WebRTC (a WebSocket for
+   * signaling + presence) — the agent never speaks SIP and FreeSWITCH stays
+   * private. Required.
    */
   gatewayUrl?: string;
   /**
@@ -74,11 +73,10 @@ export type TringEvent =
 
 export interface GuestInitOpts {
   /**
-   * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001). When
-   * set, the visitor peers directly with the gateway over raw WebRTC and never
-   * touches SIP/WSS or FreeSWITCH — the preferred web-calling path. Combine
-   * with `flowId` to pin the call to an IVR flow. When omitted, the SDK falls
-   * back to the legacy SIP-over-WSS path via minted credentials.
+   * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001). The
+   * visitor peers directly with the gateway over raw WebRTC — FreeSWITCH stays
+   * private. Required (anonymous path) unless credentialsUrl/fetchCredentials
+   * supplies it.
    */
   gatewayUrl?: string;
   /**
@@ -87,46 +85,40 @@ export interface GuestInitOpts {
    */
   iceServers?: RTCIceServer[];
   /**
-   * Optional agent/guest token, sent as a bearer to the gateway when it
-   * requires auth. Anonymous visitor calls leave this unset.
+   * Optional token, sent as a bearer to the gateway when it requires auth.
+   * Anonymous visitor calls leave this unset.
    */
   token?: string;
   /**
-   * Tenant public widget key (`pk_live_…`). Safe to embed in a public web
-   * page — it only authorizes minting a flow-pinned guest identity, never
-   * tenant access. Issued via GET /v1/guest-config. Required for the
-   * anonymous-visitor flow; omit when using credentialsUrl/fetchCredentials.
-   */
-  publicKey?: string;
-  /** Tring API base, e.g. "https://api.tring.io". Used for the public mint. */
-  apiBase?: string;
-  /**
-   * Optional flow UUID to route this guest into. Omit to use the tenant's
-   * configured support flow (the common case).
+   * Flow UUID to route this visitor into (the IVR flow the gateway pins the
+   * call to). Required for the anonymous path; or supplied by
+   * credentialsUrl/fetchCredentials.
    */
   flowId?: string;
   /**
    * Bring-your-own-credentials (the trusted, logged-in-caller flow). A URL on
-   * YOUR backend that returns a GuestCredentialsResponse — the creds your
-   * backend obtained from Tring's authenticated mint
-   * (`POST /v1/guest-credentials` with the tenant API key + a verified
-   * `client_ref`). Fetched with `credentials: "include"` so your session
-   * cookie authenticates the caller. When set, the public mint
-   * (publicKey/apiBase) is bypassed, so the caller identity can't be spoofed
-   * from the browser.
+   * YOUR backend that returns a GuestCredentialsResponse (gateway URL + flow id
+   * + optional token/ICE) — e.g. derived from the verified logged-in caller.
+   * Fetched with `credentials: "include"` so your session cookie authenticates
+   * the request. When set, it supplies the gateway connection details.
    */
   credentialsUrl?: string;
   /**
    * Programmatic alternative to credentialsUrl: return the credentials
-   * yourself (fetch them however you like). Takes precedence over
-   * credentialsUrl and the public mint.
+   * yourself. Takes precedence over credentialsUrl.
    */
   fetchCredentials?: () => Promise<GuestCredentialsResponse>;
 }
 
-/** /v1/sdk/guest-credentials response: SIP creds + the IVR dial target. */
-export interface GuestCredentialsResponse extends SipCredentialsResponse {
-  dial_target: string;
+/**
+ * Gateway connection details for a visitor call (BYOC/trusted path). The
+ * integrator's backend returns this so the browser never needs a tenant key.
+ */
+export interface GuestCredentialsResponse {
+  gateway_url: string;
+  flow_id: string;
+  token?: string;
+  ice_servers?: RTCIceServer[];
 }
 
 export type GuestCallStatus =
@@ -137,23 +129,8 @@ export type GuestCallStatus =
   | "ended";
 
 export type GuestEvent =
-  | { type: "connecting" } // fetching creds / registering
-  | { type: "ringing" } // INVITE sent into the IVR, awaiting answer
+  | { type: "connecting" } // acquiring mic / negotiating
+  | { type: "ringing" } // offer sent to the gateway, awaiting answer
   | { type: "connected" } // IVR answered, media flowing
   | { type: "ended"; reason?: string }
   | { type: "error"; error: Error };
-
-export interface SipCredentialsResponse {
-  sip_username: string;
-  sip_password: string;
-  sip_domain: string;
-  ws_url: string;
-  /**
-   * ICE servers for WebRTC media setup. Always includes at least one
-   * STUN entry; TURN entries (carry username + credential) appear when
-   * the Tring server has TRING_TURN_URL configured. Browsers behind
-   * symmetric NAT or CGNAT need TURN to relay media — pure STUN fails.
-   * Passed through to RTCPeerConnection unchanged.
-   */
-  ice_servers: RTCIceServer[];
-}
