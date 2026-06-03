@@ -19,13 +19,22 @@ import (
 // user and INVITEs a dialplan extension; media is plain RTP on the private
 // network (no DTLS on the FS leg).
 type FSConfig struct {
-	SIPAddr   string // FS internal profile host:port, e.g. "127.0.0.1:5060"
-	AuthUser  string // directory user to auth as, e.g. "1000"
-	AuthPass  string // its SIP password
-	Target    string // dialplan extension to call, e.g. "9999" (echo) or an IVR DID
-	AdvertIP  string // IP advertised to FS for SIP+RTP (FS-reachable), e.g. "127.0.0.1"
-	SIPPort   int    // gateway SIP listen port, e.g. 5090
+	SIPAddr  string // FS internal profile host:port, e.g. "127.0.0.1:5060"
+	AuthUser string // directory user to auth as, e.g. "1000"
+	AuthPass string // its SIP password
+	Target   string // dialplan extension to call when no flow is pinned (echo/DID)
+	// FlowID pins the call to an IVR flow directly (no DID/numbers lookup) —
+	// the web-call path. When set, the gateway routes to the flow-pinned
+	// dialplan extension and passes the id as a SIP header the dialplan maps
+	// to tring_flow_id (mirrors the guest web-calling path). Empty → Target.
+	FlowID   string
+	AdvertIP string // IP advertised to FS for SIP+RTP (FS-reachable), e.g. "127.0.0.1"
+	SIPPort  int    // gateway SIP listen port, e.g. 5090
 }
+
+// gwFlowExtension is the dialplan destination that pins an IVR flow from the
+// X-Tring-Flow-Id SIP header (see freeswitch/conf/dialplan/default.xml).
+const gwFlowExtension = "gwflow"
 
 // fsClient owns the shared sipgo stack (one UA + client + server listener),
 // reused for every call leg. Built once in gateway.New when FS is configured.
@@ -67,7 +76,8 @@ func newFSClient(ctx context.Context, cfg FSConfig, logger *log.Logger) (*fsClie
 type fsLeg struct {
 	RTP       *net.UDPConn
 	FSRTPAddr *net.UDPAddr
-	OpusPT    uint8 // payload type FS negotiated for Opus (forward with this)
+	OpusPT    uint8 // payload type FS negotiated for Opus
+	DTMFPT    uint8 // payload type FS negotiated for telephone-event (DTMF)
 	session   *sipgo.DialogClientSession
 	closeOnce sync.Once
 }
@@ -86,10 +96,19 @@ func (f *fsClient) dial(ctx context.Context) (*fsLeg, error) {
 	offer := buildSDP(f.cfg.AdvertIP, localPort)
 	host, portStr, _ := net.SplitHostPort(f.cfg.SIPAddr)
 	port, _ := strconv.Atoi(portStr)
-	recipient := sip.Uri{User: f.cfg.Target, Host: host, Port: port}
 
-	session, err := f.dc.Invite(ctx, recipient, []byte(offer),
-		sip.NewHeader("Content-Type", "application/sdp"))
+	// Flow-pinned (web call): route to the gwflow extension and carry the flow
+	// id in a SIP header — no DID. Otherwise dial the configured Target
+	// (echo/DID). FreeSWITCH exposes X-… headers as ${sip_h_X-…}.
+	dest := f.cfg.Target
+	headers := []sip.Header{sip.NewHeader("Content-Type", "application/sdp")}
+	if f.cfg.FlowID != "" {
+		dest = gwFlowExtension
+		headers = append(headers, sip.NewHeader("X-Tring-Flow-Id", f.cfg.FlowID))
+	}
+	recipient := sip.Uri{User: dest, Host: host, Port: port}
+
+	session, err := f.dc.Invite(ctx, recipient, []byte(offer), headers...)
 	if err != nil {
 		rtp.Close()
 		return nil, fmt.Errorf("invite: %w", err)
@@ -110,7 +129,7 @@ func (f *fsClient) dial(ctx context.Context) (*fsLeg, error) {
 			f.log.Printf("gateway: FS answer: %s", line)
 		}
 	}
-	fsAddr, opusPT, err := parseSDPMedia(answerSDP)
+	fsAddr, opusPT, dtmfPT, err := parseSDPMedia(answerSDP)
 	if err != nil {
 		rtp.Close()
 		_ = session.Bye(ctx)
@@ -121,7 +140,7 @@ func (f *fsClient) dial(ctx context.Context) (*fsLeg, error) {
 		_ = session.Bye(ctx)
 		return nil, fmt.Errorf("ack: %w", err)
 	}
-	return &fsLeg{RTP: rtp, FSRTPAddr: fsAddr, OpusPT: opusPT, session: session}, nil
+	return &fsLeg{RTP: rtp, FSRTPAddr: fsAddr, OpusPT: opusPT, DTMFPT: dtmfPT, session: session}, nil
 }
 
 func (l *fsLeg) Close() {
@@ -154,12 +173,19 @@ func buildSDP(ip string, port int) string {
 // parseSDPMedia pulls the connection IP (c=), audio port (m=audio), and the
 // Opus payload type (a=rtpmap:<PT> opus) out of an SDP answer so we know where
 // to send RTP and which PT FS expects.
-func parseSDPMedia(sdp string) (*net.UDPAddr, uint8, error) {
+func parseSDPMedia(sdp string) (addr *net.UDPAddr, opusPT, dtmfPT uint8, err error) {
 	var ip string
 	var port int
-	var opusPT uint8
+	rtpmapPT := func(line string) (uint8, bool) {
+		// a=rtpmap:<PT> <codec>/...  → PT
+		if n, e := strconv.Atoi(strings.Fields(strings.TrimPrefix(line, "a=rtpmap:"))[0]); e == nil {
+			return uint8(n), true
+		}
+		return 0, false
+	}
 	for _, line := range strings.Split(sdp, "\n") {
 		line = strings.TrimSpace(line)
+		low := strings.ToLower(line)
 		switch {
 		case strings.HasPrefix(line, "c=IN IP4 "):
 			ip = strings.TrimSpace(strings.TrimPrefix(line, "c=IN IP4 "))
@@ -168,19 +194,24 @@ func parseSDPMedia(sdp string) (*net.UDPAddr, uint8, error) {
 			if len(fields) >= 2 {
 				port, _ = strconv.Atoi(fields[1])
 			}
-		case strings.HasPrefix(line, "a=rtpmap:") && strings.Contains(strings.ToLower(line), "opus"):
-			// a=rtpmap:111 opus/48000/2  → PT 111
-			rest := strings.TrimPrefix(line, "a=rtpmap:")
-			if n, err := strconv.Atoi(strings.Fields(rest)[0]); err == nil {
-				opusPT = uint8(n)
+		case strings.HasPrefix(line, "a=rtpmap:") && strings.Contains(low, "opus"):
+			if pt, ok := rtpmapPT(line); ok {
+				opusPT = pt
+			}
+		case strings.HasPrefix(line, "a=rtpmap:") && strings.Contains(low, "telephone-event"):
+			if pt, ok := rtpmapPT(line); ok {
+				dtmfPT = pt
 			}
 		}
 	}
 	if ip == "" || port == 0 {
-		return nil, 0, fmt.Errorf("no audio media in answer")
+		return nil, 0, 0, fmt.Errorf("no audio media in answer")
 	}
 	if opusPT == 0 {
-		opusPT = 111 // fall back to our offered PT
+		opusPT = 111 // fall back to our offered PTs
 	}
-	return &net.UDPAddr{IP: net.ParseIP(ip), Port: port}, opusPT, nil
+	if dtmfPT == 0 {
+		dtmfPT = 101
+	}
+	return &net.UDPAddr{IP: net.ParseIP(ip), Port: port}, opusPT, dtmfPT, nil
 }
