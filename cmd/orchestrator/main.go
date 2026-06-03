@@ -21,6 +21,7 @@ import (
 
 	"github.com/percipia/eslgo"
 
+	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/orchestrator"
@@ -47,8 +48,18 @@ func main() {
 	// for DIDs the operator wants to put through the flow builder. Lives
 	// in this same process so the orchestrator can reuse its DB pool;
 	// runs in its own goroutine and doesn't block the event-loop runner.
+	// Optional Redis cache for IVR flow definitions (cache-aside, 1h TTL,
+	// invalidated by the API on flow edits). Redis is optional: if it's not
+	// configured or unreachable we log and run with caching disabled rather
+	// than refuse to start — correctness doesn't depend on it.
+	flowCache, err := cache.New(k.String("redis_addr"))
+	if err != nil {
+		log.Printf("cache: redis unavailable (%v) — IVR flow caching disabled", err)
+	}
+	defer flowCache.Close()
+
 	ivrAddr := k.String("ivr_addr")
-	exec := orchestrator.NewExecutor(dbase)
+	exec := orchestrator.NewExecutor(dbase).WithCache(flowCache)
 	go func() {
 		log.Printf("ivr executor listening on %s", ivrAddr)
 		if err := eslgo.ListenAndServe(ivrAddr, exec.HandleInboundCall); err != nil {

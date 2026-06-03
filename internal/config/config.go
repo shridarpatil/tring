@@ -32,6 +32,10 @@ var defaults = map[string]any{
 	"stun_url":      "stun:stun.l.google.com:19302",
 	"api_addr":      ":8085",
 	"ivr_addr":      ":8086",
+	// redis_addr enables the IVR flow cache (host:port). Empty = caching
+	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
+	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
+	"redis_addr": "",
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid

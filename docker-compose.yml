@@ -87,6 +87,21 @@ services:
       retries: 10
     restart: unless-stopped
 
+  redis:
+    image: redis:7-alpine
+    container_name: tring-redis
+    # Pure cache — no persistence. The IVR flow cache is repopulated from
+    # Postgres on a miss, so losing it on restart only costs a few DB reads.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
   # ---- Tring Go services ------------------------------------------------
   # Both are built from the same Dockerfile via build args (CMD=api or
   # CMD=orchestrator). Distroless final image, statically linked binary,
@@ -117,11 +132,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - path: .env
         required: false
     environment:
       - TRING_DSN=${TRING_DSN:-postgres://tring:tring_dev@127.0.0.1:5434/tring}
+      # IVR flow cache. Must point at the SAME Redis as the orchestrator so
+      # an edit here invalidates the key the orchestrator reads. Empty
+      # disables caching (reads fall through to Postgres).
+      - TRING_REDIS_ADDR=${TRING_REDIS_ADDR:-127.0.0.1:6379}
       - TRING_JWT_SECRET=${TRING_JWT_SECRET:-tring_dev_jwt_secret_change_me_in_prod}
       - TRING_FS_BASIC_AUTH=${TRING_FS_BASIC_AUTH:-fs:fs_dev_secret_change_me_in_prod}
       # First-boot auto-seed: creates a tenant + admin console user the
@@ -166,11 +187,16 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - path: .env
         required: false
     environment:
       - TRING_DSN=${TRING_DSN:-postgres://tring:tring_dev@127.0.0.1:5434/tring}
+      # Same Redis as the api — the orchestrator reads cached flow
+      # definitions the api invalidates on edit. Empty disables caching.
+      - TRING_REDIS_ADDR=${TRING_REDIS_ADDR:-127.0.0.1:6379}
       - TRING_ESL_ADDR=${TRING_ESL_ADDR:-127.0.0.1:8021}
       - TRING_ESL_PASSWORD=${TRING_ESL_PASSWORD:-ClueCon}
     restart: unless-stopped

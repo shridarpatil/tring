@@ -27,13 +27,34 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/percipia/eslgo"
 	"github.com/percipia/eslgo/command"
 	"github.com/percipia/eslgo/command/call"
 
+	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/queries"
 )
+
+// flowCacheTTL is how long a resolved flow definition stays cached. Flows
+// change rarely (operator edits in the console), and every edit invalidates
+// the key, so an hour is a safe upper bound on staleness if an invalidation
+// is ever missed (e.g. the API and orchestrator point at different Redis).
+const flowCacheTTL = time.Hour
+
+// FlowCacheKey is the cache key for a flow's definition. Exported so the API
+// (which writes flows) can invalidate the exact key the orchestrator reads —
+// the two services share one Redis. See handlers_flows.go.
+func FlowCacheKey(flowID uuid.UUID) string { return "ivr:flow:" + flowID.String() }
+
+// flowCacheEntry is the cached payload: the owning tenant plus the raw flow
+// definition JSON (kept as text so it unmarshals exactly as the DB column
+// would). resolveFlowByID needs the tenant, so it's cached alongside.
+type flowCacheEntry struct {
+	TenantID   uuid.UUID `json:"tenant_id"`
+	Definition string    `json:"definition"`
+}
 
 // ─── Flow data model (matches the frontend / API JSON shape) ────────
 
@@ -85,10 +106,20 @@ type Executor struct {
 	DB     *db.DB
 	Q      *queries.Queries
 	Logger *log.Logger
+	// Cache holds resolved flow definitions (cache-aside, 1h TTL). May be
+	// nil — caching disabled, every resolve reads the DB. Set via WithCache.
+	Cache *cache.Cache
 }
 
 func NewExecutor(d *db.DB) *Executor {
 	return &Executor{DB: d, Q: queries.MustLoad(), Logger: log.Default()}
+}
+
+// WithCache attaches a Redis cache for flow definitions and returns the
+// executor for chaining. Passing a nil cache leaves caching disabled.
+func (e *Executor) WithCache(c *cache.Cache) *Executor {
+	e.Cache = c
+	return e
 }
 
 // HandleInboundCall is the outbound-socket callback FreeSWITCH calls
@@ -191,23 +222,24 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 	var (
 		tenantID uuid.UUID
 		flowID   *uuid.UUID
-		defJSON  []byte
 	)
-	row := e.DB.Pool.QueryRow(ctx, e.Q.ResolveInboundFlow, called)
-	if err := row.Scan(&tenantID, &flowID, &defJSON); err != nil {
+	// Cheap indexed point read; always hits the DB (a number's flow
+	// assignment can change independently of the flow's contents).
+	row := e.DB.Pool.QueryRow(ctx, e.Q.ResolveInboundNumber, called)
+	if err := row.Scan(&tenantID, &flowID); err != nil {
 		return nil, err
 	}
-	if flowID == nil || len(defJSON) == 0 {
+	if flowID == nil {
 		return &ResolvedFlow{TenantID: tenantID}, nil
 	}
-	var flow ivrFlowData
-	if err := json.Unmarshal(defJSON, &flow); err != nil {
-		return nil, fmt.Errorf("bad flow JSON: %w", err)
+	// The (large, rarely-changing) definition is served from the cache.
+	// A nil/empty flow means the attached flow is inactive — same outcome
+	// as the old LEFT JOIN ... AND is_active returning no definition.
+	flow, _, err := e.loadFlow(ctx, *flowID)
+	if err != nil {
+		return nil, err
 	}
-	if flow.EntryNode == "" {
-		return nil, fmt.Errorf("flow has no entry node")
-	}
-	return &ResolvedFlow{TenantID: tenantID, Flow: &flow}, nil
+	return &ResolvedFlow{TenantID: tenantID, Flow: flow}, nil
 }
 
 // expireGuestSession deletes a guest_sessions row once its single call has
@@ -236,16 +268,70 @@ func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*Resolve
 	if err != nil {
 		return nil, fmt.Errorf("bad flow id %q: %w", flowID, err)
 	}
+	flow, tenantID, err := e.loadFlow(ctx, fid)
+	if err != nil {
+		return nil, err
+	}
+	if tenantID == uuid.Nil {
+		// No active flow with that id — preserve the old not-found contract
+		// (resolveFlowByID's caller distinguishes this from a parse error).
+		return nil, pgx.ErrNoRows
+	}
+	return &ResolvedFlow{TenantID: tenantID, Flow: flow}, nil
+}
+
+// loadFlow returns the parsed definition for a flow id, cache-aside (Redis,
+// 1h TTL). On a hit it parses the cached JSON; on a miss it reads the active
+// flow from Postgres and populates the cache. Returns:
+//
+//   - (nil, uuid.Nil, nil)   no active flow with that id
+//   - (nil, tenantID, nil)   active flow row, but empty definition
+//   - (flow, tenantID, nil)  active flow, parsed
+//   - (nil, _, err)          DB error, or the definition fails to parse
+//
+// The raw bytes are cached before parsing, so a malformed-but-stored flow
+// returns the same deterministic parse error on every call until it's
+// edited (which invalidates the key) — it never silently disappears.
+func (e *Executor) loadFlow(ctx context.Context, flowID uuid.UUID) (*ivrFlowData, uuid.UUID, error) {
+	key := FlowCacheKey(flowID)
+
+	if b, ok := e.Cache.Get(ctx, key); ok {
+		var ent flowCacheEntry
+		if json.Unmarshal(b, &ent) == nil {
+			flow, err := parseFlowDef([]byte(ent.Definition))
+			return flow, ent.TenantID, err
+		}
+		// Corrupt cache entry — fall through to the DB and overwrite it.
+	}
+
 	var (
 		tenantID uuid.UUID
 		defJSON  []byte
 	)
-	row := e.DB.Pool.QueryRow(ctx, e.Q.GetActiveFlowByID, fid)
+	row := e.DB.Pool.QueryRow(ctx, e.Q.GetActiveFlowByID, flowID)
 	if err := row.Scan(&tenantID, &defJSON); err != nil {
-		return nil, err
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, uuid.Nil, nil // no active flow
+		}
+		return nil, uuid.Nil, err
 	}
+
+	if ent, err := json.Marshal(flowCacheEntry{TenantID: tenantID, Definition: string(defJSON)}); err == nil {
+		e.Cache.Set(ctx, key, ent, flowCacheTTL)
+	}
+
 	if len(defJSON) == 0 {
-		return &ResolvedFlow{TenantID: tenantID}, nil
+		return nil, tenantID, nil
+	}
+	flow, err := parseFlowDef(defJSON)
+	return flow, tenantID, err
+}
+
+// parseFlowDef unmarshals a flow definition and enforces the one invariant
+// the executor relies on: a non-empty entry node.
+func parseFlowDef(defJSON []byte) (*ivrFlowData, error) {
+	if len(defJSON) == 0 {
+		return nil, nil
 	}
 	var flow ivrFlowData
 	if err := json.Unmarshal(defJSON, &flow); err != nil {
@@ -254,7 +340,7 @@ func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*Resolve
 	if flow.EntryNode == "" {
 		return nil, fmt.Errorf("flow has no entry node")
 	}
-	return &ResolvedFlow{TenantID: tenantID, Flow: &flow}, nil
+	return &flow, nil
 }
 
 // callState is the per-call mutable state — variables gathered via
