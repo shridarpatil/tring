@@ -59,7 +59,18 @@ func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
 		return nil, err
 	}
 	bind := fmt.Sprintf("%s:%d", cfg.AdvertIP, cfg.SIPPort)
-	client, err := sipgo.NewClient(ua, sipgo.WithClientHostname(cfg.AdvertIP), sipgo.WithClientAddr(bind))
+	// Use ONLY WithClientHostname (sets Via/Contact host = AdvertIP for FS's
+	// digest realm) and let the UAC REUSE the UAS listener socket: sipgo's
+	// transport defaults to ConnectionReuse=true, and the client takes its Via
+	// port from the listener (GetListenPort = SIPPort). So the INVITE goes out
+	// from the same :SIPPort the server listens on, and FS's 407/responses
+	// return to that socket and match the client transaction.
+	//   - WithClientAddr/WithClientPort would force an ephemeral source port
+	//     with ConnectionReuse=false → responses hit the listener, never the
+	//     client txn → Timer_B ("transaction terminated").
+	//   - WithClientConnectionAddr would bind a SECOND socket on :SIPPort →
+	//     "address already in use" against the server listener.
+	client, err := sipgo.NewClient(ua, sipgo.WithClientHostname(cfg.AdvertIP))
 	if err != nil {
 		return nil, err
 	}
