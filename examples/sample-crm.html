@@ -75,19 +75,25 @@
       <p>This page has zero JS of its own. The only voice-related bit is a single
       <code>&lt;script src="/sdk/agent.js"&gt;</code> tag injected after you paste a JWT below.
       In a real CRM, your backend mints and templates the JWT before the page is rendered.</p>
-      <p>Mint a JWT against the running Tring API:</p>
-      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;"># 1. log in to the console with the bootstrap admin user
-CONSOLE=$(curl -sS -X POST http://localhost:8085/v1/console/login \
+      <p>Mint a JWT against the running Tring API. <code>AUTH</code> can be a
+      console login (below) <em>or</em> a tenant API key — issue a
+      <code>tk_live_…</code> key under <a href="http://localhost:8085/admin/api-keys">/admin/ → API keys</a>
+      and skip step&nbsp;1 (<code>AUTH=tk_live_…</code>). Both authenticate the
+      same <code>/v1</code> routes.</p>
+      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;"># 1. get an AUTH token — EITHER a tenant API key (recommended) …
+AUTH=tk_live_…    # from /admin/ → API keys
+#    … OR a console login with the bootstrap admin user:
+AUTH=$(curl -sS -X POST http://localhost:8085/v1/console/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@tring.local","password":"tring_dev_change_me"}' \
   | jq -r .token)
 
 # 2. pick an agent (or create one first via /admin/ → Agents)
-AGENT=$(curl -sS -H "Authorization: Bearer $CONSOLE" \
+AGENT=$(curl -sS -H "Authorization: Bearer $AUTH" \
   http://localhost:8085/v1/agents | jq -r '.[0].id')
 
 # 3. mint a short-lived SDK token for that agent — paste it below
-curl -sS -H "Authorization: Bearer $CONSOLE" \
+curl -sS -H "Authorization: Bearer $AUTH" \
   http://localhost:8085/v1/agents/$AGENT/token | jq -r .token</pre>
       <div class="token-form">
         <input id="tokenInput" type="text" placeholder="Paste JWT here…" autocomplete="off" />
@@ -142,6 +148,7 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
       <ul>
         <li>Each <em>Call</em> button has <code>data-tring-call data-to="…"</code> — that's the whole integration on the HTML side.</li>
         <li><code>agent.js</code> fetches your agent's SIP credentials with the JWT, registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>, and listens for incoming INVITEs.</li>
+        <li><em>Coming next (ADR-001 M4b):</em> agents move onto the same raw-WebRTC media gateway the visitor widget already uses — no SIP in the browser, FreeSWITCH stays private. Server-side routing (<code>agent_transport=gateway</code>) is in place; the agent SDK transport is the remaining piece.</li>
         <li>Clicking Call posts to <code>/v1/sdk/calls</code>. Tring tells FreeSWITCH to ring the agent's browser; on answer, the call bridges to the destination via the configured trunk (loopback in dev, Exotel/Airtel/Jio/Tata in production).</li>
         <li>The floating panel in the bottom right shows ringing → connected → ended status with a single Hang up button. Pure CSS, no framework.</li>
       </ul>
