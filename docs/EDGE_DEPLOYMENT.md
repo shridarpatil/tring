@@ -1,148 +1,86 @@
-# Edge deployment — keeping FreeSWITCH (and the API) off the public internet
+# Edge deployment — what's public, what's private
 
-Browser calling needs three things reachable from the visitor's browser: the
-**SDK bundle**, **call credentials**, and the **signaling + media** path. None
-of those require FreeSWITCH — or even the Tring API — to be directly
-internet-exposed. This doc describes the public *edge* you put in front, and
-two deployment postures.
+Since the ADR-001 cutover, all browser calling goes through the **media gateway**
+(`cmd/gateway`) over raw WebRTC. The gateway is a B2BUA: a *public* face toward
+browsers and a *private* face toward a FreeSWITCH that is never internet-exposed.
+This doc is the network topology + the public/private split for production.
 
-See `docs/WEB_CALL_FLOW.md` for the per-call sequence; this doc is about
-network topology.
+See `docs/ADR-001-webrtc-gateway.md` for the rationale and `docs/WEB_CALL_FLOW.md`
+for the per-call sequence.
 
-## What the browser actually needs
-
-| Need | Served by | Must be public? |
-|------|-----------|-----------------|
-| SDK bundle (`voice.js`) | API `/sdk/*` (or your CDN/proxy) | the bytes, yes — but via your edge, not the API |
-| Call credentials | your backend (`data-credentials-url`) → Tring `POST /v1/guest-credentials` | your backend, yes; Tring API, no |
-| SIP signaling | WSS reverse-proxy → FreeSWITCH `:5066` | the proxy, yes; FreeSWITCH, no |
-| WebRTC media | TURN/coturn relay → FreeSWITCH RTP | TURN, yes; FreeSWITCH, no |
-
-Everything else — the Tring API's `/v1`/`/fs`/`/admin`, FreeSWITCH's SIP/ESL,
-the orchestrator, Postgres, Redis — is only ever called from inside the private
-network and stays there.
-
-## Posture A — private FreeSWITCH, public API
-
-The simplest hardening: FreeSWITCH has no public IP; the API (and the public
-guest mint) stay reachable so the browser can mint creds and fetch the bundle
-directly.
+## Topology
 
 ```
-Browser ──HTTPS──► Tring API (public)        ──► /sdk/voice.js, /v1/sdk/guest-credentials
-        ──WSS────► WSS proxy (public) ──────► FreeSWITCH :5066   (private)
-        ──SRTP───► TURN (public)      ──────► FreeSWITCH RTP     (private)
+                     PUBLIC (internet)                  │   PRIVATE (VPC / internal subnet)
+                                                        │
+   ┌─────────┐   WebRTC media (DTLS-SRTP/Opus, UDP)     │
+   │ Browser │◀──────────── media ───────────┐         │
+   │ visitor │   HTTPS  /webrtc/offer          │        │
+   │ / agent │   WSS    /agent/ws              ▼        │
+   └────┬────┘                          ┌────────────┐  plain RTP + SIP   ┌────────────┐
+        │  relay (symmetric NAT)        │  GATEWAY   │───────────────────▶│ FreeSWITCH │
+        ▼                               │ public face│  SIP :5090 + RTP   │  (PRIVATE) │
+   ┌─────────┐                          │ + priv face│                    └─────┬──────┘
+   │  TURN   │◀─────── relayed media ───│            │                          │ ESL
+   │ (coturn)│                          └────────────┘                   ┌──────┴───────┐
+   └─────────┘                                                           │ orchestrator │
+                                                                         └──────┬───────┘
+   your backend ──server→server (API key)──▶ ┌─────┐ ┌──────────┐ ┌───────┐    │
+   (mints tokens)                             │ API │ │ Postgres │ │ Redis │◀───┘
+   operators ──VPN/SSO──▶ /admin              └─────┘ └──────────┘ └───────┘   all PRIVATE
 ```
 
-## Posture B — private FreeSWITCH AND private API
+## Public vs private
 
-With **backend-minted credentials** (`data-credentials-url`) the browser never
-calls the Tring API, so it can be private too. Only your backend, a WSS proxy,
-TURN, and the static bundle are public.
+| Component | Net | Ports | Why |
+|---|---|---|---|
+| **Gateway — browser face** | **PUBLIC** | `8087` (HTTPS `/webrtc/offer` + WSS `/agent/ws`), **UDP RTP range** on the public IP | The call edge. Browsers do WebRTC here. TLS-front the HTTP/WS (443); the UDP media range must be reachable at `TRING_PUBLIC_IP`. |
+| **TURN** (coturn) | **PUBLIC** | `3478` (UDP/TCP), `5349` (TLS), relay UDP range | Relays media for clients behind symmetric NAT/CGNAT where direct ICE fails. |
+| **SDK bundles** `/sdk/*.js` | **PUBLIC** via CDN/proxy | — | Static JS the browser loads. Serve from a CDN or reverse-proxy — does **not** require exposing the API. |
+| **FreeSWITCH** | **PRIVATE** | SIP `5060`, RTP, ESL `8021`, WS `5066`/`7443` | The whole point: never internet-reachable. |
+| **Gateway — FS face** | **PRIVATE** | SIP `5090` + RTP to FS | The B2BUA's internal leg; same subnet as FS. |
+| **Orchestrator** | **PRIVATE** | ESL `8084`, IVR `8086` | Talks ESL to FS + DB. |
+| **API** | **PRIVATE** (recommended) | `8085` | Token minting is server-to-server from your backend; `/fs/*` is FS↔API on the private net; `/admin` for operators over VPN/SSO. Browsers don't need it directly (below). |
+| **Postgres / Redis** | **PRIVATE** | `5432`/`5434`, `6379` | Never exposed. |
 
-```
-   PUBLIC                                   PRIVATE (VPC / LAN)
-   ─────────────────────────                ─────────────────────────
-   Your backend  (mints creds) ───────────► Tring API   (/v1, /fs, /admin)
-   WSS reverse-proxy (signaling) ─────────► FreeSWITCH   (SIP/ESL/WS)
-   TURN / coturn     (media)     ─────────► Orchestrator
-   voice.js          (CDN or proxied)       Postgres, Redis
-```
+## Why the API can stay private
 
-Conditions for Posture B:
-1. Browser fetches creds from **your** backend (`data-credentials-url`); your
-   backend calls Tring `POST /v1/guest-credentials` server-to-server with the
-   tenant API key. See `docs/WEB_CALL_FLOW.md`.
-2. Serve the **bundle** without exposing the API (next section).
-3. The **agent/CRM-operator widget** (`agent.js`) is the exception — it calls
-   `/v1/sdk/credentials` and `/v1/sdk/calls` from the browser with its JWT. If
-   agents use a browser widget, either keep a minimal public API surface (just
-   `/v1/sdk/*`) or proxy those two endpoints through your backend. The
-   *visitor* flow has no such dependency.
+The browser only needs three things, none requiring a public API:
 
-## Serving the SDK bundle
+1. **SDK JS** → CDN / reverse-proxy.
+2. **A token** → minted by *your backend* (which holds the tenant API key, `tk_live_…`) and handed to the browser via `data-token-url` (agent) or `data-credentials-url` (trusted visitor). That backend→API call is server-to-server on the private network.
+3. **Anonymous "call us"** → the SDK goes straight to the gateway with `data-gateway-url` + `data-flow-id` (no token; `gateway_require_auth=false`). No API call at all — the call is flow-pinned and can never reach a trunk.
 
-The widget is one static file (`voice.js`, also `agent.js`/`tring.js`),
-produced by `make sdk`. Two ways to get it to the browser without exposing the
-API:
+If you want Tring's **public anonymous mint** instead (it adds an Origin allowlist + per-IP rate limit), expose only that one route — `POST /v1/sdk/guest-credentials` — publicly and keep the rest of the API private.
 
-- **Reverse-proxy `/sdk/*` through the edge** (zero extra infra). You already
-  run a public proxy for WSS — add a route that forwards `/sdk/` to the private
-  API. Self-host-friendly; API stays fully private.
-- **CDN.** Good for the hosted SaaS and browser-edge caching. Caveat: the API
-  serves `/sdk/*` with `Cache-Control: no-cache` and the filename is **not**
-  content-hashed (`voice.js`, stable so the embed snippet never changes), so
-  the CDN must **honor revalidation** (or use a short TTL). Caching it
-  long-lived would serve a stale widget after a deploy.
+## Two faces of the gateway
 
-## Configuration (already supported — no code change)
+The gateway binds two roles; don't conflate their IPs:
 
-Point the SDK and FreeSWITCH at the edge via env (`.env`):
+- `TRING_PUBLIC_IP` — the gateway's **public** IP, advertised to browsers as the WebRTC host candidate.
+- `TRING_GATEWAY_ADVERT_IP` — the gateway's **private** IP, used for the SIP/RTP leg to FreeSWITCH (must be FS-reachable; it's also the Via/Contact host for FS's digest realm).
+- `TRING_FS_SIP_ADDR` — FreeSWITCH's private SIP address (FS binds its LAN IP, not loopback).
 
-| Env var | Role |
-|---------|------|
-| `TRING_WS_URL` | The `ws_url` returned to the SDK. Set to your **WSS edge**, e.g. `wss://voice.example.com:7443`. Empty = API auto-detects the host LAN IP (dev only). |
-| `TRING_TURN_URL` / `TRING_TURN_USERNAME` / `TRING_TURN_PASSWORD` | TURN relay, returned in `ice_servers`. Required when FreeSWITCH has no public IP / for symmetric-NAT browsers. |
-| `TRING_STUN_URL` | STUN (default Google's). Replace with your own to avoid third-party lookups. |
-| `TRING_PUBLIC_IP` | Public IP FreeSWITCH advertises in SDP for media (the edge's public IP). |
-| `TRING_RTP_START_PORT` / `TRING_RTP_END_PORT` | RTP port range FreeSWITCH uses — open/forward exactly this range on the edge. |
+## TURN
 
-## Sample edge configs
+- Put coturn on its own **public IP**; open `3478` (UDP/TCP) + `5349` (TLS) + the relay UDP range.
+- Use **short-lived TURN REST credentials** (coturn `use-auth-secret` / time-limited), not a static username/password shipped to browsers — mint them alongside the call token.
+- `TRING_TURN_URL` / `_USERNAME` / `_PASSWORD` are returned to browsers in the ICE list **and** used by the gateway for its own candidates.
+- `TRING_TURN_RELAY_ONLY=true` forces all media through TURN (hides peer IPs) at the cost of bandwidth — only if you need it.
 
-### Caddy (WSS proxy + optional `/sdk` passthrough)
+## Production hardening checklist
 
-```
-voice.example.com {
-    # SIP-over-WebSocket → private FreeSWITCH
-    @ws header Connection *Upgrade*
-    reverse_proxy @ws 10.0.0.10:5066
+- **TLS on every public edge**: gateway signaling behind 443 (HTTPS + WSS), TURN on 5349, admin behind TLS + SSO/VPN.
+- **Auth**: the agent WebSocket (`/agent/ws`) always validates the agent JWT. Decide `gateway_require_auth` for `/webrtc/offer` — off for public "call us", **on** (require a minted gateway call token) to forbid anonymous visitors.
+- **Scale the gateway horizontally** (its own boxes behind the LB), separate from FreeSWITCH — that's the tier that grows with concurrent calls. FS scales vertically per instance.
+- **UDP port range**: widen `TRING_GATEWAY_UDP_MIN/MAX` (default `10000–10100` caps you at ~100 concurrent calls) and the matching FS RTP range; open them on the gateway's public IP.
+- **Firewall**: lock the gateway's `:5090`/RTP-to-FS leg and all of FreeSWITCH / Postgres / Redis to the private subnet (security groups). Only the gateway's browser face + TURN + (optionally) the CDN/one mint route are public.
 
-    # Optional: serve the widget bundle without exposing the API (Posture B)
-    handle_path /sdk/* {
-        reverse_proxy 10.0.0.20:8085   # private Tring API
-    }
-}
-```
+## Capacity (rule of thumb)
 
-### nginx (WSS proxy)
-
-```nginx
-server {
-    listen 7443 ssl;
-    server_name voice.example.com;
-    # ssl_certificate ...;
-
-    location / {                       # SIP-over-WS to private FreeSWITCH
-        proxy_pass http://10.0.0.10:5066;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-    }
-
-    location /sdk/ {                   # optional bundle passthrough (Posture B)
-        proxy_pass http://10.0.0.20:8085;
-    }
-}
-```
-
-### coturn (media relay)
-
-```
-listening-port=3478
-tls-listening-port=5349
-realm=voice.example.com
-use-auth-secret
-static-auth-secret=<shared-secret>     # or static user; rotate for prod
-external-ip=<edge-public-ip>
-min-port=49152
-max-port=65535
-```
-
-Set `TRING_TURN_URL=turn:voice.example.com:3478` (+ credentials) so the SDK
-relays media through it.
-
-> Roadmap (`docs/TODO.md`): ephemeral TURN credentials (coturn
-> `use-auth-secret`) for anonymous browsers, and a CDN/WAF in front of the
-> public edge. The application already emits the `ice_servers` the SDK needs;
-> wiring short-lived TURN creds is the remaining piece.
+On a co-located 4-core/8GB box with Opus passthrough (no transcoding): ~150–300
+concurrent web calls, CPU-bound on the gateway's SRTP + per-packet relay (FS
+pass-through bridging is cheap). Transcoding (recording, codec mismatch) or
+self-hosted TURN on the same box cuts that sharply. Load-test before committing
+to a number, and plan production at ~60% of the measured ceiling. Grow by adding
+gateway instances, not cores.
