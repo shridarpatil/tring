@@ -12,8 +12,9 @@ See `docs/WEB_CALL_FLOW.md` for the full sequence.
 browser (logged in) ──GET /guest-credentials──► this Flask app
                                                  └─► Tring POST /v1/guest-credentials
                                                      (Bearer <API key> + client_ref)
-                     ◄──────────── SIP creds ────────┘
-browser → Tring voice widget → places the call (shows as client_ref in the log)
+                     ◄── { gateway_url, flow_id, token, ice_servers } ──┘
+                         (token is a JWT carrying the verified client_ref)
+browser → voice widget → raw WebRTC to the media gateway → call shows as client_ref
 ```
 
 ## Prerequisites
@@ -23,8 +24,9 @@ browser → Tring voice widget → places the call (shows as client_ref in the l
 - A flow for guests to land in: either set it as the tenant's **support flow**
   (console → Settings) or pass its id via `TRING_FLOW_ID`.
 - The browser must be able to reach the Tring API for the widget bundle
-  (`/sdk/voice.js`) and FreeSWITCH's WSS endpoint (the `ws_url` in the creds).
-  For local dev with `make up`, the defaults work.
+  (`/sdk/voice.js`) and the **media gateway** `gateway_url` returned in the creds
+  (raw WebRTC — FreeSWITCH stays private). For local dev with `make up`, set
+  `TRING_GATEWAY_PUBLIC_URL` to a browser-reachable gateway URL.
 
 > Optional: in the console (Settings → guest) enable **"Require backend-minted
 > credentials"** to disable the public mint entirely — then this trusted flow
