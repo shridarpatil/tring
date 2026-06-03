@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -12,6 +14,25 @@ import (
 
 	"github.com/whatomate/tring/internal/orchestrator"
 )
+
+// flowListCacheTTL bounds staleness of the cached per-tenant flow list if an
+// invalidation is ever missed. Matches the executor's definition-cache TTL.
+const flowListCacheTTL = time.Hour
+
+// flowListCacheKey is the cache key for a tenant's full flow list (GET
+// /v1/flows). Per-tenant — invalidated on any flow create/update/delete.
+func flowListCacheKey(tenantID uuid.UUID) string {
+	return "flows:list:" + tenantID.String()
+}
+
+// invalidateFlowList drops a tenant's cached flow list so the next GET
+// /v1/flows reflects a create/update/delete. Best-effort: a failed delete
+// only means staleness until the TTL.
+func (s *Server) invalidateFlowList(ctx context.Context, tenantID uuid.UUID) {
+	if err := s.cache.Delete(ctx, flowListCacheKey(tenantID)); err != nil {
+		log.Printf("flows: list cache invalidate (tenant %s) failed: %v", tenantID, err)
+	}
+}
 
 // Flow mirrors the frontend's Flow shape (web/src/api/types.ts). The
 // FreeSWITCH executor (Phase 3) consumes `definition` — an IVRFlowData
@@ -87,11 +108,24 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "insert failed: "+err.Error())
 		return
 	}
+	s.invalidateFlowList(r.Context(), t.ID)
 	writeJSON(w, http.StatusCreated, f)
 }
 
 func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
+	key := flowListCacheKey(t.ID)
+
+	// Cache-aside: the full per-tenant list is read often (console refresh)
+	// but only changes on a flow create/update/delete, each of which
+	// invalidates this key. Serve the pre-encoded JSON verbatim on a hit.
+	if b, ok := s.cache.Get(r.Context(), key); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(b)
+		return
+	}
+
 	rows, err := s.db.Pool.Query(r.Context(), s.q.ListFlows, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -107,7 +141,16 @@ func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, f)
 	}
-	writeJSON(w, http.StatusOK, out)
+
+	b, err := json.Marshal(out)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encode failed")
+		return
+	}
+	s.cache.Set(r.Context(), key, b, flowListCacheTTL)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(b)
 }
 
 func (s *Server) handleGetFlow(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +202,13 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return
 	}
+	// Invalidate the orchestrator's cached definition (read on the call
+	// path) and the tenant's cached list so the edit takes effect on the
+	// next call/list instead of after the TTL. Best-effort.
+	if err := s.cache.Delete(r.Context(), orchestrator.FlowCacheKey(id)); err != nil {
+		log.Printf("flows: cache invalidate %s failed: %v", id, err)
+	}
+	s.invalidateFlowList(r.Context(), t.ID)
 	writeJSON(w, http.StatusOK, f)
 }
 
@@ -178,6 +228,10 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "flow not found")
 		return
 	}
+	if err := s.cache.Delete(r.Context(), orchestrator.FlowCacheKey(id)); err != nil {
+		log.Printf("flows: cache invalidate %s failed: %v", id, err)
+	}
+	s.invalidateFlowList(r.Context(), t.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

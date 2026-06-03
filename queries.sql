@@ -354,11 +354,14 @@ FROM calls WHERE fs_uuid = $1;
 -- orchestrator: IVR executor (ivr_executor.go)
 -- ===========================================================================
 
--- name: resolve-inbound-flow
--- Inbound DID → tenant + its active flow definition (empty string if none).
-SELECT n.tenant_id, n.flow_id, COALESCE(f.definition::text, '')
+-- name: resolve-inbound-number
+-- Inbound DID → owning tenant + attached flow id (NULL if none). The flow
+-- DEFINITION is loaded separately by id (get-active-flow-by-id) so it can be
+-- served from the cache; this stays a cheap indexed point read that always
+-- hits the DB, since a number's flow assignment can change independently of
+-- the flow's contents.
+SELECT n.tenant_id, n.flow_id
 FROM numbers n
-LEFT JOIN flows f ON f.id = n.flow_id AND f.is_active
 WHERE n.e164 = $1 AND n.type = 'inbound';
 
 -- name: expire-guest-session
