@@ -118,40 +118,76 @@ def guest_credentials():
     return jsonify(payload), status
 
 
-LOGIN_HTML = """
-<!doctype html><meta charset="utf-8"><title>Support portal — login</title>
-<body style="font-family:system-ui;max-width:24rem;margin:4rem auto">
-  <h1>Support portal</h1>
-  <p style="color:#666">Demo of Tring bring-your-own-credentials calling.</p>
-  {% if error %}<p style="color:#c00">{{ error }}</p>{% endif %}
-  <form method="post" action="/login">
-    <p><input name="username" placeholder="username (alice / bob)" style="width:100%;padding:.5rem"></p>
-    <p><input name="password" type="password" placeholder="password (demo)" style="width:100%;padding:.5rem"></p>
-    <button style="padding:.5rem 1rem">Log in</button>
-  </form>
-</body>
+_STYLE = """
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #111827; }
+  h1 { margin: 0 0 .25rem; }
+  .hint { color: #6b7280; font-size: 13px; margin: 0 0 1.5rem; }
+  .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 1.5rem; margin-top: 1rem; }
+  .you { background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 8px; padding: .75rem 1rem; font-size: 13px; }
+  code { background: rgba(0,0,0,.06); padding: .1rem .3rem; border-radius: 3px; }
+  input { font: inherit; padding: .45rem .5rem; width: 100%; border: 1px solid #d1d5db; border-radius: 6px; box-sizing: border-box; margin-bottom: .5rem; }
+  button { font: inherit; padding: .5rem 1rem; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+  button.link { background: none; color: #6b7280; padding: .25rem 0; text-decoration: underline; }
 """
 
-PORTAL_HTML = """
-<!doctype html><meta charset="utf-8"><title>Support portal</title>
-<body style="font-family:system-ui;max-width:32rem;margin:4rem auto">
-  <h1>Welcome, {{ name }}</h1>
-  <p style="color:#666">
-    You're logged in. Click <b>Call support</b> below — the call is placed with
-    your verified identity <code>{{ client_ref }}</code>, minted by this backend
-    (never the browser). It shows in Tring's call log as
-    <code>{{ client_ref }}</code>, not <code>guest_…</code>.
-  </p>
-  <form method="post" action="/logout"><button style="padding:.3rem .8rem">Log out</button></form>
+LOGIN_HTML = (
+    """
+<!doctype html><meta charset="utf-8"><title>Acme — Support sign in</title>
+<style>"""
+    + _STYLE
+    + """</style>
+<body>
+  <h1>🛟 Acme Help Center</h1>
+  <p class="hint">Sign in to talk to support. Once you're logged in, your call is
+  placed with <strong>your verified identity</strong> — the call log shows who
+  you are, not an anonymous guest.</p>
+  <div class="card">
+    {% if error %}<p style="color:#c00">{{ error }}</p>{% endif %}
+    <form method="post" action="/login">
+      <input name="username" type="text" placeholder="username — alice or bob" autocomplete="username">
+      <input name="password" type="password" placeholder="password — demo" autocomplete="current-password">
+      <button>Sign in</button>
+    </form>
+  </div>
+</body>
+"""
+)
 
-  <!-- Tring visitor widget. The bundle loads from the Tring API; credentials
-       come from THIS app (data-credentials-url), which mints them server-side. -->
+PORTAL_HTML = (
+    """
+<!doctype html><meta charset="utf-8"><title>Acme — Support</title>
+<style>"""
+    + _STYLE
+    + """</style>
+<body>
+  <h1>🛟 Acme Help Center</h1>
+  <p class="hint">Signed in. Tap <strong>Call support</strong> any time.</p>
+
+  <p class="you">Signed in as <strong>{{ name }}</strong> ·
+    verified id <code>{{ client_ref }}</code></p>
+
+  <div class="card">
+    <h3 style="margin-top:0">Still need help?</h3>
+    <p>One tap connects you to an agent over the internet — no number to dial.</p>
+    <p style="font-size:13px;color:#6b7280">
+      Because you're logged in, this page's <em>backend</em> mints the call token
+      with your verified id <code>{{ client_ref }}</code> — the browser never sets
+      it, so it can't be spoofed. The call shows in Tring's log as
+      <code>{{ client_ref }}</code>, not <code>guest_…</code>.
+    </p>
+    <form method="post" action="/logout"><button class="link">Log out</button></form>
+  </div>
+
+  <!-- Tring visitor widget. The bundle loads from the Tring API; the gateway
+       connection details + a client_ref-bearing call token come from THIS app
+       (data-credentials-url), minted server-side with the tenant API key. -->
   <script src="{{ api_base }}/sdk/voice.js"
           data-credentials-url="/guest-credentials"
           data-button-label="Call support"
-          data-title="Support"></script>
+          data-title="Acme Support"></script>
 </body>
 """
+)
 
 
 if __name__ == "__main__":
