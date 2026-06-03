@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/gateway"
 )
@@ -51,6 +52,14 @@ func main() {
 		}
 	}
 
+	// Redis (shared with api/orchestrator) backs agent presence. Optional:
+	// log-and-disable if unreachable — presence just goes dark, calls still work.
+	redisCache, err := cache.New(k.String("redis_addr"))
+	if err != nil {
+		log.Printf("cache: redis unavailable (%v) — agent presence disabled", err)
+	}
+	defer redisCache.Close()
+
 	gw, err := gateway.New(gateway.Config{
 		ICEServers:       ice,
 		UDPPortMin:       uint16(k.Int("gateway_udp_min")),
@@ -61,6 +70,7 @@ func main() {
 		JWTSecret:        []byte(k.String("jwt_secret")),
 		RequireAuth:      k.Bool("gateway_require_auth"),
 		AgentRingTimeout: time.Duration(k.Int("gateway_agent_ring_timeout")) * time.Second,
+		Cache:            redisCache,
 	})
 	if err != nil {
 		log.Fatalf("gateway: %v", err)

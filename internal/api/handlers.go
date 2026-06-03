@@ -91,17 +91,31 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		agents = append(agents, a)
 	}
 
-	// Enrich with live registration status (one ESL call). Fail-soft: if
-	// FreeSWITCH is unreachable, mark "unknown" rather than erroring the list.
-	regs, regErr := s.fs.RegisteredUsers(r.Context())
-	for i := range agents {
-		switch {
-		case regErr != nil:
-			agents[i].Status = "unknown"
-		case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)]:
-			agents[i].Status = "online"
-		default:
-			agents[i].Status = "offline"
+	// Enrich with live online status. With the gateway transport (ADR-001)
+	// agents connect over the gateway WebSocket, not SIP registration, so
+	// presence comes from Redis (published by the gateway). Fall back to the
+	// SIP-registration lookup for the legacy transport or when Redis is off.
+	if s.agentTransport == "gateway" && s.presence.Enabled() {
+		for i := range agents {
+			if s.presence.IsOnline(r.Context(), t.ID.String(), agents[i].SipUsername) {
+				agents[i].Status = "online"
+			} else {
+				agents[i].Status = "offline"
+			}
+		}
+	} else {
+		// Live registration status (one ESL call). Fail-soft: if FreeSWITCH is
+		// unreachable, mark "unknown" rather than erroring the list.
+		regs, regErr := s.fs.RegisteredUsers(r.Context())
+		for i := range agents {
+			switch {
+			case regErr != nil:
+				agents[i].Status = "unknown"
+			case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)]:
+				agents[i].Status = "online"
+			default:
+				agents[i].Status = "offline"
+			}
 		}
 	}
 
