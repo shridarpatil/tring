@@ -54,6 +54,7 @@ func FlowCacheKey(flowID uuid.UUID) string { return "ivr:flow:" + flowID.String(
 // would). resolveFlowByID needs the tenant, so it's cached alongside.
 type flowCacheEntry struct {
 	TenantID   uuid.UUID `json:"tenant_id"`
+	Name       string    `json:"name"`
 	Definition string    `json:"definition"`
 }
 
@@ -163,8 +164,10 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	//   - PSTN/DID call: discover the flow from the dialed inbound number.
 	var resolved *ResolvedFlow
 	var err error
+	webCall := false
 	if fid := ev.GetHeader("variable_tring_flow_id"); fid != "" {
-		e.Logger.Printf("ivr: guest call, flow pinned to %s", fid)
+		webCall = true
+		e.Logger.Printf("ivr: web call, flow pinned to %s", fid)
 		resolved, err = e.resolveFlowByID(ctx, fid)
 	} else {
 		resolved, err = e.resolveFlow(ctx, called)
@@ -181,6 +184,13 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	}
 	tenantID := resolved.TenantID
 	flow := *resolved.Flow
+
+	// A web call has no dialed number — it routed to the internal `gwflow`
+	// extension. Show the flow it reached as the call log's "To" instead of
+	// the meaningless routing token.
+	if webCall && resolved.FlowName != "" {
+		called = resolved.FlowName
+	}
 
 	state := &callState{
 		uuid:      uuidStr,
@@ -224,6 +234,7 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 type ResolvedFlow struct {
 	TenantID uuid.UUID
 	Flow     *ivrFlowData
+	FlowName string // flows.name — shown as the call log "To" for web calls
 }
 
 // resolveFlow looks up the inbound DID in `numbers`, joins to `flows`,
@@ -253,11 +264,11 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 	// The (large, rarely-changing) definition is served from the cache.
 	// A nil/empty flow means the attached flow is inactive — same outcome
 	// as the old LEFT JOIN ... AND is_active returning no definition.
-	flow, _, err := e.loadFlow(ctx, *flowID)
+	flow, _, name, err := e.loadFlow(ctx, *flowID)
 	if err != nil {
 		return nil, err
 	}
-	return &ResolvedFlow{TenantID: tenantID, Flow: flow}, nil
+	return &ResolvedFlow{TenantID: tenantID, Flow: flow, FlowName: name}, nil
 }
 
 // recordInboundCall inserts a calls row for an inbound/IVR call so it appears
@@ -307,7 +318,7 @@ func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*Resolve
 	if err != nil {
 		return nil, fmt.Errorf("bad flow id %q: %w", flowID, err)
 	}
-	flow, tenantID, err := e.loadFlow(ctx, fid)
+	flow, tenantID, name, err := e.loadFlow(ctx, fid)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +327,7 @@ func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*Resolve
 		// (resolveFlowByID's caller distinguishes this from a parse error).
 		return nil, pgx.ErrNoRows
 	}
-	return &ResolvedFlow{TenantID: tenantID, Flow: flow}, nil
+	return &ResolvedFlow{TenantID: tenantID, Flow: flow, FlowName: name}, nil
 }
 
 // loadFlow returns the parsed definition for a flow id, cache-aside (Redis,
@@ -331,39 +342,40 @@ func (e *Executor) resolveFlowByID(ctx context.Context, flowID string) (*Resolve
 // The raw bytes are cached before parsing, so a malformed-but-stored flow
 // returns the same deterministic parse error on every call until it's
 // edited (which invalidates the key) — it never silently disappears.
-func (e *Executor) loadFlow(ctx context.Context, flowID uuid.UUID) (*ivrFlowData, uuid.UUID, error) {
+func (e *Executor) loadFlow(ctx context.Context, flowID uuid.UUID) (*ivrFlowData, uuid.UUID, string, error) {
 	key := FlowCacheKey(flowID)
 
 	if b, ok := e.Cache.Get(ctx, key); ok {
 		var ent flowCacheEntry
 		if json.Unmarshal(b, &ent) == nil {
 			flow, err := parseFlowDef([]byte(ent.Definition))
-			return flow, ent.TenantID, err
+			return flow, ent.TenantID, ent.Name, err
 		}
 		// Corrupt cache entry — fall through to the DB and overwrite it.
 	}
 
 	var (
 		tenantID uuid.UUID
+		name     string
 		defJSON  []byte
 	)
 	row := e.DB.Pool.QueryRow(ctx, e.Q.GetActiveFlowByID, flowID)
-	if err := row.Scan(&tenantID, &defJSON); err != nil {
+	if err := row.Scan(&tenantID, &name, &defJSON); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, uuid.Nil, nil // no active flow
+			return nil, uuid.Nil, "", nil // no active flow
 		}
-		return nil, uuid.Nil, err
+		return nil, uuid.Nil, "", err
 	}
 
-	if ent, err := json.Marshal(flowCacheEntry{TenantID: tenantID, Definition: string(defJSON)}); err == nil {
+	if ent, err := json.Marshal(flowCacheEntry{TenantID: tenantID, Name: name, Definition: string(defJSON)}); err == nil {
 		e.Cache.Set(ctx, key, ent, flowCacheTTL)
 	}
 
 	if len(defJSON) == 0 {
-		return nil, tenantID, nil
+		return nil, tenantID, name, nil
 	}
 	flow, err := parseFlowDef(defJSON)
-	return flow, tenantID, err
+	return flow, tenantID, name, err
 }
 
 // parseFlowDef unmarshals a flow definition and enforces the one invariant

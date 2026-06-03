@@ -420,7 +420,8 @@ WHERE n.e164 = $1 AND n.type = 'inbound';
 
 -- name: get-active-flow-by-id
 -- Guest web-call path: flow pinned by UUID via tring_flow_id channel var.
-SELECT tenant_id, COALESCE(definition::text, '')
+-- name is used as the call log's "To" for web calls (no dialed number).
+SELECT tenant_id, name, COALESCE(definition::text, '')
 FROM flows WHERE id = $1 AND is_active;
 
 -- name: list-agent-sip-usernames
