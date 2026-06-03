@@ -133,6 +133,36 @@ func TestStartIncomingThenOffer(t *testing.T) {
 	}
 }
 
+// Once a call is established (teardown registered), a browser hangup must tear
+// the bridge down (which BYEs the FS leg) rather than just unblock the ring.
+func TestHangupFiresTeardownWhenEstablished(t *testing.T) {
+	s, peer := newTestSession("t1", "1001")
+	defer peer.Close()
+	go func() {
+		buf := make([]byte, 256)
+		for {
+			if _, err := peer.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	ic := s.startIncoming("web")
+	fired := false
+	ic.setTeardown(func() { fired = true })
+
+	s.dispatch(agentMsg{Type: msgHangup, CallID: ic.id})
+
+	if !fired {
+		t.Fatal("hangup on an established call must fire the bridge teardown")
+	}
+	select {
+	case <-ic.closed:
+		t.Fatal("teardown path must not also close ic.closed (that's the ringing path)")
+	default:
+	}
+}
+
 func TestSessionCloseEndsPending(t *testing.T) {
 	s, peer := newTestSession("t1", "1001")
 	defer peer.Close()
