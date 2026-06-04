@@ -1,6 +1,6 @@
 // Auto-bound widget. Imports the Tring SDK, scans the DOM for
-// `<button data-tring-call data-to="...">`, attaches click handlers, and
-// renders a small floating call panel (ringing / connected status +
+// `<button data-tring-agent-call data-to="...">`, attaches click handlers,
+// and renders a small floating call panel (ringing / connected status +
 // hangup button) when a call is in flight.
 //
 // Designed so a CRM can drop a single <script> tag in their template and
@@ -83,8 +83,12 @@ async function fetchTokenFromUrl(url?: string): Promise<string | null> {
 const BOUND_MARK = "__tringBound";
 
 function bindButtons(tring: Tring): void {
+  // The agent widget (internal, CRM-side) binds `data-tring-agent-call` only —
+  // disjoint from the visitor widget's `data-tring-call` so the two never
+  // collide on a shared page. Each button needs a destination via
+  // data-to / data-to-target.
   const buttons = document.querySelectorAll<HTMLButtonElement>(
-    "button[data-tring-call]",
+    "[data-tring-agent-call]",
   );
   for (const btn of Array.from(buttons)) {
     if ((btn as any)[BOUND_MARK]) continue;

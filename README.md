@@ -17,7 +17,7 @@ The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, K
 | Self-host | No | No | **Yes** |
 | India trunk swap (Airtel ↔ Jio ↔ Tata) | n/a | locked-in | **Config-only, no code change** |
 | 1600 transactional series | n/a | Yes | Yes — via any licensed carrier (Tata, Airtel, Jio) |
-| Browser SDK | Yes | Limited | Yes (sip.js wrapper) |
+| Browser SDK | Yes | Limited | Yes (raw WebRTC, no SIP in the browser) |
 | Per-tenant trunks | Yes | n/a | Planned (Phase 2) |
 
 ## Quickstart (no clone)
@@ -33,8 +33,10 @@ The install script drops `docker-compose.yml`, `.env.example`, and the FreeSWITC
 That brings up:
 - `tring-api` — REST API + admin console (`:8085`, console at `/admin/`)
 - `tring-orchestrator` — ESL event subscriber (writes CDRs, fires webhooks)
-- `tring-fs` — FreeSWITCH (`:5060` SIP, `:5066` plain WS, `:7443` WSS, `:8021` ESL)
+- `tring-gateway` — WebRTC media gateway (`:8087`); browsers peer here over raw WebRTC
+- `tring-fs` — FreeSWITCH (`:5060` SIP, `:8021` ESL) — **private**, never internet-exposed
 - `tring-db` — Postgres on `:5434` (moved off `:5432` to coexist with other local DBs)
+- `tring-redis` — cache + agent presence (`:6379`)
 
 `docker compose logs -f` to tail everything. `docker compose down` to stop.
 
@@ -67,11 +69,12 @@ This is the Exotel-style flow: your CRM hits this endpoint, the agent's phone ri
 
 ```html
 <!-- Anywhere in your CRM template -->
-<button data-tring-call data-to="+919876543210">Call customer</button>
+<button data-tring-agent-call data-to="+919876543210">Call customer</button>
 
 <!-- Load once, near </body> -->
-<script src="https://cdn.tring.io/voice.js"
+<script src="https://api.tring.io/sdk/agent.js"
         data-api-base="https://api.tring.io"
+        data-gateway-url="https://gw.tring.io"
         data-token-url="/tring/token"></script>
 ```
 
@@ -94,21 +97,21 @@ The next outbound call routes through the new trunk and stamps the new DID as ca
 ## Architecture
 
 ```
-Browser (CRM)  ──WSS:7443──►  FreeSWITCH  ──SIP──►  Trunk  ──PSTN──►  Customer
-       │                          ▲
-       │                          │ ESL
-       ▼                          ▼
-   Tring API (:8085)  ◄────►  Orchestrator (:8021)  ◄────►  Postgres (:5434)
-       (call origination,        (channel events,
-        webhook fan-out)          CDR updates,
-                                  webhook fan-out)
+Browser (CRM)  ──raw WebRTC──►  Gateway (:8087)  ──SIP/RTP──►  FreeSWITCH  ──SIP──►  Trunk  ──PSTN──►  Customer
+       │                          (public edge)      (private)      ▲
+       │                                                            │ ESL
+       ▼                                                            ▼
+   Tring API (:8085)  ◄──────────────────────────────►  Orchestrator (:8021)  ◄────►  Postgres (:5434)
+       (call origination,                                   (channel events,
+        webhook fan-out)                                     CDR updates, webhook fan-out)
 ```
 
-Two Go services share one Postgres. The API is stateless and horizontally scalable. The orchestrator holds a persistent ESL connection and processes FreeSWITCH events into CDR rows + webhook deliveries.
+Three Go services share one Postgres. The API is stateless and horizontally scalable. The gateway bridges browser WebRTC into the **private** FreeSWITCH (browsers never touch SIP). The orchestrator holds a persistent ESL connection and processes FreeSWITCH events into CDR rows + webhook deliveries. See [`docs/ADR-001-webrtc-gateway.md`](docs/ADR-001-webrtc-gateway.md).
 
 | Path | What it is |
 |------|-----------|
-| `cmd/api/` | Public REST + WSS API. Tenant/agent/number CRUD, JWT minting, originate, webhook CRUD. |
+| `cmd/api/` | Public REST API + admin console. Tenant/agent/number CRUD, JWT minting, originate, webhook CRUD. |
+| `cmd/gateway/` | Browser-facing WebRTC media gateway (ADR-001). Bridges browser DTLS-SRTP ↔ private FreeSWITCH as a SIP B2BUA. |
 | `cmd/orchestrator/` | FreeSWITCH-facing ESL subscriber. Settles calls, emits answered/ended webhooks. |
 | `internal/api/` | HTTP handlers, auth (API key + JWT + Basic), the public surface. |
 | `internal/freeswitch/` | ESL wrapper (originate, …). |
@@ -132,8 +135,8 @@ See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo g
 | **Originate** | `POST /v1/calls` and `POST /v1/sdk/calls`. Pre-allocated channel UUID, bgapi result captured for failed-originate handling. |
 | **CDR settlement** | Orchestrator subscribes to FreeSWITCH events. `CHANNEL_ANSWER`, `CHANNEL_HANGUP_COMPLETE`, and `BACKGROUND_JOB` (for originates that fail before a channel exists) all flow back into `calls` rows. |
 | **Webhooks** | `call.ringing`, `call.answered`, `call.ended`. HMAC-SHA256 signed (Stripe pattern). 6 attempts with 1+2+4+8+16s backoff. Delivery log with `last_error`. |
-| **Browser SDK** | Tring class + sip.js. Outbound calls auto-bridge inbound INVITE for agent leg. DTMF, hangup, event emitter. ~500KB unminified (incl. sip.js). |
-| **Drop-in widget** | `voice.js` — `<button data-tring-call data-to="…">` auto-bound on DOM ready. Floating call panel. `MutationObserver` rebinds dynamically-rendered rows. |
+| **Browser SDK** | Tring class over raw WebRTC to the media gateway (ADR-001) — **no SIP in the browser**, FreeSWITCH stays private. DTMF, hangup, event emitter. ~22KB unminified (no runtime deps; sip.js removed). |
+| **Drop-in widgets** | `agent.js` — `<button data-tring-agent-call data-to="…">` auto-bound on DOM ready (floating call panel; `MutationObserver` rebinds dynamic rows). `voice.js` — visitor "call us" widget; floating launcher or your own `<button data-tring-call>`. |
 | **Trunk providers** | Exotel, Airtel, Jio, Tata pre-baked. Loopback for dev. India E.164 normalization + validation. Config-only swap. |
 | **Multi-tenant** | Per-tenant SIP domain, API keys (SHA-256 hashed + 12-char display prefix), tenant scoping on every query, `mod_xml_curl` dynamic directory. |
 

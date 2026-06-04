@@ -32,6 +32,7 @@ export class GatewayAdapter {
   private mic: MediaStream | null = null;
   private audioEl: HTMLAudioElement | null = null;
   private dtmf: RTCDTMFSender | null = null;
+  private byeChannel: RTCDataChannel | null = null;
   private _muted = false;
   private ended = false;
 
@@ -53,6 +54,17 @@ export class GatewayAdapter {
       iceServers: opts.iceServers ?? DEFAULT_ICE,
     });
     this.pc = pc;
+
+    // Control channel for an explicit end-of-call signal. Created BEFORE the
+    // offer so the SCTP m-line is negotiated; it muxes over the same DTLS/port
+    // as the audio (no extra port). The gateway sends "bye" on teardown so the
+    // UI ends immediately — without it the only end signal is the browser's
+    // slow ICE/DTLS disconnect timeout (the visitor has no other channel).
+    const dc = pc.createDataChannel("tring");
+    this.byeChannel = dc;
+    dc.onmessage = (ev) => {
+      if (ev.data === "bye") this.finish(opts);
+    };
 
     pc.onconnectionstatechange = () => {
       switch (pc.connectionState) {
@@ -125,6 +137,19 @@ export class GatewayAdapter {
 
   /** Tear down the peer connection, mic, and audio element. Idempotent. */
   async stop(): Promise<void> {
+    // On a local hangup (finish() sets `ended` first for remote/auto teardowns)
+    // tell the gateway we're leaving, so it tears down the FS leg now — FS then
+    // hangs up the bridged agent promptly instead of it lingering until our pc
+    // hits the ICE/DTLS disconnect timer.
+    if (!this.ended && this.byeChannel?.readyState === "open") {
+      try {
+        this.byeChannel.send("bye");
+        await new Promise((r) => setTimeout(r, 120)); // let SCTP flush before close
+      } catch {
+        /* best-effort */
+      }
+    }
+    this.byeChannel = null; // closed with the pc below
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
     this.dtmf = null;

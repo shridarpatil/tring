@@ -44,22 +44,22 @@ curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/
       <tr>
         <td>Echo Test (FreeSWITCH stock extension)</td>
         <td>9196</td>
-        <td><button data-tring-call data-to="9196">Call</button></td>
+        <td><button data-tring-agent-call data-to="9196">Call</button></td>
       </tr>
       <tr>
         <td>Aanya Sharma (placeholder customer)</td>
         <td>+919876543210</td>
-        <td><button data-tring-call data-to="+919876543210">Call</button></td>
+        <td><button data-tring-agent-call data-to="+919876543210">Call</button></td>
       </tr>
       <tr>
         <td>Rahul Patel (placeholder customer)</td>
         <td>+918888001122</td>
-        <td><button data-tring-call data-to="+918888001122">Call</button></td>
+        <td><button data-tring-agent-call data-to="+918888001122">Call</button></td>
       </tr>
       <tr>
         <td>Free-form dial</td>
         <td><input id="freeform" type="text" placeholder="+91..." /></td>
-        <td><button data-tring-call data-to-target="#freeform">Call</button></td>
+        <td><button data-tring-agent-call data-to-target="#freeform">Call</button></td>
       </tr>
     </tbody>
   </table>
@@ -68,8 +68,9 @@ curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/
     Once you click <strong>Load widget</strong>, this page becomes effectively:
   </p>
   <pre style="background:#f3f4f6;padding:0.75rem;border-radius:4px;font-size:12px;">
-&lt;script src="https://cdn.tring.io/agent.js"
+&lt;script src="http://localhost:8085/sdk/agent.js"
         data-api-base="http://localhost:8085"
+        data-gateway-url="http://localhost:8087"
         data-token="..."&gt;
 &lt;/script&gt;</pre>
 
@@ -83,6 +84,7 @@ curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/
       const s = document.createElement('script');
       s.src = '../dist/agent.iife.js';
       s.setAttribute('data-api-base', 'http://localhost:8085');
+      s.setAttribute('data-gateway-url', 'http://localhost:8087'); // required — raw WebRTC to the gateway
       s.setAttribute('data-token', token);
       document.body.appendChild(s);
       document.getElementById('loadBtn').disabled = true;

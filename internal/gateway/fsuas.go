@@ -116,7 +116,10 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 
 	callID := ic.id
-	teardown := g.relay(pc, toBrowser, leg, func() {
+	// agentMediaTimeout backstop: if FS stops relaying RTP (the visitor hung up
+	// and the bridge ended) we tear down even if no clean SIP BYE reaches us, so
+	// notifyEnded fires and the agent's screen closes.
+	teardown := g.relay(pc, toBrowser, leg, agentMediaTimeout, func() {
 		sess.finishIncoming(callID)
 		sess.notifyEnded(callID, "ended")
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
