@@ -63,15 +63,20 @@ Accept/Decline. See `examples/demo-portal/` for a runnable backend (`/agent/orig
 
 ## Website visitor calling (`voice.js`)
 
-Put voice on a public page so visitors call **into your IVR** — no login, no phone number. Anonymous "call us" is one tag pointing at your gateway and the flow to land in:
+Put voice on a public page so visitors call **into your IVR** — no phone number. Both anonymous guests and logged-in callers use the **same tag**, pointing at a backend endpoint that mints a gateway call token:
 
 ```html
 <script src="https://your-tring-host/sdk/voice.js"
-        data-gateway-url="https://your-gateway-host"
-        data-flow-id="<flow-uuid>"></script>
+        data-credentials-url="/your/credentials"></script>
 ```
 
-The visitor taps the floating "Call" button (or your own `<button data-tring-call>`), gets an anonymous, flow-pinned identity, and lands in your IVR — the call is pinned to that flow server-side and can never reach a trunk. To attribute a **logged-in** caller instead, point `data-credentials-url` at your backend, which mints a gateway call token carrying the verified `client_ref`. See `examples/demo-portal/` — one runnable app with the anonymous, logged-in, and agent flows.
+Your endpoint mints via `POST /v1/guest-credentials` (tenant API key) and returns `{ gateway_url, flow_id, token }`. The only difference between guest and logged-in is what it checks first and whether it passes a `client_ref`:
+- **Logged-in** → verify the session → mint **with** `client_ref` (attributed on the CDR).
+- **Anonymous guest** → gate with a **CAPTCHA / rate-limit** → mint **without** `client_ref`.
+
+The flow is pinned **inside the token** (so it's never in the page), and the call can never reach a trunk. The visitor taps the floating "Call" button (or your own `<button data-tring-call>` with `data-render-button="false"`). See `examples/demo-portal/` — one runnable app with `/support` (guest), `/portal` (logged-in), and `/crm` (agent).
+
+> **Default is token-gated** (`gateway_require_auth=true`) and the public mint (`/v1/sdk/guest-credentials`) is **off by default** — so a token-less offer is rejected before any resource is allocated. To allow the raw, no-backend anonymous path instead (`data-gateway-url` + `data-flow-id`, token-less), set `gateway_require_auth=false` **and** re-enable the public mint per-tenant (`guest_require_backend_mint=false`). That path is still flow-pinned/can't-reach-a-trunk, but the offer endpoint is then unauthenticated.
 
 ## Programmatic use (bare SDK)
 

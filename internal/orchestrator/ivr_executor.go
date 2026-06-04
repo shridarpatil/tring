@@ -603,7 +603,15 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 		st.stepDetail = "all agents"
 	}
 
-	bridgeTo, sips, err := e.agentBridgeTarget(ctx, node, st.tenantID)
+	// What the agent's incoming-call screen shows: the trusted client_ref if we
+	// have one, else a generic label — never the gateway's internal SIP identity
+	// (which is why agents saw "sipgo"). Carried as an X-Tring-Agent-Label SIP
+	// header on the agent leg; the gateway reads it in preference to the From.
+	label := st.clientRef
+	if label == "" {
+		label = "Web Caller"
+	}
+	bridgeTo, sips, err := e.agentBridgeTarget(ctx, node, st.tenantID, label)
 	if err != nil {
 		e.Logger.Printf("ivr: transfer target lookup failed: %v", err)
 		return "no_answer", nil
@@ -613,10 +621,6 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 		return "no_answer", nil
 	}
 	e.Logger.Printf("ivr: transfer bridging to %s", bridgeTo)
-
-	// Label the caller so the agent's incoming-call screen shows something
-	// meaningful (web visitors have no real caller-id).
-	_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "effective_caller_id_name", Value: "Web Caller", Sync: true})
 
 	if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: bridgeTo, Sync: true}); err != nil {
 		return "", fmt.Errorf("bridge: %w", err)
@@ -657,14 +661,14 @@ func (e *Executor) answeredAgentLabel(fsUUID string) string {
 // agents. The second return value is the candidate SIP usernames, in the same
 // order as the dial-string legs — used after the bridge to attribute which
 // agent actually answered.
-func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantID uuid.UUID) (string, []string, error) {
+func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantID uuid.UUID, label string) (string, []string, error) {
 	var domain string
 	if err := e.DB.Pool.QueryRow(ctx, e.Q.GetTenantSipDomain, tenantID).Scan(&domain); err != nil {
 		return "", nil, err
 	}
 
 	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
-		return e.agentLeg(sip, domain, tenantID.String()), []string{sip}, nil
+		return e.agentLeg(sip, domain, tenantID.String(), label), []string{sip}, nil
 	}
 
 	rows, err := e.DB.Pool.Query(ctx, e.Q.ListAgentSipUsernames, tenantID)
@@ -703,7 +707,7 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 
 	targets := make([]string, 0, len(sips))
 	for _, sip := range sips {
-		targets = append(targets, e.agentLeg(sip, domain, tenantID.String()))
+		targets = append(targets, e.agentLeg(sip, domain, tenantID.String(), label))
 	}
 	return strings.Join(targets, ","), sips, nil // comma = simultaneous ring
 }
@@ -718,12 +722,34 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 // endpoint (carrying the tenant id as a SIP header) instead of user/<sip>, so
 // agents speak WebRTC and never register SIP (ADR-001 M4b). Mirrors
 // (*api.Server).agentALeg.
-func (e *Executor) agentLeg(sip, domain, tenantID string) string {
+func (e *Executor) agentLeg(sip, domain, tenantID, label string) string {
 	if e.AgentTransport == "gateway" {
-		return fmt.Sprintf("[tring_agent=%s,sip_h_X-Tring-Tenant=%s]sofia/gateway/%s/%s",
-			sip, tenantID, e.AgentGateway, sip)
+		vars := fmt.Sprintf("tring_agent=%s,sip_h_X-Tring-Tenant=%s", sip, tenantID)
+		// Agent-facing caller label (e.g. client_ref or "Web Caller"). The
+		// gateway reads X-Tring-Agent-Label in preference to the SIP From, so the
+		// agent never sees the gateway's internal "sipgo" identity.
+		if l := sanitizeAgentLabel(label); l != "" {
+			vars += ",sip_h_X-Tring-Agent-Label=" + l
+		}
+		return fmt.Sprintf("[%s]sofia/gateway/%s/%s", vars, e.AgentGateway, sip)
 	}
 	return fmt.Sprintf("[tring_agent=%s]user/%s@%s", sip, sip, domain)
+}
+
+// sanitizeAgentLabel strips characters that would break the FreeSWITCH
+// `[k=v,...]` channel-variable block (or inject extra vars) and caps the length.
+func sanitizeAgentLabel(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == ',', r == '[', r == ']', r == '=', r == '\'', r == '"', r < 0x20:
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > 64 {
+		s = s[:64]
+	}
+	return strings.TrimSpace(s)
 }
 
 func (e *Executor) runHangup(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {

@@ -29,7 +29,7 @@ func TestAgentBridgeTargetRingsAll(t *testing.T) {
 	e := NewExecutor(f.DB)
 
 	node := &ivrNode{Type: nodeTransfer, Config: map[string]interface{}{}}
-	got, sips, err := e.agentBridgeTarget(context.Background(), node, f.TenantID)
+	got, sips, err := e.agentBridgeTarget(context.Background(), node, f.TenantID, "")
 	if err != nil {
 		t.Fatalf("agentBridgeTarget: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestAgentBridgeTargetSpecificAgent(t *testing.T) {
 	e := NewExecutor(f.DB)
 
 	node := &ivrNode{Type: nodeTransfer, Config: map[string]interface{}{"agent_sip": "bob"}}
-	got, sips, err := e.agentBridgeTarget(context.Background(), node, f.TenantID)
+	got, sips, err := e.agentBridgeTarget(context.Background(), node, f.TenantID, "")
 	if err != nil {
 		t.Fatalf("agentBridgeTarget: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAgentBridgeTargetNoAgents(t *testing.T) {
 	f := dbtest.Setup(t)
 	e := NewExecutor(f.DB)
 
-	got, sips, err := e.agentBridgeTarget(context.Background(), &ivrNode{Config: map[string]interface{}{}}, f.TenantID)
+	got, sips, err := e.agentBridgeTarget(context.Background(), &ivrNode{Config: map[string]interface{}{}}, f.TenantID, "")
 	if err != nil {
 		t.Fatalf("agentBridgeTarget: %v", err)
 	}

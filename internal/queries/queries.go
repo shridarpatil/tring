@@ -72,8 +72,7 @@ type Queries struct {
 	GetTenant      string `query:"get-tenant"`
 
 	// ---- api: guest web-calling ----
-	GetTenantByPublicKey string `query:"get-tenant-by-public-key"`
-	FlowUsable           string `query:"flow-usable"`
+	FlowUsable string `query:"flow-usable"`
 	GetGuestConfig             string `query:"get-guest-config"`
 	UpdateSupportFlow          string `query:"update-support-flow"`
 	UpdateAllowedOrigins       string `query:"update-allowed-origins"`

@@ -70,6 +70,24 @@ func (c *Cache) Set(ctx context.Context, key string, val []byte, ttl time.Durati
 	_ = c.rdb.Set(ctx, key, val, ttl).Err()
 }
 
+// SetNX atomically sets key→val with the given TTL only if the key is absent.
+// Returns true if it was set (the FIRST writer), false if the key already
+// existed. Used for single-use markers — e.g. consuming a one-time token's jti.
+//
+// Fail-OPEN: a nil cache or any Redis error returns true (treated as "first
+// use"), so a cache outage never blocks legitimate calls. The concurrency cap
+// is the non-cache backstop against the replay this guards.
+func (c *Cache) SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) bool {
+	if c == nil {
+		return true
+	}
+	ok, err := c.rdb.SetNX(ctx, key, val, ttl).Result()
+	if err != nil {
+		return true
+	}
+	return ok
+}
+
 // Delete removes a key (cache invalidation). Returns any Redis error so the
 // caller can log it — a failed delete means readers see stale data until the
 // TTL expires. A nil cache is a no-op.
