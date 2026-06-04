@@ -131,9 +131,7 @@ npm run typecheck  # tsc --noEmit
    AGENT=$(curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents | jq -r '.[0].id')
    curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/token | jq -r .token
    ```
-4. Open one of:
-   - `http://localhost:9999/examples/demo-crm.html` — the **drop-in widget** demo (paste JWT into the form, click Load widget, then click any Call button).
-   - `http://localhost:9999/examples/test.html` — the bare-SDK manual test (Connect / Call / Hang up).
+4. Open `http://localhost:9999/examples/test.html` — the bare-SDK manual test (Connect / Call / Hang up).
 
 ## Note: no browser WSS / cert dance
 
