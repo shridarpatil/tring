@@ -61,7 +61,24 @@ The gateway binds two roles; don't conflate their IPs:
 - `TRING_GATEWAY_ADVERT_IP` — the gateway's **private** IP, used for the SIP/RTP leg to FreeSWITCH (must be FS-reachable; it's also the Via/Contact host for FS's digest realm).
 - `TRING_FS_SIP_ADDR` — FreeSWITCH's private SIP address (FS binds its LAN IP, not loopback).
 
-## TURN
+## STUN — not needed
+
+STUN is **off by default** (`TRING_STUN_URL=""`) and you generally don't need it.
+STUN solves a *peer-to-peer* problem (a NATed peer discovering its own public
+address for the *other peer*). Our calls aren't P2P — the browser connects to the
+**gateway, a public server** (`TRING_PUBLIC_IP`). The browser's outbound ICE check
+opens its NAT mapping and the gateway replies to exactly that, learning the
+browser's reflexive address itself. This even works through **symmetric NAT**
+(which only breaks P2P), so most clients connect directly with no STUN and no
+relay. What matters instead: a correct, reachable `TRING_PUBLIC_IP` + open UDP
+media range. (If the gateway sits behind a 1:1 cloud NAT, set `TRING_PUBLIC_IP`
+to the public address — pion rewrites the host candidate.)
+
+## TURN — the real fallback
+
+TURN is for the minority of clients whose network **blocks outbound UDP** (locked-
+down corporate/guest Wi-Fi). Run it as **TURNS on 443** so it doubles as the
+firewall-traversal path.
 
 - Put coturn on its own **public IP**; open `3478` (UDP/TCP) + `5349` (TLS) + the relay UDP range.
 - Use **short-lived TURN REST credentials** (coturn `use-auth-secret` / time-limited), not a static username/password shipped to browsers — mint them alongside the call token.
