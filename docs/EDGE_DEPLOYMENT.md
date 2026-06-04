@@ -59,7 +59,42 @@ The gateway binds two roles; don't conflate their IPs:
 
 - `TRING_PUBLIC_IP` — the gateway's **public** IP, advertised to browsers as the WebRTC host candidate.
 - `TRING_GATEWAY_ADVERT_IP` — the gateway's **private** IP, used for the SIP/RTP leg to FreeSWITCH (must be FS-reachable; it's also the Via/Contact host for FS's digest realm).
-- `TRING_FS_SIP_ADDR` — FreeSWITCH's private SIP address (FS binds its LAN IP, not loopback).
+- `TRING_FS_SIP_ADDR` — FreeSWITCH's private SIP address (where the gateway dials FS).
+
+## Local dev (loopback) vs LAN / production
+
+The IP these settings point at must match where FreeSWITCH actually binds — and
+on a **dev laptop the LAN IP changes with Wi-Fi**, which otherwise breaks every
+call after a network switch (the gateway keeps dialing the old IP → `Timer_B`).
+Pick one of two modes:
+
+**Local dev — everything on one machine → loopback (Wi-Fi-immune).** `127.0.0.1`
+never changes, so nothing breaks when you switch networks. Set:
+
+```bash
+TRING_INTERNAL_IP=127.0.0.1                      # FS internal profile binds loopback + auth realm
+TRING_FS_SIP_ADDR=127.0.0.1:5060
+TRING_GATEWAY_ADVERT_IP=127.0.0.1
+TRING_GATEWAY_PUBLIC_URL=http://127.0.0.1:8087
+```
+
+Browser uses `http://localhost:8087`. **Only works when the browser is on the
+same machine** as the stack. `tring_gateway_sip` (FS→gateway) is already
+`127.0.0.1:5090`. `TRING_INTERNAL_IP` drives both the FS internal bind and the
+auth-realm domain together (they must agree — `challenge-realm=auto_from`).
+
+**LAN / staging — browser on another device, same network.** Use the host's LAN
+IP for all four (and FS's `local_ip_v4` already binds it, so leave
+`TRING_INTERNAL_IP` unset). The Wi-Fi-change pain returns on a laptop; on a box
+with a fixed LAN IP it doesn't.
+
+**Production — a server with a static IP / DNS.** Leave `TRING_INTERNAL_IP`
+unset (FS binds its stable IP); set `TRING_PUBLIC_IP` to the public IP and
+`TRING_GATEWAY_PUBLIC_URL` to the public gateway URL. A server's IP doesn't
+change, so none of this bites.
+
+> The default (unset `TRING_INTERNAL_IP`) is the LAN IP — so trunks (external
+> profile + `TRING_PUBLIC_IP`) are never affected by the loopback dev mode.
 
 ## STUN — not needed
 
