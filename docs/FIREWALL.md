@@ -1,23 +1,32 @@
 # Tring behind a firewall
 
-Real PSTN trunks demand stable, predictable network reachability. Tring's components — FreeSWITCH for SIP/RTP, the Go API for REST, the browser SDK for WSS — each have specific firewall needs. This page walks through three common deployment shapes and what breaks when you skip a step.
+Tring has **two distinct public surfaces** — keep them straight:
 
-If you only read one thing on this page: **disable SIP ALG on your router/firewall**. It is by far the most common cause of "REGISTER works but calls drop after 30 seconds" or "audio is one-way" symptoms in field deployments.
+1. **FreeSWITCH ↔ PSTN trunks** — FreeSWITCH still talks SIP/RTP to your telco
+   (Exotel/Airtel/Jio/Tata). This is the bulk of this page (SIP ALG, NAT, RTP).
+2. **Gateway ↔ browsers** — since the ADR-001 cutover, browser calling goes
+   through the **media gateway** (`cmd/gateway`) over raw WebRTC, **not**
+   FreeSWITCH-over-WebSocket. The gateway is the only browser-facing node;
+   FreeSWITCH is never exposed to browsers. See `docs/EDGE_DEPLOYMENT.md` for
+   the public/private split.
+
+If you only read one thing on this page: **disable SIP ALG on your router/firewall** (on the FreeSWITCH↔telco path). It's by far the most common cause of "REGISTER works but calls drop after 30 seconds" / "audio is one-way".
 
 ## What needs to traverse the firewall
 
-The minimum surface for a working PSTN-connected Tring node:
+The minimum public surface for a working PSTN-connected Tring node:
 
 | Port | Protocol | Direction | Who's on the other side | Why |
 |------|----------|-----------|--------------------------|-----|
-| 5060 | TCP + UDP | inbound + outbound | Telco SIP gateway | SIP REGISTER/INVITE/BYE |
+| 5060 | TCP + UDP | inbound + outbound | Telco SIP gateway | SIP REGISTER/INVITE/BYE (FreeSWITCH) |
 | 5061 | TCP | inbound + outbound | Telco SIP gateway (if TLS) | SIP-over-TLS — needed for some trunks |
-| `TRING_RTP_START_PORT`–`END_PORT` | UDP | inbound + outbound | Telco media gateway + browser agents | RTP audio + RTCP |
-| 7443 | TCP | inbound | Browser agents | WSS (sip.js over WebSocket) |
-| 8085 | TCP | inbound | Your CRM / integrators | Tring REST API |
-| 3478 | UDP | outbound only | STUN server (if `TRING_PUBLIC_IP=stun:…`) | NAT auto-discovery |
+| `TRING_RTP_START_PORT`–`END_PORT` | UDP | inbound + outbound | Telco media gateway | RTP audio + RTCP (FreeSWITCH↔telco) |
+| 8087 (→443) | TCP | inbound | Browsers | Gateway signaling: HTTPS `/webrtc/offer` + WSS `/agent/ws` — TLS-front on 443 |
+| `TRING_GATEWAY_UDP_MIN`–`MAX` | UDP | inbound + outbound | Browsers | Gateway WebRTC media (DTLS-SRTP) on `TRING_PUBLIC_IP` |
+| 5349 / 3478 | TCP/UDP | inbound | Browsers | TURN (coturn) — UDP-block fallback; prefer TURNS/443 |
+| 8085 | TCP | inbound | Your CRM / integrators | Tring REST API (can stay **private** — see EDGE_DEPLOYMENT) |
 
-`ESL` (8021), the internal API↔FS channel, and Postgres (5434) are local-only — they should **never** be exposed to the internet.
+`ESL` (8021), the gateway↔FreeSWITCH SIP/RTP leg (`5090`), Postgres (5434), Redis (6379), and FreeSWITCH itself toward browsers are **internal-only** — never exposed to the internet. **STUN is not used** (the gateway is the public endpoint — see "Browser agents behind NAT" below). FreeSWITCH's old browser WebSocket ports (`5066`/`7443`) are retired.
 
 ## Scenario 1 — Cloud VPS (AWS / GCP / DO / Hetzner)
 
@@ -33,15 +42,21 @@ TRING_RTP_END_PORT=16483             # narrow the RTP range to match
 Security-group rules:
 
 ```
-inbound  tcp/5060        from 0.0.0.0/0   # or just telco's CIDR if known
-inbound  udp/5060        from 0.0.0.0/0
-inbound  udp/16384-16483 from 0.0.0.0/0
-inbound  tcp/7443        from 0.0.0.0/0   # browser agents from anywhere
-inbound  tcp/8085        from <your-crm-cidr>
-inbound  tcp/22          from <your-ip>/32   # ssh, lock it down
+# FreeSWITCH ↔ telco (trunks)
+inbound  tcp/5060        from <telco-cidr>   # SIP; tighten to telco if known
+inbound  udp/5060        from <telco-cidr>
+inbound  udp/16384-16483 from <telco-cidr>   # FS↔telco RTP
+
+# Gateway ↔ browsers (web calling)
+inbound  tcp/443         from 0.0.0.0/0       # gateway signaling (HTTPS+WSS), TLS-fronted → :8087
+inbound  udp/10000-20000 from 0.0.0.0/0       # gateway WebRTC media (TRING_GATEWAY_UDP_*)
+inbound  tcp/5349        from 0.0.0.0/0        # TURN (if co-located) — TURNS/443 ideal
+
+inbound  tcp/8085        from <your-crm-cidr>  # REST API (omit if kept private)
+inbound  tcp/22          from <your-ip>/32     # ssh, lock it down
 ```
 
-No NAT translation, no port forwarding. **Allowlist your VPS IP at the telco** (Exotel/Airtel/Jio/Tata) and you're done.
+No NAT translation, no port forwarding. Set `TRING_PUBLIC_IP` to the VPS IP, **allowlist your VPS IP at the telco** (Exotel/Airtel/Jio/Tata), and you're done. For scale, put the **gateway on its own VPS** (scaled horizontally) and keep FreeSWITCH private — only the gateway + TURN need public IPs then.
 
 ## Scenario 2 — Office firewall with 1:1 NAT
 
@@ -52,10 +67,13 @@ The server is on a private LAN (e.g. `10.x.x.x`); the office router/firewall doe
 On the firewall, forward the inbound public ports to the FS host's private IP:
 
 ```
-public 0.0.0.0:5060/tcp     →  10.0.0.50:5060/tcp
-public 0.0.0.0:5060/udp     →  10.0.0.50:5060/udp
+# FreeSWITCH ↔ telco
+public 0.0.0.0:5060/tcp         →  10.0.0.50:5060/tcp
+public 0.0.0.0:5060/udp         →  10.0.0.50:5060/udp
 public 0.0.0.0:16384-16483/udp  →  10.0.0.50:16384-16483/udp
-public 0.0.0.0:7443/tcp     →  10.0.0.50:7443/tcp
+# Gateway ↔ browsers (if the gateway is on this host)
+public 0.0.0.0:443/tcp          →  10.0.0.50:8087/tcp
+public 0.0.0.0:10000-20000/udp  →  10.0.0.50:10000-20000/udp
 ```
 
 If your firewall mangles port numbers (some do "port translation" not just IP translation), you must use the **same** port on both sides — SIP signaling embeds port numbers in headers and SDP, so a 5060→5061 remap will break it.
@@ -119,43 +137,40 @@ For Tring v0.1, **recommended is option 1** (VPS). You can move to on-prem with 
 
 ## Browser agents behind NAT — TURN
 
-So far this page has been about FreeSWITCH's reachability. The other half of the story is the **agent's browser**, which is often a residential / corporate machine that's also behind NAT — and WebRTC doesn't just work end-to-end across two NATs.
+The other half of the story is the **agent's / visitor's browser**, behind a residential or corporate NAT. The browser connects to the **gateway**, which is a public server — that changes the NAT story compared to peer-to-peer WebRTC.
 
-### Why STUN alone isn't enough
+### Why STUN isn't needed here
 
-WebRTC uses ICE to discover candidate paths between peers (browser ↔ FreeSWITCH). Each peer offers:
+In the gateway model the browser isn't peering with another NATed endpoint — it's connecting to a **public server** (the gateway, advertised at `TRING_PUBLIC_IP`). The browser's outbound ICE check opens its NAT mapping, the gateway sees the browser's reflexive address on that incoming packet, and replies to exactly it. So:
 
-- **host** candidates — the LAN IP they actually bind to
-- **srflx** candidates — their public IP as seen by an external STUN server
-- **relay** candidates — a public-IP TURN server willing to relay their packets
+- The gateway doesn't need STUN — you configure its public IP directly.
+- The browser doesn't need STUN — the gateway discovers its reflexive address for it.
+- **Symmetric NAT works without a relay**, because the gateway always replies to the exact source it saw (symmetric NAT only breaks *peer-to-peer*, where a third party must predict your mapping).
 
-ICE pairs candidates and tries them in order. **STUN gives you srflx; TURN gives you relay.**
+So `TRING_STUN_URL` is empty by default and the browser's ICE list is usually just TURN (or nothing on a LAN). What actually matters: a correct `TRING_PUBLIC_IP` and an open gateway UDP media range.
 
-STUN works for the easy NAT types — full cone, restricted cone, port-restricted cone. It fails for **symmetric NAT** (some corporate firewalls, most CGNAT deployments) because the NAT assigns a different source port per destination. The srflx candidate the browser advertises won't match what FreeSWITCH actually sees, and the ICE check times out. No audio.
+### When you still need TURN
 
-Symptoms when you need TURN but don't have it:
+TURN is the fallback for browsers whose network **blocks outbound UDP** entirely — locked-down corporate / guest Wi-Fi that only allows TCP/443. Without UDP, the browser can't reach the gateway's media ports at all, and the only way out is **TURN over TLS on 443** (`turns:`), which looks like ordinary HTTPS to the firewall.
 
-- SIP REGISTER succeeds; agent shows as registered.
-- Call connects; INVITE → 200 OK → ACK fly cleanly.
-- ICE gathering hangs or fails. Browser console shows `iceConnectionState: failed`.
-- Audio is silent in both directions, or one-way (only the side with relax NAT reaches the other).
+Symptoms you need TURN:
+
+- Signaling is fine (`/webrtc/offer` returns 200, or the agent WS connects), but…
+- ICE never connects — browser console shows `iceConnectionState: failed`, no media.
+- It only fails on certain networks (corporate/guest), works on home/mobile.
 
 ### How Tring wires TURN
 
-Three env vars, returned by `/v1/sdk/credentials` as part of the `ice_servers` array, passed straight into the browser's `RTCPeerConnection`:
+Set three env vars; the API returns them in the `ice_servers` of a mint response, and the gateway uses them for its own candidates too. Passed straight into the browser's `RTCPeerConnection`:
 
 ```bash
-# .env
-TRING_TURN_URL=turn:turn.example.com:3478
+# .env  (STUN intentionally NOT set — the gateway is the public endpoint)
+TRING_TURN_URL=turns:turn.example.com:443    # TURNS/443 for UDP-blocked clients
 TRING_TURN_USERNAME=tring
 TRING_TURN_PASSWORD=<long random>
-
-# STUN default is Google's public server. Override if you don't want
-# browsers reaching Google, or to point at the same coturn for both:
-TRING_STUN_URL=stun:turn.example.com:3478
 ```
 
-The SDK consumes this without any client-side configuration — drop the env vars in, browsers everywhere get TURN, no rebuild needed.
+No client-side config or rebuild — drop the env vars in and browsers everywhere pick up TURN. For production, prefer **short-lived TURN REST credentials** (coturn `use-auth-secret`) minted alongside the call token rather than a static shared password.
 
 ### Running coturn yourself
 
@@ -196,26 +211,30 @@ Easier if you don't want a coturn container to operate:
 | **Xirsys** | tiered | Long-running player; subscriptions from $33/mo. |
 | **Metered.ca** | free tier + paid | Generous free tier for development. |
 
-All four mint short-lived TURN credentials via an API call. If you go this route, you'll likely run a small server-side helper that mints credentials per-agent and stuffs them into the Tring env at boot (or extend `/v1/sdk/credentials` to mint per-call — Phase 2).
+All four mint short-lived TURN credentials via an API call. The clean integration is to mint them in the same place that mints the **gateway call token** (`POST /v1/guest-credentials` / the agent token endpoint) and return them in `ice_servers`, so each browser gets time-limited creds per call.
 
-### Verifying TURN is actually being used
+### Verifying which path a call took
 
-In Chrome, open `chrome://webrtc-internals` during a call. Find the active `RTCPeerConnection` and look at "Stats Tables → Selected Candidate Pair". The local candidate's `candidateType` tells you:
+In Chrome, open `chrome://webrtc-internals` during a call. Find the active `RTCPeerConnection` and look at "Stats Tables → Selected Candidate Pair". The candidate's `candidateType` tells you:
 
-- `host` — direct LAN path (same network)
-- `srflx` — direct via STUN (typical home network → FS)
-- `relay` — via TURN (the case you care about for symmetric-NAT browsers)
+- `host` / `prflx` — the browser reached the **gateway directly** (the normal case — the gateway's public IP, no relay). `prflx` (peer-reflexive) is expected since there's no STUN.
+- `relay` — via TURN (the UDP-blocked-network fallback).
 
-If you configured TURN and never see `relay` candidates even from a known-symmetric-NAT browser, something's wrong — usually wrong credentials, firewall blocking 3478, or the TURN URL is malformed.
+If a browser on a UDP-blocking network never produces a `relay` pair, TURN is misconfigured — usually wrong creds, the firewall blocking your TURN port, or the TURN URL isn't `turns:`/443. (You do **not** need to see `srflx` — STUN is off by design.)
 
 ## Outbound-only firewalls
 
-Some hosts have strict egress rules (DLP environments, government infra). FS needs *outbound* to:
+Some hosts have strict egress rules (DLP environments, government infra).
 
+**FreeSWITCH** needs *outbound* to:
 - **Telco SIP endpoints** — the realm host on TCP/UDP 5060/5061. Find the IP with `dig <realm>` and allowlist.
-- **STUN servers** — UDP 3478 to `stun.freeswitch.org` (default) or whichever you configured. Only needed if `TRING_PUBLIC_IP=stun:…`. If you set a literal IP or `host:fqdn`, you can drop STUN egress entirely.
-- **PostgreSQL** (TCP 5434) — usually local container, no egress needed.
-- **Container registries** — only at deploy time, for `docker pull`.
+- **PostgreSQL / Redis** — usually local containers, no egress needed.
+
+**The gateway** needs:
+- *Inbound* UDP (its media range) + TCP 443 from browsers — it's a server, not an egress client.
+- No STUN egress (STUN is off). If you run TURN, browsers reach it inbound; the gateway reaching TURN is only needed for relayed candidates on its own side.
+
+**Container registries** — only at deploy time, for `docker pull`.
 
 ## Diagnostic checklist
 

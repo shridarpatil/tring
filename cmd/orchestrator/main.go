@@ -59,7 +59,8 @@ func main() {
 	defer flowCache.Close()
 
 	ivrAddr := k.String("ivr_addr")
-	exec := orchestrator.NewExecutor(dbase).WithCache(flowCache)
+	exec := orchestrator.NewExecutor(dbase).WithCache(flowCache).
+		WithAgentTransport(k.String("agent_transport"), k.String("agent_gateway"))
 	go func() {
 		log.Printf("ivr executor listening on %s", ivrAddr)
 		if err := eslgo.ListenAndServe(ivrAddr, exec.HandleInboundCall); err != nil {

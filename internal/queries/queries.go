@@ -45,6 +45,20 @@ type Queries struct {
 	GetAgentSipUsername string `query:"get-agent-sip-username"`
 	CreateCallOutbound  string `query:"create-call-outbound"`
 	CreateCallBridge    string `query:"create-call-bridge"`
+	CreateCallInbound   string `query:"create-call-inbound"`
+	SetCallIVRPath      string `query:"set-call-ivr-path"`
+	SetCallAgent        string `query:"set-call-agent"`
+	GetAgentBySIP       string `query:"get-agent-by-sip"`
+
+	UpdateGuestRequireBackendMint string `query:"update-guest-require-backend-mint"`
+
+	CreateAPIKey        string `query:"create-api-key"`
+	ListAPIKeys         string `query:"list-api-keys"`
+	RevokeAPIKey        string `query:"revoke-api-key"`
+	ResolveAPIKeyTenant string `query:"resolve-api-key-tenant"`
+	TouchAPIKey         string `query:"touch-api-key"`
+	GetCallTenant       string `query:"get-call-tenant"`
+	GetCallAgentLabel   string `query:"get-call-agent-label"`
 	GetCall             string `query:"get-call"`
 	ListCalls           string `query:"list-calls"`
 	ListCallsByStatus   string `query:"list-calls-by-status"`
@@ -52,18 +66,14 @@ type Queries struct {
 	// ---- api: mod_xml_curl directory (/fs) ----
 	GetTenantIDBySipDomain string `query:"get-tenant-id-by-sip-domain"`
 	GetAgentCredentials    string `query:"get-agent-credentials"`
-	GetGuestSession        string `query:"get-guest-session"`
 
 	// ---- api: console auth ----
 	GetUserByEmail string `query:"get-user-by-email"`
 	GetTenant      string `query:"get-tenant"`
 
 	// ---- api: guest web-calling ----
-	GetTenantByPublicKey       string `query:"get-tenant-by-public-key"`
-	DeleteExpiredGuestSessions string `query:"delete-expired-guest-sessions"`
-	CountActiveGuestSessions   string `query:"count-active-guest-sessions"`
-	CreateGuestSession         string `query:"create-guest-session"`
-	FlowUsable                 string `query:"flow-usable"`
+	GetTenantByPublicKey string `query:"get-tenant-by-public-key"`
+	FlowUsable           string `query:"flow-usable"`
 	GetGuestConfig             string `query:"get-guest-config"`
 	UpdateSupportFlow          string `query:"update-support-flow"`
 	UpdateAllowedOrigins       string `query:"update-allowed-origins"`
@@ -75,9 +85,6 @@ type Queries struct {
 	UpdateFlow        string `query:"update-flow"`
 	DeleteFlow        string `query:"delete-flow"`
 	GetFlowDefinition string `query:"get-flow-definition"`
-
-	// ---- api: agent token / sdk credentials ----
-	GetAgentSipCreds string `query:"get-agent-sip-creds"`
 
 	// ---- api: webhooks ----
 	CreateWebhook         string `query:"create-webhook"`
@@ -104,7 +111,6 @@ type Queries struct {
 
 	// ---- orchestrator: IVR executor (ivr_executor.go) ----
 	ResolveInboundNumber  string `query:"resolve-inbound-number"`
-	ExpireGuestSession    string `query:"expire-guest-session"`
 	GetActiveFlowByID     string `query:"get-active-flow-by-id"`
 	ListAgentSipUsernames string `query:"list-agent-sip-usernames"`
 	// NOTE: agentBridgeTarget reuses GetTenantSipDomain (SELECT sip_domain ...).

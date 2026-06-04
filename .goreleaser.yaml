@@ -42,6 +42,17 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
 
+  - id: gateway
+    main: ./cmd/gateway
+    binary: tring-gateway
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+
 archives:
   - id: api
     ids: [api]
@@ -51,6 +62,11 @@ archives:
   - id: orchestrator
     ids: [orchestrator]
     name_template: "tring-orchestrator_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [LICENSE, NOTICE, README.md]
+  - id: gateway
+    ids: [gateway]
+    name_template: "tring-gateway_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files: [LICENSE, NOTICE, README.md]
 
@@ -95,6 +111,24 @@ dockers:
     dockerfile: Dockerfile
     goarch: arm64
     ids: [orchestrator]
+  # gateway · amd64
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-gateway:{{ .Tag }}-amd64"
+      - "{{ .Env.DOCKER_ORG }}/tring-gateway:{{ .Tag }}-amd64"
+    use: buildx
+    build_flag_templates: [--platform=linux/amd64, --build-arg=CMD=gateway]
+    dockerfile: Dockerfile
+    goarch: amd64
+    ids: [gateway]
+  # gateway · arm64
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-gateway:{{ .Tag }}-arm64"
+      - "{{ .Env.DOCKER_ORG }}/tring-gateway:{{ .Tag }}-arm64"
+    use: buildx
+    build_flag_templates: [--platform=linux/arm64, --build-arg=CMD=gateway]
+    dockerfile: Dockerfile
+    goarch: arm64
+    ids: [gateway]
 
 docker_manifests:
   - name_template: "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-api:{{ .Tag }}"
@@ -113,6 +147,14 @@ docker_manifests:
     image_templates:
       - "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}-amd64"
       - "{{ .Env.DOCKER_ORG }}/tring-orchestrator:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-gateway:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-gateway:{{ .Tag }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_ORG }}/tring-gateway:{{ .Tag }}-arm64"
+  - name_template: "{{ .Env.DOCKER_ORG }}/tring-gateway:{{ .Tag }}"
+    image_templates:
+      - "{{ .Env.DOCKER_ORG }}/tring-gateway:{{ .Tag }}-amd64"
+      - "{{ .Env.DOCKER_ORG }}/tring-gateway:{{ .Tag }}-arm64"
 
 changelog:
   sort: asc

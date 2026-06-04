@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,40 +14,37 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// guestSessionTTL bounds how long an ephemeral guest SIP identity is valid.
-// Long enough for a customer to navigate an IVR and hold a call; short
-// enough that a leaked credential expires fast. An in-progress call
-// continues past expiry (FreeSWITCH already authed the channel) — the TTL
-// only gates *new* registration / directory-auth lookups.
-const guestSessionTTL = 15 * time.Minute
-
-// maxConcurrentGuestSessions caps live (unexpired) guest sessions per tenant.
-// The non-spoofable backstop against minting floods exhausting DB rows or
-// FreeSWITCH channels. Generous for legit traffic, tight against abuse.
-const maxConcurrentGuestSessions = 100
+// gatewayCallTokenTTL bounds how long a minted gateway call token is valid —
+// long enough for the visitor's browser to set up the WebRTC call, short
+// enough that a leaked token expires fast. The gateway consumes it at offer
+// time; an established call continues past expiry.
+const gatewayCallTokenTTL = 2 * time.Minute
 
 // guestMintRatePerMin is the per-IP request cap on the public mint endpoint.
 const guestMintRatePerMin = 10
-
-// guestDialTarget is the SIP user the guest SDK sends its INVITE to. The
-// value is irrelevant to routing — the dialplan routes any user_class=guest
-// call to the IVR regardless — but a stable, obviously-non-numeric target
-// keeps logs readable and avoids colliding with the numeric-DID tring_ivr
-// extension.
-const guestDialTarget = "ivr"
 
 type guestCredentialsRequest struct {
 	PublicKey string `json:"public_key"`
 	FlowID    string `json:"flow_id"` // optional; falls back to tenant.support_flow_id
 }
 
+// authGuestCredentialsRequest is the body for the API-key-authenticated mint
+// (POST /v1/guest-credentials). client_ref is TRUSTED here because the caller
+// proved tenant ownership with the API key — unlike the public browser mint,
+// which never accepts it (a browser-supplied identity would be spoofable).
+type authGuestCredentialsRequest struct {
+	FlowID    string `json:"flow_id"`    // optional; falls back to tenant.support_flow_id
+	ClientRef string `json:"client_ref"` // the verified caller identity, e.g. a CRM client id
+}
+
+// guestCredentialsResponse gives a visitor's browser everything it needs to
+// place the call straight at the media gateway (ADR-001): the gateway URL, the
+// pinned flow, a short-lived call token, and ICE servers. No SIP.
 type guestCredentialsResponse struct {
-	SipUsername string      `json:"sip_username"`
-	SipPassword string      `json:"sip_password"`
-	SipDomain   string      `json:"sip_domain"`
-	WSURL       string      `json:"ws_url"`
-	ICEServers  []iceServer `json:"ice_servers"`
-	DialTarget  string      `json:"dial_target"`
+	GatewayURL string      `json:"gateway_url"`
+	FlowID     string      `json:"flow_id"`
+	Token      string      `json:"token"`
+	ICEServers []iceServer `json:"ice_servers"`
 }
 
 // handleGuestCredentials mints a short-lived, anonymous SIP identity for a
@@ -73,15 +68,24 @@ func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) 
 		sipDomain      string
 		supportFlow    *uuid.UUID
 		allowedOrigins []string
+		requireBackend bool
 	)
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTenantByPublicKey,
-		req.PublicKey).Scan(&tenantID, &sipDomain, &supportFlow, &allowedOrigins)
+		req.PublicKey).Scan(&tenantID, &sipDomain, &supportFlow, &allowedOrigins, &requireBackend)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusUnauthorized, "unknown public key")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+
+	// Per-tenant policy: this tenant requires backend-minted (attributable)
+	// guest credentials, so the public browser mint is disabled. The caller
+	// must mint via the API-key endpoint (POST /v1/guest-credentials).
+	if requireBackend {
+		writeError(w, http.StatusForbidden, "public guest mint disabled for this tenant; mint server-side via /v1/guest-credentials")
 		return
 	}
 
@@ -94,46 +98,66 @@ func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	flowID, err := s.resolveGuestFlow(r.Context(), tenantID, req.FlowID, supportFlow)
+	// Public path never trusts a caller-supplied identity — pass "" so a
+	// browser can't forge client_ref. The authenticated mint below sets it.
+	s.mintGatewayCall(w, r, tenantID, supportFlow, req.FlowID, "")
+}
+
+// handleAuthGuestCredentials mints guest call credentials for an
+// API-key-authenticated caller (the integrator's backend), attaching a
+// TRUSTED client_ref — the verified identity of the logged-in caller. Because
+// the request proved tenant ownership (AuthRequired), client_ref is safe to
+// attribute on the call log, unlike the public browser mint.
+//
+// Flow for a logged-in support portal: portal backend (holds the API key)
+// calls this with the session's client id → returns SIP creds to its own
+// frontend → the browser uses them with the SDK. Mirrors the agent widget's
+// data-token-url pattern.
+func (s *Server) handleAuthGuestCredentials(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	var req authGuestCredentialsRequest
+	// Body is optional (flow_id + client_ref); ignore decode errors on empty.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	// Fallback flow comes from the tenant's configured support flow. (The
+	// require-backend flag doesn't gate this path — it IS the backend mint.)
+	var (
+		publicKey      string
+		supportFlow    *uuid.UUID
+		origins        []string
+		requireBackend bool
+	)
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig, t.ID).
+		Scan(&publicKey, &supportFlow, &origins, &requireBackend); err != nil {
+		writeError(w, http.StatusInternalServerError, "tenant config lookup failed")
+		return
+	}
+	s.mintGatewayCall(w, r, t.ID, supportFlow, req.FlowID, req.ClientRef)
+}
+
+// mintGatewayCall is the shared core: resolve the flow and issue a short-lived
+// gateway call token the visitor's browser presents to the media gateway. Both
+// the public and the API-key mints call it; only the latter passes a non-empty
+// clientRef (the trusted, attributable caller identity). No SIP session — the
+// gateway dials FreeSWITCH itself (ADR-001).
+func (s *Server) mintGatewayCall(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, supportFlow *uuid.UUID, requestedFlow, clientRef string) {
+	flowID, err := s.resolveGuestFlow(r.Context(), tenantID, requestedFlow, supportFlow)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Reap expired sessions lazily so the table stays bounded without a
-	// background worker. Cheap (indexed on expires_at) and best-effort.
-	_, _ = s.db.Pool.Exec(r.Context(), s.q.DeleteExpiredGuestSessions)
-
-	// Per-tenant concurrent-session cap — the non-spoofable backstop against
-	// a flood exhausting DB rows / FreeSWITCH channels.
-	var active int
-	if err := s.db.Pool.QueryRow(r.Context(), s.q.CountActiveGuestSessions,
-		tenantID,
-	).Scan(&active); err != nil {
-		writeError(w, http.StatusInternalServerError, "session count failed")
-		return
-	}
-	if active >= maxConcurrentGuestSessions {
-		writeError(w, http.StatusTooManyRequests, "too many active guest sessions")
-		return
-	}
-
-	user := "guest_" + randToken(6)
-	pass := randToken(20)
-	_, err = s.db.Pool.Exec(r.Context(), s.q.CreateGuestSession,
-		tenantID, user, pass, flowID, int(guestSessionTTL.Seconds()))
+	token, _, err := s.IssueGatewayCallToken(tenantID, flowID.String(), clientRef, gatewayCallTokenTTL)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "session create failed")
+		writeError(w, http.StatusInternalServerError, "token issue failed")
 		return
 	}
 
 	writeJSON(w, http.StatusOK, guestCredentialsResponse{
-		SipUsername: user,
-		SipPassword: pass,
-		SipDomain:   sipDomain,
-		WSURL:       s.wsURL,
-		ICEServers:  s.iceServers,
-		DialTarget:  guestDialTarget,
+		GatewayURL: s.gatewayPublicURL,
+		FlowID:     flowID.String(),
+		Token:      token,
+		ICEServers: s.iceServers,
 	})
 }
 
@@ -179,6 +203,9 @@ type guestConfigResponse struct {
 	PublicKey      string     `json:"public_key"`
 	SupportFlowID  *uuid.UUID `json:"support_flow_id"`
 	AllowedOrigins []string   `json:"allowed_origins"`
+	// RequireBackendMint: when true the public mint is disabled and guest
+	// credentials must be minted server-side via the API-key endpoint.
+	RequireBackendMint bool `json:"guest_require_backend_mint"`
 }
 
 // handleGetGuestConfig returns the tenant's public widget key, the flow
@@ -189,7 +216,7 @@ func (s *Server) handleGetGuestConfig(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var resp guestConfigResponse
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig,
-		t.ID).Scan(&resp.PublicKey, &resp.SupportFlowID, &resp.AllowedOrigins)
+		t.ID).Scan(&resp.PublicKey, &resp.SupportFlowID, &resp.AllowedOrigins, &resp.RequireBackendMint)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -203,6 +230,9 @@ type patchGuestConfigRequest struct {
 	// AllowedOrigins: the domains the widget may be embedded on. Required
 	// (non-empty) before guest minting works — fail-closed.
 	AllowedOrigins *[]string `json:"allowed_origins"`
+	// RequireBackendMint: true disables the public mint (backend API-key mint
+	// only). nil = leave unchanged.
+	RequireBackendMint *bool `json:"guest_require_backend_mint"`
 }
 
 // handlePatchGuestConfig sets the support flow and/or the Origin allowlist.
@@ -213,8 +243,8 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.SupportFlowID == nil && req.AllowedOrigins == nil {
-		writeError(w, http.StatusBadRequest, "support_flow_id or allowed_origins required")
+	if req.SupportFlowID == nil && req.AllowedOrigins == nil && req.RequireBackendMint == nil {
+		writeError(w, http.StatusBadRequest, "support_flow_id, allowed_origins, or guest_require_backend_mint required")
 		return
 	}
 
@@ -254,6 +284,13 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	if req.RequireBackendMint != nil {
+		if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateGuestRequireBackendMint, *req.RequireBackendMint, t.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "update failed")
+			return
+		}
+	}
+
 	s.handleGetGuestConfig(w, r)
 }
 
@@ -286,11 +323,4 @@ func normalizeOrigin(s string) (string, error) {
 		return "", fmt.Errorf("origin %q must be scheme://host[:port] with no path", s)
 	}
 	return u.Scheme + "://" + u.Host, nil
-}
-
-// randToken returns a lowercase hex string of n random bytes (2n chars).
-func randToken(n int) string {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
 }

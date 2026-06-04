@@ -34,8 +34,9 @@ func insertOutboundForHandlerTest(t *testing.T, f *dbtest.Fixture, e164 string, 
 // router) lets tests mint console JWTs via s.IssueConsoleToken.
 func newTestServer(f *dbtest.Fixture) *Server {
 	return NewServer(Config{
-		DB:        f.DB,
-		JWTSecret: "test-secret",
+		DB:               f.DB,
+		JWTSecret:        "test-secret",
+		GatewayPublicURL: "http://gw.test",
 	})
 }
 

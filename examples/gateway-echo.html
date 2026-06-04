@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Tring pion gateway — echo test</title></head>
+<body style="font-family:system-ui;max-width:34rem;margin:3rem auto">
+  <h1>pion gateway echo test</h1>
+  <p style="color:#666">
+    WebRTC media gateway check (ADR-001). Click <b>Start</b>, allow the mic, and
+    you should hear your own voice echoed back. With the gateway run against
+    FreeSWITCH (env <code>TRING_FS_SIP_ADDR</code>) the path is the full bridge:
+    <code>browser → pion gateway → FreeSWITCH (echo) → gateway → browser</code>
+    — proving two-way audio through a private FreeSWITCH (milestone 2b). Without
+    FS configured, the gateway echoes locally (milestone 1).
+  </p>
+
+  <p>
+    <label>Gateway URL
+      <input id="base" value="http://localhost:8087" style="width:18rem;padding:.3rem" />
+    </label>
+  </p>
+  <button id="start" style="padding:.5rem 1rem">Start</button>
+  <button id="stop" style="padding:.5rem 1rem" disabled>Stop</button>
+  <p id="state" style="font-family:monospace"></p>
+  <audio id="remote" autoplay></audio>
+
+  <!-- DTMF dialpad: sends RFC-4733 telephone-event via RTCDTMFSender. Use it
+       against a menu/gather flow to verify DTMF survives the gateway→FS PT
+       remap. -->
+  <div id="pad" style="display:none;margin-top:1rem">
+    <span style="font-size:.85rem;color:#666">DTMF:</span>
+    <span id="keys"></span>
+    <span id="sent" style="font-family:monospace;margin-left:.5rem"></span>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let pc;
+
+    async function start() {
+      $("start").disabled = true;
+      const base = $("base").value.replace(/\/$/, "");
+      const log = (s) => ($("state").textContent = s);
+
+      // No STUN: the gateway is a public server, reached on its host candidate.
+      pc = new RTCPeerConnection({ iceServers: [] });
+      pc.onconnectionstatechange = () => log("state: " + pc.connectionState);
+      pc.ontrack = (e) => { $("remote").srcObject = e.streams[0]; };
+
+      const mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let dtmfSender = null;
+      mic.getTracks().forEach((t) => {
+        const sender = pc.addTrack(t, mic);
+        if (sender.dtmf) dtmfSender = sender.dtmf; // RTCDTMFSender for the audio track
+      });
+      buildDialpad(dtmfSender);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      // Non-trickle: wait for ICE gathering (matches the gateway).
+      await new Promise((res) => {
+        if (pc.iceGatheringState === "complete") return res();
+        pc.onicegatheringstatechange = () =>
+          pc.iceGatheringState === "complete" && res();
+      });
+
+      const r = await fetch(base + "/webrtc/offer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sdp: pc.localDescription.sdp }),
+      });
+      if (!r.ok) throw new Error("offer failed: " + r.status);
+      const { sdp } = await r.json();
+      await pc.setRemoteDescription({ type: "answer", sdp });
+      $("stop").disabled = false;
+    }
+
+    function buildDialpad(dtmf) {
+      const keys = $("keys");
+      keys.innerHTML = "";
+      if (!dtmf) { $("pad").style.display = "none"; return; }
+      "123456789*0#".split("").forEach((d) => {
+        const b = document.createElement("button");
+        b.textContent = d;
+        b.style.cssText = "width:2rem;height:2rem;margin:.1rem";
+        b.onclick = () => { dtmf.insertDTMF(d); $("sent").textContent += d; };
+        keys.appendChild(b);
+      });
+      $("pad").style.display = "block";
+    }
+
+    function stop() {
+      pc && pc.close();
+      $("start").disabled = false;
+      $("stop").disabled = true;
+      $("pad").style.display = "none";
+      $("sent").textContent = "";
+      $("state").textContent = "stopped";
+    }
+
+    $("start").onclick = () => start().catch((e) => ($("state").textContent = "error: " + e.message));
+    $("stop").onclick = stop;
+  </script>
+</body>
+</html>

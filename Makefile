@@ -8,13 +8,14 @@ DEMO_URL  := http://localhost:$(DEMO_PORT)/examples/sample-crm.html
 
 help:
 	@echo "Common targets:"
-	@echo "  make up            - docker compose up -d  (FS + Postgres + API + orchestrator)"
+	@echo "  make up            - docker compose up -d  (FS + Postgres + API + orchestrator + gateway)"
 	@echo "  make down          - docker compose down"
-	@echo "  make logs          - tail logs of all four services"
-	@echo "  make images        - rebuild both Go images (forces fresh binary)"
+	@echo "  make logs          - tail logs of all services"
+	@echo "  make images        - rebuild the Go images (forces fresh binary)"
 	@echo "  make api           - run the API on :8085 (foreground, host) — for dev hot-iterate"
 	@echo "  make orchestrator  - run the orchestrator (foreground, host) — for dev hot-iterate"
-	@echo "  make build         - go build ./... (both binaries)"
+	@echo "  make gateway       - run the WebRTC media gateway on :8087 (foreground, host)"
+	@echo "  make build         - go build ./... (all binaries)"
 	@echo "  make sdk           - npm run build in sdk/js"
 	@echo "  make sdk-watch     - rebuild SDK on change"
 	@echo "  make test          - go test ./..."
@@ -22,8 +23,12 @@ help:
 	@echo "  make serve-demo    - serve repo over :$(DEMO_PORT) and open the demo CRM"
 	@echo "  make demo-url      - print the demo URL"
 
-up:
+up: .env
 	docker compose up -d
+
+# Seed .env from the template on first run so `make up` works out of the box.
+.env:
+	@test -f .env || (cp .env.example .env && echo "created .env from .env.example — review it")
 
 down:
 	docker compose down
@@ -32,13 +37,16 @@ logs:
 	docker compose logs -f --tail=20
 
 images:
-	docker compose build api orchestrator
+	docker compose build api orchestrator gateway
 
 api:
 	go run ./cmd/api
 
 orchestrator:
 	go run ./cmd/orchestrator
+
+gateway:
+	go run ./cmd/gateway
 
 build:
 	go build ./...

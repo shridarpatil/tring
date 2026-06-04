@@ -9,7 +9,6 @@ export type {
   CallDirection,
   InitOpts,
   TringEvent,
-  SipCredentialsResponse,
   GuestInitOpts,
   GuestEvent,
   GuestCallStatus,

@@ -165,7 +165,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binary: [api, orchestrator]
+        binary: [api, orchestrator, gateway]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

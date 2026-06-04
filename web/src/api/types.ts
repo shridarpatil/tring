@@ -33,6 +33,16 @@ export interface PhoneNumber {
   created_at: string;
 }
 
+// IvrStep is one node the call walked through (mirrors orchestrator.SimStep).
+export interface IvrStep {
+  node_id: string;
+  node_type: string;
+  action: string;
+  detail?: string;
+  dtmf_input?: string;
+  outcome: string;
+}
+
 export interface Call {
   id: string;
   direction: string;
@@ -40,6 +50,8 @@ export interface Call {
   from_number: string;
   to_number: string;
   agent_id?: string;
+  agent_name?: string;
+  client_ref?: string;
   fs_uuid: string;
   started_at: string;
   answered_at?: string;
@@ -47,6 +59,7 @@ export interface Call {
   duration_seconds?: number;
   hangup_cause?: string;
   recording_url?: string;
+  ivr_path?: IvrStep[];
 }
 
 export interface Webhook {
@@ -139,6 +152,21 @@ export interface GuestConfig {
   public_key: string;
   support_flow_id: string | null;
   allowed_origins: string[];
+  // When true the public (browser) mint is disabled; guest credentials must
+  // be minted server-side via the API-key endpoint.
+  guest_require_backend_mint: boolean;
+}
+
+// Tenant API key. `key` (plaintext) is present only in the create response,
+// shown once; the list returns prefix + status only.
+export interface ApiKey {
+  id: string;
+  name: string;
+  key?: string;
+  key_prefix: string;
+  created_at: string;
+  last_used_at?: string;
+  revoked: boolean;
 }
 
 // ─── SIP Trunks ──────────────────────────────────────────────────────

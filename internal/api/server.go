@@ -16,6 +16,7 @@ import (
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
 	"github.com/whatomate/tring/internal/orchestrator"
+	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queries"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
@@ -29,7 +30,6 @@ type Config struct {
 	DB          *db.DB
 	JWTSecret   string
 	FSBasicAuth string // "user:pass" — shared with FreeSWITCH mod_xml_curl
-	WSURL       string // ws(s)://host:port that the SDK passes to sip.js
 	ESLAddr     string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
 	ESLPassword string // FreeSWITCH ESL password (default ClueCon)
 
@@ -42,6 +42,17 @@ type Config struct {
 	TURNURL      string
 	TURNUsername string
 	TURNPassword string
+
+	// AgentTransport routes the agent's own call leg: "sip" (agent registers
+	// to FS directly) or "gateway" (leg routed to the media gateway as a SIP
+	// endpoint; ADR-001 M4b). AgentGateway is the FS gateway name used for the
+	// latter. Defaults supplied by internal/config.
+	AgentTransport string
+	AgentGateway   string
+
+	// GatewayPublicURL is the browser-reachable base URL of the media gateway,
+	// returned to visitors in a guest mint response (ADR-001 M5).
+	GatewayPublicURL string
 
 	// Cache is the shared Redis cache. The API uses it only to invalidate
 	// flow definitions the orchestrator caches (handlers_flows.go). May be
@@ -56,14 +67,22 @@ type Server struct {
 	jwtSecret   []byte
 	fsBasicUser string
 	fsBasicPass string
-	wsURL       string
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
-	cache       *cache.Cache // shared Redis; used to invalidate cached IVR flows
+	cache       *cache.Cache    // shared Redis; used to invalidate cached IVR flows
+	presence    *presence.Store // agent online status published by the gateway
+
+	// agentTransport / agentGateway: how an agent's own call leg is routed
+	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
+	agentTransport string
+	agentGateway   string
+	// gatewayPublicURL: browser-reachable gateway base URL, returned to
+	// visitors in a guest mint response.
+	gatewayPublicURL string
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
-	// returned verbatim by /v1/sdk/credentials. Empty slice == "no ICE
-	// servers configured", which is valid (works on LANs).
+	// handed to the guest mint. Empty slice == "no ICE servers configured",
+	// which is valid (works on LANs).
 	iceServers []iceServer
 
 	// Round-robin trunk selection state. Lazily initialised in
@@ -93,17 +112,20 @@ type iceServer struct {
 func NewServer(cfg Config) *Server {
 	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
 	return &Server{
-		db:          cfg.DB,
-		q:           queries.MustLoad(),
-		jwtSecret:   []byte(cfg.JWTSecret),
-		fsBasicUser: user,
-		fsBasicPass: pass,
-		wsURL:       cfg.WSURL,
-		fs:          freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		notifier:    webhook.New(cfg.DB),
-		cache:       cfg.Cache,
-		iceServers:  buildICEServers(cfg),
-		simManager:  orchestrator.NewSimManager(),
+		db:               cfg.DB,
+		q:                queries.MustLoad(),
+		jwtSecret:        []byte(cfg.JWTSecret),
+		fsBasicUser:      user,
+		fsBasicPass:      pass,
+		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
+		notifier:         webhook.New(cfg.DB),
+		cache:            cfg.Cache,
+		presence:         presence.New(cfg.Cache),
+		agentTransport:   cfg.AgentTransport,
+		agentGateway:     cfg.AgentGateway,
+		gatewayPublicURL: cfg.GatewayPublicURL,
+		iceServers:       buildICEServers(cfg),
+		simManager:       orchestrator.NewSimManager(),
 		// Built once here (not in Router) so the window persists across
 		// requests regardless of how many times Router() is called.
 		guestMintLimiter: rateLimitByIP(guestMintRatePerMin, time.Minute),
@@ -155,11 +177,10 @@ func (s *Server) Router() http.Handler {
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
 		r.Post("/console/login", s.handleConsoleLogin)
-		// Guest web-calling: public (only credential is the tenant's
-		// public widget key). Mints an ephemeral, flow-pinned SIP identity
-		// for a website visitor. Per-IP rate limited; the handler also
-		// enforces an Origin allowlist + per-tenant concurrent cap. See
-		// handlers_guest.go.
+		// Guest web-calling: public (only credential is the tenant's public
+		// widget key). Mints a short-lived, flow-pinned gateway call token for
+		// a website visitor (ADR-001 M5). Per-IP rate limited; the handler also
+		// enforces an Origin allowlist. See handlers_guest.go.
 		r.With(s.guestMintLimiter).
 			Post("/sdk/guest-credentials", s.handleGuestCredentials)
 
@@ -169,6 +190,16 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/tenants/me", s.handlePatchMyTenant)
 			r.Get("/guest-config", s.handleGetGuestConfig)
 			r.Patch("/guest-config", s.handlePatchGuestConfig)
+			// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
+			// manages these with the console JWT; the issued keys then auth
+			// server-to-server callers via AuthRequired.
+			r.Post("/api-keys", s.handleCreateAPIKey)
+			r.Get("/api-keys", s.handleListAPIKeys)
+			r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+			// API-key mint: integrator backend mints guest creds with a
+			// trusted client_ref (the verified logged-in caller). The public
+			// /sdk/guest-credentials never accepts client_ref.
+			r.Post("/guest-credentials", s.handleAuthGuestCredentials)
 			r.Post("/agents", s.handleCreateAgent)
 			r.Get("/agents", s.handleListAgents)
 			r.Get("/agents/{id}", s.handleGetAgent)
@@ -207,7 +238,6 @@ func (s *Server) Router() http.Handler {
 		// SDK routes: JWT auth, scoped to the JWT's subject agent.
 		r.Group(func(r chi.Router) {
 			r.Use(s.JWTAuthRequired)
-			r.Get("/sdk/credentials", s.handleSDKCredentials)
 			r.Post("/sdk/calls", s.handleSDKCreateCall)
 		})
 	})
@@ -260,6 +290,13 @@ func (s *Server) Router() http.Handler {
 				return
 			}
 			defer indexHTML.Close()
+			// index.html references content-hashed asset bundles, so it MUST
+			// revalidate on every load — otherwise a browser keeps a cached
+			// index pointing at a stale bundle after a deploy and silently
+			// shows the old UI. The hashed assets themselves are immutable, so
+			// the FileServer's ETag/Last-Modified handles them. (Mirrors the
+			// /sdk no-cache fix.)
+			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.Copy(w, indexHTML)
 		})
