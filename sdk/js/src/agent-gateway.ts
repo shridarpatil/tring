@@ -20,7 +20,12 @@ export type AgentCallState = "connected" | "ended";
 /** One ringing/active call surfaced to the Tring controller. */
 export interface AgentCall {
   readonly callId: string;
+  /** Agent-facing label for the call (e.g. a ticket ref). Never the dialed
+   *  number — the backend keeps that. May be empty (generic "Incoming call"). */
   readonly from: string;
+  /** True when the gateway flagged this as a backend click-to-call the agent
+   *  already initiated → auto-answer rather than ring Accept/Decline. */
+  readonly auto: boolean;
   /** Accept: capture mic, offer WebRTC to the gateway. Resolves once sent. */
   accept(): Promise<void>;
   /** Decline a still-ringing call. */
@@ -96,7 +101,7 @@ export class AgentGateway {
   }
 
   private onMessage(ev: MessageEvent): void {
-    let m: { type: string; call_id?: string; sdp?: string; from?: string; reason?: string };
+    let m: { type: string; call_id?: string; sdp?: string; from?: string; reason?: string; auto?: boolean };
     try {
       m = JSON.parse(ev.data as string);
     } catch {
@@ -113,6 +118,7 @@ export class AgentGateway {
         const call = new GatewayCall(
           m.call_id,
           m.from ?? "",
+          !!m.auto,
           this,
           this.opts.iceServers ?? DEFAULT_ICE,
         );
@@ -150,6 +156,7 @@ class GatewayCall implements AgentCall {
   constructor(
     readonly callId: string,
     readonly from: string,
+    readonly auto: boolean,
     private readonly gw: AgentGateway,
     private readonly iceServers: RTCIceServer[],
   ) {}
@@ -200,8 +207,10 @@ class GatewayCall implements AgentCall {
 
   async reject(): Promise<void> {
     this.gw.send({ type: "reject", call_id: this.callId });
-    this.teardown();
-    this.gw.forget(this.callId);
+    // markEnded fires the "ended" state (so the UI closes), then tears down +
+    // deregisters — same as hangup. Previously this only tore down silently, so
+    // a declined ringing call left the panel open.
+    this.markEnded("rejected");
   }
 
   async hangup(): Promise<void> {

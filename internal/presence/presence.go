@@ -28,6 +28,13 @@ const TTL = 30 * time.Second
 // RefreshInterval is how often the gateway should re-mark a live agent online.
 const RefreshInterval = 10 * time.Second
 
+// Status values published per agent (the Redis key's value). Absent key = offline.
+const (
+	StatusOffline = "offline"
+	StatusOnline  = "online"  // connected and available to ring
+	StatusOnCall  = "on_call" // connected but busy on a call — don't ring
+)
+
 // Store reads/writes agent presence markers in Redis.
 type Store struct {
 	c *cache.Cache
@@ -49,15 +56,25 @@ func key(tenant, sip string) string {
 	return "presence:agent:" + tenant + ":" + sip
 }
 
-// MarkOnline (re)asserts that an agent is online, refreshing the TTL.
+// MarkOnline (re)asserts that an agent is online and AVAILABLE, refreshing TTL.
 func (s *Store) MarkOnline(ctx context.Context, tenant, sip string) {
 	if !s.Enabled() {
 		return
 	}
-	s.c.Set(ctx, key(tenant, sip), []byte("1"), TTL)
+	s.c.Set(ctx, key(tenant, sip), []byte(StatusOnline), TTL)
 }
 
-// Offline clears an agent's online marker (best-effort).
+// MarkOnCall (re)asserts that an agent is online but BUSY on a call, refreshing
+// TTL. Available() is false for such agents, so the orchestrator's ring-all
+// skips them — no second call is sent to an agent already on one.
+func (s *Store) MarkOnCall(ctx context.Context, tenant, sip string) {
+	if !s.Enabled() {
+		return
+	}
+	s.c.Set(ctx, key(tenant, sip), []byte(StatusOnCall), TTL)
+}
+
+// Offline clears an agent's marker (best-effort).
 func (s *Store) Offline(ctx context.Context, tenant, sip string) {
 	if !s.Enabled() {
 		return
@@ -65,8 +82,33 @@ func (s *Store) Offline(ctx context.Context, tenant, sip string) {
 	_ = s.c.Delete(ctx, key(tenant, sip))
 }
 
-// IsOnline reports whether an agent currently has a live marker. Only
-// meaningful when Enabled().
+// Status returns "online", "on_call", or "offline". Only meaningful when Enabled().
+func (s *Store) Status(ctx context.Context, tenant, sip string) string {
+	if !s.Enabled() {
+		return StatusOffline
+	}
+	v, ok := s.c.Get(ctx, key(tenant, sip))
+	if !ok {
+		return StatusOffline
+	}
+	if string(v) == StatusOnCall {
+		return StatusOnCall
+	}
+	return StatusOnline
+}
+
+// Available reports whether an agent is a valid ring target: connected and not
+// on a call. Only meaningful when Enabled().
+func (s *Store) Available(ctx context.Context, tenant, sip string) bool {
+	if !s.Enabled() {
+		return false
+	}
+	v, ok := s.c.Get(ctx, key(tenant, sip))
+	return ok && string(v) != StatusOnCall
+}
+
+// IsOnline reports whether an agent currently has a live marker (online or on a
+// call). Only meaningful when Enabled().
 func (s *Store) IsOnline(ctx context.Context, tenant, sip string) bool {
 	if !s.Enabled() {
 		return false

@@ -1,10 +1,7 @@
 # Tring dev convenience. Keep targets thin — anything non-trivial belongs
 # in a script or in the README, not here.
 
-.PHONY: help up down api orchestrator build sdk sdk-watch test fmt vet clean serve-demo demo-url
-
-DEMO_PORT ?= 9999
-DEMO_URL  := http://localhost:$(DEMO_PORT)/examples/sample-crm.html
+.PHONY: help up down api orchestrator build sdk sdk-watch test fmt vet clean demo
 
 help:
 	@echo "Common targets:"
@@ -20,8 +17,7 @@ help:
 	@echo "  make sdk-watch     - rebuild SDK on change"
 	@echo "  make test          - go test ./..."
 	@echo "  make vet           - go vet ./..."
-	@echo "  make serve-demo    - serve repo over :$(DEMO_PORT) and open the demo CRM"
-	@echo "  make demo-url      - print the demo URL"
+	@echo "  make demo          - run the web-calling demo app (Flask, :5000) — set TRING_API_KEY first"
 
 up: .env
 	docker compose up -d
@@ -69,15 +65,11 @@ test:
 vet:
 	go vet ./...
 
-serve-demo:
-	@echo ""
-	@echo "  Tring demo CRM:  $(DEMO_URL)"
-	@echo ""
-	@( sleep 1 && (xdg-open $(DEMO_URL) || open $(DEMO_URL) || true) >/dev/null 2>&1 ) &
-	@python3 -m http.server $(DEMO_PORT)
-
-demo-url:
-	@echo $(DEMO_URL)
+# Combined web-calling demo (anonymous "call us" + logged-in support + agent
+# CRM) — a Flask app on :5000. Set TRING_API_KEY (+ TRING_FLOW_ID) first; see
+# examples/demo-portal/README.md for the full env + walkthrough.
+demo:
+	cd examples/demo-portal && pip install -q -r requirements.txt && python3 app.py
 
 clean:
 	rm -rf sdk/js/dist sdk/js/node_modules

@@ -96,7 +96,7 @@ func TestStartIncomingThenReject(t *testing.T) {
 		}
 	}()
 
-	ic := s.startIncoming("+919876543210")
+	ic := s.startIncoming("+919876543210", false)
 	if ic == nil {
 		t.Fatal("startIncoming returned nil")
 	}
@@ -121,7 +121,7 @@ func TestStartIncomingThenOffer(t *testing.T) {
 		}
 	}()
 
-	ic := s.startIncoming("web")
+	ic := s.startIncoming("web", false)
 	s.dispatch(agentMsg{Type: msgOffer, CallID: ic.id, SDP: "v=0..."})
 	select {
 	case sdp := <-ic.offer:
@@ -147,7 +147,7 @@ func TestHangupFiresTeardownWhenEstablished(t *testing.T) {
 		}
 	}()
 
-	ic := s.startIncoming("web")
+	ic := s.startIncoming("web", false)
 	fired := false
 	ic.setTeardown(func() { fired = true })
 
@@ -175,7 +175,7 @@ func TestSessionCloseEndsPending(t *testing.T) {
 		}
 	}()
 
-	ic := s.startIncoming("web")
+	ic := s.startIncoming("web", false)
 	s.close()
 	select {
 	case <-ic.closed:

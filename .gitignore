@@ -33,6 +33,7 @@ sdk/js/dist/
 /docs/PHASE_2_DIAL_IN_OTP.md
 /docs/PHASE_3_IVR_EXECUTION.md
 /docs/PHASE_4_QUEUES_AGENTS.md
+/docs/VISITOR_CALL_FLOW.md
 
 # Compiled UI dist embedded by the Go binary at build time. The
 # .gitkeep in this dir is intentionally tracked so go:embed always has
