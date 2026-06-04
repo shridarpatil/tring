@@ -120,18 +120,12 @@ npm run typecheck  # tsc --noEmit
 
 ## Smoke test in a real browser
 
-1. Have the Tring API + orchestrator + gateway + FreeSWITCH running locally (root `docker compose up -d`, or `go run ./cmd/api` + `go run ./cmd/orchestrator` + `go run ./cmd/gateway`).
-2. Serve the `sdk/js/` tree over HTTP — `file://` URLs trip CORS for `fetch`:
-   ```bash
-   python3 -m http.server 9999 --directory ~/workspace/tring/sdk/js
-   ```
-3. Mint a JWT:
-   ```bash
-   KEY='tk_test_dev_local_only_change_me_in_prod'
-   AGENT=$(curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents | jq -r '.[0].id')
-   curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/token | jq -r .token
-   ```
-4. Open `http://localhost:9999/examples/test.html` — the bare-SDK manual test (Connect / Call / Hang up).
+The runnable end-to-end demo lives in [`examples/demo-portal/`](../../examples/demo-portal/)
+(a small Flask app) — it exercises all three flows against a locally-running
+stack: anonymous "call us", logged-in support, and the agent CRM. Have the Tring
+API + orchestrator + gateway + FreeSWITCH up (root `docker compose up -d`, or
+`go run ./cmd/api` + `./cmd/orchestrator` + `./cmd/gateway`), then `make demo`
+and follow its README.
 
 ## Note: no browser WSS / cert dance
 
