@@ -13,7 +13,7 @@ public guest mint, so the caller identity can't be spoofed.
                            Authorization: Bearer <TRING_API_KEY>
                            { "client_ref": "<verified client id>" }
                                                        │
-                         ◄──────── SIP credentials ────┘
+                    ◄─── gateway call token + url ─────┘
     browser uses the creds with the Tring voice widget → places the call.
 
 The Tring call log then shows the client (client_ref), never `guest_*`.

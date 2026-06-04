@@ -21,8 +21,7 @@ import (
 )
 
 // defaults are the dev-friendly fallbacks used when no TRING_* env var is
-// set. Production overrides them via env. ws_url is intentionally absent —
-// the api binary auto-detects the host's outbound IP when it's unset.
+// set. Production overrides them via env.
 var defaults = map[string]any{
 	"dsn":           "postgres://tring:tring_dev@localhost:5434/tring",
 	"jwt_secret":    "tring_dev_jwt_secret_change_me_in_prod",

@@ -41,20 +41,33 @@ const gwFlowExtension = "gwflow"
 // gateway dials FS) and a UAS (agent path: FS dials the gateway). Built once in
 // gateway.New when FS is configured.
 type fsClient struct {
-	cfg  FSConfig
-	srv  *sipgo.Server
-	dc   *sipgo.DialogClientCache // UAC dialogs (gateway → FS)
-	ds   *sipgo.DialogServerCache // UAS dialogs (FS → gateway, agent legs)
-	bind string
-	log  *log.Logger
+	cfg    FSConfig
+	srv    *sipgo.Server
+	client *sipgo.Client            // raw UAC client — used to WriteRequest orphan ACKs
+	dc     *sipgo.DialogClientCache // UAC dialogs (gateway → FS)
+	ds     *sipgo.DialogServerCache // UAS dialogs (FS → gateway, agent legs)
+	bind   string
+	log    *log.Logger
 }
 
 func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
+	f := &fsClient{cfg: cfg, log: logger, bind: fmt.Sprintf(":%d", cfg.SIPPort)}
 	// The UA hostname drives the From header domain (defaults to "localhost").
 	// FreeSWITCH's auto_from challenge realm derives from it, so it MUST be the
 	// directory domain where the auth user lives, or FS looks up the user under
 	// the wrong domain and 403s ("Can't find user [1000@localhost]").
-	ua, err := sipgo.NewUA(sipgo.WithUserAgentHostname(cfg.AdvertIP))
+	//
+	// The unhandled-response handler ACKs stray 2xx INVITE responses — FS
+	// retransmitting a 200 OK after our client transaction is already gone (a
+	// teardown race). Without an ACK, FS keeps retransmitting on the INVITE
+	// timer for ~32s and holds the channel, which stretches out the disconnect.
+	// See ackOrphan2xx.
+	ua, err := sipgo.NewUA(
+		sipgo.WithUserAgentHostname(cfg.AdvertIP),
+		sipgo.WithUserAgentTransactionLayerOptions(
+			sip.WithTransactionLayerUnhandledResponseHandler(f.ackOrphan2xx),
+		),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +76,8 @@ func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
 	// (default 127.0.0.1:5090); binding only AdvertIP would miss INVITEs sent
 	// to 127.0.0.1. Via/Contact host stays AdvertIP (below) for the visitor
 	// leg's digest realm, so both directions work without a per-host vars.xml edit.
-	bind := fmt.Sprintf(":%d", cfg.SIPPort)
+	// (f.bind = ":SIPPort" was set above.)
+	//
 	// Use ONLY WithClientHostname (sets Via/Contact host = AdvertIP for FS's
 	// digest realm) and let the UAC REUSE the UAS listener socket: sipgo's
 	// transport defaults to ConnectionReuse=true, and the client takes its Via
@@ -86,14 +100,57 @@ func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
 	// From/Contact user must be the directory user we digest-auth as, or FS
 	// rejects the INVITE (403) — it authenticates against the From user.
 	contact := sip.ContactHeader{Address: sip.Uri{User: cfg.AuthUser, Host: cfg.AdvertIP, Port: cfg.SIPPort}}
-	return &fsClient{
-		cfg:  cfg,
-		srv:  srv,
-		dc:   sipgo.NewDialogClientCache(client, contact),
-		ds:   sipgo.NewDialogServerCache(client, contact),
-		bind: bind,
-		log:  logger,
-	}, nil
+	f.srv = srv
+	f.client = client
+	f.dc = sipgo.NewDialogClientCache(client, contact)
+	f.ds = sipgo.NewDialogServerCache(client, contact)
+	return f, nil
+}
+
+// ackOrphan2xx ACKs a 2xx INVITE response that arrived with no matching client
+// transaction — typically FreeSWITCH retransmitting a 200 OK after our
+// transaction has already terminated (a teardown race). sipgo would otherwise
+// just log it as "Unhandled sip response", and FS keeps retransmitting on the
+// INVITE 200-OK timer (~every 4s up to ~32s), holding the channel open. RFC 3261
+// §13.2.2.4 requires a UAC core to ACK a 2xx even absent a transaction; doing so
+// makes FS release the leg immediately. Only INVITE 2xx are retransmitted, so we
+// ignore everything else (matching the default no-op).
+func (f *fsClient) ackOrphan2xx(resp *sip.Response) {
+	cseq := resp.CSeq()
+	if cseq == nil || cseq.MethodName != sip.INVITE {
+		return
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return
+	}
+	from, to, callID := resp.From(), resp.To(), resp.CallID()
+	if from == nil || to == nil || callID == nil {
+		return
+	}
+	// Request-URI = the remote target (Contact in the 2xx), else the To address.
+	recipient := to.Address
+	if c := resp.Contact(); c != nil {
+		recipient = c.Address
+	}
+	ack := sip.NewRequest(sip.ACK, *recipient.Clone())
+	ack.AppendHeader(sip.HeaderClone(from))
+	ack.AppendHeader(sip.HeaderClone(to)) // carries FS's To-tag (dialog id)
+	ack.AppendHeader(sip.HeaderClone(callID))
+	ackCSeq := sip.HeaderClone(cseq).(*sip.CSeqHeader)
+	ackCSeq.MethodName = sip.ACK
+	ack.AppendHeader(ackCSeq)
+	mf := sip.MaxForwardsHeader(70)
+	ack.AppendHeader(&mf)
+	// Send back to where the response came from (FS), over the same transport.
+	// WriteRequest (no opts) fills in the mandatory Via/Contact for us.
+	ack.SetTransport(resp.Transport())
+	ack.SetSource(resp.Destination())
+	ack.SetDestination(resp.Source())
+	if err := f.client.WriteRequest(ack); err != nil {
+		f.log.Printf("gateway: orphan 2xx ACK failed: %v", err)
+		return
+	}
+	f.log.Printf("gateway: ACKed orphan 2xx (call-id %s) — stopping FS retransmits", callID.Value())
 }
 
 // serve starts the SIP listener. Call AFTER any UAS handlers are registered on
@@ -111,6 +168,7 @@ type fsLeg struct {
 	OpusPT    uint8 // payload type FS negotiated for Opus
 	DTMFPT    uint8 // payload type FS negotiated for telephone-event (DTMF)
 	session   *sipgo.DialogClientSession
+	log       *log.Logger
 	closeOnce sync.Once
 }
 
@@ -182,7 +240,7 @@ func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, 
 		_ = session.Bye(ctx)
 		return nil, fmt.Errorf("ack: %w", err)
 	}
-	return &fsLeg{RTP: rtp, FSRTPAddr: fsAddr, OpusPT: opusPT, DTMFPT: dtmfPT, session: session}, nil
+	return &fsLeg{RTP: rtp, FSRTPAddr: fsAddr, OpusPT: opusPT, DTMFPT: dtmfPT, session: session, log: f.log}, nil
 }
 
 func (l *fsLeg) Close() {
@@ -192,7 +250,12 @@ func (l *fsLeg) Close() {
 		if l.session != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_ = l.session.Bye(ctx)
+			// A failure here means FS may keep the visitor channel alive (and so
+			// the bridged agent leg lingers); the error says why (non-2xx /
+			// timeout / unreachable Contact). Success is the common path — no log.
+			if err := l.session.Bye(ctx); err != nil && l.log != nil {
+				l.log.Printf("gateway: visitor leg BYE to FS failed: %v", err)
+			}
 		}
 		_ = l.RTP.Close()
 	})

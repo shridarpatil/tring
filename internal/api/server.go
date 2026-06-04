@@ -30,7 +30,6 @@ type Config struct {
 	DB          *db.DB
 	JWTSecret   string
 	FSBasicAuth string // "user:pass" — shared with FreeSWITCH mod_xml_curl
-	WSURL       string // ws(s)://host:port that the SDK passes to sip.js
 	ESLAddr     string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
 	ESLPassword string // FreeSWITCH ESL password (default ClueCon)
 
@@ -68,7 +67,6 @@ type Server struct {
 	jwtSecret   []byte
 	fsBasicUser string
 	fsBasicPass string
-	wsURL       string
 	fs          *freeswitch.Client
 	notifier    *webhook.Notifier
 	cache       *cache.Cache    // shared Redis; used to invalidate cached IVR flows
@@ -119,7 +117,6 @@ func NewServer(cfg Config) *Server {
 		jwtSecret:        []byte(cfg.JWTSecret),
 		fsBasicUser:      user,
 		fsBasicPass:      pass,
-		wsURL:            cfg.WSURL,
 		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
 		notifier:         webhook.New(cfg.DB),
 		cache:            cfg.Cache,

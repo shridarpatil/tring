@@ -19,7 +19,7 @@
 //
 // Renders a floating "Call support" launcher + full-screen call UI. To use
 // your own button instead, add data-render-button="false" and put
-// `<button data-tring-guest-call>` anywhere on the page.
+// `<button data-tring-call>` anywhere on the page.
 
 import { bootstrapGuest } from "./guest-widget";
 import { TringGuest } from "./guest";

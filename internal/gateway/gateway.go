@@ -279,7 +279,9 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID, clientRef string
 	}
 	g.log.Printf("gateway: bridge — FS leg up (FS RTP %s)", leg.FSRTPAddr)
 
-	teardown := g.relay(pc, toBrowser, leg, nil)
+	// Visitor leg: no media-inactivity backstop — IVR think-time has legitimate
+	// RTP gaps. Teardown comes from the dialog BYE watcher / pc state / DC bye.
+	teardown := g.relay(pc, toBrowser, leg, 0, nil)
 
 	// When the IVR/flow ends, FreeSWITCH hangs up the visitor leg with a SIP
 	// BYE (routed to our client dialog by OnBye in fsuas.go). The RTP socket
@@ -332,16 +334,33 @@ func (g *Gateway) newBridgePC() (*webrtc.PeerConnection, *webrtc.TrackLocalStati
 // runs once inside teardown (after the pc/leg are closed) — the agent path uses
 // it to BYE the SIP dialog and notify the browser. The caller negotiates the pc
 // (SetRemote/Local) afterwards via negotiateAnswer.
-func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalStaticRTP, leg *fsLeg, onClose func()) func() {
+// agentMediaTimeout: if the agent leg gets no RTP from FS for this long after
+// media has started, tear it down. FS stops sending the agent leg's RTP the
+// instant the bridge ends (the visitor hung up), so a stall here means the call
+// is over even when we never get/match a clean SIP BYE — without this backstop
+// the agent's screen sticks on "connected". The visitor leg passes 0 (disabled)
+// because IVR think-time legitimately has >timeout RTP gaps.
+const agentMediaTimeout = 8 * time.Second
+
+func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalStaticRTP, leg *fsLeg, mediaTimeout time.Duration, onClose func()) func() {
 	var (
 		once          sync.Once
 		stop          = make(chan struct{})
 		toFSPkts      atomic.Int64
 		toBrowserPkts atomic.Int64
+		byeDC         atomic.Pointer[webrtc.DataChannel]
 	)
 	teardown := func() {
 		once.Do(func() {
 			close(stop)
+			// Best-effort end signal before we tear the transport down. Only
+			// when the channel is actually open (a server-initiated teardown
+			// while the browser is still connected); the browser keeps the
+			// ICE/DTLS fallback, so a dropped "bye" just reverts to the slow path.
+			if dc := byeDC.Load(); dc != nil && dc.ReadyState() == webrtc.DataChannelStateOpen {
+				_ = dc.SendText("bye")
+				time.Sleep(150 * time.Millisecond) // let SCTP flush before close
+			}
 			leg.Close()
 			_ = pc.Close()
 			if onClose != nil {
@@ -349,6 +368,26 @@ func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalS
 			}
 		})
 	}
+
+	// The browser opens a "tring" DataChannel (SCTP muxed over the same DTLS
+	// transport/port as the audio — no extra port). It's bidirectional:
+	//   • gateway → browser "bye" (in teardown above): the browser ends its call
+	//     UI immediately instead of waiting on its ICE/DTLS disconnect timer.
+	//   • browser → gateway "bye" (here): the visitor hanging up tells us to tear
+	//     down the FS leg now, so FS hangs up the bridged agent promptly — without
+	//     it the agent leg lingers until OUR visitor pc hits the disconnect timer.
+	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
+		if dc.Label() != "tring" {
+			return
+		}
+		byeDC.Store(dc)
+		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
+			if string(msg.Data) == "bye" {
+				g.log.Printf("gateway: browser sent bye — tearing down bridge")
+				teardown()
+			}
+		})
+	})
 
 	// Diagnostic: log per-direction packet counts every 2s so we can see which
 	// leg of the relay is (or isn't) flowing.
@@ -370,12 +409,21 @@ func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalS
 	// rewrites SSRC/PT to the negotiated values per receiver.)
 	go func() {
 		buf := make([]byte, 1500)
+		gotFirst := false // arm the inactivity deadline only once media is flowing
 		for {
+			// mediaTimeout>0 (agent leg): after the first packet, a read that
+			// blocks longer than the timeout means FS stopped sending — the
+			// bridge is gone — so we tear down even absent a clean SIP BYE. No
+			// deadline before the first packet, so slow ICE/bridge setup is fine.
+			if mediaTimeout > 0 && gotFirst {
+				_ = leg.RTP.SetReadDeadline(time.Now().Add(mediaTimeout))
+			}
 			n, _, err := leg.RTP.ReadFromUDP(buf)
 			if err != nil {
 				teardown()
 				return
 			}
+			gotFirst = true
 			toBrowserPkts.Add(1)
 			if _, err := toBrowser.Write(buf[:n]); err != nil {
 				return

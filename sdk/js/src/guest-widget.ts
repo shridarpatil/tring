@@ -3,7 +3,7 @@
 // The customer taps once and is in the IVR over WebRTC — no number, no app.
 //
 // A page can either let the widget render its own floating launcher
-// (default) or wire its own button via `<button data-tring-guest-call>`.
+// (default) or wire its own button via `<button data-tring-call>`.
 
 import { TringGuest } from "./guest";
 import type { GuestInitOpts } from "./types";
@@ -78,8 +78,11 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
 const BOUND_MARK = "__tringGuestBound";
 
 function bindButtons(onClick: () => void): void {
+  // Put `data-tring-call` on any element to wire it to the call instead of the
+  // floating launcher (pair with data-render-button="false" to drop the
+  // launcher). Disjoint from the agent widget's `data-tring-agent-call`.
   const buttons = document.querySelectorAll<HTMLButtonElement>(
-    "button[data-tring-guest-call], [data-tring-guest-call]",
+    "[data-tring-call]",
   );
   for (const btn of Array.from(buttons)) {
     if ((btn as any)[BOUND_MARK]) continue;
