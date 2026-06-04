@@ -22,9 +22,10 @@ export interface GatewayCallOpts {
   onState?: (state: "ringing" | "connected" | "ended") => void;
 }
 
-const DEFAULT_ICE: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-];
+// No ICE servers by default: the gateway is a public server, so the browser
+// reaches it on its host candidate without STUN (ADR-001). Pass `iceServers`
+// (e.g. a TURN entry, usually from the mint) for UDP-blocked clients.
+const DEFAULT_ICE: RTCIceServer[] = [];
 
 export class GatewayAdapter {
   private pc: RTCPeerConnection | null = null;

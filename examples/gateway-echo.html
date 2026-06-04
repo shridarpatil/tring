@@ -40,9 +40,8 @@
       const base = $("base").value.replace(/\/$/, "");
       const log = (s) => ($("state").textContent = s);
 
-      pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-      });
+      // No STUN: the gateway is a public server, reached on its host candidate.
+      pc = new RTCPeerConnection({ iceServers: [] });
       pc.onconnectionstatechange = () => log("state: " + pc.connectionState);
       pc.ontrack = (e) => { $("remote").srcObject = e.streams[0]; };
 
