@@ -32,9 +32,18 @@ func (g *Gateway) ringTimeout() time.Duration {
 	return defaultAgentRingTimeout
 }
 
-// tenantHeader carries the tenant id on an FS→gateway agent INVITE so the
-// gateway can disambiguate agents whose SIP usernames collide across tenants.
-const tenantHeader = "X-Tring-Tenant"
+// SIP headers the originate sets on an FS→gateway agent INVITE.
+const (
+	// tenantHeader disambiguates agents whose SIP usernames collide across tenants.
+	tenantHeader = "X-Tring-Tenant"
+	// agentLabelHeader is the non-PII string shown to the agent for this call
+	// (e.g. a ticket/account ref). The backend sets it on a click-to-call so the
+	// agent NEVER receives the dialed customer number. Absent ⇒ generic.
+	agentLabelHeader = "X-Tring-Agent-Label"
+	// autoAnswerHeader=1 tells the gateway this is a backend click-to-call the
+	// agent already initiated, so the browser auto-answers instead of ringing.
+	autoAnswerHeader = "X-Tring-Auto-Answer"
+)
 
 // registerFSUAS wires the inbound INVITE/ACK/BYE handlers onto the FS SIP
 // server. Must be called before fsClient.serve.
@@ -57,7 +66,14 @@ func (g *Gateway) registerFSUAS() {
 func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	sipUser := req.Recipient.User
 	tenant := headerValue(req, tenantHeader)
-	from := callerFrom(req)
+	// What the agent sees: the explicit label (click-to-call sets it and never
+	// the dialed number), falling back to the SIP caller-ID for inbound / IVR
+	// transfers (where showing the caller is expected, not a privacy leak).
+	from := headerValue(req, agentLabelHeader)
+	if from == "" {
+		from = callerFrom(req)
+	}
+	auto := headerValue(req, autoAnswerHeader) == "1"
 
 	dlg, err := g.fs.ds.ReadInvite(req, tx)
 	if err != nil {
@@ -82,7 +98,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 	// Ring the browser and wait for it to accept (offer), decline, or time out.
 	_ = dlg.Respond(sip.StatusRinging, "Ringing", nil)
-	ic := sess.startIncoming(from)
+	ic := sess.startIncoming(from, auto)
 
 	var browserOffer string
 	select {
@@ -120,6 +136,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// and the bridge ended) we tear down even if no clean SIP BYE reaches us, so
 	// notifyEnded fires and the agent's screen closes.
 	teardown := g.relay(pc, toBrowser, leg, agentMediaTimeout, func() {
+		sess.leaveCall(context.Background()) // back to "online" (available to ring)
 		sess.finishIncoming(callID)
 		sess.notifyEnded(callID, "ended")
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -130,6 +147,10 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// relay's pc-state watcher only catches a slow ICE failure, so without this
 	// the FS leg would linger after the agent hangs up. Idempotent via once.
 	ic.setTeardown(teardown)
+	// The agent is committed to this call now — mark them "on_call" so the
+	// orchestrator's ring-all stops routing new calls here. Balanced with the
+	// leaveCall in the teardown above (both tied to this relay's lifecycle).
+	sess.enterCall(context.Background())
 
 	// Negotiate the browser leg (their offer → our answer) and hand the answer
 	// back over the WebSocket.

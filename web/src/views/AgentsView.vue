@@ -13,6 +13,8 @@ function badge(status?: string) {
   switch (status) {
     case "online":
       return { dot: "bg-green-500", text: "Online", cls: "text-green-700" };
+    case "on_call":
+      return { dot: "bg-amber-500", text: "On call", cls: "text-amber-700" };
     case "offline":
       return { dot: "bg-gray-300", text: "Offline", cls: "text-gray-500" };
     default:

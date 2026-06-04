@@ -1,11 +1,12 @@
-// Auto-bound widget. Imports the Tring SDK, scans the DOM for
-// `<button data-tring-agent-call data-to="...">`, attaches click handlers,
-// and renders a small floating call panel (ringing / connected status +
-// hangup button) when a call is in flight.
+// Agent call panel. Imports the Tring SDK, connects the gateway WebSocket, and
+// renders a small floating call panel (ringing / Accept-Decline / connected +
+// hangup + DTMF) whenever a leg rings this agent.
 //
-// Designed so a CRM can drop a single <script> tag in their template and
-// get working voice calls without writing JS. See widget-entry.ts for the
-// data-attribute reader.
+// The SDK has NO Tring API access, so this widget does NOT place calls. Your
+// CRM's own "Call" button tells YOUR backend, which originates via the Tring
+// API (POST /v1/calls); FreeSWITCH then rings this agent's leg and the panel
+// appears. The agent never sees the dialed number — only a backend-supplied
+// label. See widget-entry.ts for the data-attribute reader.
 
 import { Tring } from "./tring";
 import type { Call } from "./types";
@@ -15,11 +16,9 @@ export interface WidgetOpts {
   token?: string;
   /** URL to GET a fresh JWT from. Server replies with `{token: "..."}`. */
   tokenUrl?: string;
-  /** Tring API base, e.g. https://api.tring.io. */
-  apiBase: string;
   /**
-   * Media gateway base URL (ADR-001 M4b). The agent connects over raw WebRTC
-   * via the gateway. Required.
+   * Media gateway base URL (ADR-001). The agent connects over raw WebRTC via
+   * the gateway WebSocket. Required.
    */
   gatewayUrl?: string;
 }
@@ -27,10 +26,27 @@ export interface WidgetOpts {
 const PANEL_ID = "tring-call-panel";
 
 export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
-  const token = opts.token ?? (await fetchTokenFromUrl(opts.tokenUrl));
+  // The token endpoint can also carry the gateway URL + ICE servers (the API's
+  // /v1/agents/{id}/token returns them), so the <script> tag needs only
+  // data-token-url. Explicit data-token/data-gateway-url still win. Fetch when
+  // either is missing.
+  let token = opts.token;
+  let gatewayUrl = opts.gatewayUrl;
+  let iceServers: RTCIceServer[] | undefined;
+  if (!token || !gatewayUrl) {
+    const creds = await fetchCredentials(opts.tokenUrl);
+    token = token ?? creds.token;
+    gatewayUrl = gatewayUrl ?? creds.gateway_url;
+    iceServers = creds.ice_servers;
+  }
   if (!token) {
     throw new Error(
-      "tring widget: need either data-token or data-token-url on the <script> tag",
+      "tring widget: need data-token or a data-token-url that returns {token}",
+    );
+  }
+  if (!gatewayUrl) {
+    throw new Error(
+      "tring widget: gateway URL missing — set data-gateway-url, or have the token endpoint return gateway_url",
     );
   }
 
@@ -38,13 +54,13 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   const panel = createPanel();
   document.body.appendChild(panel.root);
 
-  // autoAnswer:false so a call bridged TO this agent (e.g. an IVR transfer)
-  // rings with Accept/Decline instead of snapping on. The agent's own
-  // outbound leg still auto-answers (the SDK forces that for outbound).
+  // autoAnswer:false → a TRUE inbound (IVR transfer / inbound DID) rings with
+  // Accept/Decline. A backend click-to-call leg auto-answers regardless (the
+  // gateway flags it per-call), so the agent who clicked isn't asked twice.
   const tring = await Tring.init({
     token,
-    apiBase: opts.apiBase,
-    gatewayUrl: opts.gatewayUrl,
+    gatewayUrl,
+    iceServers,
     autoAnswer: false,
   });
 
@@ -52,75 +68,30 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   tring.on("unregistered", () => panel.setStatus("idle", "disconnected"));
   tring.on("call:ringing", ({ call }) => {
     if (call.direction === "inbound") panel.showIncoming(call);
-    else panel.show(call, "ringing");
+    else panel.show(call, "calling");
   });
   tring.on("call:answered", ({ call }) => panel.setActive(call, "connected"));
   tring.on("call:ended", () => panel.hide());
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
 
-  bindButtons(tring);
-
-  // Re-bind on DOM mutations so dynamically-rendered CRM rows pick up
-  // the click handler. Idempotent — already-bound buttons are skipped.
-  const mo = new MutationObserver(() => bindButtons(tring));
-  mo.observe(document.body, { childList: true, subtree: true });
-
   return tring;
 }
 
-async function fetchTokenFromUrl(url?: string): Promise<string | null> {
-  if (!url) return null;
+interface AgentCredentials {
+  token?: string;
+  gateway_url?: string;
+  ice_servers?: RTCIceServer[];
+}
+
+// fetchCredentials GETs the integrator's token endpoint, which returns at least
+// {token} and (passing through the Tring API) optionally {gateway_url, ice_servers}.
+async function fetchCredentials(url?: string): Promise<AgentCredentials> {
+  if (!url) return {};
   const r = await fetch(url, { credentials: "same-origin" });
   if (!r.ok) {
-    throw new Error(
-      `tring widget: token endpoint ${url} returned ${r.status}`,
-    );
+    throw new Error(`tring widget: token endpoint ${url} returned ${r.status}`);
   }
-  const body = await r.json();
-  return body.token ?? null;
-}
-
-const BOUND_MARK = "__tringBound";
-
-function bindButtons(tring: Tring): void {
-  // The agent widget (internal, CRM-side) binds `data-tring-agent-call` only —
-  // disjoint from the visitor widget's `data-tring-call` so the two never
-  // collide on a shared page. Each button needs a destination via
-  // data-to / data-to-target.
-  const buttons = document.querySelectorAll<HTMLButtonElement>(
-    "[data-tring-agent-call]",
-  );
-  for (const btn of Array.from(buttons)) {
-    if ((btn as any)[BOUND_MARK]) continue;
-    (btn as any)[BOUND_MARK] = true;
-    btn.addEventListener("click", async (ev) => {
-      ev.preventDefault();
-      const to = resolveDestination(btn);
-      if (!to) {
-        console.warn("[tring] button has no data-to or data-to-target", btn);
-        return;
-      }
-      try {
-        btn.disabled = true;
-        await tring.call(to);
-      } catch (e) {
-        console.error("[tring] call failed:", e);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-  }
-}
-
-function resolveDestination(btn: HTMLButtonElement): string {
-  const direct = btn.getAttribute("data-to");
-  if (direct) return direct.trim();
-  const target = btn.getAttribute("data-to-target");
-  if (!target) return "";
-  const el = document.querySelector(target);
-  if (!el) return "";
-  if (el instanceof HTMLInputElement) return el.value.trim();
-  return (el.textContent ?? "").trim();
+  return r.json();
 }
 
 // ---- Panel ----------------------------------------------------------

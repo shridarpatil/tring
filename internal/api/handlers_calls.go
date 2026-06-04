@@ -47,11 +47,16 @@ type Call struct {
 type createCallRequest struct {
 	AgentID uuid.UUID `json:"agent_id"`
 	To      string    `json:"to"`
+	// AgentLabel is the non-PII string shown to the agent for this call (e.g. a
+	// ticket/account ref). The agent NEVER receives the dialed number — the
+	// backend holds it. Optional; empty ⇒ the agent sees a generic "Incoming call".
+	AgentLabel string `json:"agent_label"`
 }
 
-// handleCreateCall is the tenant-scoped originate. The CRM's backend uses
-// this with its API key, specifying which agent to ring as part of the
-// request body.
+// handleCreateCall is the originate surface. The CRM's backend calls this with
+// its tenant API key, choosing the agent + destination — the agent's browser
+// never sees the dialed number (the SDK has no API access; see ADR-001). The
+// agent leg auto-answers (the agent already clicked to call).
 func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var req createCallRequest
@@ -63,46 +68,7 @@ func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent_id and to are required")
 		return
 	}
-	c, code, err := s.originateForAgent(r.Context(), t, req.AgentID, req.To)
-	if err != nil {
-		writeError(w, code, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusCreated, c)
-}
-
-// handleSDKCreateCall is the JWT-scoped originate. The browser SDK uses this
-// directly without ever holding the tenant API key — the agent identity comes
-// from the JWT subject, the request body just carries the destination.
-func (s *Server) handleSDKCreateCall(w http.ResponseWriter, r *http.Request) {
-	claims := agentClaimsFromCtx(r.Context())
-	if claims == nil {
-		writeError(w, http.StatusUnauthorized, "missing agent claims")
-		return
-	}
-	agentID, err := uuid.Parse(claims.Subject)
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "bad subject")
-		return
-	}
-
-	var body struct {
-		To string `json:"to"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if body.To == "" {
-		writeError(w, http.StatusBadRequest, "to is required")
-		return
-	}
-
-	// Look up the tenant the JWT was issued under. We trust the JWT-bound
-	// tenant_id rather than refetching by sip_domain.
-	t := &Tenant{ID: claims.TenantID, SipDomain: claims.SipDomain}
-
-	c, code, err := s.originateForAgent(r.Context(), t, agentID, body.To)
+	c, code, err := s.originateForAgent(r.Context(), t, req.AgentID, req.To, req.AgentLabel)
 	if err != nil {
 		writeError(w, code, err.Error())
 		return
@@ -116,12 +82,39 @@ func (s *Server) handleSDKCreateCall(w http.ResponseWriter, r *http.Request) {
 // gateway as a SIP endpoint (ADR-001 M4b) carrying the tenant id as a SIP
 // header, so the gateway resolves the right browser and the agent never speaks
 // SIP. The IVR transfer path mirrors this in internal/orchestrator.
-func (s *Server) agentALeg(sipUsername, sipDomain, tenantID string) string {
+func (s *Server) agentALeg(sipUsername, sipDomain, tenantID, label string) string {
 	if s.agentTransport == "gateway" {
-		return fmt.Sprintf("[sip_h_X-Tring-Tenant=%s]sofia/gateway/%s/%s",
-			tenantID, s.agentGateway, sipUsername)
+		// Headers the gateway reads off the agent-leg INVITE: tenant (resolve the
+		// browser), auto-answer (backend click-to-call), and the agent-facing
+		// label. The dialed number is NEVER put on this leg, so the agent can't
+		// see it. The label is sanitized so it can't break the [..] vars block.
+		vars := fmt.Sprintf("sip_h_X-Tring-Tenant=%s,sip_h_X-Tring-Auto-Answer=1", tenantID)
+		if l := sanitizeLabel(label); l != "" {
+			vars += ",sip_h_X-Tring-Agent-Label=" + l
+		}
+		return fmt.Sprintf("[%s]sofia/gateway/%s/%s", vars, s.agentGateway, sipUsername)
 	}
 	return fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
+}
+
+// sanitizeLabel strips characters that would break the FreeSWITCH `[k=v,...]`
+// channel-variable block (or inject extra vars) and caps the length, so an
+// agent-facing label is safe to embed in the dial string.
+func sanitizeLabel(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case ',', '[', ']', '=', '\'', '"', '\n', '\r':
+			return -1
+		}
+		if r < 0x20 {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > 64 {
+		s = s[:64]
+	}
+	return strings.TrimSpace(s)
 }
 
 // originateForAgent is the shared originate path used by both the tenant-
@@ -131,6 +124,7 @@ func (s *Server) originateForAgent(
 	t *Tenant,
 	agentID uuid.UUID,
 	to string,
+	agentLabel string,
 ) (Call, int, error) {
 	var sipUsername string
 	err := s.db.Pool.QueryRow(ctx, s.q.GetAgentSipUsername,
@@ -170,7 +164,7 @@ func (s *Server) originateForAgent(
 	if sipDomain == "" {
 		_ = s.db.Pool.QueryRow(ctx, s.q.GetTenantSipDomain, t.ID).Scan(&sipDomain)
 	}
-	aLeg := s.agentALeg(sipUsername, sipDomain, t.ID.String())
+	aLeg := s.agentALeg(sipUsername, sipDomain, t.ID.String(), agentLabel)
 
 	// Build BLegs. Each entry presents that trunk's own DID as caller-ID
 	// via per-leg `[var=val]` prefix, so a roll-over from Airtel→Jio

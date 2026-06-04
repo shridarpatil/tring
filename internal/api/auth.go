@@ -13,7 +13,6 @@ type ctxKey int
 
 const (
 	tenantCtxKey ctxKey = iota
-	agentCtxKey
 )
 
 type Tenant struct {
@@ -99,28 +98,6 @@ func bearerToken(r *http.Request) string {
 	return r.Header.Get("X-API-Key")
 }
 
-// JWTAuthRequired validates a Bearer JWT and stashes the decoded claims in
-// the request context. Used by /v1/sdk/* routes (browser-side traffic).
-func (s *Server) JWTAuthRequired(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw := bearerToken(r)
-		if raw == "" {
-			writeError(w, http.StatusUnauthorized, "missing token")
-			return
-		}
-		claims, err := s.ParseAgentToken(raw)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid token: "+err.Error())
-			return
-		}
-		ctx := context.WithValue(r.Context(), agentCtxKey, claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-func agentClaimsFromCtx(ctx context.Context) *AgentClaims {
-	if c, ok := ctx.Value(agentCtxKey).(*AgentClaims); ok {
-		return c
-	}
-	return nil
-}
+// NOTE: the agent JWT is validated by the media gateway (internal/gateway) for
+// the WebSocket — the API has no agent-JWT-scoped routes. The SDK never calls
+// the Tring API; outbound origination is backend-only (POST /v1/calls).

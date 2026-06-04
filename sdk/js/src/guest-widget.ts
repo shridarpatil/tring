@@ -80,7 +80,8 @@ const BOUND_MARK = "__tringGuestBound";
 function bindButtons(onClick: () => void): void {
   // Put `data-tring-call` on any element to wire it to the call instead of the
   // floating launcher (pair with data-render-button="false" to drop the
-  // launcher). Disjoint from the agent widget's `data-tring-agent-call`.
+  // launcher). Visitor-only — the agent widget binds no buttons (it can't
+  // originate; calls are placed by the backend).
   const buttons = document.querySelectorAll<HTMLButtonElement>(
     "[data-tring-call]",
   );

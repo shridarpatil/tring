@@ -235,11 +235,9 @@ func (s *Server) Router() http.Handler {
 			r.Post("/trunks/reload", s.handleReloadTrunks)
 		})
 
-		// SDK routes: JWT auth, scoped to the JWT's subject agent.
-		r.Group(func(r chi.Router) {
-			r.Use(s.JWTAuthRequired)
-			r.Post("/sdk/calls", s.handleSDKCreateCall)
-		})
+		// No agent-JWT-scoped routes: the SDK has NO Tring API access (ADR-001).
+		// Outbound origination is backend-only (POST /v1/calls, API key); the
+		// agent JWT authenticates the gateway WebSocket and nothing else.
 	})
 
 	// Browser widget bundles (embedded). Served at /sdk/voice.js,

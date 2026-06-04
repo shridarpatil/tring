@@ -15,6 +15,11 @@ const agentTokenTTL = 5 * time.Minute
 type tokenResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// GatewayURL + ICEServers let the SDK connect the gateway WebSocket from a
+	// single token fetch — the integrator's token endpoint passes these through,
+	// so the agent <script> tag needs only data-token-url (no data-gateway-url).
+	GatewayURL string      `json:"gateway_url,omitempty"`
+	ICEServers []iceServer `json:"ice_servers,omitempty"`
 }
 
 // handleAgentToken mints a short-lived JWT for a specific agent. Auth: tenant
@@ -48,6 +53,11 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "issue token")
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenResponse{Token: tok, ExpiresAt: exp})
+	writeJSON(w, http.StatusOK, tokenResponse{
+		Token:      tok,
+		ExpiresAt:  exp,
+		GatewayURL: s.gatewayPublicURL,
+		ICEServers: s.iceServers,
+	})
 }
 
