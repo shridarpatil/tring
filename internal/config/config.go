@@ -29,9 +29,15 @@ var defaults = map[string]any{
 	"fs_basic_auth": "fs:fs_dev_secret_change_me_in_prod",
 	"esl_addr":      "127.0.0.1:8021",
 	"esl_password":  "ClueCon",
-	"stun_url":      "stun:stun.l.google.com:19302",
-	"api_addr":      ":8085",
-	"ivr_addr":      ":8086",
+	// STUN is OFF by default. In the gateway model (ADR-001) the gateway is a
+	// public server (TRING_PUBLIC_IP), so it discovers the browser's reflexive
+	// address itself — a separate STUN server is redundant (and we don't want
+	// to silently call a third party like Google). Set TRING_STUN_URL only for
+	// unusual topologies. TURN (TRING_TURN_*) is the real fallback for clients
+	// on UDP-blocking networks.
+	"stun_url": "",
+	"api_addr": ":8085",
+	"ivr_addr": ":8086",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).
