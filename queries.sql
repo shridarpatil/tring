@@ -183,10 +183,6 @@ FROM tenants WHERE id = $1;
 -- guest web-calling
 -- ===========================================================================
 
--- name: get-tenant-by-public-key
-SELECT id, sip_domain, support_flow_id, allowed_origins, guest_require_backend_mint
-FROM tenants WHERE public_key = $1;
-
 -- name: flow-usable
 -- True iff the flow exists, belongs to the tenant, and is active.
 SELECT true FROM flows WHERE id = $1 AND tenant_id = $2 AND is_active;

@@ -6,7 +6,7 @@ that links to each:
 
 | Path | Flow | Widget | Auth |
 |---|---|---|---|
-| `/support` | **Anonymous "call us"** — visitor with no account lands in your IVR | `voice.js` (`data-gateway-url`+`data-flow-id`), **inline button** (`data-render-button="false"` + your own `<button data-tring-call>`) | none (flow-pinned, can't reach a trunk) |
+| `/support` | **Anonymous "call us"** — visitor with no account lands in your IVR | `voice.js` (`data-credentials-url` → `/support-credentials`), **inline button** (`data-render-button="false"` + your own `<button data-tring-call>`) | guest token minted server-side, no `client_ref` (gate with CAPTCHA in prod); flow-pinned, can't reach a trunk |
 | `/portal` | **Logged-in support** — call attributed to the verified client | `voice.js` (`data-credentials-url`), **floating launcher** | backend mints a trusted call token (`client_ref`) |
 | `/crm` | **Agent** — receives/handles calls; the *backend* places outbound (agent never sees the number) | `agent.js` (`data-token-url`) — WS-only, no API access | backend mints a short-lived agent JWT |
 

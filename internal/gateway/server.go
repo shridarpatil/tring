@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 type offerRequest struct {
@@ -68,11 +69,30 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, `{"error":"invalid or expired call token"}`, http.StatusUnauthorized)
 			return
 		}
+		// Single-use: consume the token's jti so a captured token can't be
+		// replayed within its TTL to spin up more bridges. The marker lives only
+		// until the token would expire anyway (after which replay fails on exp).
+		// Best-effort via Redis (fail-open if it's off — the cap is the backstop).
+		if claims.ID != "" && claims.ExpiresAt != nil {
+			if ttl := time.Until(claims.ExpiresAt.Time); ttl > 0 &&
+				!g.cfg.Cache.SetNX(r.Context(), "gwtoken:"+claims.ID, []byte("1"), ttl) {
+				http.Error(w, `{"error":"call token already used"}`, http.StatusUnauthorized)
+				return
+			}
+		}
 		flowID, clientRef = claims.FlowID, claims.ClientRef
 	} else if g.cfg.RequireAuth {
 		http.Error(w, `{"error":"call token required"}`, http.StatusUnauthorized)
 		return
 	}
+
+	// TODO(cap): enforce a per-tenant + global concurrent-bridge cap HERE —
+	// before Bridge dials FS / binds a UDP port — so a rejection (503/429)
+	// allocates nothing. Key on the tenant claim (VPN/NAT/CDN-proof), in-memory
+	// per gateway now, Redis (TTL'd per-call keys) when multi-gateway. This is
+	// the backstop that single-use tokens + CAPTCHA do NOT cover: many-token
+	// minting by an insider/compromised account, a buggy backend, integrator
+	// CAPTCHA misconfig, Redis-outage fail-open, and multi-tenant fairness.
 
 	// Bridge into FreeSWITCH when configured; otherwise standalone echo (M1).
 	answer, err := g.Bridge(r.Context(), req.SDP, flowID, clientRef)

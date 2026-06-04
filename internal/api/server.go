@@ -95,9 +95,6 @@ type Server struct {
 	// state. See internal/orchestrator/sim_session.go.
 	simManager *orchestrator.SimManager
 
-	// Per-IP rate limiter for the public guest-credentials endpoint.
-	// Built once in NewServer so its window survives across requests.
-	guestMintLimiter func(http.Handler) http.Handler
 }
 
 // iceServer matches the RTCIceServer JSON shape consumed by browsers.
@@ -126,9 +123,6 @@ func NewServer(cfg Config) *Server {
 		gatewayPublicURL: cfg.GatewayPublicURL,
 		iceServers:       buildICEServers(cfg),
 		simManager:       orchestrator.NewSimManager(),
-		// Built once here (not in Router) so the window persists across
-		// requests regardless of how many times Router() is called.
-		guestMintLimiter: rateLimitByIP(guestMintRatePerMin, time.Minute),
 	}
 }
 
@@ -177,12 +171,9 @@ func (s *Server) Router() http.Handler {
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
 		r.Post("/console/login", s.handleConsoleLogin)
-		// Guest web-calling: public (only credential is the tenant's public
-		// widget key). Mints a short-lived, flow-pinned gateway call token for
-		// a website visitor (ADR-001 M5). Per-IP rate limited; the handler also
-		// enforces an Origin allowlist. See handlers_guest.go.
-		r.With(s.guestMintLimiter).
-			Post("/sdk/guest-credentials", s.handleGuestCredentials)
+		// NOTE: the public guest mint (/sdk/guest-credentials) was removed —
+		// all visitor tokens are minted server-side via POST /v1/guest-credentials
+		// (tenant API key, below), so there's no unauthenticated mint surface.
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)

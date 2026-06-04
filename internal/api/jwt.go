@@ -41,6 +41,9 @@ func (s *Server) IssueGatewayCallToken(tenantID uuid.UUID, flowID, clientRef str
 		FlowID:    flowID,
 		ClientRef: clientRef,
 		RegisteredClaims: jwt.RegisteredClaims{
+			// Unique jti so the gateway can enforce single-use (consume on first
+			// /webrtc/offer), defeating replay of a captured token within its TTL.
+			ID:        uuid.NewString(),
 			Subject:   tenantID.String(),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(exp),

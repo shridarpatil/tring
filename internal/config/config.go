@@ -53,11 +53,15 @@ var defaults = map[string]any{
 	"fs_target":         "9999", // fallback dialplan extension (echo) when no flow is pinned
 	"fs_flow_id":        "",     // pin a WebRTC call to this IVR flow (no DID); empty → fs_target
 	// Require a valid agent token on the /webrtc/offer (visitor) endpoint.
-	// Default off BY DESIGN: anonymous website visitors post there token-less
-	// for public "call us" calls, which are flow-pinned and can't reach a trunk.
-	// The agent path is unaffected — /agent/ws ALWAYS authenticates the agent
-	// JWT. Turn this on only for deployments that disallow anonymous visitors.
-	"gateway_require_auth": false,
+	// Default ON: /webrtc/offer requires a (backend-minted) gateway call token,
+	// so token-less floods are rejected before any port/FS is allocated — the
+	// safe default. Every visitor call mints a token via /v1/guest-credentials
+	// (backend, API key); guests just get one with no client_ref. Set false only
+	// to allow the raw anonymous path (browser posts token-less with a flow id) —
+	// those calls are still flow-pinned and can't reach a trunk, but the offer
+	// endpoint is then an unauthenticated resource-allocation surface.
+	// The agent path is unaffected — /agent/ws ALWAYS authenticates the agent JWT.
+	"gateway_require_auth": true,
 	// agent_transport routes the agent's own call leg. "gateway" (default since
 	// the M5 cutover) routes the leg to the media gateway as a SIP endpoint so
 	// agents speak WebRTC, never SIP (ADR-001); "sip" is the legacy mode where

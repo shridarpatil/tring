@@ -20,14 +20,6 @@ import (
 // time; an established call continues past expiry.
 const gatewayCallTokenTTL = 2 * time.Minute
 
-// guestMintRatePerMin is the per-IP request cap on the public mint endpoint.
-const guestMintRatePerMin = 10
-
-type guestCredentialsRequest struct {
-	PublicKey string `json:"public_key"`
-	FlowID    string `json:"flow_id"` // optional; falls back to tenant.support_flow_id
-}
-
 // authGuestCredentialsRequest is the body for the API-key-authenticated mint
 // (POST /v1/guest-credentials). client_ref is TRUSTED here because the caller
 // proved tenant ownership with the API key — unlike the public browser mint,
@@ -47,61 +39,10 @@ type guestCredentialsResponse struct {
 	ICEServers []iceServer `json:"ice_servers"`
 }
 
-// handleGuestCredentials mints a short-lived, anonymous SIP identity for a
-// website visitor so they can place a WebRTC call into a tenant's IVR flow.
-// Public endpoint (no auth wall): the only credential is the tenant's
-// *public* widget key, which is safe to embed in a web page.
-//
-// The minted identity is hard-pinned to one flow and — via the
-// user_class=guest directory variable + dialplan branch — can never bridge
-// to a trunk. See freeswitch/conf/dialplan/default.xml (tring_guest_ivr)
-// and handleFSDirectory's guest branch.
-func (s *Server) handleGuestCredentials(w http.ResponseWriter, r *http.Request) {
-	var req guestCredentialsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PublicKey == "" {
-		writeError(w, http.StatusBadRequest, "public_key required")
-		return
-	}
-
-	var (
-		tenantID       uuid.UUID
-		sipDomain      string
-		supportFlow    *uuid.UUID
-		allowedOrigins []string
-		requireBackend bool
-	)
-	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTenantByPublicKey,
-		req.PublicKey).Scan(&tenantID, &sipDomain, &supportFlow, &allowedOrigins, &requireBackend)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusUnauthorized, "unknown public key")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed")
-		return
-	}
-
-	// Per-tenant policy: this tenant requires backend-minted (attributable)
-	// guest credentials, so the public browser mint is disabled. The caller
-	// must mint via the API-key endpoint (POST /v1/guest-credentials).
-	if requireBackend {
-		writeError(w, http.StatusForbidden, "public guest mint disabled for this tenant; mint server-side via /v1/guest-credentials")
-		return
-	}
-
-	// Origin allowlist: bind the public key to the tenant's domains so a
-	// stolen key can't be embedded elsewhere. Fail-closed — an empty list
-	// (or a missing Origin) is rejected. Browser-enforced only; the rate
-	// limit + concurrent cap below cover spoofed/non-browser clients.
-	if !originAllowed(r.Header.Get("Origin"), allowedOrigins) {
-		writeError(w, http.StatusForbidden, "origin not allowed")
-		return
-	}
-
-	// Public path never trusts a caller-supplied identity — pass "" so a
-	// browser can't forge client_ref. The authenticated mint below sets it.
-	s.mintGatewayCall(w, r, tenantID, supportFlow, req.FlowID, "")
-}
+// NOTE: the public, unauthenticated browser mint was removed — every visitor
+// token is now minted server-side via handleAuthGuestCredentials (tenant API
+// key). Anonymous guests just get a token with no client_ref; the integrator
+// gates that endpoint (CAPTCHA/rate-limit) before issuing.
 
 // handleAuthGuestCredentials mints guest call credentials for an
 // API-key-authenticated caller (the integrator's backend), attaching a
@@ -292,21 +233,6 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.handleGetGuestConfig(w, r)
-}
-
-// originAllowed reports whether a request Origin is permitted. Fail-closed:
-// an empty Origin (non-browser caller) or an empty allowlist (unconfigured
-// tenant) is rejected. Match is exact against normalized scheme://host[:port].
-func originAllowed(origin string, allowed []string) bool {
-	if origin == "" || len(allowed) == 0 {
-		return false
-	}
-	for _, a := range allowed {
-		if a == origin {
-			return true
-		}
-	}
-	return false
 }
 
 // normalizeOrigin validates and canonicalizes an allowlist entry to the
