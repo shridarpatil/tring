@@ -3,18 +3,20 @@
 // Reads config from its own <script> tag's data-* attributes:
 //
 //   <script src=".../sdk/agent.js"
-//           data-api-base="https://api.tring.io"
+//           data-gateway-url="https://gw.tring.io"
 //           data-token="<jwt>" />
 //
 // or with a refresh endpoint:
 //
 //   <script src=".../sdk/agent.js"
-//           data-api-base="https://api.tring.io"
+//           data-gateway-url="https://gw.tring.io"
 //           data-token-url="/tring/token" />
 //
 // The token endpoint should return `{ "token": "<jwt>" }` after the
 // integrating server mints a fresh JWT for the current agent (using its
-// tenant API key). The browser never sees the API key.
+// tenant API key). The browser never sees the API key. The widget only
+// connects the gateway WebSocket and renders the in-call panel — it does NOT
+// place calls (origination is backend-only; see widget.ts).
 
 import { bootstrap } from "./widget";
 import { Tring } from "./tring";
@@ -37,13 +39,9 @@ function readOpts() {
       "tring widget: could not find own <script> tag — add data-token or data-token-url",
     );
   }
-  const apiBase =
-    s.getAttribute("data-api-base") || s.getAttribute("data-api") || "";
-  if (!apiBase) {
-    throw new Error("tring widget: data-api-base is required");
-  }
+  // data-gateway-url is optional: when omitted, the token endpoint
+  // (data-token-url) supplies the gateway URL (+ ICE) in its response.
   return {
-    apiBase,
     token: s.getAttribute("data-token") || undefined,
     tokenUrl: s.getAttribute("data-token-url") || undefined,
     gatewayUrl: s.getAttribute("data-gateway-url") || undefined,

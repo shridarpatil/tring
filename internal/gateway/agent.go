@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gobwas/ws"
@@ -43,6 +44,10 @@ type agentMsg struct {
 	SDP    string `json:"sdp,omitempty"`
 	From   string `json:"from,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Auto, set on a s→c "incoming", tells the browser to auto-answer this leg
+	// (a backend click-to-call the agent already initiated) rather than ring
+	// Accept/Decline. True inbound / IVR transfers omit it.
+	Auto bool `json:"auto,omitempty"`
 }
 
 // Message types. Server→client: ready, incoming, answer, ended. Client→server:
@@ -138,12 +143,40 @@ func (ic *incomingCall) fireTeardown() bool {
 // agentSession is one online agent's WebSocket. Writes are serialized; reads run
 // in handleAgentWS's loop and dispatch client messages to pending calls.
 type agentSession struct {
-	key     agentKey
-	conn    net.Conn
-	writeMu sync.Mutex
-	mu      sync.Mutex
-	pending map[string]*incomingCall
-	log     *log.Logger
+	key      agentKey
+	conn     net.Conn
+	writeMu  sync.Mutex
+	mu       sync.Mutex
+	pending  map[string]*incomingCall
+	presence *presence.Store // publishes online / on_call to Redis
+	active   atomic.Int32    // bridged calls in progress (>0 ⇒ "on_call")
+	log      *log.Logger
+}
+
+// publishPresence asserts the agent's CURRENT state and refreshes its TTL: busy
+// on a call (on_call) wins, else available (online). Call enter/leave and the
+// periodic refresh all go through here so the TTL refresh never clobbers a busy
+// marker back to online.
+func (s *agentSession) publishPresence(ctx context.Context) {
+	if s.active.Load() > 0 {
+		s.presence.MarkOnCall(ctx, s.key.tenant, s.key.sip)
+	} else {
+		s.presence.MarkOnline(ctx, s.key.tenant, s.key.sip)
+	}
+}
+
+// enterCall marks the agent busy ("on_call") for a bridged call. While busy the
+// orchestrator's ring-all skips this agent, so no second call is routed to one
+// already on a call.
+func (s *agentSession) enterCall(ctx context.Context) {
+	s.active.Add(1)
+	s.publishPresence(ctx)
+}
+
+// leaveCall is the counterpart: when the last call ends the agent is available again.
+func (s *agentSession) leaveCall(ctx context.Context) {
+	s.active.Add(-1)
+	s.publishPresence(ctx)
 }
 
 func (s *agentSession) send(m agentMsg) error {
@@ -159,7 +192,7 @@ func (s *agentSession) send(m agentMsg) error {
 // startIncoming registers a ringing call and notifies the browser. The returned
 // handle's offer channel fires when the agent accepts; closed fires on
 // reject/hangup/disconnect. Caller must call finishIncoming when done.
-func (s *agentSession) startIncoming(from string) *incomingCall {
+func (s *agentSession) startIncoming(from string, auto bool) *incomingCall {
 	ic := &incomingCall{
 		id:     uuid.NewString(),
 		offer:  make(chan string, 1),
@@ -168,7 +201,7 @@ func (s *agentSession) startIncoming(from string) *incomingCall {
 	s.mu.Lock()
 	s.pending[ic.id] = ic
 	s.mu.Unlock()
-	if err := s.send(agentMsg{Type: msgIncoming, CallID: ic.id, From: from}); err != nil {
+	if err := s.send(agentMsg{Type: msgIncoming, CallID: ic.id, From: from, Auto: auto}); err != nil {
 		s.finishIncoming(ic.id)
 		ic.end()
 	}
@@ -262,10 +295,11 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s := &agentSession{
-		key:     agentKey{tenant: claims.TenantID.String(), sip: claims.SipUsername},
-		conn:    conn,
-		pending: map[string]*incomingCall{},
-		log:     g.log,
+		key:      agentKey{tenant: claims.TenantID.String(), sip: claims.SipUsername},
+		conn:     conn,
+		pending:  map[string]*incomingCall{},
+		presence: g.presence,
+		log:      g.log,
 	}
 	g.agents.add(s)
 	g.log.Printf("gateway: agent online %s/%s", s.key.tenant, s.key.sip)
@@ -285,7 +319,7 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 			case <-stopRefresh:
 				return
 			case <-t.C:
-				g.presence.MarkOnline(bg, s.key.tenant, s.key.sip)
+				s.publishPresence(bg) // preserves on_call / away / online
 			}
 		}
 	}()

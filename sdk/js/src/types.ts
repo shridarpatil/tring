@@ -9,15 +9,13 @@ export interface InitOpts {
   token: string;
 
   /**
-   * Tring API base URL, e.g. "https://api.tring.io" or
-   * "http://localhost:8085" for self-host dev.
-   */
-  apiBase: string;
-
-  /**
-   * When the SDK receives an inbound INVITE (the A-leg of an originated
-   * call, or an inbound customer call to a masked DID), should it accept
-   * automatically? Default: true. Set false to gate on a UI confirm.
+   * For a TRUE inbound call (an IVR transfer / inbound DID ringing this agent),
+   * should the SDK auto-answer? Default: true; set false to gate on a UI
+   * confirm. A backend click-to-call leg always auto-answers (the agent already
+   * initiated) — the gateway signals that per-call, regardless of this flag.
+   *
+   * Note: the SDK has NO Tring API access. Outbound calls are placed by the
+   * integrator's backend (POST /v1/calls); the agent's leg then rings here.
    */
   autoAnswer?: boolean;
 

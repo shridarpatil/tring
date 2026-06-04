@@ -5,7 +5,7 @@ Drop-in browser voice SDK for the Tring CPaaS — WebRTC calling on any web page
 | Bundle | Served at | For |
 |---|---|---|
 | **`voice.js`** (`dist/voice.iife.js`) | `/sdk/voice.js` | **Website visitors** — a "Call" button on any public page drops the caller into your IVR over WebRTC, no account. Anonymous (`data-gateway-url`+`data-flow-id`) or trusted (`data-credentials-url`). |
-| **`agent.js`** (`dist/agent.iife.js`) | `/sdk/agent.js` | **CRM agents** — auto-binds `<button data-tring-agent-call>` and renders a floating call panel to place/receive calls. Auth: short-lived agent **JWT**. |
+| **`agent.js`** (`dist/agent.iife.js`) | `/sdk/agent.js` | **CRM agents** — connects the gateway WebSocket and renders the in-call panel (ring/answer/hangup/DTMF). **No Tring API access — it cannot place calls;** origination is backend-only. Auth: short-lived agent **JWT**. |
 | **`tring.js`** (`dist/tring.iife.js`) | `/sdk/tring.js` | Bare SDK — exposes `window.Tring` for programmatic use. |
 | **`tring.esm.js`** | — (npm) | `import Tring from '@tring/voice'` for bundlers. |
 
@@ -16,33 +16,50 @@ Drop-in browser voice SDK for the Tring CPaaS — WebRTC calling on any web page
 > [**How it works — protocol reference**](#how-it-works--protocol-reference-port-the-sdk-to-any-platform)
 > below. It's the full wire spec; the TypeScript is just the reference implementation.
 
-## Quickstart — drop-in widget (the laziest possible integration)
+## Quickstart — agent widget (`agent.js`)
 
-Add **one script tag** to your CRM template. Buttons with `data-tring-agent-call data-to="..."` become callable. A floating panel handles the in-call UI.
+Drop **one script tag** in your agent app. It connects the gateway WebSocket and
+renders the in-call panel (ring → Accept/Decline / connected → hangup + DTMF).
+It does **not** place calls — origination is backend-only (below).
 
 ```html
-<table>
-  <tr>
-    <td>Aanya Sharma</td>
-    <td>+919876543210</td>
-    <td><button data-tring-agent-call data-to="+919876543210">Call</button></td>
-  </tr>
-</table>
-
 <script src="https://your-tring-host/sdk/agent.js"
-        data-api-base="https://your-tring-host"
-        data-gateway-url="https://your-gateway-host"
         data-token-url="/tring/token"></script>
 ```
 
-The agent connects to the media gateway over raw WebRTC (`data-gateway-url` is required — no SIP in the browser). `/tring/token` is **your** CRM endpoint that mints a fresh JWT server-side (using your tenant API key) for the currently-logged-in agent. The browser never sees the API key. For static-token mode (e.g. server-rendered pages), use `data-token="<jwt>"` instead of `data-token-url`.
+`/tring/token` is **your** endpoint that mints a fresh agent JWT server-side
+(`GET /v1/agents/<id>/token`, using your tenant API key) for the logged-in agent.
+The browser never sees the API key. That Tring endpoint returns
+`{ token, gateway_url, ice_servers }`, so the widget learns where to connect from
+the same fetch — your endpoint just passes the JSON through. (For a static token
+on a server-rendered page, use `data-token="<jwt>"` **and** `data-gateway-url="…"`,
+since there's no fetch to carry the gateway URL.)
 
-You can also dial from a free-form input by pointing at it:
+### Placing an outbound call (backend-originated — the agent never sees the number)
 
-```html
-<input id="number" type="text">
-<button data-tring-agent-call data-to-target="#number">Call</button>
+The SDK has **no Tring API access**, so your own "Call" button hits **your**
+backend, which originates via Tring and passes the number — the agent's browser
+never receives it (mirrors the visitor flow). The agent leg auto-answers (they
+already clicked) and the panel shows your `agent_label`.
+
 ```
+agent clicks a customer row  →  your backend  →  POST /v1/calls
+                                 (tenant API key)   { agent_id, to: "<number>", agent_label: "Ticket #4821" }
+                              →  FreeSWITCH rings the agent's leg → panel appears, label only
+```
+
+```js
+// your backend (holds the API key) — the browser sent a customer id, not a number
+await fetch("https://your-tring-host/v1/calls", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${TENANT_API_KEY}`, "Content-Type": "application/json" },
+  body: JSON.stringify({ agent_id, to: customer.number, agent_label: customer.ref }),
+});
+```
+
+`agent_label` is optional and the only thing the agent sees for the call (empty →
+a generic "Incoming call"). Inbound calls / IVR transfers ring the same panel with
+Accept/Decline. See `examples/demo-portal/` for a runnable backend (`/agent/originate`).
 
 ## Website visitor calling (`voice.js`)
 
@@ -54,33 +71,38 @@ Put voice on a public page so visitors call **into your IVR** — no login, no p
         data-flow-id="<flow-uuid>"></script>
 ```
 
-The visitor taps the floating "Call" button (or your own `<button data-tring-call>`), gets an anonymous, flow-pinned identity, and lands in your IVR — the call is pinned to that flow server-side and can never reach a trunk. To attribute a **logged-in** caller instead, point `data-credentials-url` at your backend, which mints a gateway call token carrying the verified `client_ref` (see `examples/byoc-portal/`). See also `examples/support-portal.html`.
+The visitor taps the floating "Call" button (or your own `<button data-tring-call>`), gets an anonymous, flow-pinned identity, and lands in your IVR — the call is pinned to that flow server-side and can never reach a trunk. To attribute a **logged-in** caller instead, point `data-credentials-url` at your backend, which mints a gateway call token carrying the verified `client_ref`. See `examples/demo-portal/` — one runnable app with the anonymous, logged-in, and agent flows.
 
-## Programmatic use
+## Programmatic use (bare SDK)
 
-The browser needs a **short-lived JWT**, not the tenant API key. Your CRM's backend mints the JWT using `GET /v1/agents/<id>/token` (auth: tenant API key) and ships it to the browser.
+The browser needs a **short-lived JWT**, not the tenant API key. Your backend
+mints it (`GET /v1/agents/<id>/token`) and ships it to the browser. The SDK is
+**receive-only** — it surfaces call legs the backend originates; it has no
+`call()` and no API client.
 
 ```html
 <script src="https://your-tring-host/sdk/tring.js"></script>
 <script>
   const tring = await Tring.init({
     token: 'eyJ...',                     // JWT from /v1/agents/<id>/token (5-min TTL)
-    apiBase: 'https://api.tring.io',
     gatewayUrl: 'https://gw.tring.io',   // required — raw WebRTC to the media gateway
+    // autoAnswer: false,                // gate TRUE inbound on a UI confirm (default true)
   });
 
-  tring.on('registered',    ()       => console.log('ready'));   // WS to gateway up
-  tring.on('call:ringing',  ({call}) => console.log('ringing', call.to));
-  tring.on('call:answered', ()       => console.log('connected'));
+  tring.on('registered',    ()       => console.log('online'));        // WS up
+  tring.on('call:ringing',  ({call}) => console.log('ringing', call.to)); // call.to = label, not a number
+  tring.on('call:answered', ({call}) => console.log('connected'));
   tring.on('call:ended',    ()       => console.log('ended'));
 
-  const call = await tring.call('+919876543210');
-  // ...later:
-  await call.hangup();
+  // To END a call, use the Call from the ringing/answered event:
+  //   call.accept(); call.hangup(); call.sendDTMF('1');
 </script>
 ```
 
-Inbound calls (and the agent's leg of an originated call) are auto-accepted by default. Set `autoAnswer: false` in `init` to gate on user UI.
+A backend click-to-call leg auto-answers (the agent already initiated). A TRUE
+inbound (IVR transfer / inbound DID) rings per `autoAnswer` (default `true`; set
+`false` to gate on Accept/Decline). `call.to` carries the backend-supplied label,
+never the dialed number.
 
 ## Development
 
@@ -195,23 +217,29 @@ handshake can't set `Authorization` from a browser — native clients may use th
 `Authorization: Bearer` header instead). Then exchange JSON envelopes:
 
 ```jsonc
-{ "type": "...", "call_id": "...", "sdp": "...", "from": "...", "reason": "..." }
+{ "type": "...", "call_id": "...", "sdp": "...", "from": "...", "auto": false, "reason": "..." }
 ```
 
 | `type` | Direction | Fields | Meaning |
 |---|---|---|---|
 | `ready` | server→client | — | socket up, presence registered (you're "online") |
-| `incoming` | server→client | `call_id`, `from` | a call is ringing for you |
+| `incoming` | server→client | `call_id`, `from`, `auto` | a call is ringing. `from` is a backend label, **never the dialed number** (may be empty → generic). `auto:true` ⇒ a backend click-to-call the agent already initiated → auto-answer instead of prompting Accept/Decline. |
 | `offer` | client→server | `call_id`, `sdp` | accept the call with your WebRTC offer |
 | `answer` | server→client | `call_id`, `sdp` | gateway's answer — apply it, call is connected |
 | `reject` | client→server | `call_id` | decline a ringing call |
 | `hangup` | client→server | `call_id` | end an active call |
 | `ended` | server→client | `call_id`, `reason` | the call ended remotely — tear down |
 
+The agent has **no API access**: it never originates. Outbound calls are placed
+by the integrator's backend via `POST /v1/calls` (tenant API key, with the
+number + optional `agent_label`); the agent's leg then arrives here as an
+`incoming` with `auto:true`. So the agent's browser never receives the dialed
+number — only the label.
+
 Accept sequence: on `incoming` → build a PeerConnection, add mic, `createOffer`,
 wait for ICE gathering, send `{type:"offer", call_id, sdp}` → receive
 `{type:"answer", call_id, sdp}` → `setRemoteDescription`. The same WebRTC media
-rules below apply.
+rules below apply. (`auto:true` ⇒ do this immediately; else prompt the user.)
 
 **Keep-alive:** the gateway sets a ~90 s read deadline; send any message (a ping)
 periodically so an idle socket isn't reaped. On socket close, treat every live

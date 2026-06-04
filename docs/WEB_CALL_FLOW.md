@@ -132,5 +132,5 @@ Point the visitor SDK's `data-credentials-url` at **your** backend, which return
 what it obtained from `POST /v1/guest-credentials` (gateway URL + flow + the
 client-bearing token). For anonymous "call us", the SDK can instead go straight
 to the gateway with `data-gateway-url` + `data-flow-id` (no token; flow-pinned,
-can never reach a trunk). See `examples/byoc-portal/` (trusted) and
-`examples/support-portal.html` (anonymous).
+can never reach a trunk). See `examples/demo-portal/` — one app with the
+`/portal` (trusted), `/support` (anonymous), and `/crm` (agent) flows.

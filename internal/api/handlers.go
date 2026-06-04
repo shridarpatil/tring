@@ -31,9 +31,11 @@ type Agent struct {
 	SipPassword string    `json:"sip_password,omitempty"`
 	DisplayName string    `json:"display_name,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
-	// Status is live FreeSWITCH registration state — "online" when the
-	// agent is registered (WebRTC/SIP), "offline" otherwise, "unknown" if
-	// FreeSWITCH couldn't be reached. Populated on list responses.
+	// Status is the agent's live state, populated on list responses. With the
+	// gateway transport it comes from Redis presence: "online" (connected and
+	// available), "on_call" (connected but busy on a call — not ringable), or
+	// "offline". Legacy SIP transport reports "online"/"offline" from the
+	// registration, or "unknown" if FreeSWITCH couldn't be reached.
 	Status string `json:"status,omitempty"`
 }
 
@@ -96,12 +98,9 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// presence comes from Redis (published by the gateway). Fall back to the
 	// SIP-registration lookup for the legacy transport or when Redis is off.
 	if s.agentTransport == "gateway" && s.presence.Enabled() {
+		// "online" (available), "on_call" (busy — not ringable), or "offline".
 		for i := range agents {
-			if s.presence.IsOnline(r.Context(), t.ID.String(), agents[i].SipUsername) {
-				agents[i].Status = "online"
-			} else {
-				agents[i].Status = "offline"
-			}
+			agents[i].Status = s.presence.Status(r.Context(), t.ID.String(), agents[i].SipUsername)
 		}
 	} else {
 		// Live registration status (one ESL call). Fail-soft: if FreeSWITCH is
