@@ -94,9 +94,11 @@
     <param name="outbound-codec-prefs" value="$${global_codec_prefs}"/>
     <param name="rtp-timer-name" value="soft"/>
     <!-- ip address to use for rtp, DO NOT USE HOSTNAMES ONLY IP ADDRESSES -->
-    <param name="rtp-ip" value="$${local_ip_v4}"/>
-    <!-- ip address to bind to, DO NOT USE HOSTNAMES ONLY IP ADDRESSES -->
-    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${tring_internal_ip}"/>
+    <!-- ip address to bind to, DO NOT USE HOSTNAMES ONLY IP ADDRESSES.
+         tring_internal_ip = local_ip_v4 by default; 127.0.0.1 in loopback dev
+         (TRING_INTERNAL_IP) so the gateway↔FS leg is Wi-Fi-immune. -->
+    <param name="sip-ip" value="$${tring_internal_ip}"/>
     <param name="hold-music" value="$${hold_music}"/>
     <param name="apply-nat-acl" value="nat.auto"/>
 

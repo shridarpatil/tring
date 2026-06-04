@@ -17,6 +17,11 @@ services:
       # cleanly). On a VPS set TRING_PUBLIC_IP to the real public IP in
       # .env (mismatch == one-way audio).
       - TRING_PUBLIC_IP=${TRING_PUBLIC_IP:-}
+      # Internal profile bind IP + auth-realm domain. Empty → FS uses its LAN
+      # IP (local_ip_v4). Set to 127.0.0.1 for single-machine dev so the
+      # gateway↔FS path is loopback and survives Wi-Fi/IP changes. Must match
+      # the gateway's TRING_GATEWAY_ADVERT_IP + TRING_FS_SIP_ADDR.
+      - TRING_INTERNAL_IP=${TRING_INTERNAL_IP:-}
       # RTP UDP port range. FS will allocate ONLY within [start, end]
       # — sized to match your VPS firewall rules. Each concurrent call
       # consumes 2 ports (RTP + RTCP).
