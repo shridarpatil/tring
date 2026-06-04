@@ -6,6 +6,7 @@ package freeswitch
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/percipia/eslgo"
@@ -18,7 +19,34 @@ type Client struct {
 }
 
 func New(addr, password string) *Client {
+	// We open a fresh ESL connection per originate (see Originate), so eslgo's
+	// NormalLogger emits an "auth ok" + "Error receiving message: use of closed
+	// network connection" pair on every call — pure teardown noise. Swap in a
+	// filtering logger that drops that chatter but still surfaces real
+	// warnings/errors. DefaultOptions.Logger is eslgo's sanctioned config hook.
+	eslgo.DefaultOptions.Logger = quietLogger{}
 	return &Client{addr: addr, password: password}
+}
+
+// quietLogger implements eslgo.Logger, suppressing the benign connect/teardown
+// messages from the fresh-connection-per-originate pattern while still
+// surfacing genuine warnings and errors.
+type quietLogger struct{}
+
+func (quietLogger) Debug(string, ...any) {}
+func (quietLogger) Info(string, ...any)  {} // per-connection "Successfully authenticated"
+
+func (quietLogger) Warn(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "Connection closed, stopping receive loop") {
+		return // expected when we Close() a short-lived originate connection
+	}
+	log.Printf("esl warn: %s", strings.TrimSpace(msg))
+}
+
+func (quietLogger) Error(format string, args ...any) {
+	log.Printf("esl error: %s", strings.TrimSpace(fmt.Sprintf(format, args...)))
 }
 
 // OriginateRequest is everything Tring needs to ask FreeSWITCH to place a

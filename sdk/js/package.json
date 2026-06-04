@@ -24,9 +24,7 @@
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "sip.js": "^0.21.2"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.25.12",

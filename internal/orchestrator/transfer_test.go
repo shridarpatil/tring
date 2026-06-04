@@ -9,30 +9,6 @@ import (
 	"github.com/whatomate/tring/internal/dbtest"
 )
 
-// TestExpireGuestSession: single-use credentials — once a guest call ends,
-// the session row is deleted so the credential can't be replayed.
-func TestExpireGuestSession(t *testing.T) {
-	f := dbtest.Setup(t)
-	ctx := context.Background()
-	const sip = "guest_singleuse"
-	_, err := f.DB.Pool.Exec(ctx, `
-		INSERT INTO guest_sessions (tenant_id, sip_username, sip_password, expires_at)
-		VALUES ($1, $2, 'pw', now() + interval '15 min')
-	`, f.TenantID, sip)
-	if err != nil {
-		t.Fatalf("seed guest_session: %v", err)
-	}
-
-	NewExecutor(f.DB).expireGuestSession(sip)
-
-	var n int
-	_ = f.DB.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM guest_sessions WHERE sip_username = $1`, sip).Scan(&n)
-	if n != 0 {
-		t.Errorf("guest session not expired: %d rows remain, want 0", n)
-	}
-}
-
 func seedAgent(t *testing.T, f *dbtest.Fixture, sip string) {
 	t.Helper()
 	_, err := f.DB.Pool.Exec(context.Background(), `
@@ -53,7 +29,7 @@ func TestAgentBridgeTargetRingsAll(t *testing.T) {
 	e := NewExecutor(f.DB)
 
 	node := &ivrNode{Type: nodeTransfer, Config: map[string]interface{}{}}
-	got, err := e.agentBridgeTarget(context.Background(), node, f.TenantID)
+	got, sips, err := e.agentBridgeTarget(context.Background(), node, f.TenantID)
 	if err != nil {
 		t.Fatalf("agentBridgeTarget: %v", err)
 	}
@@ -61,11 +37,16 @@ func TestAgentBridgeTargetRingsAll(t *testing.T) {
 	parts := strings.Split(got, ",") // comma = simultaneous ring
 	sort.Strings(parts)
 	want := []string{
-		"user/alice@" + f.SIPDomain,
-		"user/bob@" + f.SIPDomain,
+		"[tring_agent=alice]user/alice@" + f.SIPDomain,
+		"[tring_agent=bob]user/bob@" + f.SIPDomain,
 	}
 	if len(parts) != 2 || parts[0] != want[0] || parts[1] != want[1] {
 		t.Errorf("bridge target = %q, want a comma-join of %v", got, want)
+	}
+	// The candidate SIPs are returned so the answered agent can be attributed.
+	sort.Strings(sips)
+	if len(sips) != 2 || sips[0] != "alice" || sips[1] != "bob" {
+		t.Errorf("candidate sips = %v, want [alice bob]", sips)
 	}
 }
 
@@ -78,12 +59,15 @@ func TestAgentBridgeTargetSpecificAgent(t *testing.T) {
 	e := NewExecutor(f.DB)
 
 	node := &ivrNode{Type: nodeTransfer, Config: map[string]interface{}{"agent_sip": "bob"}}
-	got, err := e.agentBridgeTarget(context.Background(), node, f.TenantID)
+	got, sips, err := e.agentBridgeTarget(context.Background(), node, f.TenantID)
 	if err != nil {
 		t.Fatalf("agentBridgeTarget: %v", err)
 	}
-	if want := "user/bob@" + f.SIPDomain; got != want {
+	if want := "[tring_agent=bob]user/bob@" + f.SIPDomain; got != want {
 		t.Errorf("bridge target = %q, want %q", got, want)
+	}
+	if len(sips) != 1 || sips[0] != "bob" {
+		t.Errorf("candidate sips = %v, want [bob]", sips)
 	}
 }
 
@@ -93,11 +77,11 @@ func TestAgentBridgeTargetNoAgents(t *testing.T) {
 	f := dbtest.Setup(t)
 	e := NewExecutor(f.DB)
 
-	got, err := e.agentBridgeTarget(context.Background(), &ivrNode{Config: map[string]interface{}{}}, f.TenantID)
+	got, sips, err := e.agentBridgeTarget(context.Background(), &ivrNode{Config: map[string]interface{}{}}, f.TenantID)
 	if err != nil {
 		t.Fatalf("agentBridgeTarget: %v", err)
 	}
-	if got != "" {
-		t.Errorf("bridge target = %q, want empty (no agents)", got)
+	if got != "" || len(sips) != 0 {
+		t.Errorf("bridge target = %q, sips = %v, want empty (no agents)", got, sips)
 	}
 }

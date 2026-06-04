@@ -20,6 +20,19 @@ export interface InitOpts {
    * automatically? Default: true. Set false to gate on a UI confirm.
    */
   autoAnswer?: boolean;
+
+  /**
+   * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001 M4b).
+   * The agent peers with the gateway over raw WebRTC (a WebSocket for
+   * signaling + presence) — the agent never speaks SIP and FreeSWITCH stays
+   * private. Required.
+   */
+  gatewayUrl?: string;
+  /**
+   * ICE servers for the gateway WebRTC path. Optional — defaults to a public
+   * STUN server. Provide TURN entries for agents behind symmetric NAT.
+   */
+  iceServers?: RTCIceServer[];
 }
 
 export interface Call {
@@ -60,23 +73,52 @@ export type TringEvent =
 
 export interface GuestInitOpts {
   /**
-   * Tenant public widget key (`pk_live_…`). Safe to embed in a public web
-   * page — it only authorizes minting a flow-pinned guest identity, never
-   * tenant access. Issued via GET /v1/guest-config.
+   * Tring media gateway base URL, e.g. "https://gw.tring.io" (ADR-001). The
+   * visitor peers directly with the gateway over raw WebRTC — FreeSWITCH stays
+   * private. Required (anonymous path) unless credentialsUrl/fetchCredentials
+   * supplies it.
    */
-  publicKey: string;
-  /** Tring API base, e.g. "https://api.tring.io". */
-  apiBase: string;
+  gatewayUrl?: string;
   /**
-   * Optional flow UUID to route this guest into. Omit to use the tenant's
-   * configured support flow (the common case).
+   * ICE servers for the gateway WebRTC path. Optional — defaults to a public
+   * STUN server. Provide TURN entries for visitors behind symmetric NAT.
+   */
+  iceServers?: RTCIceServer[];
+  /**
+   * Optional token, sent as a bearer to the gateway when it requires auth.
+   * Anonymous visitor calls leave this unset.
+   */
+  token?: string;
+  /**
+   * Flow UUID to route this visitor into (the IVR flow the gateway pins the
+   * call to). Required for the anonymous path; or supplied by
+   * credentialsUrl/fetchCredentials.
    */
   flowId?: string;
+  /**
+   * Bring-your-own-credentials (the trusted, logged-in-caller flow). A URL on
+   * YOUR backend that returns a GuestCredentialsResponse (gateway URL + flow id
+   * + optional token/ICE) — e.g. derived from the verified logged-in caller.
+   * Fetched with `credentials: "include"` so your session cookie authenticates
+   * the request. When set, it supplies the gateway connection details.
+   */
+  credentialsUrl?: string;
+  /**
+   * Programmatic alternative to credentialsUrl: return the credentials
+   * yourself. Takes precedence over credentialsUrl.
+   */
+  fetchCredentials?: () => Promise<GuestCredentialsResponse>;
 }
 
-/** /v1/sdk/guest-credentials response: SIP creds + the IVR dial target. */
-export interface GuestCredentialsResponse extends SipCredentialsResponse {
-  dial_target: string;
+/**
+ * Gateway connection details for a visitor call (BYOC/trusted path). The
+ * integrator's backend returns this so the browser never needs a tenant key.
+ */
+export interface GuestCredentialsResponse {
+  gateway_url: string;
+  flow_id: string;
+  token?: string;
+  ice_servers?: RTCIceServer[];
 }
 
 export type GuestCallStatus =
@@ -87,23 +129,8 @@ export type GuestCallStatus =
   | "ended";
 
 export type GuestEvent =
-  | { type: "connecting" } // fetching creds / registering
-  | { type: "ringing" } // INVITE sent into the IVR, awaiting answer
+  | { type: "connecting" } // acquiring mic / negotiating
+  | { type: "ringing" } // offer sent to the gateway, awaiting answer
   | { type: "connected" } // IVR answered, media flowing
   | { type: "ended"; reason?: string }
   | { type: "error"; error: Error };
-
-export interface SipCredentialsResponse {
-  sip_username: string;
-  sip_password: string;
-  sip_domain: string;
-  ws_url: string;
-  /**
-   * ICE servers for WebRTC media setup. Always includes at least one
-   * STUN entry; TURN entries (carry username + credential) appear when
-   * the Tring server has TRING_TURN_URL configured. Browsers behind
-   * symmetric NAT or CGNAT need TURN to relay media — pure STUN fails.
-   * Passed through to RTCPeerConnection unchanged.
-   */
-  ice_servers: RTCIceServer[];
-}

@@ -21,17 +21,54 @@ import (
 )
 
 // defaults are the dev-friendly fallbacks used when no TRING_* env var is
-// set. Production overrides them via env. ws_url is intentionally absent —
-// the api binary auto-detects the host's outbound IP when it's unset.
+// set. Production overrides them via env.
 var defaults = map[string]any{
 	"dsn":           "postgres://tring:tring_dev@localhost:5434/tring",
 	"jwt_secret":    "tring_dev_jwt_secret_change_me_in_prod",
 	"fs_basic_auth": "fs:fs_dev_secret_change_me_in_prod",
 	"esl_addr":      "127.0.0.1:8021",
 	"esl_password":  "ClueCon",
-	"stun_url":      "stun:stun.l.google.com:19302",
-	"api_addr":      ":8085",
-	"ivr_addr":      ":8086",
+	// STUN is OFF by default. In the gateway model (ADR-001) the gateway is a
+	// public server (TRING_PUBLIC_IP), so it discovers the browser's reflexive
+	// address itself — a separate STUN server is redundant (and we don't want
+	// to silently call a third party like Google). Set TRING_STUN_URL only for
+	// unusual topologies. TURN (TRING_TURN_*) is the real fallback for clients
+	// on UDP-blocking networks.
+	"stun_url": "",
+	"api_addr": ":8085",
+	"ivr_addr": ":8086",
+	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
+	// gateway_public_url is the browser-reachable base URL of the gateway the
+	// API hands to visitors in a mint response (override per environment).
+	"gateway_public_url": "http://localhost:8087",
+	"gateway_addr":       ":8087",
+	"gateway_udp_min":    10000,
+	"gateway_udp_max":    10100,
+	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
+	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
+	"gateway_sip_port":  5090,
+	"fs_sip_addr":       "127.0.0.1:5060",
+	"fs_auth_user":      "1000",
+	"fs_auth_pass":      "1234",
+	"fs_target":         "9999", // fallback dialplan extension (echo) when no flow is pinned
+	"fs_flow_id":        "",     // pin a WebRTC call to this IVR flow (no DID); empty → fs_target
+	// Require a valid agent token on the /webrtc/offer (visitor) endpoint.
+	// Default off BY DESIGN: anonymous website visitors post there token-less
+	// for public "call us" calls, which are flow-pinned and can't reach a trunk.
+	// The agent path is unaffected — /agent/ws ALWAYS authenticates the agent
+	// JWT. Turn this on only for deployments that disallow anonymous visitors.
+	"gateway_require_auth": false,
+	// agent_transport routes the agent's own call leg. "gateway" (default since
+	// the M5 cutover) routes the leg to the media gateway as a SIP endpoint so
+	// agents speak WebRTC, never SIP (ADR-001); "sip" is the legacy mode where
+	// agents register to FS directly (user/<sip>) — kept for migrations but the
+	// SDK no longer supports it. agent_gateway is the FreeSWITCH gateway name
+	// pointing at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
+	"agent_transport": "gateway",
+	"agent_gateway":   "tring-gw",
+	// How long (seconds) an inbound agent leg rings at the gateway before it
+	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
+	"gateway_agent_ring_timeout": 45,
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.

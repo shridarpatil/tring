@@ -94,9 +94,11 @@
     <param name="outbound-codec-prefs" value="$${global_codec_prefs}"/>
     <param name="rtp-timer-name" value="soft"/>
     <!-- ip address to use for rtp, DO NOT USE HOSTNAMES ONLY IP ADDRESSES -->
-    <param name="rtp-ip" value="$${local_ip_v4}"/>
-    <!-- ip address to bind to, DO NOT USE HOSTNAMES ONLY IP ADDRESSES -->
-    <param name="sip-ip" value="$${local_ip_v4}"/>
+    <param name="rtp-ip" value="$${tring_internal_ip}"/>
+    <!-- ip address to bind to, DO NOT USE HOSTNAMES ONLY IP ADDRESSES.
+         tring_internal_ip = local_ip_v4 by default; 127.0.0.1 in loopback dev
+         (TRING_INTERNAL_IP) so the gateway↔FS leg is Wi-Fi-immune. -->
+    <param name="sip-ip" value="$${tring_internal_ip}"/>
     <param name="hold-music" value="$${hold_music}"/>
     <param name="apply-nat-acl" value="nat.auto"/>
 
@@ -293,8 +295,18 @@
          auto                  - Use guessed ip.
          auto-nat              - Use ip learned from NAT-PMP or UPNP
     -->
-    <param name="ext-rtp-ip" value="$${external_rtp_ip}"/>
-    <param name="ext-sip-ip" value="$${external_sip_ip}"/>
+    <!-- The INTERNAL profile is PRIVATE (gateway ⇄ FS). It must advertise the
+         address the media gateway actually dials and FS is bound to
+         ($${tring_internal_ip}) in its Contact/SDP — NOT external_sip_ip (the
+         public/LAN address, which belongs to the EXTERNAL trunk profile).
+         If these advertise external_sip_ip while sip-ip binds tring_internal_ip
+         (e.g. 127.0.0.1 in loopback dev), FS answers with a Contact the gateway
+         can't reach: the INVITE works (sent to the explicit SIP addr) but the
+         in-dialog ACK/BYE follow the wrong Contact and are silently dropped —
+         FS retransmits the 200 OK (no ACK) and a hangup BYE times out, so the
+         call won't tear down. Keep these equal to sip-ip/rtp-ip. -->
+    <param name="ext-rtp-ip" value="$${tring_internal_ip}"/>
+    <param name="ext-sip-ip" value="$${tring_internal_ip}"/>
 
     <!-- rtp inactivity timeout -->
     <param name="rtp-timeout-sec" value="300"/>

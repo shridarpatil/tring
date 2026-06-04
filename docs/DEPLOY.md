@@ -44,11 +44,11 @@ All four services read from `.env` at the repo root. See `.env.example` for the 
 - `TRING_JWT_SECRET` rotated off the default
 - `TRING_FS_BASIC_AUTH` rotated off the default (must match the value in `freeswitch/conf/autoload_configs/xml_curl.conf.xml`'s `gateway-credentials` param)
 
-## Putting TLS in front of it (for prod agent browsers)
+## Putting TLS in front of it (for prod browsers)
 
-The API runs plain HTTP on `:8085`. FreeSWITCH's WSS is on `:7443` with a self-signed cert. For browser agents working from anywhere outside your trusted LAN, both need real certificates.
+Browsers reach two HTTP surfaces: the **media gateway** signaling (`:8087` — `/webrtc/offer` + `/agent/ws`) and, if you expose it, the API (`:8085`). Both run plain HTTP by default; browsers outside your trusted LAN need real certificates in front of them. (FreeSWITCH is private and never internet-exposed — there's no browser-facing WSS anymore; the gateway replaced it in the M5 cutover.)
 
-Recommended: drop a Caddy or Traefik container into `docker-compose.yml` that handles Let's Encrypt for `api.your-domain` (proxying to `:8085`) and `voice.your-domain` (proxying to `:7443`). Override `TRING_WS_URL=wss://voice.your-domain:7443` in `.env` so the SDK gets the right WSS URL in `/v1/sdk/credentials`.
+Recommended: drop a Caddy or Traefik container into `docker-compose.yml` that handles Let's Encrypt for `gw.your-domain` (proxying to the gateway `:8087`, HTTPS + WSS) and, if needed, `api.your-domain` (proxying to `:8085`). Set `TRING_GATEWAY_PUBLIC_URL=https://gw.your-domain` in `.env` so the API hands browsers the right gateway URL. The gateway's UDP media range must also be reachable on `TRING_PUBLIC_IP` (see `docs/EDGE_DEPLOYMENT.md`).
 
 This isn't built into the default compose because the right TLS posture depends on your domain / cert setup.
 

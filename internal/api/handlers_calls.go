@@ -27,6 +27,8 @@ type Call struct {
 	FromNumber   string     `json:"from_number"`
 	ToNumber     string     `json:"to_number"`
 	AgentID      *uuid.UUID `json:"agent_id,omitempty"`
+	AgentName    *string    `json:"agent_name,omitempty"` // display_name|sip of the handling agent
+	ClientRef    *string    `json:"client_ref,omitempty"` // embedder-supplied caller identity (vs guest_*)
 	FSUUID       string     `json:"fs_uuid"`
 	StartedAt    time.Time  `json:"started_at"`
 	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
@@ -34,6 +36,12 @@ type Call struct {
 	DurationSec  *int       `json:"duration_seconds,omitempty"`
 	HangupCause  *string    `json:"hangup_cause,omitempty"`
 	RecordingURL *string    `json:"recording_url,omitempty"`
+	// IVRPath is the recorded IVR journey for inbound/IVR calls — an ordered
+	// JSON array of steps (node, DTMF pressed, transfer target, outcome).
+	// Passed through verbatim from the calls.ivr_path JSONB column; empty
+	// array for outbound calls. Shape: see orchestrator.SimStep / the
+	// console's IvrStep type.
+	IVRPath json.RawMessage `json:"ivr_path,omitempty"`
 }
 
 type createCallRequest struct {
@@ -102,6 +110,20 @@ func (s *Server) handleSDKCreateCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
+// agentALeg builds the FreeSWITCH dial string for an agent's own call leg.
+// With the default "sip" transport the agent registers to FS directly, so the
+// leg is user/<sip>@<domain>. With "gateway" the leg is routed to the media
+// gateway as a SIP endpoint (ADR-001 M4b) carrying the tenant id as a SIP
+// header, so the gateway resolves the right browser and the agent never speaks
+// SIP. The IVR transfer path mirrors this in internal/orchestrator.
+func (s *Server) agentALeg(sipUsername, sipDomain, tenantID string) string {
+	if s.agentTransport == "gateway" {
+		return fmt.Sprintf("[sip_h_X-Tring-Tenant=%s]sofia/gateway/%s/%s",
+			tenantID, s.agentGateway, sipUsername)
+	}
+	return fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
+}
+
 // originateForAgent is the shared originate path used by both the tenant-
 // scoped and JWT-scoped handlers. Returns (call, http_status_on_error, err).
 func (s *Server) originateForAgent(
@@ -148,7 +170,7 @@ func (s *Server) originateForAgent(
 	if sipDomain == "" {
 		_ = s.db.Pool.QueryRow(ctx, s.q.GetTenantSipDomain, t.ID).Scan(&sipDomain)
 	}
-	aLeg := fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
+	aLeg := s.agentALeg(sipUsername, sipDomain, t.ID.String())
 
 	// Build BLegs. Each entry presents that trunk's own DID as caller-ID
 	// via per-leg `[var=val]` prefix, so a roll-over from Airtel→Jio
@@ -328,11 +350,18 @@ const (
 
 func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	var c Call
+	// Scan the jsonb ivr_path into a plain []byte, then hand it to the
+	// RawMessage field — pgx returns jsonb as raw bytes and we pass them
+	// through to the client unchanged.
+	var ivrPath []byte
 	err := scanner.Scan(
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
 		&c.AgentID, &c.FSUUID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
-		&c.DurationSec, &c.HangupCause, &c.RecordingURL,
+		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef,
 	)
+	if len(ivrPath) > 0 {
+		c.IVRPath = ivrPath
+	}
 	return c, err
 }
 

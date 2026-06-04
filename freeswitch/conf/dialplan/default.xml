@@ -13,6 +13,34 @@
 <include>
   <context name="default">
 
+    <!-- WebRTC media gateway (ADR-001) POC target: the pion gateway SIP-dials
+         9999 to validate the browser→gateway→FreeSWITCH bridge against a plain
+         echo. Milestone 2b points the gateway at the real IVR DID instead. -->
+    <!-- WebRTC gateway, flow-pinned (no DID): the pion gateway INVITEs
+         'gwflow' with an X-Tring-Flow-Id header. We copy it to tring_flow_id
+         and hand to the IVR socket, where the executor runs that flow via
+         resolveFlowByID — exactly like a guest web call, just sourced from the
+         gateway instead of a guest_* registration. -->
+    <extension name="tring_gateway_flow">
+      <condition field="destination_number" expression="^gwflow$">
+        <action application="set" data="tring_flow_id=${sip_h_X-Tring-Flow-Id}"/>
+        <!-- Trusted caller id from the gateway call token (when present) — the
+             IVR executor records it on the CDR (calls.client_ref). -->
+        <action application="set" data="tring_client_ref=${sip_h_X-Tring-Client-Ref}"/>
+        <action application="socket" data="127.0.0.1:8086 full"/>
+      </condition>
+    </extension>
+
+    <extension name="tring_gateway_echo">
+      <condition field="destination_number" expression="^9999$">
+        <action application="answer"/>
+        <!-- Echo target for the gateway bridge POC: the browser hears itself
+             through browser→gateway→FreeSWITCH→gateway→browser. M3 points the
+             gateway at a real IVR DID instead. -->
+        <action application="echo"/>
+      </condition>
+    </extension>
+
     <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
          listener BEFORE answering, so the executor decides whether to
          answer/playback/bridge/etc. based on the flow attached to this
@@ -25,21 +53,10 @@
                   the socket so the executor can read Caller-* fields.
          No `continue="true"` — if the orchestrator hangs up cleanly
          the call ends here; no fall-through into demo extensions. -->
-    <!-- Tring guest web-calling — toll-fraud guard + IVR pin.
-         A guest (anonymous website visitor) registers with an ephemeral
-         `guest_*` SIP identity whose directory entry sets user_class=guest
-         and tring_flow_id (see internal/api/handlers_fs.go). This branch
-         matches on that class and routes the call straight to the IVR
-         socket REGARDLESS of what was dialed — so a guest credential can
-         only ever reach its pinned flow and can NEVER fall through to a
-         trunk bridge. Must come before tring_ivr (and any bridge logic).
-         The executor reads tring_flow_id to pick the flow. -->
-    <extension name="tring_guest_ivr">
-      <condition field="${user_class}" expression="^guest$">
-        <action application="socket" data="127.0.0.1:8086 full"/>
-        <!-- no continue: a guest call begins and ends in the IVR -->
-      </condition>
-    </extension>
+    <!-- (Removed in the M5 cutover: the tring_guest_ivr branch keyed on a
+         guest_* SIP registration. Visitors now reach the gateway directly and
+         arrive via tring_gateway_flow (gwflow) with the flow pinned by token —
+         no guest SIP identity exists anymore.) -->
 
     <extension name="tring_ivr">
       <condition field="destination_number" expression="^\d+$">

@@ -4,15 +4,22 @@
 // Drop one tag on any public page; no JS required:
 //
 //   <script src=".../sdk/voice.js"
-//           data-api-base="https://api.tring.io"
-//           data-public-key="pk_live_…"
-//           data-flow-id="<uuid>"        // optional; else tenant default
-//           data-button-label="Call us"  // optional
+//           data-gateway-url="https://gw.tring.io"
+//           data-flow-id="<uuid>"         // the IVR flow to land in
+//           data-button-label="Call us"   // optional
+//   ></script>
+//
+// For a LOGGED-IN caller whose identity you want on the call log, point the
+// widget at your own backend, which returns the gateway connection details
+// (gateway_url + flow_id, optional token/ICE) for the verified caller:
+//
+//   <script src=".../sdk/voice.js"
+//           data-credentials-url="/api/tring/guest-credentials"
 //   ></script>
 //
 // Renders a floating "Call support" launcher + full-screen call UI. To use
 // your own button instead, add data-render-button="false" and put
-// `<button data-tring-guest-call>` anywhere on the page.
+// `<button data-tring-call>` anywhere on the page.
 
 import { bootstrapGuest } from "./guest-widget";
 import { TringGuest } from "./guest";
@@ -20,7 +27,9 @@ import { TringGuest } from "./guest";
 function findOwnScript(): HTMLScriptElement | null {
   const cs = document.currentScript as HTMLScriptElement | null;
   if (cs && cs.tagName === "SCRIPT") return cs;
-  const candidates = document.querySelectorAll("script[data-public-key]");
+  const candidates = document.querySelectorAll(
+    "script[data-gateway-url], script[data-credentials-url]",
+  );
   return (candidates[candidates.length - 1] as HTMLScriptElement) ?? null;
 }
 
@@ -28,20 +37,22 @@ function start() {
   const s = findOwnScript();
   if (!s) {
     console.error(
-      "[tring-guest] could not find own <script> tag (needs data-public-key)",
+      "[tring-guest] could not find own <script> tag (needs data-gateway-url or data-credentials-url)",
     );
     return;
   }
-  const apiBase =
-    s.getAttribute("data-api-base") || s.getAttribute("data-api") || "";
-  const publicKey = s.getAttribute("data-public-key") || "";
-  if (!apiBase || !publicKey) {
-    console.error("[tring-guest] data-api-base and data-public-key are required");
+  const credentialsUrl = s.getAttribute("data-credentials-url") || "";
+  const gatewayUrl = s.getAttribute("data-gateway-url") || "";
+  // Gateway URL (anonymous path) or a backend credentials URL (trusted path).
+  if (!gatewayUrl && !credentialsUrl) {
+    console.error(
+      "[tring-guest] provide data-gateway-url (+ data-flow-id) or data-credentials-url",
+    );
     return;
   }
   bootstrapGuest({
-    apiBase,
-    publicKey,
+    credentialsUrl: credentialsUrl || undefined,
+    gatewayUrl: gatewayUrl || undefined,
     flowId: s.getAttribute("data-flow-id") || undefined,
     buttonLabel: s.getAttribute("data-button-label") || undefined,
     title: s.getAttribute("data-title") || undefined,

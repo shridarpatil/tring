@@ -1,12 +1,46 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api } from "../api/client";
-import type { Call } from "../api/types";
+import type { Call, IvrStep } from "../api/types";
 
 const calls = ref<Call[]>([]);
 const loading = ref(true);
 const error = ref("");
 const statusFilter = ref("");
+
+// Per-call expand state for the IVR-path detail row.
+const expanded = ref<Set<string>>(new Set());
+function toggle(id: string) {
+  const s = new Set(expanded.value);
+  s.has(id) ? s.delete(id) : s.add(id);
+  expanded.value = s;
+}
+function hasPath(c: Call): boolean {
+  return Array.isArray(c.ivr_path) && c.ivr_path.length > 0;
+}
+
+// stepText turns one recorded step into a human-readable line, e.g.
+// "Menu — pressed 1", "Transfer → alice (no answer)".
+function stepText(s: IvrStep): string {
+  switch (s.node_type) {
+    case "menu":
+      if (s.outcome.startsWith("digit:")) return `Menu — pressed ${s.outcome.slice(6)}`;
+      if (s.outcome === "timeout") return "Menu — no input (timeout)";
+      if (s.outcome === "max_retries")
+        return `Menu — invalid input${s.dtmf_input ? ` (${s.dtmf_input})` : ""}`;
+      return "Menu";
+    case "transfer":
+      return `Transfer → ${s.detail || "agent"} (${s.outcome === "completed" ? "answered" : "no answer"})`;
+    case "greeting":
+      return s.action === "speak" ? `Greeting — “${s.detail}”` : `Greeting — ${s.detail || "audio"}`;
+    case "hangup":
+      return "Hangup";
+    case "start":
+      return "Start";
+    default:
+      return s.outcome ? `${s.node_type} — ${s.outcome}` : s.node_type;
+  }
+}
 
 const showConnect = ref(false);
 const placing = ref(false);
@@ -97,28 +131,49 @@ onMounted(load);
           <tr>
             <th class="px-5 py-2 font-medium">From</th>
             <th class="px-5 py-2 font-medium">To</th>
+            <th class="px-5 py-2 font-medium">Agent</th>
             <th class="px-5 py-2 font-medium">Dir</th>
             <th class="px-5 py-2 font-medium">Status</th>
             <th class="px-5 py-2 font-medium">Started</th>
             <th class="px-5 py-2 font-medium">Duration</th>
             <th class="px-5 py-2 font-medium">Recording</th>
+            <th class="px-5 py-2 font-medium">IVR path</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="c in calls" :key="c.id" class="border-t">
-            <td class="px-5 py-2 font-mono">{{ c.from_number }}</td>
-            <td class="px-5 py-2 font-mono">{{ c.to_number }}</td>
-            <td class="px-5 py-2">{{ c.direction }}</td>
-            <td class="px-5 py-2">{{ c.status }}</td>
-            <td class="px-5 py-2 text-gray-500">{{ fmt(c.started_at) }}</td>
-            <td class="px-5 py-2">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
-            <td class="px-5 py-2">
-              <a v-if="c.recording_url" :href="c.recording_url" target="_blank" class="text-gray-600 hover:text-gray-900 underline">play</a>
-              <span v-else class="text-gray-300">—</span>
-            </td>
-          </tr>
+          <template v-for="c in calls" :key="c.id">
+            <tr class="border-t" :class="hasPath(c) ? 'cursor-pointer hover:bg-gray-50' : ''" @click="hasPath(c) && toggle(c.id)">
+              <td class="px-5 py-2 font-mono"><div class="max-w-[220px] truncate" :title="c.client_ref || c.from_number">{{ c.client_ref || c.from_number }}</div></td>
+              <td class="px-5 py-2 font-mono"><div class="max-w-[220px] truncate" :title="c.to_number">{{ c.to_number }}</div></td>
+              <td class="px-5 py-2">{{ c.agent_name || "—" }}</td>
+              <td class="px-5 py-2">{{ c.direction }}</td>
+              <td class="px-5 py-2">{{ c.status }}</td>
+              <td class="px-5 py-2 text-gray-500">{{ fmt(c.started_at) }}</td>
+              <td class="px-5 py-2">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
+              <td class="px-5 py-2">
+                <a v-if="c.recording_url" :href="c.recording_url" target="_blank" class="text-gray-600 hover:text-gray-900 underline" @click.stop>play</a>
+                <span v-else class="text-gray-300">—</span>
+              </td>
+              <td class="px-5 py-2">
+                <button v-if="hasPath(c)" class="text-gray-600 hover:text-gray-900" @click.stop="toggle(c.id)">
+                  {{ expanded.has(c.id) ? "▾ hide" : `▸ view (${c.ivr_path!.length})` }}
+                </button>
+                <span v-else class="text-gray-300">—</span>
+              </td>
+            </tr>
+            <tr v-if="hasPath(c) && expanded.has(c.id)" class="bg-gray-50 border-t">
+              <td colspan="9" class="px-8 py-3">
+                <ol class="space-y-1">
+                  <li v-for="(step, i) in c.ivr_path" :key="i" class="flex items-center gap-3 text-sm">
+                    <span class="text-gray-400 tabular-nums w-5 text-right">{{ i + 1 }}.</span>
+                    <span class="text-gray-800">{{ stepText(step) }}</span>
+                  </li>
+                </ol>
+              </td>
+            </tr>
+          </template>
           <tr v-if="!loading && calls.length === 0">
-            <td colspan="7" class="px-5 py-6 text-center text-gray-400">No calls</td>
+            <td colspan="9" class="px-5 py-6 text-center text-gray-400">No calls</td>
           </tr>
         </tbody>
       </table>

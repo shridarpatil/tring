@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os/signal"
 	"strings"
@@ -24,28 +23,6 @@ import (
 // migrateRun is a tiny shim so the call site reads `migrateRun(...)`
 // rather than the long aliased package name everywhere.
 var migrateRun = tringmigrate.Run
-
-// wsURL returns the WebSocket URL the SDK uses for sip.js's transport
-// against FreeSWITCH's plain-WS binding (port 5066). If configured (via
-// TRING_WS_URL, e.g. wss://voice.tring.io:7443 for production) it's used
-// as-is; otherwise we auto-detect the host's outbound IP, since FreeSWITCH
-// binds WS to local_ip_v4, not 127.0.0.1.
-func wsURL(configured string) string {
-	if configured != "" {
-		return configured
-	}
-	// "What's my outbound IP" canonical trick: dialing a UDP socket
-	// resolves the local IP that would be used for that route. No
-	// packet is actually sent. Falls back to 127.0.0.1 if the host
-	// has no outbound route (laptop offline, CI sandbox, etc.).
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return "ws://127.0.0.1:5066"
-	}
-	defer conn.Close()
-	ip := conn.LocalAddr().(*net.UDPAddr).IP.String()
-	return fmt.Sprintf("ws://%s:5066", ip)
-}
 
 func main() {
 	// Config: defaults + TRING_* env (koanf). Flags below take precedence
@@ -102,17 +79,19 @@ func main() {
 	srv := &http.Server{
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
-			DB:           database,
-			JWTSecret:    k.String("jwt_secret"),
-			FSBasicAuth:  k.String("fs_basic_auth"),
-			WSURL:        wsURL(k.String("ws_url")),
-			ESLAddr:      k.String("esl_addr"),
-			ESLPassword:  k.String("esl_password"),
-			STUNURL:      k.String("stun_url"),
-			TURNURL:      k.String("turn_url"),
-			TURNUsername: k.String("turn_username"),
-			TURNPassword: k.String("turn_password"),
-			Cache:        flowCache,
+			DB:               database,
+			JWTSecret:        k.String("jwt_secret"),
+			FSBasicAuth:      k.String("fs_basic_auth"),
+			ESLAddr:          k.String("esl_addr"),
+			ESLPassword:      k.String("esl_password"),
+			STUNURL:          k.String("stun_url"),
+			TURNURL:          k.String("turn_url"),
+			TURNUsername:     k.String("turn_username"),
+			TURNPassword:     k.String("turn_password"),
+			AgentTransport:   k.String("agent_transport"),
+			AgentGateway:     k.String("agent_gateway"),
+			GatewayPublicURL: k.String("gateway_public_url"),
+			Cache:            flowCache,
 		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}

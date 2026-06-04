@@ -75,23 +75,36 @@
       <p>This page has zero JS of its own. The only voice-related bit is a single
       <code>&lt;script src="/sdk/agent.js"&gt;</code> tag injected after you paste a JWT below.
       In a real CRM, your backend mints and templates the JWT before the page is rendered.</p>
-      <p>Mint a JWT against the running Tring API:</p>
-      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;"># 1. log in to the console with the bootstrap admin user
-CONSOLE=$(curl -sS -X POST http://localhost:8085/v1/console/login \
+      <p>Mint a JWT against the running Tring API. <code>AUTH</code> can be a
+      console login (below) <em>or</em> a tenant API key — issue a
+      <code>tk_live_…</code> key under <a href="http://localhost:8085/admin/api-keys">/admin/ → API keys</a>
+      and skip step&nbsp;1 (<code>AUTH=tk_live_…</code>). Both authenticate the
+      same <code>/v1</code> routes.</p>
+      <pre style="background:#f3f4f6;padding:0.6rem;border-radius:6px;font-size:12px;margin:0.5rem 0;overflow-x:auto;"># 1. get an AUTH token — EITHER a tenant API key (recommended) …
+AUTH=tk_live_…    # from /admin/ → API keys
+#    … OR a console login with the bootstrap admin user:
+AUTH=$(curl -sS -X POST http://localhost:8085/v1/console/login \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@tring.local","password":"tring_dev_change_me"}' \
   | jq -r .token)
 
 # 2. pick an agent (or create one first via /admin/ → Agents)
-AGENT=$(curl -sS -H "Authorization: Bearer $CONSOLE" \
+AGENT=$(curl -sS -H "Authorization: Bearer $AUTH" \
   http://localhost:8085/v1/agents | jq -r '.[0].id')
 
 # 3. mint a short-lived SDK token for that agent — paste it below
-curl -sS -H "Authorization: Bearer $CONSOLE" \
+curl -sS -H "Authorization: Bearer $AUTH" \
   http://localhost:8085/v1/agents/$AGENT/token | jq -r .token</pre>
       <div class="token-form">
         <input id="tokenInput" type="text" placeholder="Paste JWT here…" autocomplete="off" />
         <button id="loadBtn">Load agent.js</button>
+      </div>
+      <p style="margin:.5rem 0 0">The agent connects to the media gateway over raw
+      WebRTC — no SIP in the browser, FreeSWITCH stays private. The gateway URL is
+      required; point it at your running gateway.</p>
+      <div class="token-form">
+        <input id="gwInput" type="text" value="http://localhost:8087"
+          placeholder="gateway URL (e.g. http://localhost:8087)" autocomplete="off" />
       </div>
       <div class="toolbar" id="status" style="margin-top:0.75rem;">
         <span class="dot"></span> <span class="text">not loaded</span>
@@ -109,29 +122,29 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
             <td class="name">Alice Smith</td>
             <td class="phone">+91 98765-43210</td>
             <td class="phone">2 days ago</td>
-            <td><button class="call-btn" data-tring-call data-to="+919876543210">📞 Call</button></td>
+            <td><button class="call-btn" data-tring-agent-call data-to="+919876543210">📞 Call</button></td>
           </tr>
           <tr>
             <td class="name">Robert</td>
             <td class="phone">+91 88880-01122</td>
             <td class="phone">a week ago</td>
-            <td><button class="call-btn" data-tring-call data-to="+918888001122">📞 Call</button></td>
+            <td><button class="call-btn" data-tring-agent-call data-to="+918888001122">📞 Call</button></td>
           </tr>
           <tr>
             <td class="name">Bob</td>
             <td class="phone">+91 77001-23456</td>
             <td class="phone">3 weeks ago</td>
-            <td><button class="call-btn" data-tring-call data-to="+917700123456">📞 Call</button></td>
+            <td><button class="call-btn" data-tring-agent-call data-to="+917700123456">📞 Call</button></td>
           </tr>
           <tr>
             <td class="name">Echo test (FS internal)</td>
             <td class="phone">9196</td>
             <td class="phone">—</td>
-            <td><button class="call-btn" data-tring-call data-to="9196">📞 Call</button></td>
+            <td><button class="call-btn" data-tring-agent-call data-to="9196">📞 Call</button></td>
           </tr>
           <tr class="dial-row">
             <td colspan="3"><input id="freeform" type="text" placeholder="+91XXXXXXXXXX or extension" /></td>
-            <td><button class="call-btn" data-tring-call data-to-target="#freeform">📞 Call</button></td>
+            <td><button class="call-btn" data-tring-agent-call data-to-target="#freeform">📞 Call</button></td>
           </tr>
         </tbody>
       </table>
@@ -140,8 +153,8 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
     <section class="panel">
       <h2>What's happening under the hood</h2>
       <ul>
-        <li>Each <em>Call</em> button has <code>data-tring-call data-to="…"</code> — that's the whole integration on the HTML side.</li>
-        <li><code>agent.js</code> fetches your agent's SIP credentials with the JWT, registers <code>sip.js</code> over WSS against FreeSWITCH on <code>:7443</code>, and listens for incoming INVITEs.</li>
+        <li>Each <em>Call</em> button has <code>data-tring-agent-call data-to="…"</code> — that's the whole integration on the HTML side.</li>
+        <li><strong>Media gateway (ADR-001):</strong> <code>agent.js</code> opens one WebSocket to the media gateway (<code>/agent/ws</code>) with the JWT for presence + incoming-call signaling, then peers over raw WebRTC. No SIP in the browser; FreeSWITCH stays private. Requires the gateway running and <code>agent_transport=gateway</code> on the server.</li>
         <li>Clicking Call posts to <code>/v1/sdk/calls</code>. Tring tells FreeSWITCH to ring the agent's browser; on answer, the call bridges to the destination via the configured trunk (loopback in dev, Exotel/Airtel/Jio/Tata in production).</li>
         <li>The floating panel in the bottom right shows ringing → connected → ended status with a single Hang up button. Pure CSS, no framework.</li>
       </ul>
@@ -164,6 +177,10 @@ curl -sS -H "Authorization: Bearer $CONSOLE" \
       s.src = 'http://localhost:8085/sdk/agent.js';
       s.setAttribute('data-api-base', 'http://localhost:8085');
       s.setAttribute('data-token', token);
+      // Raw-WebRTC media gateway transport (required — the SDK has no SIP path).
+      const gw = $('gwInput').value.trim();
+      if (!gw) { setStatus('error', 'gateway URL is required'); return; }
+      s.setAttribute('data-gateway-url', gw);
       s.onload = () => setStatus('ready', 'agent.js loaded — click any Call button');
       s.onerror = () => setStatus('error', 'agent.js failed to load');
       document.body.appendChild(s);
