@@ -23,8 +23,12 @@ help:
 	@echo "  make serve-demo    - serve repo over :$(DEMO_PORT) and open the demo CRM"
 	@echo "  make demo-url      - print the demo URL"
 
-up:
+up: .env
 	docker compose up -d
+
+# Seed .env from the template on first run so `make up` works out of the box.
+.env:
+	@test -f .env || (cp .env.example .env && echo "created .env from .env.example — review it")
 
 down:
 	docker compose down
