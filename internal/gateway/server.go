@@ -1,11 +1,35 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
 )
+
+// jtiStore consumes one-time token ids. *cache.Cache (Redis) satisfies it via
+// SetNX; tests fake it. Returns true on the FIRST use of a key, false on a
+// replay. Fail-open: a nil/erroring store returns true (a cache outage must
+// never block legitimate calls — the concurrency cap is the other guard).
+type jtiStore interface {
+	SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) bool
+}
+
+// consumeToken enforces single-use of a gateway call token: true the FIRST time
+// a jti is seen, false on any replay within the token's remaining TTL. An empty
+// jti, a nil store, or an already-expired token are allowed (the JWT exp check
+// and the concurrency cap are the other guards).
+func (g *Gateway) consumeToken(ctx context.Context, jti string, exp time.Time) bool {
+	if jti == "" || g.tokens == nil {
+		return true
+	}
+	ttl := time.Until(exp)
+	if ttl <= 0 {
+		return true
+	}
+	return g.tokens.SetNX(ctx, "gwtoken:"+jti, []byte("1"), ttl)
+}
 
 type offerRequest struct {
 	SDP string `json:"sdp"`
@@ -70,15 +94,14 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Single-use: consume the token's jti so a captured token can't be
-		// replayed within its TTL to spin up more bridges. The marker lives only
-		// until the token would expire anyway (after which replay fails on exp).
-		// Best-effort via Redis (fail-open if it's off — the cap is the backstop).
-		if claims.ID != "" && claims.ExpiresAt != nil {
-			if ttl := time.Until(claims.ExpiresAt.Time); ttl > 0 &&
-				!g.cfg.Cache.SetNX(r.Context(), "gwtoken:"+claims.ID, []byte("1"), ttl) {
-				http.Error(w, `{"error":"call token already used"}`, http.StatusUnauthorized)
-				return
-			}
+		// replayed within its TTL to spin up more bridges. See consumeToken.
+		var exp time.Time
+		if claims.ExpiresAt != nil {
+			exp = claims.ExpiresAt.Time
+		}
+		if !g.consumeToken(r.Context(), claims.ID, exp) {
+			http.Error(w, `{"error":"call token already used"}`, http.StatusUnauthorized)
+			return
 		}
 		flowID, clientRef = claims.FlowID, claims.ClientRef
 	} else if g.cfg.RequireAuth {

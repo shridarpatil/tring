@@ -76,7 +76,7 @@ Your endpoint mints via `POST /v1/guest-credentials` (tenant API key) and return
 
 The flow is pinned **inside the token** (so it's never in the page), and the call can never reach a trunk. The visitor taps the floating "Call" button (or your own `<button data-tring-call>` with `data-render-button="false"`). See `examples/demo-portal/` — one runnable app with `/support` (guest), `/portal` (logged-in), and `/crm` (agent).
 
-> **Default is token-gated** (`gateway_require_auth=true`) and the public mint (`/v1/sdk/guest-credentials`) is **off by default** — so a token-less offer is rejected before any resource is allocated. To allow the raw, no-backend anonymous path instead (`data-gateway-url` + `data-flow-id`, token-less), set `gateway_require_auth=false` **and** re-enable the public mint per-tenant (`guest_require_backend_mint=false`). That path is still flow-pinned/can't-reach-a-trunk, but the offer endpoint is then unauthenticated.
+> **Default is token-gated** (`gateway_require_auth=true`): a token-less offer is rejected before any port/FS is allocated, so every visitor call needs a backend-minted token (`POST /v1/guest-credentials`). There is no public mint. To allow a raw, no-backend anonymous path instead (`data-gateway-url` + `data-flow-id`, token-less), set `gateway_require_auth=false` — still flow-pinned/can't-reach-a-trunk, but the offer endpoint is then unauthenticated.
 
 ## Programmatic use (bare SDK)
 
@@ -181,12 +181,15 @@ verified by the gateway with no DB lookup (everything rides in the claims):
 | Token | Audience | Claims | Minted by | Presented to |
 |---|---|---|---|---|
 | **Agent JWT** | `tring.sdk` | `tenant`, `sip_user`, `sip_domain` | `GET /v1/agents/{id}/token` (tenant API key) | `/agent/ws` (required) |
-| **Gateway call token** | `tring.gateway` | `tenant`, `flow_id`, optional `client_ref` | `POST /v1/guest-credentials` (API key, trusted) or `POST /v1/sdk/guest-credentials` (public) | `/webrtc/offer` (optional¹) |
+| **Gateway call token** | `tring.gateway` | `tenant`, `flow_id`, optional `client_ref` | `POST /v1/guest-credentials` (tenant API key, backend) | `/webrtc/offer` (required¹) — single-use (jti) |
 
-Issuer is always `tring`, alg `HS256`. ¹ The visitor token is optional unless
-the gateway runs with `gateway_require_auth=true`; anonymous visitors instead
-pass `flow_id` in the offer body. A trusted-mint token's `flow_id`/`client_ref`
-**override** anything in the body (the browser can't spoof identity).
+Issuer is always `tring`, alg `HS256`. ¹ Required by default
+(`gateway_require_auth=true`). There is **no public mint** — every visitor token
+is minted server-side by the integrator's backend (which gates anonymous guests
+with a CAPTCHA). The token's `flow_id`/`client_ref` are server-set (the browser
+can't spoof identity), and it's consumed on first use so it can't be replayed.
+(Set `gateway_require_auth=false` to allow a raw, token-less anonymous path —
+still flow-pinned/can't reach a trunk, but the offer endpoint is then open.)
 
 ### Visitor call flow (simplest to port)
 

@@ -4,10 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,7 +22,7 @@ const gatewayCallTokenTTL = 2 * time.Minute
 // proved tenant ownership with the API key — unlike the public browser mint,
 // which never accepts it (a browser-supplied identity would be spoofable).
 type authGuestCredentialsRequest struct {
-	FlowID    string `json:"flow_id"`    // optional; falls back to tenant.support_flow_id
+	FlowID    string `json:"flow_id"`    // optional; falls back to the tenant default_flow_id
 	ClientRef string `json:"client_ref"` // the verified caller identity, e.g. a CRM client id
 }
 
@@ -60,20 +57,14 @@ func (s *Server) handleAuthGuestCredentials(w http.ResponseWriter, r *http.Reque
 	// Body is optional (flow_id + client_ref); ignore decode errors on empty.
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	// Fallback flow comes from the tenant's configured support flow. (The
-	// require-backend flag doesn't gate this path — it IS the backend mint.)
-	var (
-		publicKey      string
-		supportFlow    *uuid.UUID
-		origins        []string
-		requireBackend bool
-	)
-	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig, t.ID).
-		Scan(&publicKey, &supportFlow, &origins, &requireBackend); err != nil {
+	// Fallback flow comes from the tenant's configured default flow (used only
+	// when the caller doesn't pass flow_id).
+	var defaultFlow *uuid.UUID
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig, t.ID).Scan(&defaultFlow); err != nil {
 		writeError(w, http.StatusInternalServerError, "tenant config lookup failed")
 		return
 	}
-	s.mintGatewayCall(w, r, t.ID, supportFlow, req.FlowID, req.ClientRef)
+	s.mintGatewayCall(w, r, t.ID, defaultFlow, req.FlowID, req.ClientRef)
 }
 
 // mintGatewayCall is the shared core: resolve the flow and issue a short-lived
@@ -81,8 +72,8 @@ func (s *Server) handleAuthGuestCredentials(w http.ResponseWriter, r *http.Reque
 // the public and the API-key mints call it; only the latter passes a non-empty
 // clientRef (the trusted, attributable caller identity). No SIP session — the
 // gateway dials FreeSWITCH itself (ADR-001).
-func (s *Server) mintGatewayCall(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, supportFlow *uuid.UUID, requestedFlow, clientRef string) {
-	flowID, err := s.resolveGuestFlow(r.Context(), tenantID, requestedFlow, supportFlow)
+func (s *Server) mintGatewayCall(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, defaultFlow *uuid.UUID, requestedFlow, clientRef string) {
+	flowID, err := s.resolveGuestFlow(r.Context(), tenantID, requestedFlow, defaultFlow)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -104,7 +95,7 @@ func (s *Server) mintGatewayCall(w http.ResponseWriter, r *http.Request, tenantI
 
 // resolveGuestFlow picks the flow a guest call lands in: the caller's
 // requested flow_id if supplied (validated to belong to the tenant and be
-// active), otherwise the tenant's configured support_flow_id. Errors if
+// active), otherwise the tenant's configured default_flow_id. Errors if
 // neither yields a usable flow — a guest with no flow has nothing to call.
 func (s *Server) resolveGuestFlow(ctx context.Context, tenantID uuid.UUID, requested string, fallback *uuid.UUID) (uuid.UUID, error) {
 	if requested != "" {
@@ -120,7 +111,7 @@ func (s *Server) resolveGuestFlow(ctx context.Context, tenantID uuid.UUID, reque
 	if fallback != nil {
 		return *fallback, nil
 	}
-	return uuid.Nil, errors.New("guest calling is not enabled for this tenant — an operator must set a support flow in Settings")
+	return uuid.Nil, errors.New("no flow for this guest call — pass flow_id, or set a default flow in Settings")
 }
 
 // assertFlowUsable confirms a flow exists, belongs to the tenant, and is
@@ -141,24 +132,19 @@ func (s *Server) assertFlowUsable(ctx context.Context, flowID, tenantID uuid.UUI
 // ---- Guest widget config (tenant-scoped) --------------------------------
 
 type guestConfigResponse struct {
-	PublicKey      string     `json:"public_key"`
-	SupportFlowID  *uuid.UUID `json:"support_flow_id"`
-	AllowedOrigins []string   `json:"allowed_origins"`
-	// RequireBackendMint: when true the public mint is disabled and guest
-	// credentials must be minted server-side via the API-key endpoint.
-	RequireBackendMint bool `json:"guest_require_backend_mint"`
+	// DefaultFlowID: the tenant's default IVR flow for guest calls — the
+	// fallback used only when a mint doesn't pass an explicit flow_id.
+	DefaultFlowID *uuid.UUID `json:"default_flow_id"`
 }
 
-// handleGetGuestConfig returns the tenant's public widget key, the flow
-// guest web-calls are routed into, and the Origin allowlist. The console
-// reads this to render the embed snippet, support-flow picker, and the
-// allowed-domains field.
+// handleGetGuestConfig returns the tenant's default guest flow. The console
+// reads it to render the default-flow picker. (The old public_key /
+// allowed_origins / guest_require_backend_mint fields went away with the public
+// mint — all visitor tokens are now minted server-side via /v1/guest-credentials.)
 func (s *Server) handleGetGuestConfig(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var resp guestConfigResponse
-	err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig,
-		t.ID).Scan(&resp.PublicKey, &resp.SupportFlowID, &resp.AllowedOrigins, &resp.RequireBackendMint)
-	if err != nil {
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetGuestConfig, t.ID).Scan(&resp.DefaultFlowID); err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
@@ -166,17 +152,11 @@ func (s *Server) handleGetGuestConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchGuestConfigRequest struct {
-	// SupportFlowID: a flow UUID to pin guest calls to, or "" to clear it.
-	SupportFlowID *string `json:"support_flow_id"`
-	// AllowedOrigins: the domains the widget may be embedded on. Required
-	// (non-empty) before guest minting works — fail-closed.
-	AllowedOrigins *[]string `json:"allowed_origins"`
-	// RequireBackendMint: true disables the public mint (backend API-key mint
-	// only). nil = leave unchanged.
-	RequireBackendMint *bool `json:"guest_require_backend_mint"`
+	// DefaultFlowID: a flow UUID to use as the tenant default, or "" to clear it.
+	DefaultFlowID *string `json:"default_flow_id"`
 }
 
-// handlePatchGuestConfig sets the support flow and/or the Origin allowlist.
+// handlePatchGuestConfig sets the tenant's default guest flow.
 func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var req patchGuestConfigRequest
@@ -184,69 +164,28 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.SupportFlowID == nil && req.AllowedOrigins == nil && req.RequireBackendMint == nil {
-		writeError(w, http.StatusBadRequest, "support_flow_id, allowed_origins, or guest_require_backend_mint required")
+	if req.DefaultFlowID == nil {
+		writeError(w, http.StatusBadRequest, "default_flow_id required")
 		return
 	}
 
-	if req.SupportFlowID != nil {
-		var flowID *uuid.UUID
-		if *req.SupportFlowID != "" {
-			fid, err := uuid.Parse(*req.SupportFlowID)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid support_flow_id")
-				return
-			}
-			if err := s.assertFlowUsable(r.Context(), fid, t.ID); err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			flowID = &fid
-		}
-		if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateSupportFlow, flowID, t.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "update failed")
+	var flowID *uuid.UUID
+	if *req.DefaultFlowID != "" {
+		fid, err := uuid.Parse(*req.DefaultFlowID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid default_flow_id")
 			return
 		}
-	}
-
-	if req.AllowedOrigins != nil {
-		normalized := make([]string, 0, len(*req.AllowedOrigins))
-		for _, o := range *req.AllowedOrigins {
-			n, err := normalizeOrigin(o)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			normalized = append(normalized, n)
-		}
-		if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateAllowedOrigins, normalized, t.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "update failed")
+		if err := s.assertFlowUsable(r.Context(), fid, t.ID); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		flowID = &fid
 	}
-
-	if req.RequireBackendMint != nil {
-		if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateGuestRequireBackendMint, *req.RequireBackendMint, t.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "update failed")
-			return
-		}
+	if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateDefaultFlow, flowID, t.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed")
+		return
 	}
-
 	s.handleGetGuestConfig(w, r)
 }
 
-// normalizeOrigin validates and canonicalizes an allowlist entry to the
-// scheme://host[:port] form browsers send in the Origin header (no path,
-// no trailing slash). Returns an error for anything that isn't a plain
-// http(s) origin.
-func normalizeOrigin(s string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(s))
-	if err != nil {
-		return "", fmt.Errorf("invalid origin %q", s)
-	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
-		(u.Path != "" && u.Path != "/") {
-		return "", fmt.Errorf("origin %q must be scheme://host[:port] with no path", s)
-	}
-	return u.Scheme + "://" + u.Host, nil
-}

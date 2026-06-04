@@ -39,9 +39,10 @@ See `docs/WEB_CALL_FLOW.md` (trusted-identity sequence) and the SDK README's
   `TRING_AGENT_ID`. The agent's browser session at `/crm` must stay open to
   receive transferred calls.
 
-> Optional: in the console (Settings → guest) enable **"Require backend-minted
-> credentials"** to disable the public mint — then the trusted `/portal` flow is
-> the only way to place a visitor web call for your tenant.
+> All visitor tokens are minted **server-side** via `POST /v1/guest-credentials`
+> (tenant API key) — there is no public mint. `/support` mints a guest token (no
+> `client_ref`); `/portal` mints with the verified `client_ref`. In production,
+> gate the guest mint (`/support-credentials` here) with a CAPTCHA.
 
 ## Run
 

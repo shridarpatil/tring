@@ -170,7 +170,7 @@ Source of truth: `internal/migrate/migrations/*.sql` (applied by `golang-migrate
 
 | Table | Purpose |
 |---|---|
-| `tenants` | The unit of isolation. `sip_domain`, `outbound_strategy`, `failover_causes`, `public_key` (widget), `support_flow_id`, `allowed_origins`, `guest_require_backend_mint`. |
+| `tenants` | The unit of isolation. `sip_domain`, `outbound_strategy`, `failover_causes`, `default_flow_id` (fallback IVR flow for guest calls). |
 | `users` | Console operators (email + bcrypt). |
 | `api_keys` | Tenant API keys (`tk_live_…`): multiple named keys, SHA-256 hash, prefix, `last_used_at`, soft `revoked_at`. |
 | `agents` | SIP identities owned by a tenant (`sip_username`, `sip_password`). |
@@ -255,8 +255,8 @@ Key properties:
 - **Trusted `client_ref`:** the API-key mint (`POST /v1/guest-credentials`,
   `internal/api/handlers_guest.go`) embeds a server-verified `client_ref` in the
   token; the gateway propagates it (`X-Tring-Client-Ref`) and the executor
-  records it on the CDR. The browser can never set it. The public mint refuses
-  `client_ref`. See §10.
+  records it on the CDR. The browser can never set it (it's minted server-side
+  from the API-key request). See §10.
 - **"To" on the CDR:** a web call has no dialed number, so the executor records
   the **flow name** (not the internal `gwflow` token) as `to_number`.
 - **Agent answering:** the IVR `Transfer` node rings only agents **currently
@@ -289,18 +289,18 @@ Adding a node type means updating **executor + simulator + the Vue node componen
 
 ## 10. Security model (visitor calling)
 
-The public mint (`/v1/sdk/guest-credentials`) and the gateway are defended in layers:
+The backend mint (`/v1/guest-credentials`) and the gateway are defended in layers:
 
 | Control | Stops |
 |---|---|
-| **Origin allowlist** (`tenants.allowed_origins`, fail-closed) | Embedding a stolen public key on another site (Origin is unspoofable in a browser) |
-| **Per-IP rate limit** (10/min, `internal/api/ratelimit.go`) | Scripted mint floods from one host |
+| **Backend-only mint** (`/v1/guest-credentials`, tenant API key; public mint removed) | Token-less / unauthenticated minting — every visitor token is issued server-side, gated by the integrator's CAPTCHA/rate-limit |
+| **`gateway_require_auth`** (default on) + **single-use tokens** (jti consumed once) | Token-less floods on `/webrtc/offer`, and replay of a captured token within its TTL |
 | **Flow-pinned token (no `client_ref` from a browser)** | Choosing another flow; spoofing a caller identity (only the API-key mint sets `client_ref`) |
 | **`gwflow` dialplan only sockets to the IVR** | **Toll fraud** — a web call can never reach a trunk bridge |
-| **Short-lived gateway call token (~2-min TTL)** | Token replay / arbitrary dialing |
-| **`gateway_require_auth`** (optional) | Anonymous visitors entirely (require a minted token on `/webrtc/offer`) |
+| **Short-lived (~2-min) + single-use gateway call token** (jti consumed once) | Arbitrary dialing; replay of a captured token within its TTL |
+| **`gateway_require_auth`** (default on) | Token-less offers on `/webrtc/offer` — every visitor call needs a backend-minted token |
 
-Net: a stolen key is blocked in a browser; even a scripted spoof can only make **rate-limited, money-safe nuisance calls into the tenant's own IVR**. Operators manage the allowlist + support flow + `guest_require_backend_mint` from **Settings → Guest web calling** (`GET/PATCH /v1/guest-config`).
+Net: there's no public mint — every visitor token is issued **server-side via `POST /v1/guest-credentials`** (tenant API key), so the integrator gates anonymous guests with a CAPTCHA/rate-limit before minting; a token is flow-pinned, single-use, and can only reach the tenant's own IVR (never a trunk). Operators set the tenant's **default flow** in **Settings → Guest web calling** (`GET/PATCH /v1/guest-config`). *(Backstop still TODO: a per-tenant/global concurrent-bridge cap — see `gateway/server.go`.)*
 
 **Production prerequisites** (not enforced by code): TLS-fronting the gateway signaling (HTTPS + WSS on 443), a TURN server (prefer short-lived TURN REST credentials), and bot mitigation in front of the mint. See `docs/EDGE_DEPLOYMENT.md`.
 
