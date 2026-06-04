@@ -687,17 +687,18 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 	// With the gateway transport, an agent leg always reaches the gateway (it's
 	// always up) and 480s if that agent isn't connected — so ringing offline
 	// agents just wastes a leg. When presence is available, ring only agents
-	// currently connected to the gateway. (Presence disabled / legacy SIP
-	// transport → ring all, as before; FS fails unregistered legs itself.)
+	// currently connected to the gateway AND not already on a call (Available);
+	// an on-call agent should not be sent another call. (Presence disabled /
+	// legacy SIP transport → ring all, as before; FS fails dead legs itself.)
 	pres := presence.New(e.Cache)
 	if e.AgentTransport == "gateway" && pres.Enabled() {
-		online := sips[:0]
+		avail := sips[:0]
 		for _, sip := range sips {
-			if pres.IsOnline(ctx, tenantID.String(), sip) {
-				online = append(online, sip)
+			if pres.Available(ctx, tenantID.String(), sip) {
+				avail = append(avail, sip)
 			}
 		}
-		sips = online
+		sips = avail
 	}
 
 	targets := make([]string, 0, len(sips))

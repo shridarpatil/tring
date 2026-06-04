@@ -80,7 +80,7 @@ This is the Exotel-style flow: your CRM hits this endpoint, the agent's phone ri
 
 `/tring/token` is **your** server-side endpoint that mints a fresh 5-min JWT for the logged-in agent using your tenant API key. The browser never holds the API key.
 
-See [`examples/sample-crm.html`](examples/sample-crm.html) for a runnable end-to-end demo, and [`sdk/js/README.md`](sdk/js/README.md) for the full SDK reference.
+See [`examples/demo-portal/`](examples/demo-portal/) for a runnable end-to-end demo (anonymous "call us", logged-in support, and the agent CRM in one app), and [`sdk/js/README.md`](sdk/js/README.md) for the full SDK reference.
 
 ## Provider swap (Exotel → Airtel → Jio → Tata)
 

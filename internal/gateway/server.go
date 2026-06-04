@@ -18,10 +18,10 @@ type answerResponse struct {
 }
 
 // Handler is the gateway's HTTP surface: WebRTC offer/answer signaling (and a
-// health check). Signaling is plain HTTPS — auth (agent JWT / API key / guest)
-// is layered in milestone 3; for now it's open for the echo POC. CORS is on so
-// a browser page on another origin (e.g. examples/gateway-echo.html, the SDK)
-// can post offers. No HTML is served from the gateway itself.
+// health check). Signaling is plain HTTPS; the visitor offer optionally carries
+// a gateway call token and the agent WS always validates the agent JWT. CORS is
+// on so the SDK on another origin can post offers. No HTML is served from the
+// gateway itself.
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
