@@ -67,22 +67,35 @@ This is the Exotel-style flow: your CRM hits this endpoint, the agent's phone ri
 
 ## Drop-in browser widget
 
-```html
-<!-- Anywhere in your CRM template -->
-<button data-tring-agent-call data-to="+919876543210">Call customer</button>
+The agent widget is a **WebSocket-only media client** — it rings/answers calls but
+**cannot place them** (no Tring API access). Drop one tag in your agent app:
 
+```html
 <!-- Load once, near </body> -->
 <script src="https://api.tring.io/sdk/agent.js"
-        data-api-base="https://api.tring.io"
-        data-gateway-url="https://gw.tring.io"
         data-token-url="/tring/token"></script>
 ```
 
-`/tring/token` is **your** server-side endpoint that mints a fresh 5-min JWT for the logged-in agent using your tenant API key. The browser never holds the API key.
+`/tring/token` is **your** server-side endpoint that mints a fresh 5-min agent JWT
+(`GET /v1/agents/{id}/token`) with your tenant API key and passes its response
+through — `{ token, gateway_url, ice_servers }`. The browser never holds the API key.
+
+To **place** an outbound call, your own button hits **your** backend, which
+originates via the Tring API — so the agent never sees the dialed number:
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+     -d '{"agent_id":"<id>","to":"+919876543210","agent_label":"Ticket #4821"}' \
+     https://api.tring.io/v1/calls
+```
+
+FreeSWITCH then rings the agent's leg (auto-answered, showing `agent_label`), and
+audio flows over WebRTC. Visitor "call us" calling uses `voice.js` the same way —
+a `data-credentials-url` that mints a token server-side.
 
 See [`examples/demo-portal/`](examples/demo-portal/) for a runnable end-to-end demo (anonymous "call us", logged-in support, and the agent CRM in one app), and [`sdk/js/README.md`](sdk/js/README.md) for the full SDK reference.
 
-## Provider swap (Exotel → Airtel → Jio → Tata)
+## Provider swap (Airtel → Jio → Tata)
 
 Four Indian trunks ship pre-baked. Switching is **one API call**, no code edits:
 
@@ -136,7 +149,7 @@ See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo g
 | **CDR settlement** | Orchestrator subscribes to FreeSWITCH events. `CHANNEL_ANSWER`, `CHANNEL_HANGUP_COMPLETE`, and `BACKGROUND_JOB` (for originates that fail before a channel exists) all flow back into `calls` rows. |
 | **Webhooks** | `call.ringing`, `call.answered`, `call.ended`. HMAC-SHA256 signed (Stripe pattern). 6 attempts with 1+2+4+8+16s backoff. Delivery log with `last_error`. |
 | **Browser SDK** | Tring class over raw WebRTC to the media gateway (ADR-001) — **no SIP in the browser**, FreeSWITCH stays private. DTMF, hangup, event emitter. ~22KB unminified (no runtime deps; sip.js removed). |
-| **Drop-in widgets** | `agent.js` — `<button data-tring-agent-call data-to="…">` auto-bound on DOM ready (floating call panel; `MutationObserver` rebinds dynamic rows). `voice.js` — visitor "call us" widget; floating launcher or your own `<button data-tring-call>`. |
+| **Drop-in widgets** | `agent.js` — WS-only media client; rings/answers in a floating panel (no call buttons — origination is backend via `POST /v1/calls`). `voice.js` — visitor "call us" widget (floating launcher or your own `<button data-tring-call>`), token minted via `data-credentials-url`. |
 | **Trunk providers** | Exotel, Airtel, Jio, Tata pre-baked. Loopback for dev. India E.164 normalization + validation. Config-only swap. |
 | **Multi-tenant** | Per-tenant SIP domain, API keys (SHA-256 hashed + 12-char display prefix), tenant scoping on every query, `mod_xml_curl` dynamic directory. |
 

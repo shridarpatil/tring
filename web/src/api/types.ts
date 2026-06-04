@@ -145,16 +145,11 @@ export interface Flow {
   updated_at: string;
 }
 
-// Guest web-calling config (GET/PATCH /v1/guest-config). public_key goes in
-// the embed snippet; allowed_origins is the domain allowlist the public mint
-// endpoint enforces; support_flow_id is the flow guests land in.
+// Guest web-calling config (GET/PATCH /v1/guest-config). default_flow_id is the
+// tenant's default IVR flow for guest calls — the fallback used only when a mint
+// doesn't pass an explicit flow_id (tokens are minted backend-side via the API key).
 export interface GuestConfig {
-  public_key: string;
-  support_flow_id: string | null;
-  allowed_origins: string[];
-  // When true the public (browser) mint is disabled; guest credentials must
-  // be minted server-side via the API-key endpoint.
-  guest_require_backend_mint: boolean;
+  default_flow_id: string | null;
 }
 
 // Tenant API key. `key` (plaintext) is present only in the create response,
