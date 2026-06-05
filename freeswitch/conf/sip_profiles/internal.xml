@@ -84,7 +84,12 @@
     <param name="log-auth-failures" value="false"/>
     <param name="forward-unsolicited-mwi-notify" value="false"/>
 
-    <param name="context" value="public"/>
+    <!-- Tring: the internal profile is PRIVATE (gateway ⇄ FS) and trusted via
+         the domains ACL, so route its calls straight to the 'default' context
+         where the gwflow / tring_ivr extensions live. Vanilla ships 'public'
+         here, but public.xml has no route for gwflow (its transfer_to_default
+         is commented out), so the gateway's web-call INVITE to gwflow got 480. -->
+    <param name="context" value="default"/>
     <param name="rfc2833-pt" value="101"/>
     <!-- port to bind to for sip traffic -->
     <param name="sip-port" value="$${internal_sip_port}"/>
