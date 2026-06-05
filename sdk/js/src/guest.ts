@@ -22,7 +22,6 @@ import type {
 export class TringGuest extends Emitter<GuestEvent> {
   private gw: GatewayAdapter | null = null;
   private muted = false;
-  private speakerOn = true;
 
   constructor(private readonly opts: GuestInitOpts) {
     super();
@@ -52,7 +51,6 @@ export class TringGuest extends Emitter<GuestEvent> {
     const gw = new GatewayAdapter();
     this.gw = gw;
     this.muted = false;
-    this.speakerOn = true;
     try {
       await gw.captureMic();
     } catch (e) {
@@ -139,27 +137,6 @@ export class TringGuest extends Emitter<GuestEvent> {
     const next = !this.muted;
     void this.mute(next);
     return next;
-  }
-
-  /** Route call audio to the loudspeaker (on) or the earpiece (off). Best-effort
-   *  — only where the platform allows output switching (see speakerSwitchable). */
-  async speaker(on: boolean): Promise<void> {
-    if (!this.gw) return;
-    await this.gw.setSpeaker(on);
-    this.speakerOn = on;
-  }
-
-  /** Convenience: flip the speaker and return the new state. */
-  toggleSpeaker(): boolean {
-    const next = !this.speakerOn;
-    void this.speaker(next);
-    return next;
-  }
-
-  /** Whether audio output routing can be switched on this platform (false on
-   *  iOS Safari). The widget hides the speaker toggle when this is false. */
-  get speakerSwitchable(): boolean {
-    return GatewayAdapter.outputSwitchable();
   }
 
   private async cleanup(): Promise<void> {
