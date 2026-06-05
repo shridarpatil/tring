@@ -48,8 +48,7 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
   // Wire UI controls back to the guest session.
   ui.onHangup(() => guest.hangup());
   ui.onMute(() => guest.toggleMute());
-  ui.showSpeaker(guest.speakerSwitchable); // hidden on iOS Safari (no setSinkId)
-  ui.onSpeaker(() => guest.toggleSpeaker());
+
   ui.onDigit((digit) => guest.sendDTMF(digit));
 
   const startCall = async () => {
@@ -116,9 +115,6 @@ interface GuestUI {
   end(message: string): void;
   onHangup(fn: () => void): void;
   onMute(fn: () => boolean | void): void;
-  onSpeaker(fn: () => boolean | void): void;
-  /** Reveal the speaker toggle (only where output routing is switchable). */
-  showSpeaker(show: boolean): void;
   onDigit(fn: (digit: string) => void): void;
 }
 
@@ -140,7 +136,6 @@ function createGuestUI(title: string): GuestUI {
   // Inline SVGs so the controls look native with no asset dependency.
   const micIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
   const phoneIcon = `<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
-  const speakerIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M3 10v4h4l5 5V5L7 10H3zm13.5 2A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/></svg>`;
 
   root.innerHTML = `
     <div class="tring-guest-card">
@@ -157,9 +152,6 @@ function createGuestUI(title: string): GuestUI {
         <button type="button" class="tring-guest-btn tring-guest-mute" aria-pressed="false">
           <span class="tring-guest-ic">${micIcon}</span><span class="tring-guest-lbl">Mute</span>
         </button>
-        <button type="button" class="tring-guest-btn tring-guest-speaker" aria-pressed="true" hidden>
-          <span class="tring-guest-ic">${speakerIcon}</span><span class="tring-guest-lbl">Speaker</span>
-        </button>
         <button type="button" class="tring-guest-btn tring-guest-end">
           <span class="tring-guest-ic">${phoneIcon}</span><span class="tring-guest-lbl">End</span>
         </button>
@@ -172,8 +164,6 @@ function createGuestUI(title: string): GuestUI {
   const keypadEl = $(".tring-guest-keypad");
   const muteBtn = $<HTMLButtonElement>(".tring-guest-mute");
   const muteLbl = muteBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
-  const speakerBtn = $<HTMLButtonElement>(".tring-guest-speaker");
-  const speakerLbl = speakerBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
   const endBtn = $<HTMLButtonElement>(".tring-guest-end");
 
   let tick: number | undefined;
@@ -192,9 +182,6 @@ function createGuestUI(title: string): GuestUI {
       muteBtn.setAttribute("aria-pressed", "false");
       muteBtn.classList.remove("is-active");
       muteLbl.textContent = "Mute";
-      speakerBtn.setAttribute("aria-pressed", "true");
-      speakerBtn.classList.remove("is-active");
-      speakerLbl.textContent = "Speaker";
       dialed = "";
       dialedEl.textContent = "";
       subEl.textContent = "Connecting…";
@@ -234,18 +221,6 @@ function createGuestUI(title: string): GuestUI {
         muteBtn.classList.toggle("is-active", on);
         muteLbl.textContent = on ? "Unmute" : "Mute";
       });
-    },
-    onSpeaker(fn) {
-      speakerBtn.addEventListener("click", () => {
-        const speakerOn = fn();
-        const on = speakerOn !== false; // default to "on" if the cb returns void
-        speakerBtn.setAttribute("aria-pressed", String(on));
-        speakerBtn.classList.toggle("is-active", !on); // highlight when OFF (earpiece)
-        speakerLbl.textContent = on ? "Speaker" : "Earpiece";
-      });
-    },
-    showSpeaker(show) {
-      speakerBtn.hidden = !show;
     },
     onDigit(fn) {
       // One delegated listener covers all 12 keys.

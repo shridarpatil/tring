@@ -52,47 +52,10 @@ export class GatewayAdapter {
   private dtmf: RTCDTMFSender | null = null;
   private byeChannel: RTCDataChannel | null = null;
   private _muted = false;
-  private _speaker = true;
   private ended = false;
 
   get muted(): boolean {
     return this._muted;
-  }
-
-  get speaker(): boolean {
-    return this._speaker;
-  }
-
-  /** Whether audio output can be routed (setSinkId). False on iOS Safari, so the
-   *  widget hides the speaker toggle there rather than show a dead button. */
-  static outputSwitchable(): boolean {
-    return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
-  }
-
-  /** Route remote audio to the loudspeaker (on) or the earpiece/receiver (off),
-   *  where the platform supports it. Best-effort + no-op on iOS Safari (no
-   *  setSinkId / no web access to the earpiece). */
-  async setSpeaker(on: boolean): Promise<void> {
-    this._speaker = on;
-    const el = this.audioEl as
-      | (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> })
-      | null;
-    if (!el || typeof el.setSinkId !== "function") return;
-    try {
-      if (on) {
-        await el.setSinkId(""); // default route (loudspeaker on mobile)
-      } else {
-        const outs = (await navigator.mediaDevices.enumerateDevices()).filter(
-          (d) => d.kind === "audiooutput",
-        );
-        const earpiece =
-          outs.find((d) => /earpiece|receiver|handset/i.test(d.label)) ??
-          outs.find((d) => d.deviceId !== "default" && !/speaker/i.test(d.label));
-        if (earpiece) await el.setSinkId(earpiece.deviceId);
-      }
-    } catch {
-      /* best-effort: keep the current route */
-    }
   }
 
   get active(): boolean {
