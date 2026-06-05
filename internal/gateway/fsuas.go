@@ -15,6 +15,7 @@ package gateway
 import (
 	"context"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -102,6 +103,15 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
+	// Detect the visitor hanging up mid-ring IMMEDIATELY. When FS CANCELs the
+	// INVITE, sipgo fires OnCancel synchronously (and auto-sends the 487). We
+	// must NOT wait on tx.Done() for this: Done only fires once the cancelled
+	// transaction fully terminates, which (when FS doesn't ACK the 487) is ~5s
+	// later on Timer H — leaving the agent's incoming-call UI up that whole time.
+	cancelled := make(chan struct{})
+	var cancelOnce sync.Once
+	tx.OnCancel(func(*sip.Request) { cancelOnce.Do(func() { close(cancelled) }) })
+
 	var sess *agentSession
 	var browserOffer string
 	select {
@@ -112,11 +122,10 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		ic.cancelAll("declined")
 		_ = dlg.Respond(sip.StatusBusyHere, "Declined", nil)
 		return
-	case <-tx.Done():
-		// FS terminated the INVITE while the agent was still ringing — the
-		// visitor hung up (FS sent CANCEL) before anyone answered. Stop ringing
-		// every tab now instead of leaving the incoming-call UI up until the ring
-		// timeout. The transaction already sent 487, so we just clear the agents.
+	case <-cancelled:
+		// Visitor hung up while the agent was still ringing — clear every tab
+		// now. sipgo already sent the 487, so we just stop ringing the agents.
+		g.log.Info("invite cancelled mid-ring, clearing agent ring", "tenant", tenant, "sip", sipUser)
 		ic.cancelAll("caller hung up")
 		return
 	case <-time.After(g.ringTimeout()):
