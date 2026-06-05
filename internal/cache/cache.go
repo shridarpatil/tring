@@ -6,16 +6,20 @@
 // keeps it reusable for whatever else needs caching later (resolved tenant
 // config, ICE servers, rate-limit counters, …).
 //
-// Redis is OPTIONAL. A nil *Cache is valid and behaves as a no-op (caching
-// disabled), so self-hosters who don't run Redis still get correct — just
-// uncached — behaviour. Reads and writes are best-effort: a Redis error is
-// treated as a miss / dropped write so a transient cache problem never turns
-// into a request failure. Deletes (invalidation) return their error so the
-// caller can decide whether stale data matters.
+// Redis is OPTIONAL for the best-effort surface. A nil *Cache is valid and
+// behaves as a no-op (caching disabled), so self-hosters who don't run Redis
+// still get correct — just uncached — behaviour. Reads and writes are
+// best-effort: a Redis error is treated as a miss / dropped write so a
+// transient cache problem never turns into a request failure. Two methods opt
+// OUT of best-effort and return their error so the caller decides: Delete
+// (invalidation — stale data may matter) and SetNX (single-use markers — a
+// caller cannot treat an unreachable Redis as "first use" without opening a
+// replay window). For those, Redis is a hard dependency.
 package cache
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -71,21 +75,22 @@ func (c *Cache) Set(ctx context.Context, key string, val []byte, ttl time.Durati
 }
 
 // SetNX atomically sets key→val with the given TTL only if the key is absent.
-// Returns true if it was set (the FIRST writer), false if the key already
-// existed. Used for single-use markers — e.g. consuming a one-time token's jti.
+// Used for single-use markers — e.g. consuming a one-time token's jti. Returns
+// (true, nil) when it set the key (the FIRST writer), (false, nil) when the key
+// already existed (a replay), and (false, err) when the operation could not be
+// performed at all — a nil cache (Redis not configured) or a Redis transport
+// error.
 //
-// Fail-OPEN: a nil cache or any Redis error returns true (treated as "first
-// use"), so a cache outage never blocks legitimate calls. The concurrency cap
-// is the non-cache backstop against the replay this guards.
-func (c *Cache) SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) bool {
+// Unlike the best-effort reads/writes above, SetNX does NOT swallow the error:
+// a caller enforcing single-use cannot treat "couldn't reach Redis" as "first
+// use" without opening a replay window, so it MUST surface the error and let
+// the caller decide. The gateway fails CLOSED on it (see gateway.consumeToken);
+// Redis is therefore a hard dependency for single-use enforcement.
+func (c *Cache) SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) (bool, error) {
 	if c == nil {
-		return true
+		return false, errors.New("cache: redis not configured")
 	}
-	ok, err := c.rdb.SetNX(ctx, key, val, ttl).Result()
-	if err != nil {
-		return true
-	}
-	return ok
+	return c.rdb.SetNX(ctx, key, val, ttl).Result()
 }
 
 // Delete removes a key (cache invalidation). Returns any Redis error so the

@@ -60,6 +60,17 @@ func main() {
 	}
 	defer redisCache.Close()
 
+	// Redis is a HARD dependency for single-use gateway-call-token enforcement:
+	// without it consumeToken can't prove a token is fresh and the gateway fails
+	// closed on every authed offer. So when auth is required, refuse to boot
+	// without a reachable Redis rather than serve 503s — the operator must set
+	// TRING_REDIS_ADDR (or explicitly disable auth for an open/dev gateway).
+	if k.Bool("gateway_require_auth") && redisCache == nil {
+		log.Fatalf("gateway: gateway_require_auth is set but Redis is unavailable — " +
+			"set TRING_REDIS_ADDR to a reachable Redis (single-use token enforcement " +
+			"needs it), or set TRING_GATEWAY_REQUIRE_AUTH=false for an open gateway")
+	}
+
 	gw, err := gateway.New(gateway.Config{
 		ICEServers:       ice,
 		UDPPortMin:       uint16(k.Int("gateway_udp_min")),
