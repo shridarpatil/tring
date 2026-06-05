@@ -238,6 +238,24 @@ def agent_originate():
     return jsonify(payload), status
 
 
+@app.post("/agent/availability")
+def agent_availability():
+    """The CRM's own Away/Break toggle hits THIS endpoint; the backend (which
+    holds the API key) sets the agent available/unavailable via the Tring API.
+    Availability is intentionally backend-controlled — the browser SDK can't set
+    it — so the CRM owns it and can track away time from the agent.status
+    webhook. Unavailable agents stay connected but the orchestrator stops
+    ringing them."""
+    if not API_KEY:
+        return jsonify({"error": "server misconfigured: TRING_API_KEY not set"}), 500
+    aid, err = resolve_agent_id()
+    if err:
+        return jsonify({"error": err}), 502
+    available = bool((request.json or {}).get("available", True))
+    status, payload = _api("POST", f"/v1/agents/{aid}/availability", {"available": available})
+    return jsonify(payload), status
+
+
 # ── Templates ──────────────────────────────────────────────────────────────────
 
 _STYLE = """
@@ -398,6 +416,17 @@ CRM_HTML = (
   {% if agent_err %}<p class="warn">⚠ {{ agent_err }} — calls won't work until this is fixed.</p>
   {% else %}<p class="you">Acting as agent <code>{{ agent_id }}</code> · numbers stay server-side</p>{% endif %}
 
+  <!-- The CRM's OWN Away/Break control. It POSTs to this backend's
+       /agent/availability, which (holding the API key) sets the agent
+       available/unavailable via the Tring API. Availability is backend-owned —
+       the agent.js widget never sets it — so the CRM tracks away time. While
+       away the agent stays connected (online) but Tring stops ringing them. -->
+  <p>
+    Status for calls:
+    <button id="awayBtn" onclick="toggleAway(this)">⏸ Set Away / Break</button>
+    <span id="awayState" class="hint"></span>
+  </p>
+
   <table>
     <thead><tr><th>Customer</th><th></th></tr></thead>
     <tbody>
@@ -429,6 +458,33 @@ CRM_HTML = (
         btn.disabled = false;
       }
     }
+
+    // Away/Break toggle. Calls OUR backend, which flips availability via the
+    // Tring API. `available` starts true (agents are available when created).
+    let available = true;
+    async function toggleAway(btn) {
+      const next = available; // if currently available, going away → available=false
+      btn.disabled = true;
+      const stateEl = document.getElementById('awayState');
+      try {
+        const r = await fetch('/agent/availability', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ available: !next }),
+        });
+        if (!r.ok) { stateEl.textContent = 'Failed: ' + (await r.text()); return; }
+        const a = await r.json();
+        available = !!a.available_for_calls;
+        btn.textContent = available ? '⏸ Set Away / Break' : '▶ Back — Set Available';
+        stateEl.textContent = available
+          ? 'Available — Tring will ring you.'
+          : 'Away — connected, but Tring won\\'t ring you.';
+      } catch (e) {
+        stateEl.textContent = 'Error: ' + e;
+      } finally {
+        btn.disabled = false;
+      }
+    }
   </script>
 
   <!-- Agent widget: WS-only media client. Just data-token-url — the token
@@ -443,4 +499,4 @@ CRM_HTML = (
 if __name__ == "__main__":
     if not API_KEY:
         print("WARNING: TRING_API_KEY is not set — the trusted-support and agent demos will 500.")
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
