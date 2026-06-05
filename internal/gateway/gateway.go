@@ -114,11 +114,12 @@ func New(cfg Config) (*Gateway, error) {
 		}
 	}
 
+	pres := presence.New(cfg.Cache)
 	g := &Gateway{
 		cfg:      cfg,
 		api:      webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
-		agents:   newAgentRegistry(),
-		presence: presence.New(cfg.Cache),
+		agents:   newAgentRegistry(pres), // registry owns presence (aggregate per agent)
+		presence: pres,
 		tokens:   cfg.Cache, // Redis-backed; nil cache → single-use disabled (fail-open)
 		log:      cfg.Logger.With("component", "gateway"),
 	}

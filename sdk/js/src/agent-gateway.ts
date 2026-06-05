@@ -64,6 +64,7 @@ export interface AgentGatewayOpts {
 const PING_INTERVAL_MS = 30_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+const STABLE_AFTER_MS = 10_000; // a connection up this long resets the backoff
 
 export class AgentGateway {
   private ws: WebSocket | null = null;
@@ -72,6 +73,7 @@ export class AgentGateway {
   private closedByUser = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private stableTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempt = 0;
 
   constructor(
@@ -107,8 +109,15 @@ export class AgentGateway {
     let opened = false;
     ws.onopen = () => {
       opened = true;
-      this.reconnectAttempt = 0;
       this.startPing();
+      // Reset the backoff only once the connection has been STABLE for a while,
+      // not the instant it opens — otherwise a socket that opens then drops
+      // immediately (e.g. an eviction war) would spin at the 1s base forever
+      // instead of backing off.
+      this.clearStableTimer();
+      this.stableTimer = setTimeout(() => {
+        this.reconnectAttempt = 0;
+      }, STABLE_AFTER_MS);
     };
     ws.onmessage = (ev) => this.onMessage(ev);
     ws.onerror = () => {
@@ -116,6 +125,7 @@ export class AgentGateway {
     };
     ws.onclose = () => {
       this.stopPing();
+      this.clearStableTimer();
       for (const c of this.calls.values()) c.markEnded("socket closed");
       this.calls.clear();
       this.ws = null;
@@ -131,6 +141,13 @@ export class AgentGateway {
     };
   }
 
+  private clearStableTimer(): void {
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer);
+      this.stableTimer = null;
+    }
+  }
+
   private scheduleReconnect(): void {
     if (this.closedByUser || this.reconnectTimer) return;
     const attempt = this.reconnectAttempt++;
@@ -139,6 +156,9 @@ export class AgentGateway {
     this.h.onReconnecting?.(attempt + 1);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      // Guard: we may have been replaced/disconnected while this timer waited
+      // (e.g. another tab took over). Don't reconnect and evict it back.
+      if (this.closedByUser) return;
       void this.open();
     }, delay);
   }

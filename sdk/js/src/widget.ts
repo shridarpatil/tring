@@ -117,7 +117,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
 // backend via POST /v1/agents/{id}/availability.
 interface StatusBadge {
   root: HTMLElement;
-  set(state: "online" | "reconnecting" | "offline", attempt?: number): void;
+  set(state: "online" | "reconnecting" | "offline", attempt?: number, label?: string): void;
 }
 
 function createStatusBadge(): StatusBadge {
@@ -128,14 +128,15 @@ function createStatusBadge(): StatusBadge {
   const textEl = root.querySelector<HTMLElement>(".tring-status-text")!;
   return {
     root,
-    set(state, attempt) {
+    set(state, attempt, label) {
       root.setAttribute("data-state", state);
       textEl.textContent =
-        state === "online"
+        label ??
+        (state === "online"
           ? "Online"
           : state === "reconnecting"
             ? `Reconnecting${attempt ? ` (${attempt})` : ""}…`
-            : "Offline";
+            : "Offline");
     },
   };
 }
