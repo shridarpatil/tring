@@ -15,6 +15,8 @@ function badge(status?: string) {
       return { dot: "bg-green-500", text: "Online", cls: "text-green-700" };
     case "on_call":
       return { dot: "bg-amber-500", text: "On call", cls: "text-amber-700" };
+    case "away":
+      return { dot: "bg-yellow-400", text: "Away", cls: "text-yellow-700" };
     case "offline":
       return { dot: "bg-gray-300", text: "Offline", cls: "text-gray-500" };
     default:
@@ -62,6 +64,19 @@ async function mintToken(a: Agent) {
     token.value = await api.get<AgentToken>(`/v1/agents/${a.id}/token`);
   } catch (e) {
     error.value = e instanceof Error ? e.message : "token failed";
+  }
+}
+
+// Flip availability_for_calls (the Away/Break toggle). Same endpoint the
+// integrator's backend uses; an operator can also set it here.
+async function setAvailability(a: Agent, available: boolean) {
+  error.value = "";
+  try {
+    const updated = await api.post<Agent>(`/v1/agents/${a.id}/availability`, { available });
+    const i = agents.value.findIndex((x) => x.id === a.id);
+    if (i >= 0) agents.value[i] = { ...agents.value[i], ...updated };
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "update failed";
   }
 }
 
@@ -136,6 +151,7 @@ onUnmounted(() => {
         <thead class="text-left text-gray-500">
           <tr>
             <th class="px-5 py-2 font-medium">Status</th>
+            <th class="px-5 py-2 font-medium">Availability</th>
             <th class="px-5 py-2 font-medium">SIP username</th>
             <th class="px-5 py-2 font-medium">Display name</th>
             <th class="px-5 py-2 font-medium">Created</th>
@@ -150,6 +166,20 @@ onUnmounted(() => {
                 {{ badge(a.status).text }}
               </span>
             </td>
+            <td class="px-5 py-2">
+              <button
+                class="text-xs rounded-full px-2.5 py-1 border transition-colors"
+                :class="
+                  a.available_for_calls
+                    ? 'border-green-300 text-green-700 bg-green-50 hover:bg-green-100'
+                    : 'border-yellow-300 text-yellow-700 bg-yellow-50 hover:bg-yellow-100'
+                "
+                :title="a.available_for_calls ? 'Click to set Away' : 'Click to set Available'"
+                @click="setAvailability(a, !a.available_for_calls)"
+              >
+                {{ a.available_for_calls ? "Available" : "Away" }}
+              </button>
+            </td>
             <td class="px-5 py-2 font-mono">{{ a.sip_username }}</td>
             <td class="px-5 py-2">{{ a.display_name }}</td>
             <td class="px-5 py-2 text-gray-500">{{ new Date(a.created_at).toLocaleDateString() }}</td>
@@ -158,7 +188,7 @@ onUnmounted(() => {
             </td>
           </tr>
           <tr v-if="!loading && agents.length === 0">
-            <td colspan="5" class="px-5 py-6 text-center text-gray-400">No agents yet</td>
+            <td colspan="6" class="px-5 py-6 text-center text-gray-400">No agents yet</td>
           </tr>
         </tbody>
       </table>
