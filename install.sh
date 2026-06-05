@@ -35,6 +35,7 @@ freeswitch/conf/vars.xml
 freeswitch/conf/dialplan/default.xml
 freeswitch/conf/directory/default.xml
 freeswitch/conf/autoload_configs/modules.conf.xml
+freeswitch/conf/autoload_configs/acl.conf.xml
 freeswitch/conf/autoload_configs/xml_curl.conf.xml
 freeswitch/conf/autoload_configs/switch.conf.xml
 freeswitch/conf/sip_profiles/external.xml

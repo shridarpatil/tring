@@ -46,6 +46,9 @@ services:
       - ./freeswitch/conf/dialplan/default.xml:/usr/share/freeswitch/conf/vanilla/dialplan/default.xml:ro
       - ./freeswitch/conf/directory/default.xml:/usr/share/freeswitch/conf/vanilla/directory/default.xml:ro
       - ./freeswitch/conf/autoload_configs/modules.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml:ro
+      # ACL override: trust the media gateway's loopback/private-IP INVITEs into
+      # the internal profile's "domains" ACL (otherwise web calls 403). See file.
+      - ./freeswitch/conf/autoload_configs/acl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml:ro
       - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/xml_curl.conf.xml:ro
       # Overrides the default switch.conf.xml to wire the RTP port range
       # to vars.xml's $${rtp_start_port}/$${rtp_end_port} placeholders.
