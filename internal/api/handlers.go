@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/whatomate/tring/internal/freeswitch"
+	"github.com/whatomate/tring/internal/presence"
+	"github.com/whatomate/tring/internal/webhook"
 )
 
 // Ensure pgx errors are reachable in PATCH endpoints below.
@@ -30,12 +32,16 @@ type Agent struct {
 	SipUsername string    `json:"sip_username"`
 	SipPassword string    `json:"sip_password,omitempty"`
 	DisplayName string    `json:"display_name,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	// Status is the agent's live state, populated on list responses. With the
-	// gateway transport it comes from Redis presence: "online" (connected and
-	// available), "on_call" (connected but busy on a call — not ringable), or
-	// "offline". Legacy SIP transport reports "online"/"offline" from the
-	// registration, or "unknown" if FreeSWITCH couldn't be reached.
+	// AvailableForCalls is the backend-managed availability (the integrator's
+	// Away/Break button). Separate from connection presence: the orchestrator
+	// rings an agent only when they're BOTH connected AND available_for_calls.
+	AvailableForCalls bool      `json:"available_for_calls"`
+	CreatedAt         time.Time `json:"created_at"`
+	// Status is the agent's live EFFECTIVE state, populated on list responses.
+	// It combines Redis presence with available_for_calls: "on_call" (busy),
+	// "away" (connected but marked unavailable), "online" (connected and
+	// available), or "offline". Legacy SIP transport reports "online"/"offline"
+	// from registration, or "unknown" if FreeSWITCH couldn't be reached.
 	Status string `json:"status,omitempty"`
 }
 
@@ -65,7 +71,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
 		t.ID, req.SipUsername, sipPassword, req.DisplayName).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.CreatedAt,
+		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
 	)
 	if err != nil {
 		writeError(w, http.StatusConflict, "sip_username already exists for this tenant")
@@ -86,7 +92,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	agents := []Agent{}
 	for rows.Next() {
 		var a Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
@@ -98,9 +104,14 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// presence comes from Redis (published by the gateway). Fall back to the
 	// SIP-registration lookup for the legacy transport or when Redis is off.
 	if s.agentTransport == "gateway" && s.presence.Enabled() {
-		// "online" (available), "on_call" (busy — not ringable), or "offline".
+		// Presence gives "online"/"on_call"/"offline"; fold in the backend
+		// availability flag so a connected-but-unavailable agent reads "away".
 		for i := range agents {
-			agents[i].Status = s.presence.Status(r.Context(), t.ID.String(), agents[i].SipUsername)
+			st := s.presence.Status(r.Context(), t.ID.String(), agents[i].SipUsername)
+			if st == presence.StatusOnline && !agents[i].AvailableForCalls {
+				st = "away"
+			}
+			agents[i].Status = st
 		}
 	} else {
 		// Live registration status (one ESL call). Fail-soft: if FreeSWITCH is
@@ -130,7 +141,7 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgent,
-		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.CreatedAt)
+		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -139,6 +150,47 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+// setAgentAvailabilityRequest is the body of POST /v1/agents/{id}/availability.
+type setAgentAvailabilityRequest struct {
+	Available bool `json:"available"`
+}
+
+// handleSetAgentAvailability flips an agent's available_for_calls (the
+// integrator's Away/Break toggle, driven from THEIR backend with the tenant
+// API key). Unavailable agents stay connected but the orchestrator stops
+// ringing them. Emits an agent.status webhook so the CRM can track the change.
+func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var req setAgentAvailabilityRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	var a Agent
+	err = s.db.Pool.QueryRow(r.Context(), s.q.SetAgentAvailability, req.Available, id, t.ID).Scan(
+		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "update failed")
+		return
+	}
+	s.notifier.Emit(r.Context(), t.ID, webhook.EventAgentStatus, map[string]any{
+		"agent_id":            a.ID,
+		"sip_username":        a.SipUsername,
+		"available_for_calls": a.AvailableForCalls,
+	})
 	writeJSON(w, http.StatusOK, a)
 }
 

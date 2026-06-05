@@ -26,9 +26,10 @@ var sqlFile = tring.QueriesSQL
 // by the domain (and owning binary) they serve.
 type Queries struct {
 	// ---- api: agents ----
-	CreateAgent string `query:"create-agent"`
-	ListAgents  string `query:"list-agents"`
-	GetAgent    string `query:"get-agent"`
+	CreateAgent          string `query:"create-agent"`
+	ListAgents           string `query:"list-agents"`
+	GetAgent             string `query:"get-agent"`
+	SetAgentAvailability string `query:"set-agent-availability"`
 
 	// ---- api: numbers ----
 	CreateNumber             string `query:"create-number"`

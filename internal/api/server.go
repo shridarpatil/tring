@@ -205,6 +205,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/agents", s.handleCreateAgent)
 			r.Get("/agents", s.handleListAgents)
 			r.Get("/agents/{id}", s.handleGetAgent)
+			r.Post("/agents/{id}/availability", s.handleSetAgentAvailability)
 			r.Get("/agents/{id}/token", s.handleAgentToken)
 			r.Post("/numbers", s.handleCreateNumber)
 			r.Get("/numbers", s.handleListNumbers)
