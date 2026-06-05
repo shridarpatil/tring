@@ -3,6 +3,14 @@ services:
     image: safarov/freeswitch:latest
     container_name: tring-fs
     network_mode: host
+    # FreeSWITCH wants real-time thread priority for low-latency audio.
+    # Without SYS_NICE it logs "Failed to set SCHED_FIFO / Could not set nice
+    # level" and runs at normal priority — fine in dev, but media threads can
+    # jitter under CPU load. Grant the capability + allow the rtprio it asks for.
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 95
     env_file:
       # Per-deployment trunk credentials (Exotel etc.). Gitignored; see
       # .env.example for the schema. Missing file is fine — defaults
