@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,7 @@ func main() {
 	// Config: defaults + TRING_* env (koanf).
 	k := config.Load()
 	logger := logging.New(k.String("log_format"), k.String("log_level"))
+	slog.SetDefault(logger)
 
 	dbase, err := db.Connect(ctx, k.String("dsn"))
 	if err != nil {

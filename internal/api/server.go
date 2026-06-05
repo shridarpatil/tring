@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -59,6 +60,9 @@ type Config struct {
 	// nil — invalidation becomes a no-op (the orchestrator then relies on
 	// the TTL, or is itself uncached).
 	Cache *cache.Cache
+
+	// Logger is the structured logger; nil falls back to slog.Default().
+	Logger *slog.Logger
 }
 
 type Server struct {
@@ -95,6 +99,7 @@ type Server struct {
 	// state. See internal/orchestrator/sim_session.go.
 	simManager *orchestrator.SimManager
 
+	log *slog.Logger
 }
 
 // iceServer matches the RTCIceServer JSON shape consumed by browsers.
@@ -108,6 +113,11 @@ type iceServer struct {
 
 func NewServer(cfg Config) *Server {
 	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("component", "api")
 	return &Server{
 		db:               cfg.DB,
 		q:                queries.MustLoad(),
@@ -115,7 +125,7 @@ func NewServer(cfg Config) *Server {
 		fsBasicUser:      user,
 		fsBasicPass:      pass,
 		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		notifier:         webhook.New(cfg.DB),
+		notifier:         webhook.New(cfg.DB).WithLogger(cfg.Logger),
 		cache:            cfg.Cache,
 		presence:         presence.New(cfg.Cache),
 		agentTransport:   cfg.AgentTransport,
@@ -123,6 +133,7 @@ func NewServer(cfg Config) *Server {
 		gatewayPublicURL: cfg.GatewayPublicURL,
 		iceServers:       buildICEServers(cfg),
 		simManager:       orchestrator.NewSimManager(),
+		log:              logger,
 	}
 }
 

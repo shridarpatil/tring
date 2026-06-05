@@ -4,8 +4,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/logging"
 	tringmigrate "github.com/whatomate/tring/internal/migrate"
 	"github.com/whatomate/tring/internal/queries"
 )
@@ -28,6 +30,8 @@ func main() {
 	// Config: defaults + TRING_* env (koanf). Flags below take precedence
 	// by defaulting to the resolved value, so flag > env > default.
 	k := config.Load()
+	logger := logging.New(k.String("log_format"), k.String("log_level"))
+	slog.SetDefault(logger) // so startup helpers (bootstrap) log through it too
 	addr := flag.String("addr", k.String("api_addr"), "HTTP listen address")
 	dsn := flag.String("dsn", k.String("dsn"), "Postgres connection string")
 	seed := flag.String("seed-tenant", "", "If set, creates a tenant with the given name, prints the API key, then exits")
@@ -40,12 +44,14 @@ func main() {
 	// schema is at the expected version when handlers start running.
 	// Idempotent — no-op when the DB is already at the latest version.
 	if err := migrateRun(*dsn); err != nil {
-		log.Fatalf("migrate: %v", err)
+		logger.Error("migrate failed", "err", err)
+		os.Exit(1)
 	}
 
 	database, err := db.Connect(ctx, *dsn)
 	if err != nil {
-		log.Fatalf("db: %v", err)
+		logger.Error("db connect failed", "err", err)
+		os.Exit(1)
 	}
 	defer database.Close()
 
@@ -57,12 +63,14 @@ func main() {
 		AdminEmail:    k.String("admin_email"),
 		AdminPassword: k.String("admin_password"),
 	}); err != nil {
-		log.Fatalf("bootstrap: %v", err)
+		logger.Error("bootstrap failed", "err", err)
+		os.Exit(1)
 	}
 
 	if *seed != "" {
 		if err := seedTenant(ctx, database, *seed); err != nil {
-			log.Fatalf("seed: %v", err)
+			logger.Error("seed failed", "err", err)
+			os.Exit(1)
 		}
 		return
 	}
@@ -72,7 +80,7 @@ func main() {
 	// the orchestrator. Optional: log-and-disable if unreachable.
 	flowCache, err := cache.New(k.String("redis_addr"))
 	if err != nil {
-		log.Printf("cache: redis unavailable (%v) — flow-cache invalidation disabled", err)
+		logger.Warn("redis unavailable, flow-cache invalidation disabled", "err", err)
 	}
 	defer flowCache.Close()
 
@@ -92,19 +100,21 @@ func main() {
 			AgentGateway:     k.String("agent_gateway"),
 			GatewayPublicURL: k.String("gateway_public_url"),
 			Cache:            flowCache,
+			Logger:           logger,
 		}).Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	go func() {
-		log.Printf("tring api listening on %s", *addr)
+		logger.Info("api listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			logger.Error("api listen failed", "err", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("shutting down...")
+	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)

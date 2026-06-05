@@ -6,7 +6,7 @@ package freeswitch
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/percipia/eslgo"
@@ -42,11 +42,11 @@ func (quietLogger) Warn(format string, args ...any) {
 		strings.Contains(msg, "Connection closed, stopping receive loop") {
 		return // expected when we Close() a short-lived originate connection
 	}
-	log.Printf("esl warn: %s", strings.TrimSpace(msg))
+	slog.Warn("eslgo warning", "component", "freeswitch", "msg", strings.TrimSpace(msg))
 }
 
 func (quietLogger) Error(format string, args ...any) {
-	log.Printf("esl error: %s", strings.TrimSpace(fmt.Sprintf(format, args...)))
+	slog.Error("eslgo error", "component", "freeswitch", "msg", strings.TrimSpace(fmt.Sprintf(format, args...)))
 }
 
 // OriginateRequest is everything Tring needs to ask FreeSWITCH to place a
