@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -94,9 +95,13 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 	}
 }
 
-// rerenderAllGateways writes the full set of dynamic gateway XMLs for
-// the tenant, then triggers a sofia profile rescan. Called after any
-// trunk create/update/delete so FreeSWITCH state matches the DB.
+// rerenderAllGateways writes the full set of dynamic gateway XMLs, then
+// triggers a sofia profile rescan so FreeSWITCH state matches the DB. Called
+// after any trunk create/update/delete. Returns an error if the XML can't be
+// written OR the rescan fails — callers MUST surface it. The DB row has
+// already been committed by then, so a failure here means FreeSWITCH is out of
+// sync with the DB until POST /v1/trunks/reload (or the next successful trunk
+// op) re-renders and rescans.
 func (s *Server) rerenderAllGateways(ctx context.Context) error {
 	rows, err := s.db.Pool.Query(ctx, s.q.ListActiveTrunks)
 	if err != nil {
@@ -112,14 +117,22 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 		gws = append(gws, trunkToGateway(t))
 	}
 	if err := freeswitch.WriteGateways(gws); err != nil {
-		return err
+		return fmt.Errorf("write gateway xml: %w", err)
 	}
-	// Best-effort rescan: log but don't fail the API call if FS is down.
 	if err := s.fs.RescanExternalProfile(ctx); err != nil {
-		// Logged inside the client; the API still succeeded.
-		_ = err
+		return fmt.Errorf("freeswitch rescan: %w", err)
 	}
 	return nil
+}
+
+// syncTrunkError writes a 502 telling the caller their DB change committed but
+// FreeSWITCH didn't pick it up — so they don't read a 2xx as "live" and they
+// know POST /v1/trunks/reload is the retry. `did` is the past-tense verb, e.g.
+// "saved" / "updated" / "deleted".
+func syncTrunkError(w http.ResponseWriter, did string, err error) {
+	writeError(w, http.StatusBadGateway,
+		"trunk "+did+" but FreeSWITCH did not reload: "+err.Error()+
+			" — retry with POST /v1/trunks/reload")
 }
 
 func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +162,10 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "trunk insert failed: "+err.Error())
 		return
 	}
-	_ = s.rerenderAllGateways(r.Context())
+	if err := s.rerenderAllGateways(r.Context()); err != nil {
+		syncTrunkError(w, "saved", err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, tr)
 }
 
@@ -249,7 +265,10 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return
 	}
-	_ = s.rerenderAllGateways(r.Context())
+	if err := s.rerenderAllGateways(r.Context()); err != nil {
+		syncTrunkError(w, "updated", err)
+		return
+	}
 	writeJSON(w, http.StatusOK, tr)
 }
 
@@ -269,7 +288,10 @@ func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "trunk not found")
 		return
 	}
-	_ = s.rerenderAllGateways(r.Context())
+	if err := s.rerenderAllGateways(r.Context()); err != nil {
+		syncTrunkError(w, "deleted", err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
