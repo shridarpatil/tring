@@ -10,18 +10,23 @@
 -- name: create-agent
 INSERT INTO agents (tenant_id, sip_username, sip_password, display_name)
 VALUES ($1, $2, $3, NULLIF($4, ''))
-RETURNING id, tenant_id, sip_username, sip_password, COALESCE(display_name, ''), created_at;
+RETURNING id, tenant_id, sip_username, sip_password, COALESCE(display_name, ''), available_for_calls, created_at;
 
 -- name: list-agents
-SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), created_at
+SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at
 FROM agents
 WHERE tenant_id = $1
 ORDER BY created_at DESC;
 
 -- name: get-agent
-SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), created_at
+SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at
 FROM agents
 WHERE id = $1 AND tenant_id = $2;
+
+-- name: set-agent-availability
+UPDATE agents SET available_for_calls = $1
+WHERE id = $2 AND tenant_id = $3
+RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at;
 
 -- ===========================================================================
 -- numbers
@@ -412,7 +417,9 @@ SELECT tenant_id, name, COALESCE(definition::text, '')
 FROM flows WHERE id = $1 AND is_active;
 
 -- name: list-agent-sip-usernames
-SELECT sip_username FROM agents WHERE tenant_id = $1;
+-- Ring targets only: skip agents the backend marked unavailable (Away/Break).
+-- Connection presence (online/on_call) is checked separately by the caller.
+SELECT sip_username FROM agents WHERE tenant_id = $1 AND available_for_calls;
 
 -- ===========================================================================
 -- bootstrap / seed (first-boot + --seed-tenant CLI)

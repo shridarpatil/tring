@@ -41,6 +41,7 @@ const (
 	EventCallRinging  = "call.ringing"
 	EventCallAnswered = "call.answered"
 	EventCallEnded    = "call.ended"
+	EventAgentStatus  = "agent.status" // an agent's availability_for_calls changed
 )
 
 type Notifier struct {
