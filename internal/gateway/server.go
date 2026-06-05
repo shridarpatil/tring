@@ -3,32 +3,51 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 )
 
 // jtiStore consumes one-time token ids. *cache.Cache (Redis) satisfies it via
-// SetNX; tests fake it. Returns true on the FIRST use of a key, false on a
-// replay. Fail-open: a nil/erroring store returns true (a cache outage must
-// never block legitimate calls — the concurrency cap is the other guard).
+// SetNX; tests fake it. Returns (true, nil) on the FIRST use of a key, (false,
+// nil) on a replay, and (false, err) when the store can't be reached.
 type jtiStore interface {
-	SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) bool
+	SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) (bool, error)
 }
 
-// consumeToken enforces single-use of a gateway call token: true the FIRST time
-// a jti is seen, false on any replay within the token's remaining TTL. An empty
-// jti, a nil store, or an already-expired token are allowed (the JWT exp check
-// and the concurrency cap are the other guards).
-func (g *Gateway) consumeToken(ctx context.Context, jti string, exp time.Time) bool {
-	if jti == "" || g.tokens == nil {
-		return true
+// errTokenReused is returned by consumeToken when a jti has already been spent.
+// The handler maps it to 401; any other consumeToken error means single-use
+// could not be PROVEN and is treated as a hard rejection (fail closed).
+var errTokenReused = errors.New("gateway call token already used")
+
+// consumeToken enforces single-use of a gateway call token. It returns nil only
+// when the jti is seen for the FIRST time and the call may proceed. It returns
+// an error — and the caller MUST reject the offer — on a replay (errTokenReused)
+// or when single-use cannot be proven: a token with no jti, or an unreachable
+// store. This fails CLOSED on purpose: Redis is a hard dependency, so a captured
+// token can't be replayed during a cache outage (the old fail-open behaviour).
+// An already-expired token is caught by the JWT exp check before we get here; a
+// non-positive remaining TTL is treated as expired and rejected.
+func (g *Gateway) consumeToken(ctx context.Context, jti string, exp time.Time) error {
+	if jti == "" {
+		return errors.New("gateway call token has no jti")
 	}
 	ttl := time.Until(exp)
 	if ttl <= 0 {
-		return true
+		return errors.New("gateway call token expired")
 	}
-	return g.tokens.SetNX(ctx, "gwtoken:"+jti, []byte("1"), ttl)
+	if g.tokens == nil {
+		return errors.New("single-use store unavailable")
+	}
+	fresh, err := g.tokens.SetNX(ctx, "gwtoken:"+jti, []byte("1"), ttl)
+	if err != nil {
+		return fmt.Errorf("single-use check failed: %w", err)
+	}
+	if !fresh {
+		return errTokenReused
+	}
+	return nil
 }
 
 type offerRequest struct {
@@ -94,13 +113,22 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Single-use: consume the token's jti so a captured token can't be
-		// replayed within its TTL to spin up more bridges. See consumeToken.
+		// replayed within its TTL to spin up more bridges. Fails closed — if the
+		// store is unreachable we reject (503) rather than risk a replay. See
+		// consumeToken.
 		var exp time.Time
 		if claims.ExpiresAt != nil {
 			exp = claims.ExpiresAt.Time
 		}
-		if !g.consumeToken(r.Context(), claims.ID, exp) {
-			http.Error(w, `{"error":"call token already used"}`, http.StatusUnauthorized)
+		if err := g.consumeToken(r.Context(), claims.ID, exp); err != nil {
+			if errors.Is(err, errTokenReused) {
+				http.Error(w, `{"error":"call token already used"}`, http.StatusUnauthorized)
+				return
+			}
+			// Single-use couldn't be proven (store down / malformed token):
+			// reject rather than fail open. Retryable once the store recovers.
+			g.log.Printf("gateway: single-use rejected: %v", err)
+			http.Error(w, `{"error":"call token verification unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
 		flowID, clientRef = claims.FlowID, claims.ClientRef
@@ -115,7 +143,8 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 	// per gateway now, Redis (TTL'd per-call keys) when multi-gateway. This is
 	// the backstop that single-use tokens + CAPTCHA do NOT cover: many-token
 	// minting by an insider/compromised account, a buggy backend, integrator
-	// CAPTCHA misconfig, Redis-outage fail-open, and multi-tenant fairness.
+	// CAPTCHA misconfig, and multi-tenant fairness. (Redis-outage replay is no
+	// longer a gap here — single-use now fails closed; see consumeToken.)
 
 	// Bridge into FreeSWITCH when configured; otherwise standalone echo (M1).
 	answer, err := g.Bridge(r.Context(), req.SDP, flowID, clientRef)

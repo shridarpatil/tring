@@ -2,20 +2,29 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
 
-// fakeJTIStore is an in-memory jtiStore: SetNX is true the first time it sees a
-// key, false thereafter — mirroring Redis SETNX without a Redis dependency.
-type fakeJTIStore struct{ seen map[string]bool }
+// fakeJTIStore is an in-memory jtiStore: SetNX returns (true, nil) the first
+// time it sees a key, (false, nil) thereafter — mirroring Redis SETNX without a
+// Redis dependency. A non-nil err makes every call return it, to model an
+// unreachable store.
+type fakeJTIStore struct {
+	seen map[string]bool
+	err  error
+}
 
-func (f *fakeJTIStore) SetNX(_ context.Context, key string, _ []byte, _ time.Duration) bool {
+func (f *fakeJTIStore) SetNX(_ context.Context, key string, _ []byte, _ time.Duration) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
 	if f.seen[key] {
-		return false
+		return false, nil
 	}
 	f.seen[key] = true
-	return true
+	return true, nil
 }
 
 // TestConsumeTokenSingleUse: the gateway consumes a gateway-call-token's jti on
@@ -25,38 +34,43 @@ func TestConsumeTokenSingleUse(t *testing.T) {
 	ctx := context.Background()
 	exp := time.Now().Add(2 * time.Minute)
 
-	if !g.consumeToken(ctx, "jti-1", exp) {
-		t.Fatal("first use of jti-1 must be allowed")
+	if err := g.consumeToken(ctx, "jti-1", exp); err != nil {
+		t.Fatalf("first use of jti-1 must be allowed: %v", err)
 	}
-	if g.consumeToken(ctx, "jti-1", exp) {
-		t.Fatal("replay of jti-1 must be rejected (single-use)")
+	if err := g.consumeToken(ctx, "jti-1", exp); !errors.Is(err, errTokenReused) {
+		t.Fatalf("replay of jti-1 must be rejected as reused, got %v", err)
 	}
-	if !g.consumeToken(ctx, "jti-2", exp) {
-		t.Fatal("a different jti must be allowed")
+	if err := g.consumeToken(ctx, "jti-2", exp); err != nil {
+		t.Fatalf("a different jti must be allowed: %v", err)
 	}
 }
 
-// TestConsumeTokenAllowsWhenUncheckable: an empty jti, an already-expired token,
-// or no store (Redis off) all fail OPEN — single-use never blocks a call it
-// can't meaningfully gate (the JWT exp check + concurrency cap cover those).
-func TestConsumeTokenAllowsWhenUncheckable(t *testing.T) {
+// TestConsumeTokenFailsClosed: single-use is a hard gate. A token with no jti,
+// an unreachable store, or no store at all (Redis off) must all be REJECTED, so
+// a captured token can never be replayed during a cache outage. This is the
+// fail-CLOSED contract — Redis is a hard dependency.
+func TestConsumeTokenFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	future := time.Now().Add(2 * time.Minute)
 
 	withStore := &Gateway{tokens: &fakeJTIStore{seen: map[string]bool{}}}
-	if !withStore.consumeToken(ctx, "", future) {
-		t.Error("empty jti must be allowed")
+	if err := withStore.consumeToken(ctx, "", future); err == nil {
+		t.Error("a token with no jti must be rejected")
 	}
-	if !withStore.consumeToken(ctx, "jti-expired", time.Now().Add(-time.Minute)) {
-		t.Error("an already-expired token must not be blocked by single-use")
+	if err := withStore.consumeToken(ctx, "jti-expired", time.Now().Add(-time.Minute)); err == nil {
+		t.Error("a token with no remaining TTL must be rejected")
+	}
+
+	down := &Gateway{tokens: &fakeJTIStore{err: errors.New("redis down")}}
+	if err := down.consumeToken(ctx, "jti-x", future); err == nil {
+		t.Error("an unreachable store must fail closed (reject)")
+	}
+	if errors.Is(down.consumeToken(ctx, "jti-x", future), errTokenReused) {
+		t.Error("a store error must NOT be reported as a reuse (it's a 503, not a 401)")
 	}
 
 	noStore := &Gateway{} // tokens == nil (Redis disabled)
-	if !noStore.consumeToken(ctx, "jti-x", future) {
-		t.Error("nil store must fail open (allow)")
-	}
-	// And a replay against the nil store is still allowed (no enforcement).
-	if !noStore.consumeToken(ctx, "jti-x", future) {
-		t.Error("nil store must allow even a replay (single-use disabled)")
+	if err := noStore.consumeToken(ctx, "jti-x", future); err == nil {
+		t.Error("a nil store must fail closed (reject), not allow the call")
 	}
 }
