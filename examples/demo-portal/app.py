@@ -89,10 +89,13 @@ def _api(method: str, path: str, body: dict | None = None):
         return 502, {"error": f"cannot reach Tring at {API_BASE}: {e.reason}"}
 
 
-def mint_credentials(client_ref: str):
-    """Authenticated guest mint: Tring trusts client_ref because the API key
-    authorizes the call, and stamps it on the CDR."""
-    body = {"client_ref": client_ref}
+def mint_credentials(client_ref: str = ""):
+    """Backend guest mint via the API key. With client_ref (logged-in) Tring
+    trusts it and stamps it on the CDR; without it (anonymous guest) you get a
+    plain flow-pinned token. Same endpoint for both — that's the point."""
+    body = {}
+    if client_ref:
+        body["client_ref"] = client_ref
     if FLOW_ID:
         body["flow_id"] = FLOW_ID
     return _api("POST", "/v1/guest-credentials", body)
@@ -125,9 +128,20 @@ def landing():
 # --- 1. Anonymous "call us" (no login, no token) --------------------------------
 @app.get("/support")
 def support():
-    return render_template_string(
-        SUPPORT_HTML, api_base=API_BASE, gateway_url=GATEWAY_URL, flow_id=FLOW_ID
-    )
+    return render_template_string(SUPPORT_HTML, api_base=API_BASE)
+
+
+@app.get("/support-credentials")
+def support_credentials():
+    """voice.js data-credentials-url target for the ANONYMOUS guest. No session
+    and (in this demo) no CAPTCHA — in production you'd gate this with a CAPTCHA
+    / rate-limit before minting, since there's no login. Mints a guest token
+    (no client_ref) via the backend, so the gateway URL + flow are server-side
+    and the gateway's require_auth is satisfied without a public mint."""
+    if not API_KEY:
+        return jsonify({"error": "server misconfigured: TRING_API_KEY not set"}), 500
+    status, payload = mint_credentials()  # no client_ref → anonymous guest token
+    return jsonify(payload), status
 
 
 # --- 2. Logged-in trusted support (client_ref minted server-side) ---------------
@@ -260,7 +274,7 @@ LANDING_HTML = (
     the logged-in support and agent CRM demos need it to mint tokens.</p>{% endif %}
 
   <a class="demo" href="/support"><b>1 · Anonymous “call us”</b><br>
-    <span class="hint">Visitor with no account taps Call → lands in your IVR. No login, no token.</span></a>
+    <span class="hint">Visitor with no account taps Call → lands in your IVR. No login; a guest token is minted server-side (gate with CAPTCHA in prod).</span></a>
   <a class="demo" href="/portal"><b>2 · Logged-in support (trusted identity)</b><br>
     <span class="hint">Backend mints a call token with the verified <code>client_ref</code> — shows on the CDR, can't be spoofed.</span></a>
   <a class="demo" href="/crm"><b>3 · Agent CRM</b><br>
@@ -282,18 +296,18 @@ SUPPORT_HTML = (
   """ + _NAV + """
   <h1>🛟 Acme Help Center</h1>
   <p class="hint">Anonymous visitor page — no account. Tap <strong>Talk to a
-  human</strong> and you land in the IVR over WebRTC. The browser talks straight
-  to the media gateway with just the gateway URL + the flow id; no login, no
-  token, and the call is flow-pinned so it can never reach a trunk.</p>
+  human</strong> and you land in the IVR over WebRTC. The widget fetches a guest
+  token from this backend's <code>/support-credentials</code> (which mints via
+  the API key — no <code>client_ref</code>), so the gateway URL + flow live
+  server-side and the gateway's <code>require_auth</code> is satisfied without
+  any public mint. The call is flow-pinned so it can never reach a trunk.
+  <em>In production you'd gate <code>/support-credentials</code> with a CAPTCHA.</em></p>
 
   <p class="hint">This demo uses an <strong>inline button</strong> (your own
   markup) rather than the widget's floating launcher — see the
   <code>data-render-button="false"</code> + <code>&lt;button data-tring-call&gt;</code>
   below. (The logged-in <a href="/portal">/portal</a> demo shows the floating
   launcher instead.)</p>
-
-  {% if not flow_id %}<p class="warn">No <code>TRING_FLOW_ID</code> set — the gateway
-    will fall back to the tenant's default support flow (if configured).</p>{% endif %}
 
   <div class="card">
     <h3 style="margin-top:0">Talk to us</h3>
@@ -304,12 +318,12 @@ SUPPORT_HTML = (
     <button data-tring-call>📞 Talk to a human</button>
   </div>
 
-  <!-- Anonymous path: gateway URL + flow id, nothing else. data-render-button=
-       "false" tells the widget to bind our inline button above instead of
-       drawing a floating launcher. -->
+  <!-- Backend-minted guest token: the widget GETs /support-credentials for
+       { gateway_url, flow_id, token } — no data-gateway-url / data-flow-id, the
+       flow id stays in the token. Same mechanism as the logged-in /portal flow,
+       just without a client_ref. -->
   <script src="{{ api_base }}/sdk/voice.js"
-          data-gateway-url="{{ gateway_url }}"
-          data-flow-id="{{ flow_id }}"
+          data-credentials-url="/support-credentials"
           data-render-button="false"
           data-title="Acme Support"></script>
 </body>"""

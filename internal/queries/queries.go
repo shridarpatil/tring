@@ -50,8 +50,6 @@ type Queries struct {
 	SetCallAgent        string `query:"set-call-agent"`
 	GetAgentBySIP       string `query:"get-agent-by-sip"`
 
-	UpdateGuestRequireBackendMint string `query:"update-guest-require-backend-mint"`
-
 	CreateAPIKey        string `query:"create-api-key"`
 	ListAPIKeys         string `query:"list-api-keys"`
 	RevokeAPIKey        string `query:"revoke-api-key"`
@@ -72,11 +70,9 @@ type Queries struct {
 	GetTenant      string `query:"get-tenant"`
 
 	// ---- api: guest web-calling ----
-	GetTenantByPublicKey string `query:"get-tenant-by-public-key"`
-	FlowUsable           string `query:"flow-usable"`
-	GetGuestConfig             string `query:"get-guest-config"`
-	UpdateSupportFlow          string `query:"update-support-flow"`
-	UpdateAllowedOrigins       string `query:"update-allowed-origins"`
+	FlowUsable        string `query:"flow-usable"`
+	GetGuestConfig    string `query:"get-guest-config"`
+	UpdateDefaultFlow string `query:"update-default-flow"`
 
 	// ---- api: flows ----
 	CreateFlow        string `query:"create-flow"`
