@@ -14,7 +14,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -33,6 +33,7 @@ type Runner struct {
 	notifier    *webhook.Notifier
 	eslAddr     string
 	eslPassword string
+	log         *slog.Logger
 }
 
 func New(d *db.DB, addr, password string) *Runner {
@@ -42,7 +43,18 @@ func New(d *db.DB, addr, password string) *Runner {
 		notifier:    webhook.New(d),
 		eslAddr:     addr,
 		eslPassword: password,
+		log:         slog.Default(),
 	}
+}
+
+// WithLogger sets the runner's logger (scoped component=orchestrator) and
+// returns it for chaining. Event-loop lines that pertain to a specific call
+// bind call_id so they correlate with the IVR executor's per-call lines.
+func (r *Runner) WithLogger(l *slog.Logger) *Runner {
+	if l != nil {
+		r.log = l.With("component", "orchestrator")
+	}
+	return r
 }
 
 // Run keeps a connection to FreeSWITCH ESL alive. On any disconnect it
@@ -67,8 +79,8 @@ func (r *Runner) Run(ctx context.Context) error {
 		if sessionDuration >= healthyAfter {
 			backoff = initialBackoff
 		}
-		log.Printf("orchestrator: esl session ended after %v (%v); reconnect in %v",
-			sessionDuration.Round(time.Millisecond), err, backoff)
+		r.log.Warn("esl session ended, reconnecting",
+			"after", sessionDuration.Round(time.Millisecond).String(), "err", err, "reconnect_in", backoff.String())
 		select {
 		case <-ctx.Done():
 			return nil
@@ -92,7 +104,7 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if err := conn.EnableEvents(ctx); err != nil {
 		return err
 	}
-	log.Printf("orchestrator: connected to %s, subscribed to events", r.eslAddr)
+	r.log.Info("connected to esl, subscribed to events", "addr", r.eslAddr)
 
 	conn.RegisterEventListener(eslgo.EventListenAll, func(e *eslgo.Event) {
 		// Use background ctx for DB writes so a slow query doesn't get
@@ -150,14 +162,14 @@ func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event)
 		label   string
 	)
 	if err := r.db.Pool.QueryRow(ctx, r.q.GetAgentBySIP, tenantID, sip).Scan(&agentID, &label); err != nil {
-		log.Printf("orchestrator: bridge agent lookup %q failed: %v", sip, err)
+		r.log.Error("bridge agent lookup failed", "call_id", aLeg, "sip", sip, "err", err)
 		return
 	}
 	if _, err := r.db.Pool.Exec(ctx, r.q.SetCallAgent, agentID, aLeg); err != nil {
-		log.Printf("orchestrator: stamp agent on %s: %v", aLeg, err)
+		r.log.Error("stamp agent on call failed", "call_id", aLeg, "err", err)
 		return
 	}
-	log.Printf("orchestrator: call %s answered by agent %s (%s)", aLeg, sip, label)
+	r.log.Info("call answered by agent", "call_id", aLeg, "sip", sip, "label", label)
 }
 
 // onBackgroundJob settles call rows whose bgapi originate failed before any
@@ -183,10 +195,10 @@ func (r *Runner) onBackgroundJob(ctx context.Context, e *eslgo.Event) {
 		return // not a Tring originate, or already settled
 	}
 	if err != nil {
-		log.Printf("orchestrator: bg job update %s: %v", jobUUID, err)
+		r.log.Error("bg job update failed", "job_uuid", jobUUID, "err", err)
 		return
 	}
-	log.Printf("orchestrator: %s failed cause=%s (no channel created)", jobUUID, cause)
+	r.log.Info("originate failed (no channel created)", "job_uuid", jobUUID, "cause", cause)
 	if tenantID, payload, ok := r.loadCallPayload(ctx, fsUUID); ok {
 		r.notifier.Emit(ctx, tenantID, webhook.EventCallEnded, payload)
 	}
@@ -201,13 +213,13 @@ func (r *Runner) onAnswer(ctx context.Context, e *eslgo.Event) {
 	// or replayed events.
 	tag, err := r.db.Pool.Exec(ctx, r.q.MarkCallAnswered, fsUUID)
 	if err != nil {
-		log.Printf("orchestrator: answer update for %s: %v", fsUUID, err)
+		r.log.Error("answer update failed", "call_id", fsUUID, "err", err)
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		return
 	}
-	log.Printf("orchestrator: %s answered", fsUUID)
+	r.log.Info("call answered", "call_id", fsUUID)
 	if tenantID, payload, ok := r.loadCallPayload(ctx, fsUUID); ok {
 		r.notifier.Emit(ctx, tenantID, webhook.EventCallAnswered, payload)
 	}
@@ -250,10 +262,10 @@ func (r *Runner) onHangup(ctx context.Context, e *eslgo.Event) {
 
 	_, err = r.db.Pool.Exec(ctx, r.q.SettleCall, finalStatus, dur, nullIfEmpty(cause), uuid)
 	if err != nil {
-		log.Printf("orchestrator: hangup update for %s: %v", uuid, err)
+		r.log.Error("hangup update failed", "call_id", uuid, "err", err)
 		return
 	}
-	log.Printf("orchestrator: %s ended status=%s cause=%s dur=%ds", uuid, finalStatus, cause, dur)
+	r.log.Info("call ended", "call_id", uuid, "status", finalStatus, "cause", cause, "duration_s", dur)
 	if tenantID, payload, ok := r.loadCallPayload(ctx, uuid); ok {
 		r.notifier.Emit(ctx, tenantID, webhook.EventCallEnded, payload)
 	}

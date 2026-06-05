@@ -15,7 +15,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -24,6 +24,7 @@ import (
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/logging"
 	"github.com/whatomate/tring/internal/orchestrator"
 )
 
@@ -33,14 +34,16 @@ func main() {
 
 	// Config: defaults + TRING_* env (koanf).
 	k := config.Load()
+	logger := logging.New(k.String("log_format"), k.String("log_level"))
 
 	dbase, err := db.Connect(ctx, k.String("dsn"))
 	if err != nil {
-		log.Fatalf("db: %v", err)
+		logger.Error("db connect failed", "err", err)
+		os.Exit(1)
 	}
 	defer dbase.Close()
 
-	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password"))
+	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password")).WithLogger(logger)
 
 	// IVR executor — starts an outbound-ESL listener so FreeSWITCH can
 	// hand inbound calls to us via the dialplan's `socket` application
@@ -54,22 +57,24 @@ func main() {
 	// than refuse to start — correctness doesn't depend on it.
 	flowCache, err := cache.New(k.String("redis_addr"))
 	if err != nil {
-		log.Printf("cache: redis unavailable (%v) — IVR flow caching disabled", err)
+		logger.Warn("redis unavailable, IVR flow caching disabled", "err", err)
 	}
 	defer flowCache.Close()
 
 	ivrAddr := k.String("ivr_addr")
 	exec := orchestrator.NewExecutor(dbase).WithCache(flowCache).
-		WithAgentTransport(k.String("agent_transport"), k.String("agent_gateway"))
+		WithAgentTransport(k.String("agent_transport"), k.String("agent_gateway")).
+		WithLogger(logger)
 	go func() {
-		log.Printf("ivr executor listening on %s", ivrAddr)
+		logger.Info("ivr executor listening", "addr", ivrAddr)
 		if err := eslgo.ListenAndServe(ivrAddr, exec.HandleInboundCall); err != nil {
-			log.Printf("ivr listener exited: %v", err)
+			logger.Error("ivr listener exited", "err", err)
 		}
 	}()
 
-	log.Println("tring orchestrator starting")
+	logger.Info("orchestrator starting")
 	if err := r.Run(ctx); err != nil {
-		log.Fatalf("run: %v", err)
+		logger.Error("orchestrator run failed", "err", err)
+		os.Exit(1)
 	}
 }
