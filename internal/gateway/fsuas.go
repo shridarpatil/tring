@@ -112,6 +112,13 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		ic.cancelAll("declined")
 		_ = dlg.Respond(sip.StatusBusyHere, "Declined", nil)
 		return
+	case <-tx.Done():
+		// FS terminated the INVITE while the agent was still ringing — the
+		// visitor hung up (FS sent CANCEL) before anyone answered. Stop ringing
+		// every tab now instead of leaving the incoming-call UI up until the ring
+		// timeout. The transaction already sent 487, so we just clear the agents.
+		ic.cancelAll("caller hung up")
+		return
 	case <-time.After(g.ringTimeout()):
 		ic.cancelAll("no answer")
 		_ = dlg.Respond(sip.StatusRequestTimeout, "No Answer", nil)
