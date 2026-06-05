@@ -13,9 +13,13 @@ export interface Agent {
   tenant_id: string;
   sip_username: string;
   display_name: string;
+  // Backend-managed availability (the integrator's Away/Break toggle). The
+  // orchestrator rings an agent only when connected AND available_for_calls.
+  available_for_calls: boolean;
   created_at: string;
-  // Live FreeSWITCH registration state, populated on list responses.
-  status?: "online" | "offline" | "unknown";
+  // Live effective state, populated on list responses: combines connection
+  // presence with available_for_calls ("away" = connected but unavailable).
+  status?: "online" | "offline" | "on_call" | "away" | "unknown";
 }
 
 export interface PhoneNumber {
