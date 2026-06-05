@@ -45,6 +45,22 @@ export class TringGuest extends Emitter<GuestEvent> {
     if (this.inCall) return; // already in a call — ignore double taps
     this.emit({ type: "connecting" });
 
+    // Capture the mic FIRST — synchronously in the click/tap that started this
+    // call, BEFORE the credentials fetch below. iOS Safari (and some Android
+    // cases) only grant getUserMedia while the gesture is active, so capturing
+    // it after an await throws a permission error.
+    const gw = new GatewayAdapter();
+    this.gw = gw;
+    this.muted = false;
+    this.speakerOn = true;
+    try {
+      await gw.captureMic();
+    } catch (e) {
+      this.emit({ type: "error", error: e as Error });
+      await this.cleanup();
+      throw e;
+    }
+
     // Resolve gateway connection details: BYOC (trusted) overrides config.
     let gatewayUrl = this.opts.gatewayUrl;
     let flowId = this.opts.flowId;
@@ -76,10 +92,6 @@ export class TringGuest extends Emitter<GuestEvent> {
       throw e;
     }
 
-    const gw = new GatewayAdapter();
-    this.gw = gw;
-    this.muted = false;
-    this.speakerOn = true;
     try {
       await gw.start({
         gatewayUrl,
