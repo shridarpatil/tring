@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -80,7 +81,7 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("/fsleg/test", func(w http.ResponseWriter, r *http.Request) {
 		n, err := g.TestFSLeg(r.Context())
 		if err != nil {
-			g.log.Printf("gateway: fsleg test failed: %v", err)
+			g.log.Error("fsleg test failed", "err", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -95,8 +96,10 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	remote := clientIP(r)
 	var req offerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SDP == "" {
+		g.log.Warn("offer rejected: missing/invalid sdp", "remote", remote)
 		http.Error(w, `{"error":"sdp required"}`, http.StatusBadRequest)
 		return
 	}
@@ -106,9 +109,12 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 	// browser put in the body. Anonymous callers post no token and supply
 	// flow_id in the body; RequireAuth makes the token mandatory.
 	flowID, clientRef := req.FlowID, ""
+	tenant, authMode := "-", "anonymous"
 	if raw := bearer(r); raw != "" {
+		authMode = "token"
 		claims, err := validateGatewayCallToken(raw, g.cfg.JWTSecret)
 		if err != nil {
+			g.log.Warn("offer rejected: invalid/expired call token", "remote", remote, "err", err)
 			http.Error(w, `{"error":"invalid or expired call token"}`, http.StatusUnauthorized)
 			return
 		}
@@ -122,17 +128,19 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := g.consumeToken(r.Context(), claims.ID, exp); err != nil {
 			if errors.Is(err, errTokenReused) {
+				g.log.Warn("offer rejected: call token already used (replay)", "remote", remote, "tenant", claims.TenantID)
 				http.Error(w, `{"error":"call token already used"}`, http.StatusUnauthorized)
 				return
 			}
 			// Single-use couldn't be proven (store down / malformed token):
 			// reject rather than fail open. Retryable once the store recovers.
-			g.log.Printf("gateway: single-use rejected: %v", err)
+			g.log.Error("offer rejected: single-use unprovable", "remote", remote, "tenant", claims.TenantID, "err", err)
 			http.Error(w, `{"error":"call token verification unavailable"}`, http.StatusServiceUnavailable)
 			return
 		}
-		flowID, clientRef = claims.FlowID, claims.ClientRef
+		flowID, clientRef, tenant = claims.FlowID, claims.ClientRef, claims.TenantID.String()
 	} else if g.cfg.RequireAuth {
+		g.log.Warn("offer rejected: call token required", "remote", remote, "gateway_require_auth", true)
 		http.Error(w, `{"error":"call token required"}`, http.StatusUnauthorized)
 		return
 	}
@@ -146,15 +154,31 @@ func (g *Gateway) handleOffer(w http.ResponseWriter, r *http.Request) {
 	// CAPTCHA misconfig, and multi-tenant fairness. (Redis-outage replay is no
 	// longer a gap here — single-use now fails closed; see consumeToken.)
 
+	g.log.Info("offer received, bridging", "remote", remote, "tenant", tenant, "flow", flowOrDash(flowID), "auth", authMode)
+
 	// Bridge into FreeSWITCH when configured; otherwise standalone echo (M1).
 	answer, err := g.Bridge(r.Context(), req.SDP, flowID, clientRef)
 	if err != nil {
-		g.log.Printf("gateway: offer failed: %v", err)
+		g.log.Error("offer failed", "remote", remote, "tenant", tenant, "flow", flowOrDash(flowID), "err", err)
 		http.Error(w, `{"error":"negotiation failed"}`, http.StatusInternalServerError)
 		return
 	}
+	g.log.Info("offer bridged", "remote", remote, "tenant", tenant, "flow", flowOrDash(flowID))
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(answerResponse{SDP: answer})
+}
+
+// clientIP returns the best-effort client address for logging: the first
+// X-Forwarded-For hop when present (the gateway sits behind a TLS proxy in
+// prod), else the transport remote address.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if first, _, ok := strings.Cut(xff, ","); ok {
+			return strings.TrimSpace(first)
+		}
+		return strings.TrimSpace(xff)
+	}
+	return r.RemoteAddr
 }
 
 // cors echoes the request Origin so the browser SDK (cross-origin) can post

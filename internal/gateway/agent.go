@@ -14,7 +14,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"sync"
@@ -150,7 +150,7 @@ type agentSession struct {
 	pending  map[string]*incomingCall
 	presence *presence.Store // publishes online / on_call to Redis
 	active   atomic.Int32    // bridged calls in progress (>0 ⇒ "on_call")
-	log      *log.Logger
+	log      *slog.Logger
 }
 
 // publishPresence asserts the agent's CURRENT state and refreshes its TTL: busy
@@ -242,22 +242,22 @@ func (s *agentSession) dispatch(m agentMsg) {
 		ic := s.pending[m.CallID]
 		s.mu.Unlock()
 		if ic == nil {
-			s.log.Printf("gateway: agent %s/%s %s for unknown call %q (no pending bridge)",
-				s.key.tenant, s.key.sip, m.Type, m.CallID)
+			s.log.Warn("agent msg for unknown call (no pending bridge)",
+				"tenant", s.key.tenant, "sip", s.key.sip, "type", m.Type, "call", m.CallID)
 			return
 		}
 		// Established call → tear the bridge down (which BYEs the FS leg).
 		// Still ringing → unblock the UAS select so it rejects the INVITE.
 		if ic.fireTeardown() {
-			s.log.Printf("gateway: agent %s/%s %s — tearing down bridge for call %s",
-				s.key.tenant, s.key.sip, m.Type, m.CallID)
+			s.log.Info("agent ended call, tearing down bridge",
+				"tenant", s.key.tenant, "sip", s.key.sip, "type", m.Type, "call", m.CallID)
 		} else {
-			s.log.Printf("gateway: agent %s/%s %s while ringing — declining call %s",
-				s.key.tenant, s.key.sip, m.Type, m.CallID)
+			s.log.Info("agent declined call while ringing",
+				"tenant", s.key.tenant, "sip", s.key.sip, "type", m.Type, "call", m.CallID)
 			ic.end()
 		}
 	default:
-		s.log.Printf("gateway: agent %s/%s sent unknown msg %q", s.key.tenant, s.key.sip, m.Type)
+		s.log.Warn("agent sent unknown msg", "tenant", s.key.tenant, "sip", s.key.sip, "type", m.Type)
 	}
 }
 
@@ -290,7 +290,7 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 
 	conn, _, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
-		g.log.Printf("gateway: agent ws upgrade failed: %v", err)
+		g.log.Error("agent ws upgrade failed", "err", err)
 		return
 	}
 
@@ -302,7 +302,7 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		log:      g.log,
 	}
 	g.agents.add(s)
-	g.log.Printf("gateway: agent online %s/%s", s.key.tenant, s.key.sip)
+	g.log.Info("agent online", "tenant", s.key.tenant, "sip", s.key.sip)
 	_ = s.send(agentMsg{Type: msgReady})
 
 	// Publish presence to Redis (read by the API badge + orchestrator transfer)
@@ -329,7 +329,7 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		g.presence.Offline(bg, s.key.tenant, s.key.sip)
 		g.agents.remove(s)
 		s.close()
-		g.log.Printf("gateway: agent offline %s/%s", s.key.tenant, s.key.sip)
+		g.log.Info("agent offline", "tenant", s.key.tenant, "sip", s.key.sip)
 	}()
 
 	for {
@@ -348,7 +348,7 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 		}
 		var m agentMsg
 		if err := json.Unmarshal(data, &m); err != nil {
-			g.log.Printf("gateway: agent %s/%s bad msg: %v", s.key.tenant, s.key.sip, err)
+			g.log.Warn("agent bad msg", "tenant", s.key.tenant, "sip", s.key.sip, "err", err)
 			continue
 		}
 		s.dispatch(m)

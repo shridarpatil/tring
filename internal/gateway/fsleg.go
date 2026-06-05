@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -47,10 +47,10 @@ type fsClient struct {
 	dc     *sipgo.DialogClientCache // UAC dialogs (gateway → FS)
 	ds     *sipgo.DialogServerCache // UAS dialogs (FS → gateway, agent legs)
 	bind   string
-	log    *log.Logger
+	log    *slog.Logger
 }
 
-func newFSClient(cfg FSConfig, logger *log.Logger) (*fsClient, error) {
+func newFSClient(cfg FSConfig, logger *slog.Logger) (*fsClient, error) {
 	f := &fsClient{cfg: cfg, log: logger, bind: fmt.Sprintf(":%d", cfg.SIPPort)}
 	// The UA hostname drives the From header domain (defaults to "localhost").
 	// FreeSWITCH's auto_from challenge realm derives from it, so it MUST be the
@@ -147,10 +147,10 @@ func (f *fsClient) ackOrphan2xx(resp *sip.Response) {
 	ack.SetSource(resp.Destination())
 	ack.SetDestination(resp.Source())
 	if err := f.client.WriteRequest(ack); err != nil {
-		f.log.Printf("gateway: orphan 2xx ACK failed: %v", err)
+		f.log.Warn("orphan 2xx ack failed", "err", err)
 		return
 	}
-	f.log.Printf("gateway: ACKed orphan 2xx (call-id %s) — stopping FS retransmits", callID.Value())
+	f.log.Info("acked orphan 2xx, stopping fs retransmits", "call_id", callID.Value())
 }
 
 // serve starts the SIP listener. Call AFTER any UAS handlers are registered on
@@ -168,7 +168,7 @@ type fsLeg struct {
 	OpusPT    uint8 // payload type FS negotiated for Opus
 	DTMFPT    uint8 // payload type FS negotiated for telephone-event (DTMF)
 	session   *sipgo.DialogClientSession
-	log       *log.Logger
+	log       *slog.Logger
 	closeOnce sync.Once
 }
 
@@ -186,7 +186,7 @@ func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, 
 		return nil, fmt.Errorf("rtp socket: %w", err)
 	}
 	localPort := rtp.LocalAddr().(*net.UDPAddr).Port
-	f.log.Printf("gateway: our RTP socket on %s:%d (advertised to FS)", f.cfg.AdvertIP, localPort)
+	f.log.Debug("rtp socket bound (advertised to fs)", "advert_ip", f.cfg.AdvertIP, "port", localPort)
 
 	offer := buildSDP(f.cfg.AdvertIP, localPort, 111, 101)
 	host, portStr, _ := net.SplitHostPort(f.cfg.SIPAddr)
@@ -207,18 +207,19 @@ func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, 
 		}
 	}
 	recipient := sip.Uri{User: dest, Host: host, Port: port}
+	f.log.Info("inviting freeswitch", "dest", dest, "sip_addr", f.cfg.SIPAddr, "flow", flowOrDash(flowID))
 
 	session, err := f.dc.Invite(ctx, recipient, []byte(offer), headers...)
 	if err != nil {
 		rtp.Close()
-		return nil, fmt.Errorf("invite: %w", err)
+		return nil, fmt.Errorf("invite %s@%s: %w%s", dest, f.cfg.SIPAddr, err, sipFailureHint(err))
 	}
 	if err := session.WaitAnswer(ctx, sipgo.AnswerOptions{
 		Username: f.cfg.AuthUser, Password: f.cfg.AuthPass,
 	}); err != nil {
 		rtp.Close()
 		_ = session.Bye(ctx)
-		return nil, fmt.Errorf("wait answer: %w", err)
+		return nil, fmt.Errorf("wait answer (%s@%s flow=%s): %w%s", dest, f.cfg.SIPAddr, flowOrDash(flowID), err, sipFailureHint(err))
 	}
 	answerSDP := string(session.InviteResponse.Body())
 	// Log FS's negotiated media line + codecs so we can see the agreed PT
@@ -226,7 +227,7 @@ func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, 
 	for _, line := range strings.Split(answerSDP, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "m=audio") || strings.HasPrefix(line, "a=rtpmap") {
-			f.log.Printf("gateway: FS answer: %s", line)
+			f.log.Debug("fs answer sdp", "line", line)
 		}
 	}
 	fsAddr, opusPT, dtmfPT, err := parseSDPMedia(answerSDP)
@@ -243,6 +244,38 @@ func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, 
 	return &fsLeg{RTP: rtp, FSRTPAddr: fsAddr, OpusPT: opusPT, DTMFPT: dtmfPT, session: session, log: f.log}, nil
 }
 
+// flowOrDash renders a flow id for logging, using "-" for the empty (default
+// flow / non-flow) case so log lines stay aligned and greppable.
+func flowOrDash(flowID string) string {
+	if flowID == "" {
+		return "-"
+	}
+	return flowID
+}
+
+// sipFailureHint maps a FreeSWITCH INVITE rejection to a short operator hint so
+// a failed web call is diagnosable from the gateway log alone (these are the
+// codes that actually bit us bringing web calling up). Best-effort string match
+// on the SIP status in the error; returns "" when nothing obvious matches.
+func sipFailureHint(err error) string {
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "403"):
+		return " [403: FreeSWITCH rejected the INVITE — the internal profile's inbound ACL may not trust this gateway]"
+	case strings.Contains(s, "404"):
+		return " [404: no dialplan route — is gwflow/the DID reachable in the profile's context?]"
+	case strings.Contains(s, "480"):
+		return " [480: destination unavailable — flow not reachable (wrong context/route) or no agent online]"
+	case strings.Contains(s, "486"):
+		return " [486: busy]"
+	case strings.Contains(s, "408"), strings.Contains(s, "timeout"):
+		return " [408/timeout: FreeSWITCH did not answer — is it up and is fs_sip_addr correct?]"
+	case strings.Contains(s, "503"):
+		return " [503: FreeSWITCH unavailable — profile down or out of resources]"
+	}
+	return ""
+}
+
 func (l *fsLeg) Close() {
 	l.closeOnce.Do(func() {
 		// The UAC (visitor) leg owns a client dialog to BYE; the UAS (agent)
@@ -254,7 +287,7 @@ func (l *fsLeg) Close() {
 			// the bridged agent leg lingers); the error says why (non-2xx /
 			// timeout / unreachable Contact). Success is the common path — no log.
 			if err := l.session.Bye(ctx); err != nil && l.log != nil {
-				l.log.Printf("gateway: visitor leg BYE to FS failed: %v", err)
+				l.log.Warn("visitor leg bye to fs failed", "err", err)
 			}
 		}
 		_ = l.RTP.Close()

@@ -14,7 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,7 +51,7 @@ type Config struct {
 	// Cache (Redis) backs agent presence so the API/orchestrator can see which
 	// agents are connected. nil = presence disabled (no Redis).
 	Cache  *cache.Cache
-	Logger *log.Logger
+	Logger *slog.Logger
 }
 
 type ICEServer struct {
@@ -69,7 +69,7 @@ type Gateway struct {
 	agents   *agentRegistry  // online agents' signaling WebSockets (M4b)
 	presence *presence.Store // publishes agent presence to Redis (M5)
 	tokens   jtiStore        // consumes one-time gateway-call-token jti (*cache.Cache in prod)
-	log      *log.Logger
+	log      *slog.Logger
 }
 
 // New builds a Gateway: registers Opus + telephone-event (DTMF), scopes the
@@ -77,7 +77,7 @@ type Gateway struct {
 // v4 setup.
 func New(cfg Config) (*Gateway, error) {
 	if cfg.Logger == nil {
-		cfg.Logger = log.Default()
+		cfg.Logger = slog.Default()
 	}
 
 	me := &webrtc.MediaEngine{}
@@ -120,7 +120,7 @@ func New(cfg Config) (*Gateway, error) {
 		agents:   newAgentRegistry(),
 		presence: presence.New(cfg.Cache),
 		tokens:   cfg.Cache, // Redis-backed; nil cache → single-use disabled (fail-open)
-		log:      cfg.Logger,
+		log:      cfg.Logger.With("component", "gateway"),
 	}
 	if cfg.FS != nil {
 		fc, err := newFSClient(*cfg.FS, g.log)
@@ -131,7 +131,7 @@ func New(cfg Config) (*Gateway, error) {
 		// Register the UAS handlers (FS-delivered agent legs) BEFORE serving.
 		g.registerFSUAS()
 		fc.serve(context.Background())
-		g.log.Printf("gateway: FreeSWITCH bridge enabled → %s (target %s)", cfg.FS.SIPAddr, cfg.FS.Target)
+		g.log.Info("freeswitch bridge enabled", "sip_addr", cfg.FS.SIPAddr, "target", cfg.FS.Target)
 	}
 	return g, nil
 }
@@ -148,7 +148,7 @@ func (g *Gateway) TestFSLeg(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	defer leg.Close()
-	g.log.Printf("gateway: FS leg up, FS RTP at %s — reading inbound RTP for 4s", leg.FSRTPAddr)
+	g.log.Info("fs leg up (echo test), reading inbound rtp for 4s", "fs_rtp", leg.FSRTPAddr)
 
 	count := 0
 	_ = leg.RTP.SetReadDeadline(time.Now().Add(4 * time.Second))
@@ -228,7 +228,7 @@ func (g *Gateway) Echo(ctx context.Context, offerSDP string) (string, error) {
 	})
 
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		g.log.Printf("gateway: pc state=%s", s)
+		g.log.Debug("pc state", "state", s.String())
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			_ = pc.Close()
 		}
@@ -279,7 +279,7 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID, clientRef string
 		_ = pc.Close()
 		return "", fmt.Errorf("fs dial: %w", err)
 	}
-	g.log.Printf("gateway: bridge — FS leg up (FS RTP %s)", leg.FSRTPAddr)
+	g.log.Info("bridge: fs leg up", "fs_rtp", leg.FSRTPAddr)
 
 	// Visitor leg: no media-inactivity backstop — IVR think-time has legitimate
 	// RTP gaps. Teardown comes from the dialog BYE watcher / pc state / DC bye.
@@ -294,7 +294,7 @@ func (g *Gateway) Bridge(ctx context.Context, offerSDP, flowID, clientRef string
 		go func() {
 			for st := range leg.session.StateRead() {
 				if st == sip.DialogStateEnded {
-					g.log.Printf("gateway: visitor leg ended (FS BYE) — tearing down bridge")
+					g.log.Info("visitor leg ended (fs bye), tearing down bridge")
 					teardown()
 					return
 				}
@@ -385,7 +385,7 @@ func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalS
 		byeDC.Store(dc)
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 			if string(msg.Data) == "bye" {
-				g.log.Printf("gateway: browser sent bye — tearing down bridge")
+				g.log.Info("browser sent bye, tearing down bridge")
 				teardown()
 			}
 		})
@@ -401,8 +401,8 @@ func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalS
 			case <-stop:
 				return
 			case <-t.C:
-				g.log.Printf("gateway: relay pkts browser→FS=%d FS→browser=%d",
-					toFSPkts.Load(), toBrowserPkts.Load())
+				g.log.Debug("relay packet counts",
+					"browser_to_fs", toFSPkts.Load(), "fs_to_browser", toBrowserPkts.Load())
 			}
 		}
 	}()
@@ -439,7 +439,7 @@ func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalS
 	// can't reconcile, so it never echoes. Stripping the extensions and
 	// re-marshalling gives FS a clean Opus stream (PT stays 111, matches).
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		g.log.Printf("gateway: bridge — browser track arrived (%s)", remote.Codec().MimeType)
+		g.log.Debug("browser track arrived", "codec", remote.Codec().MimeType)
 		// The browser sends two payload types on the audio track: Opus (its
 		// negotiated PT — Firefox 109, Chrome 111) and telephone-event for
 		// DTMF (another dynamic PT). FS rejects any PT that isn't the one IT
@@ -475,7 +475,7 @@ func (g *Gateway) relay(pc *webrtc.PeerConnection, toBrowser *webrtc.TrackLocalS
 	})
 
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
-		g.log.Printf("gateway: bridge pc state=%s", s)
+		g.log.Debug("bridge pc state", "state", s.String())
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed {
 			teardown()
 		}

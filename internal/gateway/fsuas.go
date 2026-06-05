@@ -77,13 +77,13 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 	dlg, err := g.fs.ds.ReadInvite(req, tx)
 	if err != nil {
-		g.log.Printf("gateway: UAS read invite failed: %v", err)
+		g.log.Error("uas read invite failed", "err", err)
 		return
 	}
 
 	sess, ok := g.agents.lookup(agentKey{tenant: tenant, sip: sipUser})
 	if !ok {
-		g.log.Printf("gateway: agent %s/%s offline → 480", tenant, sipUser)
+		g.log.Info("agent offline, replying 480", "tenant", tenant, "sip", sipUser)
 		_ = dlg.Respond(sip.StatusTemporarilyUnavailable, "Agent Offline", nil)
 		return
 	}
@@ -91,7 +91,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// FS is the offerer; learn its RTP endpoint + the PTs we must echo.
 	fsAddr, opusPT, dtmfPT, err := parseSDPMedia(string(req.Body()))
 	if err != nil {
-		g.log.Printf("gateway: agent leg bad SDP from FS: %v", err)
+		g.log.Error("agent leg bad sdp from fs", "err", err)
 		_ = dlg.Respond(sip.StatusNotAcceptableHere, "Bad SDP", nil)
 		return
 	}
@@ -156,13 +156,13 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// back over the WebSocket.
 	answerSDP, err := g.negotiateAnswer(pc, browserOffer)
 	if err != nil {
-		g.log.Printf("gateway: agent leg negotiate failed: %v", err)
+		g.log.Error("agent leg negotiate failed", "err", err)
 		teardown()
 		_ = dlg.Respond(sip.StatusInternalServerError, "Negotiate", nil)
 		return
 	}
 	if err := sess.sendAnswer(callID, answerSDP); err != nil {
-		g.log.Printf("gateway: agent leg send answer failed: %v", err)
+		g.log.Error("agent leg send answer failed", "err", err)
 		teardown()
 		_ = dlg.Respond(sip.StatusInternalServerError, "Signal", nil)
 		return
@@ -170,11 +170,11 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 
 	// Answer FS with our RTP SDP (echoing FS's PTs). Media flows both ways now.
 	if err := dlg.RespondSDP([]byte(buildSDP(g.fs.cfg.AdvertIP, localPort, opusPT, dtmfPT))); err != nil {
-		g.log.Printf("gateway: agent leg 200 OK failed: %v", err)
+		g.log.Error("agent leg 200 ok failed", "err", err)
 		teardown()
 		return
 	}
-	g.log.Printf("gateway: agent bridge up %s/%s (FS RTP %s)", tenant, sipUser, fsAddr)
+	g.log.Info("agent bridge up", "tenant", tenant, "sip", sipUser, "fs_rtp", fsAddr)
 
 	// Tear down when FS ends the dialog (BYE).
 	go func() {
@@ -190,7 +190,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 // failAgentLeg logs, 500s the SIP leg, and notifies the browser that media
 // setup failed (the browser was already ringing/answered).
 func (g *Gateway) failAgentLeg(dlg *sipgo.DialogServerSession, sess *agentSession, callID, what string, err error) {
-	g.log.Printf("gateway: agent leg %s failed: %v", what, err)
+	g.log.Error("agent leg failed", "stage", what, "err", err)
 	sess.finishIncoming(callID)
 	sess.notifyEnded(callID, "media setup failed")
 	_ = dlg.Respond(sip.StatusInternalServerError, "Media", nil)

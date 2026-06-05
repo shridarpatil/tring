@@ -28,6 +28,10 @@ var defaults = map[string]any{
 	"fs_basic_auth": "fs:fs_dev_secret_change_me_in_prod",
 	"esl_addr":      "127.0.0.1:8021",
 	"esl_password":  "ClueCon",
+	// Structured logging (internal/logging). format: text (logfmt, local dev) |
+	// json (log shippers — logchef/Loki). level: debug|info|warn|error.
+	"log_format": "text",
+	"log_level":  "info",
 	// STUN is OFF by default. In the gateway model (ADR-001) the gateway is a
 	// public server (TRING_PUBLIC_IP), so it discovers the browser's reflexive
 	// address itself — a separate STUN server is redundant (and we don't want

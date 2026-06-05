@@ -13,19 +13,22 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/gateway"
+	"github.com/whatomate/tring/internal/logging"
 )
 
 func main() {
 	dialTest := flag.Bool("dial-test", false, "one-shot: SIP-dial FreeSWITCH, read inbound RTP for 4s, print result, exit (headless 2a check)")
 	flag.Parse()
 	k := config.Load()
+
+	logger := logging.New(k.String("log_format"), k.String("log_level"))
 
 	var ice []gateway.ICEServer
 	if stun := k.String("stun_url"); stun != "" {
@@ -56,7 +59,7 @@ func main() {
 	// log-and-disable if unreachable — presence just goes dark, calls still work.
 	redisCache, err := cache.New(k.String("redis_addr"))
 	if err != nil {
-		log.Printf("cache: redis unavailable (%v) — agent presence disabled", err)
+		logger.Warn("redis unavailable, agent presence disabled", "err", err)
 	}
 	defer redisCache.Close()
 
@@ -66,9 +69,10 @@ func main() {
 	// without a reachable Redis rather than serve 503s — the operator must set
 	// TRING_REDIS_ADDR (or explicitly disable auth for an open/dev gateway).
 	if k.Bool("gateway_require_auth") && redisCache == nil {
-		log.Fatalf("gateway: gateway_require_auth is set but Redis is unavailable — " +
+		logger.Error("gateway_require_auth is set but Redis is unavailable — " +
 			"set TRING_REDIS_ADDR to a reachable Redis (single-use token enforcement " +
 			"needs it), or set TRING_GATEWAY_REQUIRE_AUTH=false for an open gateway")
+		os.Exit(1)
 	}
 
 	gw, err := gateway.New(gateway.Config{
@@ -82,9 +86,11 @@ func main() {
 		RequireAuth:      k.Bool("gateway_require_auth"),
 		AgentRingTimeout: time.Duration(k.Int("gateway_agent_ring_timeout")) * time.Second,
 		Cache:            redisCache,
+		Logger:           logger,
 	})
 	if err != nil {
-		log.Fatalf("gateway: %v", err)
+		logger.Error("gateway init failed", "err", err)
+		os.Exit(1)
 	}
 
 	if *dialTest {
@@ -92,9 +98,10 @@ func main() {
 		defer cancel()
 		n, err := gw.TestFSLeg(ctx)
 		if err != nil {
-			log.Fatalf("dial-test FAILED: %v", err)
+			logger.Error("dial-test failed", "err", err)
+			os.Exit(1)
 		}
-		log.Printf("dial-test OK: FreeSWITCH leg established, inbound RTP packets in 4s = %d", n)
+		logger.Info("dial-test ok: freeswitch leg established", "inbound_rtp_packets_4s", n)
 		return
 	}
 
@@ -104,8 +111,9 @@ func main() {
 		Handler:           gw.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	log.Printf("tring gateway listening on %s (echo mode — milestone 1)", addr)
+	logger.Info("gateway listening", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("gateway serve: %v", err)
+		logger.Error("gateway serve failed", "err", err)
+		os.Exit(1)
 	}
 }

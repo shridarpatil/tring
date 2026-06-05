@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"log"
+	"log/slog"
 	"net"
 	"testing"
 )
@@ -14,7 +14,7 @@ func newTestSession(tenant, sip string) (*agentSession, net.Conn) {
 		key:     agentKey{tenant: tenant, sip: sip},
 		conn:    a,
 		pending: map[string]*incomingCall{},
-		log:     log.Default(),
+		log:     slog.Default(),
 	}
 	return s, b
 }
