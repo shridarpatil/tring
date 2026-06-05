@@ -11,6 +11,15 @@ services:
       - SYS_NICE
     ulimits:
       rtprio: 95
+    # Start after the API container so FreeSWITCH's first mod_xml_curl lookups
+    # (directory/gateways/ACL against :8085 on boot) are less likely to race a
+    # not-yet-listening API. service_started (not _healthy) because the API is a
+    # distroless image with no shell/curl for a healthcheck — this is ordering
+    # only, so a brief first-query race can still occur, but FS retries on real
+    # lookups so it self-heals.
+    depends_on:
+      api:
+        condition: service_started
     env_file:
       # Per-deployment trunk credentials (Exotel etc.). Gitignored; see
       # .env.example for the schema. Missing file is fine — defaults
