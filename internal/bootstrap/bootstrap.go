@@ -16,7 +16,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -91,7 +91,7 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 
 	// Operator already knows the password — they set it in env. Just
 	// confirm what was seeded so they can verify on first boot.
-	log.Printf("bootstrap: seeded tenant %q (id=%s)", cfg.TenantName, tenantID)
-	log.Printf("bootstrap: admin user %s — sign in at /admin/", email)
+	slog.Info("bootstrap seeded tenant", "name", cfg.TenantName, "tenant_id", tenantID)
+	slog.Info("bootstrap admin user ready, sign in at /admin/", "email", email)
 	return nil
 }

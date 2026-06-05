@@ -13,6 +13,7 @@ package main
 import (
 	"context"
 	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -29,6 +30,7 @@ func main() {
 	k := config.Load()
 
 	logger := logging.New(k.String("log_format"), k.String("log_level"))
+	slog.SetDefault(logger)
 
 	var ice []gateway.ICEServer
 	if stun := k.String("stun_url"); stun != "" {

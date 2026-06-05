@@ -11,7 +11,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,7 +186,7 @@ func WriteGateways(gws []Gateway) error {
 func (c *Client) RescanExternalProfile(ctx context.Context) error {
 	conn, err := eslgo.Dial(c.addr, c.password, func() {})
 	if err != nil {
-		log.Printf("freeswitch: dial for rescan failed: %v", err)
+		slog.Error("freeswitch dial for rescan failed", "component", "freeswitch", "err", err)
 		return err
 	}
 	defer conn.Close()
@@ -195,7 +195,7 @@ func (c *Client) RescanExternalProfile(ctx context.Context) error {
 		Arguments: "profile external rescan",
 	})
 	if err != nil {
-		log.Printf("freeswitch: sofia rescan failed: %v", err)
+		slog.Error("freeswitch sofia rescan failed", "component", "freeswitch", "err", err)
 		return err
 	}
 	return nil

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"time"
 
@@ -30,7 +29,7 @@ func flowListCacheKey(tenantID uuid.UUID) string {
 // only means staleness until the TTL.
 func (s *Server) invalidateFlowList(ctx context.Context, tenantID uuid.UUID) {
 	if err := s.cache.Delete(ctx, flowListCacheKey(tenantID)); err != nil {
-		log.Printf("flows: list cache invalidate (tenant %s) failed: %v", tenantID, err)
+		s.log.Warn("flow list cache invalidate failed", "tenant", tenantID, "err", err)
 	}
 }
 
@@ -206,7 +205,7 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 	// path) and the tenant's cached list so the edit takes effect on the
 	// next call/list instead of after the TTL. Best-effort.
 	if err := s.cache.Delete(r.Context(), orchestrator.FlowCacheKey(id)); err != nil {
-		log.Printf("flows: cache invalidate %s failed: %v", id, err)
+		s.log.Warn("flow definition cache invalidate failed", "flow", id, "err", err)
 	}
 	s.invalidateFlowList(r.Context(), t.ID)
 	writeJSON(w, http.StatusOK, f)
@@ -229,7 +228,7 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cache.Delete(r.Context(), orchestrator.FlowCacheKey(id)); err != nil {
-		log.Printf("flows: cache invalidate %s failed: %v", id, err)
+		s.log.Warn("flow definition cache invalidate failed", "flow", id, "err", err)
 	}
 	s.invalidateFlowList(r.Context(), t.ID)
 	w.WriteHeader(http.StatusNoContent)

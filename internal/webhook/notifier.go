@@ -25,7 +25,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -47,6 +47,7 @@ type Notifier struct {
 	db   *db.DB
 	q    *queries.Queries
 	http *http.Client
+	log  *slog.Logger
 }
 
 func New(d *db.DB) *Notifier {
@@ -54,7 +55,18 @@ func New(d *db.DB) *Notifier {
 		db:   d,
 		q:    queries.MustLoad(),
 		http: &http.Client{Timeout: 10 * time.Second},
+		log:  slog.Default().With("component", "webhook"),
 	}
+}
+
+// WithLogger sets the notifier's logger (scoped component=webhook) and returns
+// it for chaining. Used by both the API and orchestrator when they construct a
+// Notifier so deliveries log through the configured handler.
+func (n *Notifier) WithLogger(l *slog.Logger) *Notifier {
+	if l != nil {
+		n.log = l.With("component", "webhook")
+	}
+	return n
 }
 
 // envelope is the JSON shape POSTed to subscribers. `data` is event-
@@ -75,7 +87,7 @@ type envelope struct {
 func (n *Notifier) Emit(ctx context.Context, tenantID uuid.UUID, eventType string, data interface{}) {
 	rows, err := n.db.Pool.Query(ctx, n.q.ListWebhookSubscribers, tenantID, eventType)
 	if err != nil {
-		log.Printf("webhook: lookup %s for tenant %s: %v", eventType, tenantID, err)
+		n.log.Error("lookup subscribers failed", "event", eventType, "tenant", tenantID, "err", err)
 		return
 	}
 	defer rows.Close()
@@ -90,7 +102,7 @@ func (n *Notifier) Emit(ctx context.Context, tenantID uuid.UUID, eventType strin
 		var t target
 		var events []string
 		if err := rows.Scan(&t.HookID, &t.URL, &t.Secret, &events); err != nil {
-			log.Printf("webhook: scan: %v", err)
+			n.log.Error("scan subscriber failed", "err", err)
 			continue
 		}
 		targets = append(targets, t)
@@ -107,13 +119,13 @@ func (n *Notifier) Emit(ctx context.Context, tenantID uuid.UUID, eventType strin
 			Data:    data,
 		})
 		if err != nil {
-			log.Printf("webhook: marshal: %v", err)
+			n.log.Error("marshal envelope failed", "err", err)
 			continue
 		}
 		err = n.db.Pool.QueryRow(ctx, n.q.InsertWebhookDelivery,
 			tgt.HookID, eventType, payloadBytes).Scan(&deliveryID)
 		if err != nil {
-			log.Printf("webhook: insert delivery: %v", err)
+			n.log.Error("insert delivery failed", "err", err)
 			continue
 		}
 		// Re-marshal with the assigned delivery id so the body the
@@ -126,7 +138,7 @@ func (n *Notifier) Emit(ctx context.Context, tenantID uuid.UUID, eventType strin
 		}
 		body, err := json.Marshal(fullEnv)
 		if err != nil {
-			log.Printf("webhook: marshal w/ id: %v", err)
+			n.log.Error("marshal envelope with id failed", "err", err)
 			continue
 		}
 		go n.deliver(deliveryID, tgt.URL, tgt.Secret, eventType, body)
@@ -197,14 +209,14 @@ func (n *Notifier) recordAttempt(id uuid.UUID, attempts, status int, errStr stri
 	_, err := n.db.Pool.Exec(context.Background(), n.q.UpdateDeliveryAttempt,
 		attempts, status, errStr, id)
 	if err != nil {
-		log.Printf("webhook: record attempt %s: %v", id, err)
+		n.log.Error("record attempt failed", "delivery", id, "err", err)
 	}
 }
 
 func (n *Notifier) markDelivered(id uuid.UUID, status int) {
 	_, err := n.db.Pool.Exec(context.Background(), n.q.MarkDeliverySuccess, status, id)
 	if err != nil {
-		log.Printf("webhook: mark delivered %s: %v", id, err)
+		n.log.Error("mark delivered failed", "delivery", id, "err", err)
 	}
 }
 
@@ -212,6 +224,6 @@ func (n *Notifier) markExhausted(id uuid.UUID, lastStatus int, lastErr string) {
 	_, err := n.db.Pool.Exec(context.Background(), n.q.MarkDeliveryExhausted,
 		lastStatus, lastErr, id)
 	if err != nil {
-		log.Printf("webhook: mark exhausted %s: %v", id, err)
+		n.log.Error("mark exhausted failed", "delivery", id, "err", err)
 	}
 }

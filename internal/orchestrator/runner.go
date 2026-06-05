@@ -53,6 +53,7 @@ func New(d *db.DB, addr, password string) *Runner {
 func (r *Runner) WithLogger(l *slog.Logger) *Runner {
 	if l != nil {
 		r.log = l.With("component", "orchestrator")
+		r.notifier.WithLogger(l)
 	}
 	return r
 }
