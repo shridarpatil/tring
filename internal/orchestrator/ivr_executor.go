@@ -22,7 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -107,7 +107,7 @@ const (
 type Executor struct {
 	DB     *db.DB
 	Q      *queries.Queries
-	Logger *log.Logger
+	Logger *slog.Logger
 	// Cache holds resolved flow definitions (cache-aside, 1h TTL). May be
 	// nil — caching disabled, every resolve reads the DB. Set via WithCache.
 	Cache *cache.Cache
@@ -119,7 +119,17 @@ type Executor struct {
 }
 
 func NewExecutor(d *db.DB) *Executor {
-	return &Executor{DB: d, Q: queries.MustLoad(), Logger: log.Default()}
+	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default()}
+}
+
+// WithLogger sets the executor's base logger (scoped component=orchestrator)
+// and returns the executor for chaining. Per-call lines are logged through a
+// child logger carrying call_id/tenant (see callState.log).
+func (e *Executor) WithLogger(l *slog.Logger) *Executor {
+	if l != nil {
+		e.Logger = l.With("component", "orchestrator")
+	}
+	return e
 }
 
 // WithCache attaches a Redis cache for flow definitions and returns the
@@ -149,10 +159,13 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	uuidStr := ev.GetHeader("Unique-ID")
 	called := ev.GetHeader("Caller-Destination-Number")
 	caller := ev.GetHeader("Caller-Caller-ID-Number")
-	e.Logger.Printf("ivr: handler entry uuid=%s called=%s caller=%s", uuidStr, called, caller)
+	// Call-scoped logger: every line for this call carries call_id so a single
+	// call's IVR journey is greppable. Enriched with tenant once resolved.
+	clog := e.Logger.With("call_id", uuidStr)
+	clog.Info("ivr handler entry", "called", called, "caller", caller)
 
 	if uuidStr == "" || called == "" {
-		e.Logger.Printf("ivr: missing UUID or destination on inbound call")
+		clog.Warn("ivr inbound missing uuid or destination")
 		_ = conn.HangupCall(ctx, uuidStr, "CALL_REJECTED")
 		return
 	}
@@ -167,23 +180,24 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	webCall := false
 	if fid := ev.GetHeader("variable_tring_flow_id"); fid != "" {
 		webCall = true
-		e.Logger.Printf("ivr: web call, flow pinned to %s", fid)
+		clog.Info("ivr web call, flow pinned", "flow", fid)
 		resolved, err = e.resolveFlowByID(ctx, fid)
 	} else {
 		resolved, err = e.resolveFlow(ctx, called)
 	}
 	if err != nil {
-		e.Logger.Printf("ivr: no flow for %s: %v", called, err)
+		clog.Warn("ivr no flow resolved", "called", called, "err", err)
 		_ = conn.HangupCall(ctx, uuidStr, "UNALLOCATED_NUMBER")
 		return
 	}
 	if resolved.Flow == nil {
-		e.Logger.Printf("ivr: %s has no flow attached; hanging up", called)
+		clog.Warn("ivr no flow attached, hanging up", "called", called)
 		_ = conn.HangupCall(ctx, uuidStr, "NORMAL_CLEARING")
 		return
 	}
 	tenantID := resolved.TenantID
 	flow := *resolved.Flow
+	clog = clog.With("tenant", tenantID)
 
 	// A web call has no dialed number — it routed to the internal `gwflow`
 	// extension. Show the flow it reached as the call log's "To" instead of
@@ -199,6 +213,7 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 		called:    called,
 		clientRef: ev.GetHeader("variable_tring_client_ref"),
 		vars:      map[string]string{},
+		log:       clog,
 	}
 
 	// Log the inbound/IVR call (incl. guest web calls) so it shows in the
@@ -211,15 +226,15 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	// Persist the IVR path on the way out, even if walk errors mid-flow.
 	defer e.saveIVRPath(state)
 
-	e.Logger.Printf("ivr: resolved flow for %s, answering", called)
+	clog.Info("ivr resolved flow, answering", "to", called)
 	if err := conn.AnswerCall(ctx, uuidStr); err != nil {
-		e.Logger.Printf("ivr: answer failed: %v", err)
+		clog.Error("ivr answer failed", "err", err)
 		return
 	}
-	e.Logger.Printf("ivr: answered, walking from entry node %s", flow.EntryNode)
+	clog.Info("ivr answered, walking flow", "entry_node", flow.EntryNode)
 
 	if err := e.walk(ctx, conn, &flow, flow.EntryNode, state); err != nil {
-		e.Logger.Printf("ivr: walk error: %v", err)
+		clog.Error("ivr walk error", "err", err)
 	}
 
 	// Best-effort hangup if the call's still up. Hangup nodes already do
@@ -281,10 +296,10 @@ func (e *Executor) recordInboundCall(ctx context.Context, st *callState) {
 		st.tenantID, st.caller, st.called, st.uuid, st.clientRef,
 	).Scan(&id)
 	if err != nil {
-		e.Logger.Printf("ivr: failed to record inbound call (uuid=%s): %v", st.uuid, err)
+		st.log.Error("ivr failed to record inbound call", "err", err)
 		return
 	}
-	e.Logger.Printf("ivr: recorded inbound call %s (uuid=%s)", id, st.uuid)
+	st.log.Info("ivr recorded inbound call", "call_row", id)
 }
 
 // saveIVRPath persists the recorded IVR journey to the call's ivr_path column,
@@ -300,11 +315,11 @@ func (e *Executor) saveIVRPath(st *callState) {
 	defer cancel()
 	b, err := json.Marshal(st.steps)
 	if err != nil {
-		e.Logger.Printf("ivr: marshal ivr_path (uuid=%s): %v", st.uuid, err)
+		st.log.Error("ivr marshal ivr_path failed", "err", err)
 		return
 	}
 	if _, err := e.DB.Pool.Exec(ctx, e.Q.SetCallIVRPath, string(b), st.uuid); err != nil {
-		e.Logger.Printf("ivr: save ivr_path (uuid=%s): %v", st.uuid, err)
+		st.log.Error("ivr save ivr_path failed", "err", err)
 	}
 }
 
@@ -404,6 +419,10 @@ type callState struct {
 	clientRef string // embedder-supplied caller identity (tring_client_ref)
 	vars      map[string]string
 
+	// log is the per-call logger: the executor's base logger with call_id +
+	// tenant bound, so every walk/node line correlates to this one call.
+	log *slog.Logger
+
 	// steps is the recorded IVR journey (one SimStep per node walked),
 	// persisted to calls.ivr_path so the call log shows the path taken.
 	// Reuses the simulator's step shape so the live path and the Test-panel
@@ -442,7 +461,7 @@ func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData
 		if !ok {
 			return fmt.Errorf("node %s not found", nodeID)
 		}
-		e.Logger.Printf("ivr: walk depth=%d node=%s type=%s", depth, node.ID, node.Type)
+		st.log.Info("ivr walk node", "depth", depth, "node", node.ID, "type", node.Type)
 
 		// Clear per-node scratch; the handler fills it in, then we record
 		// one step from it below (after the outcome is known).
@@ -452,7 +471,7 @@ func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData
 			st.recordStep(node, "error")
 			return fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
 		}
-		e.Logger.Printf("ivr: walk node=%s outcome=%q", node.ID, outcome)
+		st.log.Info("ivr node outcome", "node", node.ID, "outcome", outcome)
 		st.recordStep(node, outcome)
 		if outcome == "" {
 			// Terminal node (hangup) or executor explicitly ended.
@@ -461,7 +480,7 @@ func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData
 
 		next := findNextNode(flow, nodeID, outcome)
 		if next == "" {
-			e.Logger.Printf("ivr: node %s outcome=%s has no outgoing edge — ending", node.ID, outcome)
+			st.log.Info("ivr node has no outgoing edge, ending", "node", node.ID, "outcome", outcome)
 			return nil
 		}
 		nodeID = next
@@ -511,19 +530,19 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 	// ─── TODO scaffolds (see docs/PHASE_3_IVR_EXECUTION.md) ──────────
 	case nodeGather:
 		// TODO: play prompt → read N digits up to terminator → st.vars[store_as] = digits → "default" / "timeout" / "max_retries"
-		e.Logger.Printf("ivr: gather node not yet implemented; following default")
+		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "default")
 		return "default", nil
 	case nodeHTTPCallback:
 		// TODO: substitute {{vars}} in URL/body, HTTP request, branch on 2xx vs non2xx
-		e.Logger.Printf("ivr: http_callback node not yet implemented; following http:2xx")
+		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "http:2xx")
 		return "http:2xx", nil
 	case nodeTiming:
 		// TODO: evaluate config.schedule against time.Now in tenant TZ → "in_hours" / "out_of_hours"
-		e.Logger.Printf("ivr: timing node not yet implemented; following in_hours")
+		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "in_hours")
 		return "in_hours", nil
 	case nodeGotoFlow:
 		// TODO: load flow_id, recurse into walk() against new flow.entry_node
-		e.Logger.Printf("ivr: goto_flow node not yet implemented; ending call")
+		st.log.Warn("ivr node not yet implemented, ending call", "type", node.Type, "node", node.ID)
 		return "", nil
 
 	default:
@@ -534,15 +553,15 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 // ─── Node implementations (real) ────────────────────────────────────
 
 func (e *Executor) runGreeting(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
-	e.Logger.Printf("ivr: runGreeting node=%s config=%+v", node.ID, node.Config)
+	st.log.Info("ivr greeting", "node", node.ID)
 	if file, ok := node.Config["audio_file"].(string); ok && file != "" {
 		st.stepAction, st.stepDetail = "play_audio", file
-		e.Logger.Printf("ivr: playback file=%s (sync)", file)
+		st.log.Info("ivr playback (sync)", "node", node.ID, "file", file)
 		_, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: file, Sync: true})
 		if err != nil {
 			return "", fmt.Errorf("playback: %w", err)
 		}
-		e.Logger.Printf("ivr: playback done")
+		st.log.Info("ivr playback done", "node", node.ID, "file", file)
 	} else if text, ok := node.Config["greeting_text"].(string); ok && text != "" {
 		st.stepAction, st.stepDetail = "speak", text
 		_, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "speak", AppArgs: "flite|kal|" + text, Sync: true})
@@ -613,14 +632,14 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	}
 	bridgeTo, sips, err := e.agentBridgeTarget(ctx, node, st.tenantID, label)
 	if err != nil {
-		e.Logger.Printf("ivr: transfer target lookup failed: %v", err)
+		st.log.Error("ivr transfer target lookup failed", "node", node.ID, "err", err)
 		return "no_answer", nil
 	}
 	if bridgeTo == "" {
-		e.Logger.Printf("ivr: transfer node has no agents to ring (tenant=%s)", st.tenantID)
+		st.log.Warn("ivr transfer has no agents to ring", "node", node.ID)
 		return "no_answer", nil
 	}
-	e.Logger.Printf("ivr: transfer bridging to %s", bridgeTo)
+	st.log.Info("ivr transfer bridging", "node", node.ID, "bridge_to", bridgeTo, "agents", sips)
 
 	if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: bridgeTo, Sync: true}); err != nil {
 		return "", fmt.Errorf("bridge: %w", err)
