@@ -11,24 +11,24 @@ caller's business identity travels in a short-lived **gateway call token**, not
 in a SIP registration. See `docs/ADR-001-webrtc-gateway.md` and
 `docs/EDGE_DEPLOYMENT.md`.
 
-## Why two mint paths
+## One mint, two policies
 
-The caller's *business* identity (`client_ref`) can only be trusted when the
-request proves tenant ownership, so the API exposes two mints — both issue a
-gateway call token, they differ only in whether `client_ref` is honoured:
+There is a **single mint** — `POST /v1/guest-credentials` (tenant **API key**,
+`tk_live_…`), called by the integrator's backend (there is no public/browser
+mint). It issues a gateway call token; the only difference between an anonymous
+guest and a logged-in caller is what the backend checks first and whether it
+passes a `client_ref`:
 
-- **Public mint** — `POST /v1/sdk/guest-credentials` (Origin allowlist + per-IP
-  rate limit, no auth). For anonymous website visitors. **`client_ref` is
-  ignored here** — a browser-supplied identity would be spoofable. Can be
-  disabled per-tenant (then this returns 403 and you must mint server-side).
-- **Authenticated mint** — `POST /v1/guest-credentials` (tenant **API key**,
-  `tk_live_…`). For the integrator's backend, which knows the verified
-  logged-in client. **`client_ref` is trusted** and baked into the token.
+- **Anonymous guest** → the backend gates with a **CAPTCHA / rate-limit**, then
+  mints **without** `client_ref`.
+- **Logged-in caller** → the backend verifies the session, then mints **with**
+  the verified `client_ref` (attributed on the CDR).
 
-Both resolve the flow and call the shared `mintGatewayCall`. The browser never
-holds the API key — this mirrors the agent widget's `data-token-url` pattern:
-the integrator's backend issues call credentials to its own authenticated
-frontend.
+`client_ref` is only ever trusted because the request proved tenant ownership
+(the API key) — the browser never holds the key and can't set it. This mirrors
+the agent widget's `data-token-url` pattern: the integrator's backend issues
+call credentials to its own frontend. The minted token is short-lived and
+**single-use** (the gateway consumes its `jti` on first `/webrtc/offer`).
 
 ## 1. Mint a gateway call token (trust boundary)
 
@@ -55,9 +55,10 @@ frontend.
        │ ◄── creds ─────────────│                        │
        │                        │
        ▼ 4. SDK POSTs an SDP offer + token to the gateway /webrtc/offer
+            (gateway consumes the token's jti → single-use)
 
-  ✗ Public  POST /v1/sdk/guest-credentials  (Origin allowlist + rate limit, no auth)
-            → mints a token but client_ref is IGNORED (browser can't forge identity)
+  (Anonymous guests use the SAME endpoint — the backend just gates with a
+   CAPTCHA and mints without a client_ref. There is no public/browser mint.)
 ```
 
 No database row is written at mint time — the token *is* the state, signed and
@@ -116,11 +117,10 @@ client identity, not a spoofable label. Everything downstream (token claim →
 
 | Step | File |
 |------|------|
-| Authenticated mint (trusted `client_ref`) | `internal/api/handlers_guest.go` — `handleAuthGuestCredentials` → `mintGatewayCall` |
-| Public mint (ignores `client_ref`)        | `internal/api/handlers_guest.go` — `handleGuestCredentials` → `mintGatewayCall` |
-| Gateway call token issue/parse            | `internal/api/jwt.go` — `IssueGatewayCallToken` / `ParseGatewayCallToken` (`GatewayCallClaims`) |
-| Route registration                        | `internal/api/server.go` — `/v1/guest-credentials` (AuthRequired) + `/sdk/guest-credentials` (public) |
-| Token validation at the edge              | `internal/gateway/auth.go` — `validateGatewayCallToken`; `internal/gateway/server.go` — `handleOffer` |
+| Backend mint (optional trusted `client_ref`) | `internal/api/handlers_guest.go` — `handleAuthGuestCredentials` → `mintGatewayCall` |
+| Gateway call token issue/parse (with `jti`)  | `internal/api/jwt.go` — `IssueGatewayCallToken` / `ParseGatewayCallToken` (`GatewayCallClaims`) |
+| Route registration                          | `internal/api/server.go` — `/v1/guest-credentials` (AuthRequired) |
+| Token validation + single-use at the edge   | `internal/gateway/auth.go` — `validateGatewayCallToken`; `internal/gateway/server.go` — `handleOffer` (jti consume) |
 | `client_ref` → SIP header → CDR           | `internal/gateway/fsleg.go` — `X-Tring-Client-Ref`; `internal/orchestrator/ivr_executor.go` — `HandleInboundCall` records it |
 | IVR path recording                        | `internal/orchestrator/ivr_executor.go` — `walk` / `recordStep`, persisted via `saveIVRPath` |
 | Agent attribution on answer               | `internal/orchestrator/runner.go` — `onBridge` (CHANNEL_BRIDGE) stamps `calls.agent_id` |

@@ -48,10 +48,9 @@ for the per-call sequence.
 The browser only needs three things, none requiring a public API:
 
 1. **SDK JS** → CDN / reverse-proxy.
-2. **A token** → minted by *your backend* (which holds the tenant API key, `tk_live_…`) and handed to the browser via `data-token-url` (agent) or `data-credentials-url` (trusted visitor). That backend→API call is server-to-server on the private network.
-3. **Anonymous "call us"** → the SDK goes straight to the gateway with `data-gateway-url` + `data-flow-id` (no token; `gateway_require_auth=false`). No API call at all — the call is flow-pinned and can never reach a trunk.
+2. **A token** → minted by *your backend* (which holds the tenant API key, `tk_live_…`) and handed to the browser via `data-token-url` (agent) or `data-credentials-url` (visitor — both guests and logged-in). That backend→API call (`POST /v1/guest-credentials` / `GET /v1/agents/{id}/token`) is server-to-server on the private network. There is no public mint to expose.
 
-If you want Tring's **public anonymous mint** instead (it adds an Origin allowlist + per-IP rate limit), expose only that one route — `POST /v1/sdk/guest-credentials` — publicly and keep the rest of the API private.
+> The default (`gateway_require_auth=true`) requires a backend-minted token on every visitor call, so the API stays fully private. If you instead set `gateway_require_auth=false`, the SDK can go straight to the gateway with `data-gateway-url` + `data-flow-id` (no token, no backend) — still flow-pinned and can't reach a trunk, but then the offer endpoint is unauthenticated.
 
 ## Two faces of the gateway
 

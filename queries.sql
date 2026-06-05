@@ -183,28 +183,15 @@ FROM tenants WHERE id = $1;
 -- guest web-calling
 -- ===========================================================================
 
--- name: get-tenant-by-public-key
-SELECT id, sip_domain, support_flow_id, allowed_origins, guest_require_backend_mint
-FROM tenants WHERE public_key = $1;
-
 -- name: flow-usable
 -- True iff the flow exists, belongs to the tenant, and is active.
 SELECT true FROM flows WHERE id = $1 AND tenant_id = $2 AND is_active;
 
 -- name: get-guest-config
-SELECT COALESCE(public_key, ''), support_flow_id, allowed_origins, guest_require_backend_mint
-FROM tenants WHERE id = $1;
+SELECT default_flow_id FROM tenants WHERE id = $1;
 
--- name: update-support-flow
-UPDATE tenants SET support_flow_id = $1 WHERE id = $2;
-
--- name: update-allowed-origins
-UPDATE tenants SET allowed_origins = $1 WHERE id = $2;
-
--- name: update-guest-require-backend-mint
--- Per-tenant policy toggle: true disables the public guest mint (backend
--- API-key mint only). See handleGuestCredentials / handleAuthGuestCredentials.
-UPDATE tenants SET guest_require_backend_mint = $1 WHERE id = $2;
+-- name: update-default-flow
+UPDATE tenants SET default_flow_id = $1 WHERE id = $2;
 
 -- ===========================================================================
 -- api keys (tenant-scoped; tk_live_… bearer auth)

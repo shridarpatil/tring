@@ -63,15 +63,20 @@ Accept/Decline. See `examples/demo-portal/` for a runnable backend (`/agent/orig
 
 ## Website visitor calling (`voice.js`)
 
-Put voice on a public page so visitors call **into your IVR** — no login, no phone number. Anonymous "call us" is one tag pointing at your gateway and the flow to land in:
+Put voice on a public page so visitors call **into your IVR** — no phone number. Both anonymous guests and logged-in callers use the **same tag**, pointing at a backend endpoint that mints a gateway call token:
 
 ```html
 <script src="https://your-tring-host/sdk/voice.js"
-        data-gateway-url="https://your-gateway-host"
-        data-flow-id="<flow-uuid>"></script>
+        data-credentials-url="/your/credentials"></script>
 ```
 
-The visitor taps the floating "Call" button (or your own `<button data-tring-call>`), gets an anonymous, flow-pinned identity, and lands in your IVR — the call is pinned to that flow server-side and can never reach a trunk. To attribute a **logged-in** caller instead, point `data-credentials-url` at your backend, which mints a gateway call token carrying the verified `client_ref`. See `examples/demo-portal/` — one runnable app with the anonymous, logged-in, and agent flows.
+Your endpoint mints via `POST /v1/guest-credentials` (tenant API key) and returns `{ gateway_url, flow_id, token }`. The only difference between guest and logged-in is what it checks first and whether it passes a `client_ref`:
+- **Logged-in** → verify the session → mint **with** `client_ref` (attributed on the CDR).
+- **Anonymous guest** → gate with a **CAPTCHA / rate-limit** → mint **without** `client_ref`.
+
+The flow is pinned **inside the token** (so it's never in the page), and the call can never reach a trunk. The visitor taps the floating "Call" button (or your own `<button data-tring-call>` with `data-render-button="false"`). See `examples/demo-portal/` — one runnable app with `/support` (guest), `/portal` (logged-in), and `/crm` (agent).
+
+> **Default is token-gated** (`gateway_require_auth=true`): a token-less offer is rejected before any port/FS is allocated, so every visitor call needs a backend-minted token (`POST /v1/guest-credentials`). There is no public mint. To allow a raw, no-backend anonymous path instead (`data-gateway-url` + `data-flow-id`, token-less), set `gateway_require_auth=false` — still flow-pinned/can't-reach-a-trunk, but the offer endpoint is then unauthenticated.
 
 ## Programmatic use (bare SDK)
 
@@ -115,20 +120,12 @@ npm run typecheck  # tsc --noEmit
 
 ## Smoke test in a real browser
 
-1. Have the Tring API + orchestrator + gateway + FreeSWITCH running locally (root `docker compose up -d`, or `go run ./cmd/api` + `go run ./cmd/orchestrator` + `go run ./cmd/gateway`).
-2. Serve the `sdk/js/` tree over HTTP — `file://` URLs trip CORS for `fetch`:
-   ```bash
-   python3 -m http.server 9999 --directory ~/workspace/tring/sdk/js
-   ```
-3. Mint a JWT:
-   ```bash
-   KEY='tk_test_dev_local_only_change_me_in_prod'
-   AGENT=$(curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents | jq -r '.[0].id')
-   curl -sS -H "Authorization: Bearer $KEY" http://localhost:8085/v1/agents/$AGENT/token | jq -r .token
-   ```
-4. Open one of:
-   - `http://localhost:9999/examples/demo-crm.html` — the **drop-in widget** demo (paste JWT into the form, click Load widget, then click any Call button).
-   - `http://localhost:9999/examples/test.html` — the bare-SDK manual test (Connect / Call / Hang up).
+The runnable end-to-end demo lives in [`examples/demo-portal/`](../../examples/demo-portal/)
+(a small Flask app) — it exercises all three flows against a locally-running
+stack: anonymous "call us", logged-in support, and the agent CRM. Have the Tring
+API + orchestrator + gateway + FreeSWITCH up (root `docker compose up -d`, or
+`go run ./cmd/api` + `./cmd/orchestrator` + `./cmd/gateway`), then `make demo`
+and follow its README.
 
 ## Note: no browser WSS / cert dance
 
@@ -176,12 +173,15 @@ verified by the gateway with no DB lookup (everything rides in the claims):
 | Token | Audience | Claims | Minted by | Presented to |
 |---|---|---|---|---|
 | **Agent JWT** | `tring.sdk` | `tenant`, `sip_user`, `sip_domain` | `GET /v1/agents/{id}/token` (tenant API key) | `/agent/ws` (required) |
-| **Gateway call token** | `tring.gateway` | `tenant`, `flow_id`, optional `client_ref` | `POST /v1/guest-credentials` (API key, trusted) or `POST /v1/sdk/guest-credentials` (public) | `/webrtc/offer` (optional¹) |
+| **Gateway call token** | `tring.gateway` | `tenant`, `flow_id`, optional `client_ref` | `POST /v1/guest-credentials` (tenant API key, backend) | `/webrtc/offer` (required¹) — single-use (jti) |
 
-Issuer is always `tring`, alg `HS256`. ¹ The visitor token is optional unless
-the gateway runs with `gateway_require_auth=true`; anonymous visitors instead
-pass `flow_id` in the offer body. A trusted-mint token's `flow_id`/`client_ref`
-**override** anything in the body (the browser can't spoof identity).
+Issuer is always `tring`, alg `HS256`. ¹ Required by default
+(`gateway_require_auth=true`). There is **no public mint** — every visitor token
+is minted server-side by the integrator's backend (which gates anonymous guests
+with a CAPTCHA). The token's `flow_id`/`client_ref` are server-set (the browser
+can't spoof identity), and it's consumed on first use so it can't be replayed.
+(Set `gateway_require_auth=false` to allow a raw, token-less anonymous path —
+still flow-pinned/can't reach a trunk, but the offer endpoint is then open.)
 
 ### Visitor call flow (simplest to port)
 

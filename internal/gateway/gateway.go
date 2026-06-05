@@ -68,6 +68,7 @@ type Gateway struct {
 	fs       *fsClient       // nil = standalone echo mode
 	agents   *agentRegistry  // online agents' signaling WebSockets (M4b)
 	presence *presence.Store // publishes agent presence to Redis (M5)
+	tokens   jtiStore        // consumes one-time gateway-call-token jti (*cache.Cache in prod)
 	log      *log.Logger
 }
 
@@ -118,6 +119,7 @@ func New(cfg Config) (*Gateway, error) {
 		api:      webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se)),
 		agents:   newAgentRegistry(),
 		presence: presence.New(cfg.Cache),
+		tokens:   cfg.Cache, // Redis-backed; nil cache → single-use disabled (fail-open)
 		log:      cfg.Logger,
 	}
 	if cfg.FS != nil {
