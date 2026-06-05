@@ -18,7 +18,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gobwas/ws"
@@ -63,51 +62,156 @@ const (
 	msgPing     = "ping"     // c→s: keepalive (resets the read deadline; no reply)
 )
 
-// agentRegistry tracks online agents keyed by (tenant, sip). One session per
-// agent — a new connection for the same key evicts the old one (last-writer
-// wins, the common "agent reloaded the tab" case).
+// agentRegistry tracks online agents keyed by (tenant, sip). An agent may hold
+// MULTIPLE sessions at once (several tabs/devices) — they all coexist; a call
+// rings every session and whoever answers first wins (see handleFSInvite). The
+// registry also OWNS the agent's Redis presence: one refresh ticker per agent
+// (not per session) publishes the aggregate state (on_call if ANY session is on
+// a call, else online), so the per-session tickers can't clobber each other.
 type agentRegistry struct {
-	mu sync.RWMutex
-	m  map[agentKey]*agentSession
+	mu       sync.Mutex
+	m        map[agentKey]*agentGroup
+	presence *presence.Store
 }
 
-func newAgentRegistry() *agentRegistry {
-	return &agentRegistry{m: make(map[agentKey]*agentSession)}
+// agentGroup is all of one agent's live sessions plus their aggregate call
+// count and the stop channel for that agent's presence refresh ticker.
+type agentGroup struct {
+	sessions map[*agentSession]struct{}
+	active   int           // bridged calls in progress across ALL sessions
+	stop     chan struct{} // closed when the last session leaves → stops the ticker
 }
 
+func newAgentRegistry(p *presence.Store) *agentRegistry {
+	return &agentRegistry{m: make(map[agentKey]*agentGroup), presence: p}
+}
+
+// add registers a session. If it's the agent's first, presence goes online and
+// a refresh ticker starts; otherwise it just joins the existing group.
 func (r *agentRegistry) add(s *agentSession) {
 	r.mu.Lock()
-	old := r.m[s.key]
-	r.m[s.key] = s
+	g := r.m[s.key]
+	first := g == nil
+	if first {
+		g = &agentGroup{sessions: map[*agentSession]struct{}{}, stop: make(chan struct{})}
+		r.m[s.key] = g
+	}
+	g.sessions[s] = struct{}{}
+	stop := g.stop
 	r.mu.Unlock()
-	if old != nil && old != s {
-		old.close() // evict the stale session
+	r.publish(s.key)
+	if first {
+		go r.refreshLoop(s.key, stop)
 	}
 }
 
-// remove deletes s only if it's still the registered session for its key (a
-// later reconnect must not be clobbered by the old session's teardown).
+// remove deregisters a session. When the agent's LAST session leaves, the
+// refresh ticker stops and presence goes offline; otherwise presence is just
+// re-published (the agent is still online via the remaining sessions).
 func (r *agentRegistry) remove(s *agentSession) {
 	r.mu.Lock()
-	if r.m[s.key] == s {
+	g := r.m[s.key]
+	if g == nil {
+		r.mu.Unlock()
+		return
+	}
+	delete(g.sessions, s)
+	last := len(g.sessions) == 0
+	if last {
+		close(g.stop)
 		delete(r.m, s.key)
 	}
 	r.mu.Unlock()
+	if last {
+		r.presence.Offline(context.Background(), s.key.tenant, s.key.sip)
+	} else {
+		r.publish(s.key)
+	}
 }
 
-func (r *agentRegistry) lookup(k agentKey) (*agentSession, bool) {
-	r.mu.RLock()
-	s, ok := r.m[k]
-	r.mu.RUnlock()
-	return s, ok
+// sessionsFor returns a snapshot of the agent's live sessions (nil if offline).
+func (r *agentRegistry) sessionsFor(k agentKey) []*agentSession {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g := r.m[k]
+	if g == nil {
+		return nil
+	}
+	out := make([]*agentSession, 0, len(g.sessions))
+	for s := range g.sessions {
+		out = append(out, s)
+	}
+	return out
 }
 
-// incomingCall coordinates one inbound call's signaling with the browser. The
-// SIP UAS creates it via agentSession.startIncoming, then waits on offer/closed.
+// enterCall / leaveCall adjust the agent's aggregate on-call count and re-publish
+// presence. The orchestrator's ring-all skips an agent whose aggregate is >0, so
+// a second call isn't routed to an agent already on one (on any tab).
+func (r *agentRegistry) enterCall(k agentKey) {
+	r.mu.Lock()
+	if g := r.m[k]; g != nil {
+		g.active++
+	}
+	r.mu.Unlock()
+	r.publish(k)
+}
+
+func (r *agentRegistry) leaveCall(k agentKey) {
+	r.mu.Lock()
+	if g := r.m[k]; g != nil && g.active > 0 {
+		g.active--
+	}
+	r.mu.Unlock()
+	r.publish(k)
+}
+
+// publish writes the agent's current aggregate presence (on_call if any session
+// is on a call, else online), refreshing the TTL. No-op if the agent is gone.
+func (r *agentRegistry) publish(k agentKey) {
+	r.mu.Lock()
+	g := r.m[k]
+	if g == nil {
+		r.mu.Unlock()
+		return
+	}
+	onCall := g.active > 0
+	r.mu.Unlock()
+	if onCall {
+		r.presence.MarkOnCall(context.Background(), k.tenant, k.sip)
+	} else {
+		r.presence.MarkOnline(context.Background(), k.tenant, k.sip)
+	}
+}
+
+// refreshLoop keeps the agent's presence TTL alive until the group is gone.
+func (r *agentRegistry) refreshLoop(k agentKey, stop chan struct{}) {
+	t := time.NewTicker(presence.RefreshInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			r.publish(k)
+		}
+	}
+}
+
+// offerFrom is a browser's accept (WebRTC offer SDP) tagged with the session it
+// came from, so a call rung across several sessions knows WHICH one to bridge.
+type offerFrom struct {
+	sess *agentSession
+	sdp  string
+}
+
+// incomingCall coordinates one inbound call's signaling across ALL of an agent's
+// sessions (tabs). The SIP UAS rings every session via Gateway.ringAgent, then
+// waits on offer/closed: the first session to accept wins (offer is buffered 1,
+// so later accepts are dropped), the rest are cancelled.
 type incomingCall struct {
 	id     string
-	offer  chan string   // browser's WebRTC offer SDP (it accepted)
-	closed chan struct{} // browser rejected / hung up / disconnected
+	offer  chan offerFrom // first browser to accept wins
+	closed chan struct{}  // declined / all ringing sessions gone
 	once   sync.Once
 
 	// teardown tears down the live media bridge once the call is established.
@@ -115,10 +219,31 @@ type incomingCall struct {
 	// the UAS after the bridge is up so a browser hangup ends the FS leg too.
 	mu       sync.Mutex
 	teardown func()
+	ringers  map[*agentSession]struct{} // sessions still ringing this call
 }
 
 func (ic *incomingCall) end() {
 	ic.once.Do(func() { close(ic.closed) })
+}
+
+// dropRinger removes a session from the ringing set (it disconnected). If the
+// call is already established, hanging up that session ends the bridge; else if
+// no sessions are left ringing, the call ends (nobody can answer).
+func (ic *incomingCall) dropRinger(s *agentSession) {
+	ic.mu.Lock()
+	if _, ok := ic.ringers[s]; !ok {
+		ic.mu.Unlock()
+		return // not (or no longer) ringing this call — e.g. a cancelled loser
+	}
+	delete(ic.ringers, s)
+	n := len(ic.ringers)
+	fn := ic.teardown
+	ic.mu.Unlock()
+	if fn != nil {
+		fn() // established call, this session hung up → end the bridge
+	} else if n == 0 {
+		ic.end() // last ringer gone, nobody answered → call lost
+	}
 }
 
 // setTeardown registers how to tear down the established bridge.
@@ -141,43 +266,17 @@ func (ic *incomingCall) fireTeardown() bool {
 	return true
 }
 
-// agentSession is one online agent's WebSocket. Writes are serialized; reads run
-// in handleAgentWS's loop and dispatch client messages to pending calls.
+// agentSession is one of an agent's live WebSockets (a tab/device). Writes are
+// serialized; reads run in handleAgentWS's loop and dispatch client messages to
+// this session's pending calls. Presence + on-call counting live on the
+// agentGroup (registry), aggregated across all of the agent's sessions.
 type agentSession struct {
-	key      agentKey
-	conn     net.Conn
-	writeMu  sync.Mutex
-	mu       sync.Mutex
-	pending  map[string]*incomingCall
-	presence *presence.Store // publishes online / on_call to Redis
-	active   atomic.Int32    // bridged calls in progress (>0 ⇒ "on_call")
-	log      *slog.Logger
-}
-
-// publishPresence asserts the agent's CURRENT state and refreshes its TTL: busy
-// on a call (on_call) wins, else available (online). Call enter/leave and the
-// periodic refresh all go through here so the TTL refresh never clobbers a busy
-// marker back to online.
-func (s *agentSession) publishPresence(ctx context.Context) {
-	if s.active.Load() > 0 {
-		s.presence.MarkOnCall(ctx, s.key.tenant, s.key.sip)
-	} else {
-		s.presence.MarkOnline(ctx, s.key.tenant, s.key.sip)
-	}
-}
-
-// enterCall marks the agent busy ("on_call") for a bridged call. While busy the
-// orchestrator's ring-all skips this agent, so no second call is routed to one
-// already on a call.
-func (s *agentSession) enterCall(ctx context.Context) {
-	s.active.Add(1)
-	s.publishPresence(ctx)
-}
-
-// leaveCall is the counterpart: when the last call ends the agent is available again.
-func (s *agentSession) leaveCall(ctx context.Context) {
-	s.active.Add(-1)
-	s.publishPresence(ctx)
+	key     agentKey
+	conn    net.Conn
+	writeMu sync.Mutex
+	mu      sync.Mutex
+	pending map[string]*incomingCall
+	log     *slog.Logger
 }
 
 func (s *agentSession) send(m agentMsg) error {
@@ -190,23 +289,68 @@ func (s *agentSession) send(m agentMsg) error {
 	return wsutil.WriteServerMessage(s.conn, ws.OpText, b)
 }
 
-// startIncoming registers a ringing call and notifies the browser. The returned
-// handle's offer channel fires when the agent accepts; closed fires on
-// reject/hangup/disconnect. Caller must call finishIncoming when done.
-func (s *agentSession) startIncoming(from string, auto bool) *incomingCall {
-	ic := &incomingCall{
-		id:     uuid.NewString(),
-		offer:  make(chan string, 1),
-		closed: make(chan struct{}),
+// ringAgent rings ALL of the agent's live sessions (tabs/devices) for one
+// inbound call and returns the shared handle, or nil if the agent has no
+// sessions. The first session to accept wins (offer is buffered 1); the caller
+// cancels the rest. The caller selects on ic.offer / ic.closed / a timeout.
+func (g *Gateway) ringAgent(key agentKey, from string, auto bool) *incomingCall {
+	sessions := g.agents.sessionsFor(key)
+	if len(sessions) == 0 {
+		return nil
 	}
-	s.mu.Lock()
-	s.pending[ic.id] = ic
-	s.mu.Unlock()
-	if err := s.send(agentMsg{Type: msgIncoming, CallID: ic.id, From: from, Auto: auto}); err != nil {
-		s.finishIncoming(ic.id)
-		ic.end()
+	ic := &incomingCall{
+		id:      uuid.NewString(),
+		offer:   make(chan offerFrom, 1),
+		closed:  make(chan struct{}),
+		ringers: make(map[*agentSession]struct{}, len(sessions)),
+	}
+	for _, s := range sessions {
+		ic.ringers[s] = struct{}{}
+	}
+	for _, s := range sessions {
+		s.mu.Lock()
+		s.pending[ic.id] = ic
+		s.mu.Unlock()
+		if err := s.send(agentMsg{Type: msgIncoming, CallID: ic.id, From: from, Auto: auto}); err != nil {
+			s.finishIncoming(ic.id)
+			ic.dropRinger(s) // couldn't notify this tab — drop it from the ring
+		}
 	}
 	return ic
+}
+
+// cancelOthers tells every ringing session EXCEPT the winner that the call was
+// answered elsewhere and clears it from their pending. The winner keeps it.
+func (ic *incomingCall) cancelOthers(winner *agentSession) {
+	ic.mu.Lock()
+	others := make([]*agentSession, 0, len(ic.ringers))
+	for s := range ic.ringers {
+		if s != winner {
+			others = append(others, s)
+		}
+	}
+	ic.ringers = map[*agentSession]struct{}{winner: {}}
+	ic.mu.Unlock()
+	for _, s := range others {
+		s.notifyEnded(ic.id, "answered elsewhere")
+		s.finishIncoming(ic.id)
+	}
+}
+
+// cancelAll tells every ringing session the call ended (declined / timeout) and
+// clears it from their pending.
+func (ic *incomingCall) cancelAll(reason string) {
+	ic.mu.Lock()
+	all := make([]*agentSession, 0, len(ic.ringers))
+	for s := range ic.ringers {
+		all = append(all, s)
+	}
+	ic.ringers = map[*agentSession]struct{}{}
+	ic.mu.Unlock()
+	for _, s := range all {
+		s.notifyEnded(ic.id, reason)
+		s.finishIncoming(ic.id)
+	}
 }
 
 // sendAnswer delivers the gateway's WebRTC answer for an accepted call.
@@ -234,8 +378,8 @@ func (s *agentSession) dispatch(m agentMsg) {
 		s.mu.Unlock()
 		if ic != nil {
 			select {
-			case ic.offer <- m.SDP:
-			default:
+			case ic.offer <- offerFrom{sess: s, sdp: m.SDP}:
+			default: // a sibling tab already won this call
 			}
 		}
 	case msgPing:
@@ -265,14 +409,16 @@ func (s *agentSession) dispatch(m agentMsg) {
 	}
 }
 
-// close tears down the session: ends all pending calls and closes the socket.
+// close tears down the session: drops it from any call it was ringing (which
+// ends a call only if it was the last ringer / had answered it) and closes the
+// socket. A sibling tab still ringing the same call is unaffected.
 func (s *agentSession) close() {
 	s.mu.Lock()
 	pending := s.pending
 	s.pending = map[string]*incomingCall{}
 	s.mu.Unlock()
 	for _, ic := range pending {
-		ic.end()
+		ic.dropRinger(s)
 	}
 	_ = s.conn.Close()
 }
@@ -299,38 +445,20 @@ func (g *Gateway) handleAgentWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s := &agentSession{
-		key:      agentKey{tenant: claims.TenantID.String(), sip: claims.SipUsername},
-		conn:     conn,
-		pending:  map[string]*incomingCall{},
-		presence: g.presence,
-		log:      g.log,
+		key:     agentKey{tenant: claims.TenantID.String(), sip: claims.SipUsername},
+		conn:    conn,
+		pending: map[string]*incomingCall{},
+		log:     g.log,
 	}
+	// add registers the session and owns presence (online + refresh ticker)
+	// aggregated across all of this agent's sessions/tabs.
 	g.agents.add(s)
 	g.log.Info("agent online", "tenant", s.key.tenant, "sip", s.key.sip)
 	_ = s.send(agentMsg{Type: msgReady})
 
-	// Publish presence to Redis (read by the API badge + orchestrator transfer)
-	// and keep it fresh while the socket is up; it ages out within TTL of a
-	// disconnect/crash. No-op when Redis is disabled.
-	bg := context.Background()
-	g.presence.MarkOnline(bg, s.key.tenant, s.key.sip)
-	stopRefresh := make(chan struct{})
-	go func() {
-		t := time.NewTicker(presence.RefreshInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-stopRefresh:
-				return
-			case <-t.C:
-				s.publishPresence(bg) // preserves on_call / away / online
-			}
-		}
-	}()
-
 	defer func() {
-		close(stopRefresh)
-		g.presence.Offline(bg, s.key.tenant, s.key.sip)
+		// remove deregisters this session; presence goes offline only when the
+		// agent's LAST session leaves (the registry handles that).
 		g.agents.remove(s)
 		s.close()
 		g.log.Info("agent offline", "tenant", s.key.tenant, "sip", s.key.sip)

@@ -81,12 +81,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	sess, ok := g.agents.lookup(agentKey{tenant: tenant, sip: sipUser})
-	if !ok {
-		g.log.Info("agent offline, replying 480", "tenant", tenant, "sip", sipUser)
-		_ = dlg.Respond(sip.StatusTemporarilyUnavailable, "Agent Offline", nil)
-		return
-	}
+	key := agentKey{tenant: tenant, sip: sipUser}
 
 	// FS is the offerer; learn its RTP endpoint + the PTs we must echo.
 	fsAddr, opusPT, dtmfPT, err := parseSDPMedia(string(req.Body()))
@@ -96,20 +91,29 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 
-	// Ring the browser and wait for it to accept (offer), decline, or time out.
+	// Ring ALL of the agent's tabs/devices and wait for the FIRST to accept; the
+	// rest get "answered elsewhere". Declined / no live session / timeout fail
+	// the leg so FS rolls on.
 	_ = dlg.Respond(sip.StatusRinging, "Ringing", nil)
-	ic := sess.startIncoming(from, auto)
+	ic := g.ringAgent(key, from, auto)
+	if ic == nil {
+		g.log.Info("agent offline, replying 480", "tenant", tenant, "sip", sipUser)
+		_ = dlg.Respond(sip.StatusTemporarilyUnavailable, "Agent Offline", nil)
+		return
+	}
 
+	var sess *agentSession
 	var browserOffer string
 	select {
-	case browserOffer = <-ic.offer:
-		// accepted
+	case of := <-ic.offer:
+		sess, browserOffer = of.sess, of.sdp
+		ic.cancelOthers(sess) // stop ringing the other tabs
 	case <-ic.closed:
-		sess.finishIncoming(ic.id)
+		ic.cancelAll("declined")
 		_ = dlg.Respond(sip.StatusBusyHere, "Declined", nil)
 		return
 	case <-time.After(g.ringTimeout()):
-		sess.finishIncoming(ic.id)
+		ic.cancelAll("no answer")
 		_ = dlg.Respond(sip.StatusRequestTimeout, "No Answer", nil)
 		return
 	}
@@ -136,7 +140,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// and the bridge ended) we tear down even if no clean SIP BYE reaches us, so
 	// notifyEnded fires and the agent's screen closes.
 	teardown := g.relay(pc, toBrowser, leg, agentMediaTimeout, func() {
-		sess.leaveCall(context.Background()) // back to "online" (available to ring)
+		g.agents.leaveCall(key) // agent back to "online" (available to ring)
 		sess.finishIncoming(callID)
 		sess.notifyEnded(callID, "ended")
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -150,7 +154,7 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// The agent is committed to this call now — mark them "on_call" so the
 	// orchestrator's ring-all stops routing new calls here. Balanced with the
 	// leaveCall in the teardown above (both tied to this relay's lifecycle).
-	sess.enterCall(context.Background())
+	g.agents.enterCall(key)
 
 	// Negotiate the browser leg (their offer → our answer) and hand the answer
 	// back over the WebSocket.
