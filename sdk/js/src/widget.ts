@@ -53,19 +53,53 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   injectStyles();
   const panel = createPanel();
   document.body.appendChild(panel.root);
+  const badge = createStatusBadge();
+  document.body.appendChild(badge.root);
+
+  // getToken re-mints on every (re)connect so the agent's socket survives drops
+  // past the ~5-min JWT TTL. The FIRST connect reuses the token we already
+  // fetched above (no double mint); reconnects re-fetch from data-token-url.
+  // A static data-token can't refresh (it'll work until it expires).
+  const tokenUrl = opts.tokenUrl;
+  const staticToken = token;
+  let prefetched: string | undefined = token;
+  const getToken = tokenUrl
+    ? async () => {
+        if (prefetched) {
+          const t = prefetched;
+          prefetched = undefined; // only the first connect reuses it
+          return t;
+        }
+        const c = await fetchCredentials(tokenUrl);
+        if (!c.token) throw new Error("tring widget: token endpoint returned no token");
+        return c.token;
+      }
+    : () => Promise.resolve(staticToken);
 
   // autoAnswer:false → a TRUE inbound (IVR transfer / inbound DID) rings with
   // Accept/Decline. A backend click-to-call leg auto-answers regardless (the
   // gateway flags it per-call), so the agent who clicked isn't asked twice.
   const tring = await Tring.init({
-    token,
+    getToken,
     gatewayUrl,
     iceServers,
     autoAnswer: false,
   });
 
-  tring.on("registered", () => panel.setStatus("idle", "ready"));
-  tring.on("unregistered", () => panel.setStatus("idle", "disconnected"));
+  // Tring.init resolves once already registered — that first `registered` fired
+  // during init, before these listeners attached, so set the initial UI here.
+  panel.setStatus("idle", "ready");
+  badge.set("online");
+
+  tring.on("registered", () => {
+    panel.setStatus("idle", "ready");
+    badge.set("online");
+  });
+  tring.on("reconnecting", ({ attempt }) => badge.set("reconnecting", attempt));
+  tring.on("unregistered", () => {
+    panel.setStatus("idle", "disconnected");
+    badge.set("offline");
+  });
   tring.on("call:ringing", ({ call }) => {
     if (call.direction === "inbound") panel.showIncoming(call);
     else panel.show(call, "calling");
@@ -75,6 +109,35 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
 
   return tring;
+}
+
+// createStatusBadge renders an always-visible connection indicator (online /
+// reconnecting / offline). It reflects the gateway SOCKET only — agent
+// availability (Away/Break) is the integrator's own UI, driven from their
+// backend via POST /v1/agents/{id}/availability.
+interface StatusBadge {
+  root: HTMLElement;
+  set(state: "online" | "reconnecting" | "offline", attempt?: number): void;
+}
+
+function createStatusBadge(): StatusBadge {
+  const root = document.createElement("div");
+  root.className = "tring-status-badge";
+  root.setAttribute("data-state", "offline");
+  root.innerHTML = `<span class="tring-status-dot"></span><span class="tring-status-text">Offline</span>`;
+  const textEl = root.querySelector<HTMLElement>(".tring-status-text")!;
+  return {
+    root,
+    set(state, attempt) {
+      root.setAttribute("data-state", state);
+      textEl.textContent =
+        state === "online"
+          ? "Online"
+          : state === "reconnecting"
+            ? `Reconnecting${attempt ? ` (${attempt})` : ""}…`
+            : "Offline";
+    },
+  };
 }
 
 interface AgentCredentials {
@@ -327,6 +390,24 @@ function injectStyles(): void {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       color: #fbbf24; min-height: 1.2em; font-size: 13px;
     }
+    /* Always-visible connection badge (socket health only). */
+    .tring-status-badge {
+      position: fixed; left: 1rem; bottom: 1rem;
+      display: inline-flex; align-items: center; gap: .45rem;
+      padding: .35rem .7rem; border-radius: 999px;
+      background: #111827; color: #e5e7eb;
+      font: 12px/1 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+      z-index: 999998; user-select: none;
+    }
+    .tring-status-badge .tring-status-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #6b7280;
+    }
+    .tring-status-badge[data-state="online"] .tring-status-dot { background: #34d399; }
+    .tring-status-badge[data-state="reconnecting"] .tring-status-dot {
+      background: #fbbf24; animation: tring-pulse 1s ease-in-out infinite;
+    }
+    .tring-status-badge[data-state="offline"] .tring-status-dot { background: #f87171; }
+    @keyframes tring-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
   `;
   document.head.appendChild(style);
 }

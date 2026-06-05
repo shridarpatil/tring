@@ -41,16 +41,24 @@ export class Tring extends Emitter<TringEvent> {
       throw new Error("Tring.init: gatewayUrl is required");
     }
     this.autoAnswer = opts.autoAnswer ?? true;
+    // Prefer getToken (re-mints a fresh JWT on every reconnect, surviving the
+    // ~5-min token TTL); fall back to a static token wrapped as a provider.
+    const getToken =
+      opts.getToken ?? (opts.token ? () => Promise.resolve(opts.token as string) : undefined);
+    if (!getToken) {
+      throw new Error("Tring.init: provide `getToken` (preferred) or `token`");
+    }
     this.gw = new AgentGateway(
       {
         gatewayUrl: opts.gatewayUrl,
-        token: opts.token,
+        getToken,
         iceServers: opts.iceServers,
       },
       {
         onReady: () => this.emit({ type: "registered" }),
         onIncoming: (c) => this.handleIncoming(c),
         onClosed: (reason) => this.emit({ type: "unregistered", reason }),
+        onReconnecting: (attempt) => this.emit({ type: "reconnecting", attempt }),
       },
     );
   }
