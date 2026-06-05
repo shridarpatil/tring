@@ -27,6 +27,24 @@ export interface GatewayCallOpts {
 // (e.g. a TURN entry, usually from the mint) for UDP-blocked clients.
 const DEFAULT_ICE: RTCIceServer[] = [];
 
+// micError turns a getUserMedia DOMException into a human-friendly message the
+// call UI can show, instead of a raw "NotAllowedError".
+function micError(e: unknown): Error {
+  const name = (e as DOMException | undefined)?.name;
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return new Error("Microphone blocked — allow microphone access and try again.");
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return new Error("No microphone found on this device.");
+    case "NotReadableError":
+      return new Error("Your microphone is in use by another app.");
+    default:
+      return e instanceof Error ? e : new Error("Could not access the microphone.");
+  }
+}
+
 export class GatewayAdapter {
   private pc: RTCPeerConnection | null = null;
   private mic: MediaStream | null = null;
@@ -82,9 +100,24 @@ export class GatewayAdapter {
   }
 
   /**
-   * Acquire the mic, negotiate WebRTC with the gateway, and start media.
-   * Resolves once the SDP answer is applied (the call is then connecting →
-   * connected via onState). Throws on mic denial or signaling failure.
+   * Capture the microphone. Call this SYNCHRONOUSLY inside the click/tap that
+   * starts the call, BEFORE any await (e.g. a credentials fetch) — iOS Safari
+   * only grants getUserMedia while the user gesture is still active, so calling
+   * it after an await throws a permission error. Idempotent.
+   */
+  async captureMic(): Promise<void> {
+    if (this.mic) return;
+    try {
+      this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      throw micError(e);
+    }
+  }
+
+  /**
+   * Negotiate WebRTC with the gateway and start media. Resolves once the SDP
+   * answer is applied (the call is then connecting → connected via onState).
+   * Uses the mic captured by captureMic (or captures one as a fallback).
    */
   async start(opts: GatewayCallOpts): Promise<void> {
     const pc = new RTCPeerConnection({
@@ -123,11 +156,13 @@ export class GatewayAdapter {
       void el.play().catch(() => {});
     };
 
-    // Mic → first (and only) audio sender; capture its DTMF channel.
-    this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const track = this.mic.getAudioTracks()[0];
+    // Mic → first (and only) audio sender; capture its DTMF channel. The mic is
+    // usually already captured (captureMic, called in the tap gesture); fall
+    // back to capturing here for non-gesture callers.
+    await this.captureMic();
+    const track = this.mic!.getAudioTracks()[0];
     if (!track) throw new Error("no microphone track available");
-    const sender = pc.addTrack(track, this.mic);
+    const sender = pc.addTrack(track, this.mic!);
     this.dtmf = sender.dtmf ?? null;
 
     const offer = await pc.createOffer({ offerToReceiveAudio: true });
