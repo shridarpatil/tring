@@ -34,35 +34,41 @@ services:
       - SOUND_TYPES=music:en-us-callie
     volumes:
       - freeswitch-sounds:/usr/share/freeswitch/sounds
-      # All bind mounts use :ro because the safarov/freeswitch entrypoint
-      # blindly copies vanilla templates over /etc/freeswitch/* on every
-      # start. Read-only mounts make those copies silently fail and our
-      # configs survive.
-      - ./freeswitch/conf/vars.xml:/etc/freeswitch/vars.xml:ro
-      - ./freeswitch/conf/dialplan/default.xml:/etc/freeswitch/dialplan/default.xml:ro
-      - ./freeswitch/conf/directory/default.xml:/etc/freeswitch/directory/default.xml:ro
-      - ./freeswitch/conf/autoload_configs/modules.conf.xml:/etc/freeswitch/autoload_configs/modules.conf.xml:ro
-      - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/etc/freeswitch/autoload_configs/xml_curl.conf.xml:ro
+      # Our config overrides are mounted onto the entrypoint's COPY SOURCE
+      # (/usr/share/freeswitch/conf/vanilla/*), NOT the destination
+      # (/etc/freeswitch/*). On boot the safarov entrypoint runs
+      # `cp vanilla/* /etc/freeswitch/`; by overriding the source, the copy
+      # picks up OUR files into a fresh writable /etc/freeswitch — our configs
+      # still win, and there are no "Read-only file system" cp errors (the old
+      # approach mounted :ro onto the destination, so every copy collided).
+      # :ro is safe here because the entrypoint only READS the source.
+      - ./freeswitch/conf/vars.xml:/usr/share/freeswitch/conf/vanilla/vars.xml:ro
+      - ./freeswitch/conf/dialplan/default.xml:/usr/share/freeswitch/conf/vanilla/dialplan/default.xml:ro
+      - ./freeswitch/conf/directory/default.xml:/usr/share/freeswitch/conf/vanilla/directory/default.xml:ro
+      - ./freeswitch/conf/autoload_configs/modules.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml:ro
+      - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/xml_curl.conf.xml:ro
       # Overrides the default switch.conf.xml to wire the RTP port range
       # to vars.xml's $${rtp_start_port}/$${rtp_end_port} placeholders.
-      - ./freeswitch/conf/autoload_configs/switch.conf.xml:/etc/freeswitch/autoload_configs/switch.conf.xml:ro
+      - ./freeswitch/conf/autoload_configs/switch.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/switch.conf.xml:ro
       # (Static Exotel/Airtel/Jio/Tata gateway XML mounts removed.
       # Trunks now live in DB and render to external/dynamic/ at runtime.)
       # Custom external sofia profile — adds external/dynamic/*.xml to
       # the gateway include list so UI-managed trunks are picked up on
       # `sofia profile external rescan`.
-      - ./freeswitch/conf/sip_profiles/external.xml:/etc/freeswitch/sip_profiles/external.xml:ro
+      - ./freeswitch/conf/sip_profiles/external.xml:/usr/share/freeswitch/conf/vanilla/sip_profiles/external.xml:ro
       # Static gateway pointing at the Tring media gateway (agent_transport=
       # gateway; ADR-001 M4b). Picked up by external.xml's external/*.xml
-      # include. :ro so the entrypoint can't clobber it.
-      - ./freeswitch/conf/sip_profiles/external/tring-gw.xml:/etc/freeswitch/sip_profiles/external/tring-gw.xml:ro
+      # include.
+      - ./freeswitch/conf/sip_profiles/external/tring-gw.xml:/usr/share/freeswitch/conf/vanilla/sip_profiles/external/tring-gw.xml:ro
       # Override sofia's internal profile to disable the force-register-*
       # params — see comment block in the file for why (multi-tenant
       # depends on the SDK's From URI domain reaching /fs/directory
       # un-rewritten).
-      - ./freeswitch/conf/sip_profiles/internal.xml:/etc/freeswitch/sip_profiles/internal.xml:ro
-      # Dynamic gateway dir — Tring writes t_<uuid>.xml here, FS reads.
-      # RW because both containers share this host path.
+      - ./freeswitch/conf/sip_profiles/internal.xml:/usr/share/freeswitch/conf/vanilla/sip_profiles/internal.xml:ro
+      # Dynamic gateway dir — Tring writes t_<uuid>.xml here, FS reads. This
+      # stays mounted at the DESTINATION (not vanilla source) and RW because
+      # the api container shares the SAME host path at the same /etc path; the
+      # entrypoint copy just lands vanilla's external/* alongside it.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
     # network_mode: host is simplest for SIP/RTP during dev.
     # Ports: 5060 (SIP), 5080 (external SIP), 8021 (ESL),
