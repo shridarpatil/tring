@@ -51,7 +51,7 @@ type agentMsg struct {
 }
 
 // Message types. Server→client: ready, incoming, answer, ended. Client→server:
-// offer (accept + browser SDP), reject, hangup.
+// offer (accept + browser SDP), reject, hangup, ping (keepalive).
 const (
 	msgReady    = "ready"    // s→c: WS up, presence registered
 	msgIncoming = "incoming" // s→c: a call is ringing for this agent
@@ -60,6 +60,7 @@ const (
 	msgOffer    = "offer"    // c→s: accept the incoming call with this WebRTC offer
 	msgReject   = "reject"   // c→s: decline a ringing call
 	msgHangup   = "hangup"   // c→s: end an in-progress call
+	msgPing     = "ping"     // c→s: keepalive (resets the read deadline; no reply)
 )
 
 // agentRegistry tracks online agents keyed by (tenant, sip). One session per
@@ -237,6 +238,9 @@ func (s *agentSession) dispatch(m agentMsg) {
 			default:
 			}
 		}
+	case msgPing:
+		// Keepalive: the read already reset the deadline; nothing else to do.
+		return
 	case msgReject, msgHangup:
 		s.mu.Lock()
 		ic := s.pending[m.CallID]

@@ -5,8 +5,18 @@ export interface InitOpts {
    * Short-lived JWT issued by `GET /v1/agents/{id}/token` (5-min TTL).
    * The integrating CRM's backend mints this with its API key and ships it
    * to the browser. The browser MUST NOT ever have the raw API key.
+   *
+   * A static token can't outlive its TTL across a reconnect — prefer
+   * `getToken` so the SDK re-mints a fresh token on every (re)connect.
    */
-  token: string;
+  token?: string;
+
+  /**
+   * Mint a fresh agent JWT on demand. Called on every (re)connect, so the
+   * agent's socket survives drops past the 5-min token TTL. Typically fetches
+   * from YOUR backend (which holds the API key). Takes precedence over `token`.
+   */
+  getToken?: () => Promise<string>;
 
   /**
    * For a TRUE inbound call (an IVR transfer / inbound DID ringing this agent),
@@ -62,6 +72,7 @@ export type CallDirection = "inbound" | "outbound";
 export type TringEvent =
   | { type: "registered" }
   | { type: "unregistered"; reason?: string }
+  | { type: "reconnecting"; attempt: number }
   | { type: "call:ringing"; call: Call }
   | { type: "call:answered"; call: Call }
   | { type: "call:ended"; call: Call; cause?: string }

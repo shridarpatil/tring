@@ -39,65 +39,140 @@ export interface AgentCall {
 }
 
 export interface AgentGatewayHandlers {
-  /** WS up + presence registered. */
+  /** WS up + presence registered. Fires on every (re)connect. */
   onReady(): void;
   /** A call is ringing for this agent. */
   onIncoming(call: AgentCall): void;
-  /** WS closed (network drop / server shutdown). */
+  /** WS closed for good (explicit disconnect). */
   onClosed(reason?: string): void;
+  /** A drop was detected and a reconnect is scheduled (1-based attempt). */
+  onReconnecting?(attempt: number): void;
 }
 
 export interface AgentGatewayOpts {
   /** Gateway base URL, e.g. "https://gw.tring.io" (ws(s) is derived). */
   gatewayUrl: string;
-  /** Agent JWT (sent as the `token` query param — WS can't set headers). */
-  token: string;
+  /** Mint a fresh agent JWT. Called on every (re)connect, so an expired token
+   *  is never reused — the agent JWT is short-lived (~5 min). For a static
+   *  token, pass `() => Promise.resolve(token)`. */
+  getToken: () => Promise<string>;
   iceServers?: RTCIceServer[];
 }
+
+// Keepalive must beat the gateway's 90s read deadline; backoff is capped so a
+// flapping gateway doesn't get hammered.
+const PING_INTERVAL_MS = 30_000;
+const RECONNECT_BASE_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
 
 export class AgentGateway {
   private ws: WebSocket | null = null;
   private readonly calls = new Map<string, GatewayCall>();
   private readyOnce: (() => void) | null = null;
+  private closedByUser = false;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempt = 0;
 
   constructor(
     private readonly opts: AgentGatewayOpts,
     private readonly h: AgentGatewayHandlers,
   ) {}
 
-  /** Open the signaling socket. Resolves on the first `ready` message. */
+  /** Open the signaling socket. Resolves on the first `ready`. After a
+   *  successful first connect, drops auto-reconnect with backoff. */
   connect(): Promise<void> {
-    const url = `${wsBase(this.opts.gatewayUrl)}/agent/ws?token=${encodeURIComponent(this.opts.token)}`;
+    this.closedByUser = false;
     return new Promise((resolve, reject) => {
-      let opened = false;
-      const ws = new WebSocket(url);
-      this.ws = ws;
-      this.readyOnce = () => {
-        opened = true;
-        resolve();
-      };
-      ws.onmessage = (ev) => this.onMessage(ev);
-      ws.onerror = () => {
-        if (!opened) reject(new Error("agent gateway socket failed"));
-      };
-      ws.onclose = () => {
-        for (const c of this.calls.values()) c.markEnded("socket closed");
-        this.calls.clear();
-        this.h.onClosed();
-      };
+      this.readyOnce = resolve;
+      void this.open(reject);
     });
   }
 
+  // open mints a token, opens the WS, and wires keepalive + reconnect. `reject`
+  // is passed only on the initial connect so a first-attempt failure surfaces
+  // to the caller; later drops reconnect silently instead.
+  private async open(reject?: (e: Error) => void): Promise<void> {
+    let token: string;
+    try {
+      token = await this.opts.getToken();
+    } catch (e) {
+      if (reject) reject(e as Error);
+      else this.scheduleReconnect();
+      return;
+    }
+    const url = `${wsBase(this.opts.gatewayUrl)}/agent/ws?token=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(url);
+    this.ws = ws;
+    let opened = false;
+    ws.onopen = () => {
+      opened = true;
+      this.reconnectAttempt = 0;
+      this.startPing();
+    };
+    ws.onmessage = (ev) => this.onMessage(ev);
+    ws.onerror = () => {
+      /* surfaced via onclose */
+    };
+    ws.onclose = () => {
+      this.stopPing();
+      for (const c of this.calls.values()) c.markEnded("socket closed");
+      this.calls.clear();
+      this.ws = null;
+      if (this.closedByUser) {
+        this.h.onClosed("disconnected");
+        return;
+      }
+      if (reject && !opened) {
+        reject(new Error("agent gateway socket failed")); // initial attempt failed
+        return;
+      }
+      this.scheduleReconnect(); // dropped after a good connect → retry
+    };
+  }
+
+  private scheduleReconnect(): void {
+    if (this.closedByUser || this.reconnectTimer) return;
+    const attempt = this.reconnectAttempt++;
+    const base = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt);
+    const delay = base + base * 0.3 * Math.random(); // jitter so clients don't sync
+    this.h.onReconnecting?.(attempt + 1);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.open();
+    }, delay);
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    this.pingTimer = setInterval(() => this.send({ type: "ping" }), PING_INTERVAL_MS);
+  }
+
+  private stopPing(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+  }
+
   disconnect(): void {
+    this.closedByUser = true;
+    this.stopPing();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     for (const c of this.calls.values()) c.teardown();
     this.calls.clear();
     this.ws?.close();
     this.ws = null;
   }
 
-  // send serializes one JSON envelope to the gateway.
+  // send serializes one JSON envelope to the gateway (no-op if not open).
   send(msg: Record<string, unknown>): void {
-    this.ws?.send(JSON.stringify(msg));
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
   }
 
   private onMessage(ev: MessageEvent): void {
