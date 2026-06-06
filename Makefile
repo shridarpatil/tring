@@ -33,7 +33,7 @@ logs:
 	docker compose logs -f --tail=20
 
 images:
-	docker compose build api orchestrator gateway
+	docker compose build api orchestrator gateway freeswitch
 
 api:
 	go run ./cmd/api
