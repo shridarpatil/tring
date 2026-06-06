@@ -29,7 +29,7 @@
         <!-- Trusted caller id from the gateway call token (when present) — the
              IVR executor records it on the CDR (calls.client_ref). -->
         <action application="set" data="tring_client_ref=${sip_h_X-Tring-Client-Ref}"/>
-        <action application="socket" data="127.0.0.1:8086 full"/>
+        <action application="socket" data="$${tring_ivr_socket} full"/>
       </condition>
     </extension>
 
@@ -48,17 +48,18 @@
          DID. This matches every numeric destination, which is why the stock
          demo extensions (all numeric) were safe to remove — they sat below
          this rule and were already shadowed.
-         We use SYNCHRONOUS socket mode (no `async`): the dialplan
-         parser blocks here until the socket session ends, which keeps
-         the channel alive long enough for the orchestrator to read the
-         channel-data event, look up the flow, and drive the call.
-         `full` = ship the full channel-data event (all headers) on
-                  the socket so the executor can read Caller-* fields.
-         No `continue="true"` — if the orchestrator hangs up cleanly the
-         call ends here; there are no demo extensions to fall through to. -->
+         We use SYNCHRONOUS socket mode (`full`, no `async`): the executor
+         drives the channel step by step (answer → greeting → menu/DTMF →
+         transfer) and relies on eslgo's synchronous command/reply matching.
+         `async` breaks that matching ("no response channels"), which drops
+         DTMF collection and the queue's uuid_exists probe — so we keep sync.
+         The queue plays hold music via a non-blocking uuid_broadcast API
+         command (NOT a foreground app, which would freeze the poll loop in
+         sync mode). `full` = ship the full channel-data event so the
+         executor can read Caller-* fields. -->
     <extension name="tring_ivr">
       <condition field="destination_number" expression="^\d+$">
-        <action application="socket" data="127.0.0.1:8086 full"/>
+        <action application="socket" data="$${tring_ivr_socket} full"/>
       </condition>
     </extension>
 
