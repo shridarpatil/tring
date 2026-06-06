@@ -60,6 +60,9 @@ type Queries struct {
 	GetAudio    string `query:"get-audio"`
 	DeleteAudio string `query:"delete-audio"`
 
+	// ---- api: dashboard live stats ----
+	CountActiveAgentCalls string `query:"count-active-agent-calls"`
+
 	// ---- api: calls ----
 	GetAgentSipUsername string `query:"get-agent-sip-username"`
 	CreateCallOutbound  string `query:"create-call-outbound"`

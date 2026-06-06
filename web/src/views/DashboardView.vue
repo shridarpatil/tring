@@ -7,7 +7,7 @@ const tenant = ref<Tenant | null>(null);
 const calls = ref<Call[]>([]);
 const agents = ref<Agent[]>([]);
 const numbers = ref<PhoneNumber[]>([]);
-const queues = ref<Queues>({ total: 0, queues: [] });
+const queues = ref<Queues>({ total: 0, on_call: 0, queues: [] });
 const loading = ref(true);
 const error = ref("");
 let poll: number | undefined;
@@ -59,7 +59,16 @@ const activeOutbound = () =>
     <div v-if="loading" class="text-gray-400 text-sm">Loading…</div>
 
     <template v-else>
-      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        <div
+          class="rounded-xl border p-5"
+          :class="queues.on_call > 0 ? 'bg-green-50 border-green-200' : 'bg-white'"
+        >
+          <div class="text-3xl font-bold" :class="queues.on_call > 0 ? 'text-green-700' : ''">
+            {{ queues.on_call }}
+          </div>
+          <div class="text-sm text-gray-500">On call</div>
+        </div>
         <div
           class="rounded-xl border p-5"
           :class="queues.total > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white'"
