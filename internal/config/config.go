@@ -90,6 +90,12 @@ var defaults = map[string]any{
 	// local path while leaving audio_fs_dir at the FS-visible path.
 	"audio_dir":    "/usr/share/freeswitch/sounds/tring",
 	"audio_fs_dir": "/usr/share/freeswitch/sounds/tring",
+	// queue_gapless_moh: EXPERIMENTAL. When true, a queued caller hears one
+	// continuous (gapless) hold-music playback broken by a side ESL connection
+	// the instant an agent frees, instead of the default chunked playback (which
+	// has a ~2s seam but is proven not to regress the bridge). Default false —
+	// flip on only to test gapless on real calls; flip off to revert instantly.
+	"queue_gapless_moh": false,
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid
