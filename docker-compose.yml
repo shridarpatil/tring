@@ -188,6 +188,9 @@ services:
     restart: unless-stopped
 
   orchestrator:
+    # NOTE: also mounts the recordings volume (rw) below — the orchestrator
+    # uploads finished recordings to S3 on RECORD_STOP and deletes the local
+    # spool, so it needs read+write access to the same files FreeSWITCH wrote.
     image: ghcr.io/shridarpatil/tring-orchestrator:${TRING_TAG:-develop}
     build:
       context: .
@@ -204,6 +207,10 @@ services:
     env_file:
       - path: .env
         required: false
+    volumes:
+      # rw: the orchestrator uploads finished recordings to S3 then deletes the
+      # local spool. Same named volume FreeSWITCH writes to.
+      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
     restart: unless-stopped
 
   # WebRTC media gateway (ADR-001). Browsers peer with this over raw WebRTC

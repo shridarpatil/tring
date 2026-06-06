@@ -22,6 +22,7 @@ import (
 
 	"github.com/percipia/eslgo"
 
+	"github.com/whatomate/tring/internal/blobstore"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
@@ -45,8 +46,24 @@ func main() {
 	}
 	defer dbase.Close()
 
+	// Optional S3 store for call recordings. Misconfig → warn and run local-only
+	// (recordings stay on the volume); S3 is opt-in, not required to boot.
+	blob, err := blobstore.New(blobstore.Config{
+		Bucket:    k.String("s3_bucket"),
+		Region:    k.String("s3_region"),
+		Endpoint:  k.String("s3_endpoint"),
+		AccessKey: k.String("s3_access_key"),
+		SecretKey: k.String("s3_secret_key"),
+		Prefix:    k.String("s3_prefix"),
+		UseSSL:    k.Bool("s3_use_ssl"),
+	})
+	if err != nil {
+		logger.Warn("S3 recording storage disabled (config error)", "err", err)
+	}
+
 	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password")).
 		WithRecordings(k.String("recordings_dir")).
+		WithBlobStore(blob).
 		WithLogger(logger)
 
 	// IVR executor — starts an outbound-ESL listener so FreeSWITCH can

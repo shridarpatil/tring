@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/whatomate/tring/internal/api"
+	"github.com/whatomate/tring/internal/blobstore"
 	"github.com/whatomate/tring/internal/bootstrap"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
@@ -84,6 +85,21 @@ func main() {
 	}
 	defer flowCache.Close()
 
+	// Optional S3 store for serving call recordings (mirrors the orchestrator's
+	// uploader). Misconfig → warn and serve from the local volume instead.
+	blob, err := blobstore.New(blobstore.Config{
+		Bucket:    k.String("s3_bucket"),
+		Region:    k.String("s3_region"),
+		Endpoint:  k.String("s3_endpoint"),
+		AccessKey: k.String("s3_access_key"),
+		SecretKey: k.String("s3_secret_key"),
+		Prefix:    k.String("s3_prefix"),
+		UseSSL:    k.Bool("s3_use_ssl"),
+	})
+	if err != nil {
+		logger.Warn("S3 recording storage disabled (config error)", "err", err)
+	}
+
 	srv := &http.Server{
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
@@ -102,6 +118,7 @@ func main() {
 			AudioDir:         k.String("audio_dir"),
 			AudioFSDir:       k.String("audio_fs_dir"),
 			RecordingsDir:    k.String("recordings_dir"),
+			Blob:             blob,
 			Cache:            flowCache,
 			Logger:           logger,
 		}).Router(),
