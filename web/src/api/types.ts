@@ -66,7 +66,8 @@ export interface QueueDepth {
   waiting: number;
 }
 export interface Queues {
-  total: number;
+  total: number; // callers waiting across all team queues
+  on_call: number; // live calls currently connected to an agent
   queues: QueueDepth[];
 }
 

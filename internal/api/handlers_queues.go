@@ -20,12 +20,17 @@ type queueDepth struct {
 }
 
 type queuesResponse struct {
-	Total  int          `json:"total"`
+	Total  int          `json:"total"`   // callers waiting across all team queues
+	OnCall int          `json:"on_call"` // live calls currently connected to an agent
 	Queues []queueDepth `json:"queues"`
 }
 
 func (s *Server) handleListQueues(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
+
+	var onCall int
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.CountActiveAgentCalls, t.ID).Scan(&onCall)
+
 	rows, err := s.db.Pool.Query(r.Context(), s.q.ListTeams, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -42,7 +47,7 @@ func (s *Server) handleListQueues(w http.ResponseWriter, r *http.Request) {
 		names = append(names, tm.Name)
 	}
 
-	out := queuesResponse{Queues: []queueDepth{}}
+	out := queuesResponse{OnCall: onCall, Queues: []queueDepth{}}
 	for _, name := range names {
 		n := 0
 		if v, ok := s.cache.Get(r.Context(), orchestrator.QueueDepthKey(t.ID, name)); ok {

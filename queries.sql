@@ -164,6 +164,12 @@ FROM audio_assets WHERE id = $1 AND tenant_id = $2;
 -- name: delete-audio
 DELETE FROM audio_assets WHERE id = $1 AND tenant_id = $2;
 
+-- name: count-active-agent-calls
+-- Live calls currently connected to an agent (answered + an agent stamped, not
+-- yet ended) — powers the dashboard "on call" stat.
+SELECT COUNT(*) FROM calls
+WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
+
 -- ===========================================================================
 -- calls
 -- ===========================================================================
