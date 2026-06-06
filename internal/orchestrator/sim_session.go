@@ -55,19 +55,19 @@ type SimSnapshot struct {
 // session is the in-memory record. Not exported — clients see only
 // the SimSnapshot view.
 type session struct {
-	id           uuid.UUID
-	flow         *ivrFlowData
-	currentNode  string // where to resume; "" once ended
-	vars         map[string]string
-	steps        []SimStep
-	depth        int
-	caller       string
-	awaiting     *AwaitingNode
-	ended        bool
-	endedAt      string
-	hangupCause  string
-	errString    string
-	lastTouched  time.Time
+	id          uuid.UUID
+	flow        *ivrFlowData
+	currentNode string // where to resume; "" once ended
+	vars        map[string]string
+	steps       []SimStep
+	depth       int
+	caller      string
+	awaiting    *AwaitingNode
+	ended       bool
+	endedAt     string
+	hangupCause string
+	errString   string
+	lastTouched time.Time
 }
 
 // SimManager owns the live sessions. One instance per api process —
@@ -248,8 +248,7 @@ func stepForInteractive(node *ivrNode, input string, vars map[string]string) (Si
 
 	case nodeTransfer:
 		step.Action = "transfer"
-		agent, _ := node.Config["agent_number"].(string)
-		step.Detail = agent
+		step.Detail = transferDetail(node.Config)
 		step.Outcome = "completed"
 		return step, "completed"
 

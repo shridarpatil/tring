@@ -40,9 +40,38 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+// uploadFile POSTs a file as multipart/form-data (e.g. the sound library).
+// We do NOT set Content-Type — the browser sets it with the multipart boundary.
+async function uploadFile<T>(path: string, file: File, fields?: Record<string, string>): Promise<T> {
+  const token = auth.token();
+  const form = new FormData();
+  form.append("file", file);
+  for (const [k, v] of Object.entries(fields ?? {})) form.append(k, v);
+  const res = await fetch(path, {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const j = await res.json();
+      if (j && typeof j.error === "string") msg = j.error;
+    } catch {
+      /* non-JSON error body */
+    }
+    if (res.status === 401) auth.logout();
+    throw new ApiError(res.status, msg);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
   patch: <T>(path: string, body?: unknown) => request<T>("PATCH", path, body),
   del: <T>(path: string) => request<T>("DELETE", path),
+  upload: <T>(path: string, file: File, fields?: Record<string, string>) =>
+    uploadFile<T>(path, file, fields),
 };

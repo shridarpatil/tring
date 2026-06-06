@@ -31,6 +31,17 @@ type Queries struct {
 	GetAgent             string `query:"get-agent"`
 	SetAgentAvailability string `query:"set-agent-availability"`
 
+	// ---- api: teams (GetTeam + ListTeamAgentSips also used by orchestrator) ----
+	CreateTeam        string `query:"create-team"`
+	ListTeams         string `query:"list-teams"`
+	GetTeam           string `query:"get-team"`
+	UpdateTeam        string `query:"update-team"`
+	DeleteTeam        string `query:"delete-team"`
+	ListTeamAgents    string `query:"list-team-agents"`
+	AddTeamAgent      string `query:"add-team-agent"`
+	RemoveTeamAgent   string `query:"remove-team-agent"`
+	ListTeamAgentSips string `query:"list-team-agent-sips"`
+
 	// ---- api: numbers ----
 	CreateNumber             string `query:"create-number"`
 	GetNumberTypeActive      string `query:"get-number-type-active"`
@@ -41,6 +52,13 @@ type Queries struct {
 	// ---- api: tenants ----
 	UpdateTenant       string `query:"update-tenant"`
 	GetTenantSipDomain string `query:"get-tenant-sip-domain"`
+	GetTenantHoldMusic string `query:"get-tenant-hold-music"`
+
+	// ---- api: audio library (sound assets) ----
+	CreateAudio string `query:"create-audio"`
+	ListAudio   string `query:"list-audio"`
+	GetAudio    string `query:"get-audio"`
+	DeleteAudio string `query:"delete-audio"`
 
 	// ---- api: calls ----
 	GetAgentSipUsername string `query:"get-agent-sip-username"`
@@ -110,6 +128,7 @@ type Queries struct {
 	ResolveInboundNumber  string `query:"resolve-inbound-number"`
 	GetActiveFlowByID     string `query:"get-active-flow-by-id"`
 	ListAgentSipUsernames string `query:"list-agent-sip-usernames"`
+	GetTeamMOH            string `query:"get-team-moh"`
 	// NOTE: agentBridgeTarget reuses GetTenantSipDomain (SELECT sip_domain ...).
 
 	// ---- bootstrap / seed (first-boot + --seed-tenant CLI) ----

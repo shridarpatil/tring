@@ -22,8 +22,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -116,10 +121,48 @@ type Executor struct {
 	// endpoint, ADR-001 M4b). Set via WithAgentTransport. Empty = "sip".
 	AgentTransport string
 	AgentGateway   string
+
+	// rrMu/rr back the round_robin team strategy: a per-team counter that
+	// rotates which member rings first each call. In-process (one orchestrator
+	// per FreeSWITCH), reset on restart — load-spreading, not exact fairness,
+	// matching the trunk round_robin precedent.
+	rrMu sync.Mutex
+	rr   map[string]int
+
+	// queue holds callers waiting for a team whose members are all busy
+	// (Transfer-node queue overflow). One per orchestrator; see callQueue.
+	queue *callQueue
+
+	// HTTP is the client the http_callback node uses (per-request timeout comes
+	// from the node config). nil → http.DefaultClient; tests inject a fake.
+	HTTP *http.Client
+
+	// eslAddr/eslPassword let the queue open a SIDE inbound ESL connection to
+	// uuid_break a caller's hold music: the executor's own outbound socket is
+	// blocked on the (gapless, continuous) playback, so it can't break it itself.
+	// Set via WithESL. Empty → the queue falls back to a chunked playback.
+	eslAddr     string
+	eslPassword string
+}
+
+func (e *Executor) httpClient() *http.Client {
+	if e.HTTP != nil {
+		return e.HTTP
+	}
+	return http.DefaultClient
 }
 
 func NewExecutor(d *db.DB) *Executor {
-	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default()}
+	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default(), rr: map[string]int{}, queue: newCallQueue()}
+}
+
+// WithESL gives the executor the ESL credentials it needs to open a short-lived
+// side connection for breaking queue hold music (see breakChannel). Returns the
+// executor for chaining.
+func (e *Executor) WithESL(addr, password string) *Executor {
+	e.eslAddr = addr
+	e.eslPassword = password
+	return e
 }
 
 // WithLogger sets the executor's base logger (scoped component=orchestrator)
@@ -418,6 +461,11 @@ type callState struct {
 	called    string
 	clientRef string // embedder-supplied caller identity (tring_client_ref)
 	vars      map[string]string
+	// queuePriority routes this caller into a team's priority queue tier rather
+	// than the normal tier. Set from the Transfer node's Priority checkbox; the
+	// graph (which Transfer the call reaches) decides it — e.g. a caller-lookup
+	// success branch points at a priority Transfer.
+	queuePriority bool
 
 	// log is the per-call logger: the executor's base logger with call_id +
 	// tenant bound, so every walk/node line correlates to this one call.
@@ -434,6 +482,20 @@ type callState struct {
 	stepAction string
 	stepDetail string
 	stepDTMF   string
+}
+
+// templateVars returns the variables an http_callback may interpolate: the
+// collected flow vars plus the call's built-in identity fields (caller/called/
+// client_ref). Flow vars win on a name clash.
+func (st *callState) templateVars() map[string]string {
+	m := make(map[string]string, len(st.vars)+3)
+	m["caller"] = st.caller
+	m["called"] = st.called
+	m["client_ref"] = st.clientRef
+	for k, v := range st.vars {
+		m[k] = v
+	}
+	return m
 }
 
 // recordStep appends one step to the IVR journey from the scratch fields the
@@ -533,9 +595,7 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "default")
 		return "default", nil
 	case nodeHTTPCallback:
-		// TODO: substitute {{vars}} in URL/body, HTTP request, branch on 2xx vs non2xx
-		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "http:2xx")
-		return "http:2xx", nil
+		return e.runHTTPCallback(ctx, conn, node, st)
 	case nodeTiming:
 		// TODO: evaluate config.schedule against time.Now in tenant TZ → "in_hours" / "out_of_hours"
 		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "in_hours")
@@ -612,15 +672,7 @@ func (e *Executor) runMenu(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 }
 
 func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
-	// Record the target for the call log: the specific agent if one is
-	// pinned, otherwise "all agents" (ring-all). The outcome (completed /
-	// no_answer) is filled in by walk from this function's return.
 	st.stepAction = "transfer"
-	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
-		st.stepDetail = sip
-	} else {
-		st.stepDetail = "all agents"
-	}
 
 	// What the agent's incoming-call screen shows: the trusted client_ref if we
 	// have one, else a generic label — never the gateway's internal SIP identity
@@ -629,6 +681,27 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	label := st.clientRef
 	if label == "" {
 		label = "Web Caller"
+	}
+
+	// Team target → strategy-ordered ring with queue overflow. The Priority
+	// checkbox (config.priority) puts the caller in the team's priority queue
+	// tier. "Who is calling decides priority" is expressed in the graph, not a
+	// variable: wire a caller lookup's success branch to a Transfer with Priority
+	// on, and its failure branch to a normal Transfer.
+	if team := stringFromConfig(node.Config, "team"); team != "" {
+		st.queuePriority = boolFromConfig(node.Config, "priority")
+		st.stepDetail = "team " + team
+		if st.queuePriority {
+			st.stepDetail += " (priority)"
+		}
+		return e.runTeamTransfer(ctx, conn, st, team, label)
+	}
+
+	// Legacy: a single pinned agent (agent_sip) or ring-all (no team). No queue.
+	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
+		st.stepDetail = sip
+	} else {
+		st.stepDetail = "all agents"
 	}
 	bridgeTo, sips, err := e.agentBridgeTarget(ctx, node, st.tenantID, label)
 	if err != nil {
@@ -659,6 +732,347 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	return "no_answer", nil
 }
 
+// queueDepthTTL bounds how long a published queue-depth value lives without a
+// refresh. The orchestrator re-publishes on every poll tick while callers wait,
+// so a team's count goes stale (then expires to "absent" = 0) within this window
+// of the last caller leaving — and survives an orchestrator crash without leaving
+// a phantom count forever.
+const queueDepthTTL = 10 * time.Second
+
+// QueueDepthKey is the Redis key holding the number of callers waiting in a
+// team's queue. The orchestrator writes it (publishDepth); the API reads it for
+// the dashboard. Exported so both sides agree on the key (like FlowCacheKey).
+func QueueDepthKey(tenantID uuid.UUID, team string) string {
+	return "tring:queue:depth:" + tenantID.String() + ":" + team
+}
+
+// publishDepth writes a team's current queue depth to Redis so the API/dashboard
+// can show it. No-op without a cache.
+func (e *Executor) publishDepth(ctx context.Context, tenantID uuid.UUID, team string) {
+	if e.Cache == nil {
+		return
+	}
+	n := e.queue.depth(tenantID.String() + "/" + team)
+	e.Cache.Set(ctx, QueueDepthKey(tenantID, team), []byte(strconv.Itoa(n)), queueDepthTTL)
+}
+
+// queuePollSeconds is how often (in whole seconds, for FreeSWITCH's sched_api)
+// a queued caller's hold-music chunk ends so the loop re-checks for a free
+// agent. Short enough to feel responsive, long enough not to thrash.
+const queuePollSeconds = 2
+
+// runTeamTransfer rings a team by its strategy and, when every member is busy,
+// holds the caller in the team's queue (music-on-hold) until a member frees up
+// or max_wait elapses. Outcomes: "completed" (an agent answered), "queue_timeout"
+// (waited too long), "no_answer" (unknown/empty team), or "" (caller abandoned
+// — terminal; runner.go settles the CDR). The caller is already answered.
+func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *callState, team, label string) (string, error) {
+	cfg, ok, err := e.loadTeamConfig(ctx, st.tenantID, team)
+	if err != nil {
+		st.log.Error("ivr transfer team lookup failed", "team", team, "err", err)
+		return "no_answer", nil
+	}
+	if !ok {
+		st.log.Warn("ivr transfer unknown team, routing no_answer", "team", team)
+		return "no_answer", nil
+	}
+	members, err := e.teamMemberSips(ctx, st.tenantID, team)
+	if err != nil {
+		st.log.Error("ivr transfer team members lookup failed", "team", team, "err", err)
+		return "no_answer", nil
+	}
+	if len(members) == 0 {
+		st.log.Warn("ivr transfer team has no available members, routing no_answer", "team", team)
+		return "no_answer", nil
+	}
+	var domain string
+	if err := e.DB.Pool.QueryRow(ctx, e.Q.GetTenantSipDomain, st.tenantID).Scan(&domain); err != nil {
+		return "no_answer", nil
+	}
+	if cfg.maxWait <= 0 {
+		cfg.maxWait = 120
+	}
+
+	qkey := st.tenantID.String() + "/" + team
+	// Stage 3 sets priority from the caller's backend lookup; Stage 2 is all-normal.
+	priority := st.queuePriority
+	waiter := e.queue.enqueue(qkey, priority)
+	defer func() {
+		e.queue.remove(qkey, waiter)
+		e.publishDepth(context.Background(), st.tenantID, team) // reflect this caller leaving
+	}()
+
+	// Surface the resolved hold-music source so a silent/unreadable MOH is
+	// diagnosable from the log alone.
+	st.log.Info("ivr transfer queued, holding caller", "team", team, "moh", cfg.moh, "priority", priority, "max_wait_s", cfg.maxWait)
+
+	deadline := time.Now().Add(time.Duration(cfg.maxWait) * time.Second)
+	for {
+		// Liveness probe: the queue wait can outlast the caller. uuid_exists (plus
+		// ctx) makes an abandoned call exit immediately instead of holding a slot.
+		if !channelAlive(ctx, conn, st.uuid) {
+			st.log.Info("ivr transfer: caller gone while queued", "team", team)
+			st.stepDetail = "abandoned in queue"
+			return "", nil
+		}
+
+		// Dequeue: a member is free AND we're at the head of line. Nothing is
+		// playing here (the hold music below has returned), so we bridge directly.
+		avail := e.filterAvailable(ctx, st.tenantID, members)
+		if len(avail) > 0 && e.queue.isHead(qkey, waiter) {
+			e.queue.remove(qkey, waiter)           // release our spot so the next waiter can claim too
+			e.publishDepth(ctx, st.tenantID, team) // dashboard: one fewer waiting
+			// Keep audio going through the ring: hand the hold music to FreeSWITCH as
+			// the bridge ringback so the caller hears it WHILE the agent rings, and FS
+			// stops it the instant the agent answers (no dead air, no bleed-through).
+			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "ringback", Value: cfg.moh, Sync: false})
+			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "instant_ringback", Value: "true", Sync: false})
+			dial := e.buildTeamDial(ctx, st.tenantID, team, cfg.strategy, cfg.ringSeconds, avail, domain, label)
+			st.log.Info("ivr transfer bridging team", "team", team, "strategy", cfg.strategy, "targets", len(avail))
+			if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: dial, Sync: true}); err != nil {
+				return "", fmt.Errorf("bridge: %w", err)
+			}
+			if l := e.answeredAgentLabel(st.uuid); l != "" {
+				st.stepDetail = l
+				return "completed", nil
+			}
+			// Nobody answered (raced busy / declined) — rejoin the line and wait.
+			st.log.Info("ivr transfer team bridge fell through, requeueing", "team", team)
+			waiter = e.queue.enqueue(qkey, priority)
+			continue
+		}
+
+		if time.Now().After(deadline) {
+			st.log.Info("ivr transfer queue timed out", "team", team, "max_wait_s", cfg.maxWait)
+			st.stepDetail = "team " + team + " (queue timeout)"
+			return "queue_timeout", nil
+		}
+
+		// Hold music for one bounded chunk: a blocking playback ended by a
+		// FreeSWITCH-SCHEDULED uuid_break, so control returns every ~2s to re-check
+		// for a free agent — and crucially we bridge BETWEEN chunks, when nothing
+		// is playing, so the connect is clean. (A side-connection break racing the
+		// bridge left the caller on hold music after the agent answered.) A
+		// local_stream:// source resumes across chunks; a one-shot file restarts,
+		// so there's a brief seam between chunks — audible but minor.
+		e.publishDepth(ctx, st.tenantID, team) // keep the dashboard count fresh while waiting
+		grp := "tringmoh_" + st.uuid
+		_, _ = conn.SendCommand(ctx, command.API{Command: "sched_api", Arguments: fmt.Sprintf("+%d %s uuid_break %s", queuePollSeconds, grp, st.uuid)})
+		if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: cfg.moh, Sync: true}); err != nil {
+			st.log.Warn("ivr queue hold-music playback error", "moh", cfg.moh, "err", err)
+		}
+		_, _ = conn.SendCommand(ctx, command.API{Command: "sched_del", Arguments: grp}) // cancel the break if the file ended first
+	}
+}
+
+// teamConfig is the queue-relevant settings of a team.
+type teamConfig struct {
+	name        string
+	strategy    string
+	ringSeconds int
+	maxWait     int
+	moh         string
+}
+
+// loadTeamConfig fetches a team's queue settings and resolves its effective
+// hold music; ok=false when the team doesn't exist.
+func (e *Executor) loadTeamConfig(ctx context.Context, tenantID uuid.UUID, team string) (teamConfig, bool, error) {
+	var (
+		cfg       teamConfig
+		holdMusic string // the tenant's system hold music (subselected by get-team-moh)
+	)
+	err := e.DB.Pool.QueryRow(ctx, e.Q.GetTeamMOH, tenantID, team).Scan(
+		&cfg.strategy, &cfg.ringSeconds, &cfg.maxWait, &cfg.moh, &holdMusic)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return teamConfig{}, false, nil
+	}
+	if err != nil {
+		return teamConfig{}, false, err
+	}
+	cfg.name = team
+	cfg.moh = effectiveMOH(cfg.moh, holdMusic)
+	return cfg, true, nil
+}
+
+// effectiveMOH resolves the hold music a team plays: an explicit per-team
+// override wins; otherwise the tenant's uploaded system hold music; otherwise
+// the built-in default stream. teams.moh_sound defaults to 'local_stream://moh'
+// in the schema, so that value (or empty) means "no team override".
+func effectiveMOH(teamMOH, tenantHoldMusic string) string {
+	const builtin = "local_stream://moh"
+	if teamMOH != "" && teamMOH != builtin {
+		return teamMOH
+	}
+	if tenantHoldMusic != "" {
+		return tenantHoldMusic
+	}
+	return builtin
+}
+
+// teamMemberSips returns a team's member SIP usernames in position order
+// (available_for_calls only), regardless of live presence. Empty = no members.
+func (e *Executor) teamMemberSips(ctx context.Context, tenantID uuid.UUID, team string) ([]string, error) {
+	rows, err := e.DB.Pool.Query(ctx, e.Q.ListTeamAgentSips, tenantID, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sips []string
+	for rows.Next() {
+		var sip string
+		var pos int
+		if err := rows.Scan(&sip, &pos); err != nil {
+			return nil, err
+		}
+		sips = append(sips, sip)
+	}
+	return sips, rows.Err()
+}
+
+// buildTeamDial orders the given (available) members per strategy and joins
+// them into a bridge dial-string: ',' (all ring at once) for ring_all, '|'
+// (ring one at a time, fall through on no-answer) for the ordered strategies,
+// bounded per attempt by originate_timeout.
+func (e *Executor) buildTeamDial(ctx context.Context, tenantID uuid.UUID, team, strategy string, ringSeconds int, sips []string, domain, label string) string {
+	sips = e.orderByStrategy(ctx, tenantID, team, strategy, sips)
+	targets := make([]string, 0, len(sips))
+	for _, sip := range sips {
+		targets = append(targets, e.agentLeg(sip, domain, tenantID.String(), label))
+	}
+	sep := ","
+	if strategy != "" && strategy != "ring_all" {
+		sep = "|"
+	}
+	dial := strings.Join(targets, sep)
+	if ringSeconds > 0 {
+		dial = fmt.Sprintf("{originate_timeout=%d}%s", ringSeconds, dial)
+	}
+	return dial
+}
+
+// channelAlive reports whether the channel still exists (uuid_exists). Used to
+// detect a caller who hung up while queued so the wait loop exits promptly.
+func channelAlive(ctx context.Context, conn *eslgo.Conn, channelUUID string) bool {
+	resp, err := conn.SendCommand(ctx, command.API{Command: "uuid_exists", Arguments: channelUUID})
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(resp.Body)) == "true"
+}
+
+// ─── http_callback node ─────────────────────────────────────────────
+
+// httpRespBodyCap bounds how much of a callback response we read, so a huge or
+// hostile body can't exhaust memory.
+const httpRespBodyCap = 1 << 20 // 1 MiB
+
+// runHTTPCallback calls the integrator's backend so the flow can route on data
+// only they have (who is calling → which team/queue/priority). It templates
+// {{vars}} into the URL + body, performs the request, and on a 2xx stashes the
+// top-level JSON fields into both flow vars (for downstream nodes like Transfer)
+// and channel vars (tring_<key>, visible to the CDR). Branches http:2xx /
+// http:non2xx; never errors the call (a backend problem routes to the error
+// edge, it doesn't drop the caller).
+func (e *Executor) runHTTPCallback(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
+	tv := st.templateVars()
+	url := substituteVars(stringFromConfig(node.Config, "url"), tv)
+	method := strings.ToUpper(stringFromConfig(node.Config, "method"))
+	if method == "" {
+		method = "GET"
+	}
+	st.stepAction, st.stepDetail = "http_call", method+" "+url
+	if url == "" {
+		st.log.Warn("ivr http_callback has no url, routing non2xx", "node", node.ID)
+		return "http:non2xx", nil
+	}
+
+	timeout := time.Duration(intFromConfig(node.Config, "timeout_seconds", 10)) * time.Second
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var body io.Reader
+	bodyTmpl := stringFromConfig(node.Config, "body_template")
+	if bodyTmpl != "" {
+		body = strings.NewReader(substituteVars(bodyTmpl, tv))
+	}
+	req, err := http.NewRequestWithContext(rctx, method, url, body)
+	if err != nil {
+		st.log.Error("ivr http_callback bad request", "node", node.ID, "err", err)
+		return "http:non2xx", nil
+	}
+	if bodyTmpl != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range mapStringFromConfig(node.Config, "headers") {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := e.httpClient().Do(req)
+	if err != nil {
+		st.log.Warn("ivr http_callback request failed, routing non2xx", "node", node.ID, "err", err)
+		return "http:non2xx", nil
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, httpRespBodyCap))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		st.log.Info("ivr http_callback non-2xx", "node", node.ID, "status", resp.StatusCode)
+		return "http:non2xx", nil
+	}
+	e.stashResponse(ctx, conn, st, respBody)
+	return "http:2xx", nil
+}
+
+// stashResponse writes each top-level key of a JSON-object response into flow
+// vars (st.vars[key]) and a channel var (tring_<key>), so later nodes can route
+// on backend data. A non-object body is ignored (best-effort).
+func (e *Executor) stashResponse(ctx context.Context, conn *eslgo.Conn, st *callState, body []byte) {
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		st.log.Info("ivr http_callback response not a JSON object, no vars stashed")
+		return
+	}
+	for k, v := range obj {
+		val := stringifyJSON(v)
+		st.vars[k] = val
+		if conn != nil { // nil in unit tests; live calls always have a channel
+			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "tring_" + k, Value: val, Sync: false})
+		}
+	}
+}
+
+// substituteVars replaces {{key}} tokens in a template with vars[key]. Unknown
+// tokens are left as-is (visible in logs so the author can spot a typo).
+func substituteVars(tmpl string, vars map[string]string) string {
+	if !strings.Contains(tmpl, "{{") {
+		return tmpl
+	}
+	for k, v := range vars {
+		tmpl = strings.ReplaceAll(tmpl, "{{"+k+"}}", v)
+	}
+	return tmpl
+}
+
+// stringifyJSON renders a JSON value as the plain string stored in a flow/channel
+// var (so {"priority":true} → "true", {"team":"sales"} → "sales").
+func stringifyJSON(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case nil:
+		return ""
+	default:
+		b, _ := json.Marshal(t)
+		return string(b)
+	}
+}
+
 // answeredAgentLabel returns the display label of the agent attributed to this
 // call (stamped by the CHANNEL_BRIDGE handler), or "" if none answered. Uses a
 // fresh short context so it works even after the call's ctx is cancelled.
@@ -686,10 +1100,16 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 		return "", nil, err
 	}
 
+	// Legacy single-agent pin — ring exactly that agent.
 	if sip := stringFromConfig(node.Config, "agent_sip"); sip != "" {
 		return e.agentLeg(sip, domain, tenantID.String(), label), []string{sip}, nil
 	}
 
+	// Note: team targets are handled in runTeamTransfer (queue-aware) before
+	// reaching here, so this path is only the legacy ring-all fallback.
+
+	// Back-compat: no agent and no team → ring ALL tenant agents simultaneously
+	// (the pre-teams behaviour).
 	rows, err := e.DB.Pool.Query(ctx, e.Q.ListAgentSipUsernames, tenantID)
 	if err != nil {
 		return "", nil, err
@@ -706,29 +1126,73 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 	if err := rows.Err(); err != nil {
 		return "", nil, err
 	}
-
-	// With the gateway transport, an agent leg always reaches the gateway (it's
-	// always up) and 480s if that agent isn't connected — so ringing offline
-	// agents just wastes a leg. When presence is available, ring only agents
-	// currently connected to the gateway AND not already on a call (Available);
-	// an on-call agent should not be sent another call. (Presence disabled /
-	// legacy SIP transport → ring all, as before; FS fails dead legs itself.)
-	pres := presence.New(e.Cache)
-	if e.AgentTransport == "gateway" && pres.Enabled() {
-		avail := sips[:0]
-		for _, sip := range sips {
-			if pres.Available(ctx, tenantID.String(), sip) {
-				avail = append(avail, sip)
-			}
-		}
-		sips = avail
-	}
+	sips = e.filterAvailable(ctx, tenantID, sips)
 
 	targets := make([]string, 0, len(sips))
 	for _, sip := range sips {
 		targets = append(targets, e.agentLeg(sip, domain, tenantID.String(), label))
 	}
 	return strings.Join(targets, ","), sips, nil // comma = simultaneous ring
+}
+
+// filterAvailable keeps only agents connected to the gateway and not already on
+// a call. With the legacy SIP transport or when presence is off it returns the
+// input unchanged (FreeSWITCH fails dead legs itself).
+func (e *Executor) filterAvailable(ctx context.Context, tenantID uuid.UUID, sips []string) []string {
+	pres := presence.New(e.Cache)
+	if e.AgentTransport != "gateway" || !pres.Enabled() {
+		return sips
+	}
+	// Fresh slice — do NOT reuse sips' backing array (sips[:0]), which would
+	// corrupt the caller's member list across queue-poll iterations.
+	avail := make([]string, 0, len(sips))
+	for _, sip := range sips {
+		if pres.Available(ctx, tenantID.String(), sip) {
+			avail = append(avail, sip)
+		}
+	}
+	return avail
+}
+
+// orderByStrategy reorders a team's available members for ringing:
+//   - round_robin: rotate the start by a per-team counter (load spreading)
+//   - longest_wait: idle-longest first (by Redis freed-at; missing = longest)
+//   - sequential / ring_all: keep membership-position order
+func (e *Executor) orderByStrategy(ctx context.Context, tenantID uuid.UUID, team, strategy string, sips []string) []string {
+	switch strategy {
+	case "round_robin":
+		if len(sips) > 1 {
+			start := e.rrNext(tenantID.String()+"/"+team, len(sips))
+			sips = append(append([]string{}, sips[start:]...), sips[:start]...)
+		}
+	case "longest_wait":
+		pres := presence.New(e.Cache)
+		if pres.Enabled() {
+			freed := make(map[string]time.Time, len(sips))
+			for _, sip := range sips {
+				if t, ok := pres.FreedAt(ctx, tenantID.String(), sip); ok {
+					freed[sip] = t
+				} // absent → zero time → sorts first (idle longest)
+			}
+			sort.SliceStable(sips, func(i, j int) bool {
+				return freed[sips[i]].Before(freed[sips[j]])
+			})
+		}
+	}
+	return sips
+}
+
+// rrNext returns the next rotation offset for a round_robin key (0..n-1) and
+// advances the per-team counter. Bounded so the counter never overflows.
+func (e *Executor) rrNext(key string, n int) int {
+	e.rrMu.Lock()
+	defer e.rrMu.Unlock()
+	if e.rr == nil {
+		e.rr = map[string]int{}
+	}
+	i := e.rr[key] % n
+	e.rr[key] = (e.rr[key] + 1) % (1 << 30)
+	return i
 }
 
 // agentLeg builds one bridge dial-string leg for an agent, tagging it with a
@@ -802,11 +1266,32 @@ func stringFromConfig(c map[string]interface{}, key string) string {
 	return ""
 }
 
+func boolFromConfig(c map[string]interface{}, key string) bool {
+	if v, ok := c[key].(bool); ok {
+		return v
+	}
+	return false
+}
+
 func mapFromConfig(c map[string]interface{}, key string) map[string]interface{} {
 	if v, ok := c[key].(map[string]interface{}); ok {
 		return v
 	}
 	return nil
+}
+
+// mapStringFromConfig reads a JSON object config field as map[string]string,
+// dropping non-string values (used for http_callback headers).
+func mapStringFromConfig(c map[string]interface{}, key string) map[string]string {
+	out := map[string]string{}
+	if m, ok := c[key].(map[string]interface{}); ok {
+		for k, v := range m {
+			if s, ok := v.(string); ok {
+				out[k] = s
+			}
+		}
+	}
+	return out
 }
 
 // getChannelVar reads ${var} off the live channel via `uuid_getvar`.
