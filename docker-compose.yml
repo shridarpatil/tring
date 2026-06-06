@@ -1,6 +1,14 @@
 services:
   freeswitch:
-    image: safarov/freeswitch:latest
+    # Baked image: FROM safarov/freeswitch + Tring's STATIC config (see
+    # freeswitch/Dockerfile). Built here so dev runs the EXACT image shipped to
+    # production. Trade-off: editing freeswitch/conf now needs a rebuild
+    # (`make images` or `docker compose build freeswitch`) + recreate, not just
+    # a restart. Only the dynamic trunk dir + sounds/recordings stay as volumes.
+    image: ghcr.io/shridarpatil/tring-freeswitch:${TRING_TAG:-develop}
+    build:
+      context: ./freeswitch
+      dockerfile: Dockerfile
     container_name: tring-fs
     network_mode: host
     # FreeSWITCH wants real-time thread priority for low-latency audio.
@@ -34,59 +42,14 @@ services:
       - SOUND_TYPES=music:en-us-callie
     volumes:
       - freeswitch-sounds:/usr/share/freeswitch/sounds
-      # Tenant sound library (uploaded IVR prompts + hold music). The api
-      # container writes uploads here; FreeSWITCH plays them. Same host path at
-      # the same container path in both, so the api's audio_fs_dir default
-      # (/usr/share/freeswitch/sounds/tring) is exactly what FS reads. Mounted
-      # read-only here since only the api writes. (Nested under the sounds
-      # volume above — Docker mounts the more-specific path on top.)
+      # Tenant sound library — the api writes uploaded audio here; FS plays it.
       - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
-      # Call recordings. FreeSWITCH WRITES here (uuid_record on bridge); the api
-      # reads the same named volume to serve them. A named volume (not a host
-      # bind) so FS's uid can write without host-permission fuss, and recordings
-      # survive restarts. Matches the api's recordings_dir default.
+      # Call recordings — FS writes (uuid_record on bridge); the api serves from
+      # the same named volume when S3 is off. Survives restarts.
       - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
-      # Our config overrides are mounted onto the entrypoint's COPY SOURCE
-      # (/usr/share/freeswitch/conf/vanilla/*), NOT the destination
-      # (/etc/freeswitch/*). On boot the safarov entrypoint runs
-      # `cp vanilla/* /etc/freeswitch/`; by overriding the source, the copy
-      # picks up OUR files into a fresh writable /etc/freeswitch — our configs
-      # still win, and there are no "Read-only file system" cp errors (the old
-      # approach mounted :ro onto the destination, so every copy collided).
-      # :ro is safe here because the entrypoint only READS the source.
-      - ./freeswitch/conf/vars.xml:/usr/share/freeswitch/conf/vanilla/vars.xml:ro
-      - ./freeswitch/conf/dialplan/default.xml:/usr/share/freeswitch/conf/vanilla/dialplan/default.xml:ro
-      - ./freeswitch/conf/directory/default.xml:/usr/share/freeswitch/conf/vanilla/directory/default.xml:ro
-      - ./freeswitch/conf/autoload_configs/modules.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml:ro
-      # ACL override: trust the media gateway's loopback/private-IP INVITEs into
-      # the internal profile's "domains" ACL (otherwise web calls 403). See file.
-      - ./freeswitch/conf/autoload_configs/acl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml:ro
-      - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/xml_curl.conf.xml:ro
-      # Defines the `moh` local_stream source (the image ships none, so the
-      # default hold music local_stream://moh played silence). See the file.
-      - ./freeswitch/conf/autoload_configs/local_stream.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/local_stream.conf.xml:ro
-      # Overrides the default switch.conf.xml to wire the RTP port range
-      # to vars.xml's $${rtp_start_port}/$${rtp_end_port} placeholders.
-      - ./freeswitch/conf/autoload_configs/switch.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/switch.conf.xml:ro
-      # (Static Exotel/Airtel/Jio/Tata gateway XML mounts removed.
-      # Trunks now live in DB and render to external/dynamic/ at runtime.)
-      # Custom external sofia profile — adds external/dynamic/*.xml to
-      # the gateway include list so UI-managed trunks are picked up on
-      # `sofia profile external rescan`.
-      - ./freeswitch/conf/sip_profiles/external.xml:/usr/share/freeswitch/conf/vanilla/sip_profiles/external.xml:ro
-      # Static gateway pointing at the Tring media gateway (agent_transport=
-      # gateway; ADR-001 M4b). Picked up by external.xml's external/*.xml
-      # include.
-      - ./freeswitch/conf/sip_profiles/external/tring-gw.xml:/usr/share/freeswitch/conf/vanilla/sip_profiles/external/tring-gw.xml:ro
-      # Override sofia's internal profile to disable the force-register-*
-      # params — see comment block in the file for why (multi-tenant
-      # depends on the SDK's From URI domain reaching /fs/directory
-      # un-rewritten).
-      - ./freeswitch/conf/sip_profiles/internal.xml:/usr/share/freeswitch/conf/vanilla/sip_profiles/internal.xml:ro
-      # Dynamic gateway dir — Tring writes t_<uuid>.xml here, FS reads. This
-      # stays mounted at the DESTINATION (not vanilla source) and RW because
-      # the api container shares the SAME host path at the same /etc path; the
-      # entrypoint copy just lands vanilla's external/* alongside it.
+      # Dynamic trunk gateways — RUNTIME only (NOT baked into the image): Tring
+      # writes t_<uuid>.xml here and rescans the external profile; the api shares
+      # the same host path. Static config is baked into the image above.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
     # network_mode: host is simplest for SIP/RTP during dev.
     # Ports: 5060 (SIP), 5080 (external SIP), 8021 (ESL),
