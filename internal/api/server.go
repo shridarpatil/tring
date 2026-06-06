@@ -60,6 +60,9 @@ type Config struct {
 	// internal/config and handlers_audio.go.
 	AudioDir   string
 	AudioFSDir string
+	// RecordingsDir is the shared-mount path FreeSWITCH writes call recordings to
+	// and the API serves them from. See handleGetCallRecording.
+	RecordingsDir string
 
 	// Cache is the shared Redis cache. The API uses it only to invalidate
 	// flow definitions the orchestrator caches (handlers_flows.go). May be
@@ -94,6 +97,10 @@ type Server struct {
 	// FreeSWITCH plays them from (default equal). See handlers_audio.go.
 	audioDir   string
 	audioFSDir string
+
+	// recordingsDir: where FreeSWITCH writes call recordings; the API reads them
+	// back from the same shared-mount path to serve. See handleGetCallRecording.
+	recordingsDir string
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
 	// handed to the guest mint. Empty slice == "no ICE servers configured",
@@ -144,6 +151,7 @@ func NewServer(cfg Config) *Server {
 		gatewayPublicURL: cfg.GatewayPublicURL,
 		audioDir:         cfg.AudioDir,
 		audioFSDir:       cfg.AudioFSDir,
+		recordingsDir:    cfg.RecordingsDir,
 		iceServers:       buildICEServers(cfg),
 		simManager:       orchestrator.NewSimManager(),
 		log:              logger,
@@ -244,6 +252,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/calls/connect", s.handleConnectCall)
 			r.Get("/calls", s.handleListCalls)
 			r.Get("/calls/{id}", s.handleGetCall)
+			r.Get("/calls/{id}/recording", s.handleGetCallRecording)
 
 			r.Post("/webhooks", s.handleCreateWebhook)
 			r.Get("/webhooks", s.handleListWebhooks)

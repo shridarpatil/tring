@@ -15,6 +15,8 @@ const strategy = ref("failover");
 const strategies = ["failover", "round_robin", "manual", "load_based"];
 // System hold music (an uploaded sound's fs_path; "" = built-in default).
 const holdMusic = ref("");
+// Record a call once the agent and client connect.
+const recordCalls = ref(true);
 
 // ─── Guest web-calling config (the tenant's default guest flow) ───────
 const guest = ref<GuestConfig | null>(null);
@@ -32,6 +34,7 @@ async function load() {
     tenant.value = await api.get<Tenant>("/v1/tenants/me");
     strategy.value = tenant.value.outbound_strategy || "failover";
     holdMusic.value = tenant.value.hold_music || "";
+    recordCalls.value = tenant.value.record_calls ?? true;
   } catch (e) {
     error.value = errMessage(e, "failed to load");
   } finally {
@@ -58,8 +61,10 @@ async function save() {
     tenant.value = await api.patch<Tenant>("/v1/tenants/me", {
       outbound_strategy: strategy.value,
       hold_music: holdMusic.value,
+      record_calls: recordCalls.value,
     });
     holdMusic.value = tenant.value.hold_music || "";
+    recordCalls.value = tenant.value.record_calls ?? true;
     saved.value = true;
   } catch (e) {
     error.value = errMessage(e, "save failed");
@@ -129,6 +134,17 @@ onMounted(load);
           Default is FreeSWITCH's built-in music.
         </p>
         <AudioPicker v-model="holdMusic" default-label="Default (built-in music)" />
+      </div>
+
+      <div class="block">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" v-model="recordCalls" class="h-4 w-4 rounded border-gray-300" />
+          <span class="text-sm font-medium text-gray-700">Record calls</span>
+        </label>
+        <p class="text-xs text-gray-400 mt-1">
+          Record each call once the agent and caller connect. Recordings appear in the
+          <strong>Calls</strong> log. Make sure recording is permitted and disclosed where you operate.
+        </p>
       </div>
 
       <div class="flex items-center gap-3">

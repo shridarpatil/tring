@@ -141,9 +141,29 @@ ORDER BY type, priority ASC, created_at DESC;
 UPDATE tenants
 SET outbound_strategy = COALESCE($1, outbound_strategy),
     failover_causes   = COALESCE($2::TEXT[], failover_causes),
-    hold_music        = COALESCE($4, hold_music)
+    hold_music        = COALESCE($4, hold_music),
+    record_calls      = COALESCE($5, record_calls)
 WHERE id = $3
-RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music;
+RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls;
+
+-- name: get-tenant-settings
+-- Tenant-level toggles the Settings page reads (not carried in the auth context).
+SELECT hold_music, record_calls FROM tenants WHERE id = $1;
+
+-- name: get-tenant-record-calls
+-- Whether the orchestrator should record a connected call for this tenant.
+SELECT record_calls FROM tenants WHERE id = $1;
+
+-- name: set-call-recording
+-- Mark a call as recording: point recording_url at the authenticated serve
+-- endpoint (keyed by the call's own id). Idempotent — only sets it once.
+UPDATE calls SET recording_url = '/v1/calls/' || id::text || '/recording'
+WHERE fs_uuid = $1 AND recording_url IS NULL;
+
+-- name: get-call-fs-uuid
+-- Resolve a call's FreeSWITCH UUID for the recording serve endpoint, scoped to
+-- the tenant so one tenant can't fetch another's recording.
+SELECT fs_uuid FROM calls WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-tenant-hold-music
 SELECT hold_music FROM tenants WHERE id = $1;

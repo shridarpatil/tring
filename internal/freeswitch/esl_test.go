@@ -59,7 +59,7 @@ func TestBuildVarBlockWrapsInCurlies(t *testing.T) {
 func TestBuildVarBlockMultipleVars(t *testing.T) {
 	// Map iteration order is unstable, so we assert structure not ordering.
 	got := buildVarBlock(map[string]string{
-		"continue_on_fail": "GATEWAY_DOWN",
+		"continue_on_fail":    "GATEWAY_DOWN",
 		"hangup_after_bridge": "true",
 	})
 	if !strings.HasPrefix(got, "{") || !strings.HasSuffix(got, "}") {

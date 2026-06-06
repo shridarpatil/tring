@@ -51,9 +51,11 @@ type Queries struct {
 	ListNumbers              string `query:"list-numbers"`
 
 	// ---- api: tenants ----
-	UpdateTenant       string `query:"update-tenant"`
-	GetTenantSipDomain string `query:"get-tenant-sip-domain"`
-	GetTenantHoldMusic string `query:"get-tenant-hold-music"`
+	UpdateTenant         string `query:"update-tenant"`
+	GetTenantSipDomain   string `query:"get-tenant-sip-domain"`
+	GetTenantHoldMusic   string `query:"get-tenant-hold-music"`
+	GetTenantSettings    string `query:"get-tenant-settings"`
+	GetTenantRecordCalls string `query:"get-tenant-record-calls"`
 
 	// ---- api: audio library (sound assets) ----
 	CreateAudio string `query:"create-audio"`
@@ -71,6 +73,8 @@ type Queries struct {
 	CreateCallInbound   string `query:"create-call-inbound"`
 	SetCallIVRPath      string `query:"set-call-ivr-path"`
 	SetCallAgent        string `query:"set-call-agent"`
+	SetCallRecording    string `query:"set-call-recording"`
+	GetCallFsUUID       string `query:"get-call-fs-uuid"`
 	GetAgentBySIP       string `query:"get-agent-by-sip"`
 
 	CreateAPIKey        string `query:"create-api-key"`

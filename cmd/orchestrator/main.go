@@ -45,7 +45,9 @@ func main() {
 	}
 	defer dbase.Close()
 
-	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password")).WithLogger(logger)
+	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password")).
+		WithRecordings(k.String("recordings_dir")).
+		WithLogger(logger)
 
 	// IVR executor — starts an outbound-ESL listener so FreeSWITCH can
 	// hand inbound calls to us via the dialplan's `socket` application

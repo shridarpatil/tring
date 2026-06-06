@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ErrNoAvailableDID = errors.New("no available masked numbers in pool")
+	ErrNoAvailableDID  = errors.New("no available masked numbers in pool")
 	ErrSessionNotFound = errors.New("masked session not found")
 )
 
@@ -22,9 +22,9 @@ type Session struct {
 
 // Pool manages masked number allocation and session lookups
 type Pool struct {
-	mu       sync.RWMutex
-	allDIDs  []string          // all available masked DIDs
-	active   map[string]*Session // maskedDID → session
+	mu      sync.RWMutex
+	allDIDs []string            // all available masked DIDs
+	active  map[string]*Session // maskedDID → session
 }
 
 // NewPool creates a masking pool with the given DIDs

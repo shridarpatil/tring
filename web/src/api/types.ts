@@ -8,6 +8,8 @@ export interface Tenant {
   failover_causes: string[];
   // System hold music: an audio asset's fs_path, or "" for the built-in default.
   hold_music?: string;
+  // Record a call once the agent and client connect.
+  record_calls?: boolean;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.

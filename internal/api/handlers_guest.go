@@ -188,4 +188,3 @@ func (s *Server) handlePatchGuestConfig(w http.ResponseWriter, r *http.Request) 
 	}
 	s.handleGetGuestConfig(w, r)
 }
-

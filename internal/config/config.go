@@ -90,6 +90,11 @@ var defaults = map[string]any{
 	// local path while leaving audio_fs_dir at the FS-visible path.
 	"audio_dir":    "/usr/share/freeswitch/sounds/tring",
 	"audio_fs_dir": "/usr/share/freeswitch/sounds/tring",
+	// recordings_dir: where FreeSWITCH writes call recordings and the API reads
+	// them back to serve. Same container path in both (a shared mount), like
+	// audio_dir, so the path the orchestrator hands uuid_record is exactly what
+	// the API serves from.
+	"recordings_dir": "/usr/share/freeswitch/recordings/tring",
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid

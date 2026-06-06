@@ -15,12 +15,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/percipia/eslgo"
+	"github.com/percipia/eslgo/command"
 
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/queries"
@@ -33,7 +35,17 @@ type Runner struct {
 	notifier    *webhook.Notifier
 	eslAddr     string
 	eslPassword string
-	log         *slog.Logger
+	// recordingsDir is the FreeSWITCH-side directory recordings are written to
+	// (shared mount the API also reads). Empty disables recording.
+	recordingsDir string
+	log           *slog.Logger
+}
+
+// WithRecordings sets the directory FreeSWITCH writes call recordings to and
+// returns the runner for chaining. Empty leaves recording off.
+func (r *Runner) WithRecordings(dir string) *Runner {
+	r.recordingsDir = dir
+	return r
 }
 
 func New(d *db.DB, addr, password string) *Runner {
@@ -154,6 +166,15 @@ func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event)
 	if err := r.db.Pool.QueryRow(ctx, r.q.GetCallTenant, aLeg).Scan(&tenantID); err != nil {
 		return
 	}
+
+	// Agent and client are now connected — start recording if the tenant has it
+	// enabled. Done before agent attribution so it covers BOTH inbound transfers
+	// (agent is the tagged B-leg) and outbound click-to-call (agent is the A-leg,
+	// client the B-leg) — either way we record the A-leg, which carries the
+	// bridged audio. RECORD_STEREO splits the two parties onto separate channels;
+	// uuid_record stops itself on hangup, so there's no explicit stop.
+	r.maybeRecord(ctx, conn, aLeg, tenantID)
+
 	sip, _ := getChannelVar(ctx, conn, bLeg, "tring_agent")
 	if sip == "" {
 		return // bridged leg isn't a tagged agent leg (e.g. not a transfer)
@@ -171,6 +192,31 @@ func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event)
 		return
 	}
 	r.log.Info("call answered by agent", "call_id", aLeg, "sip", sip, "label", label)
+}
+
+// maybeRecord starts a WAV recording of the connected call when the tenant's
+// record_calls flag is on. Best-effort: a failure is logged and the call
+// continues (recording must never break a live call).
+func (r *Runner) maybeRecord(ctx context.Context, conn *eslgo.Conn, aLeg string, tenantID uuid.UUID) {
+	if r.recordingsDir == "" {
+		return
+	}
+	var enabled bool
+	if err := r.db.Pool.QueryRow(ctx, r.q.GetTenantRecordCalls, tenantID).Scan(&enabled); err != nil || !enabled {
+		return
+	}
+	path := filepath.Join(r.recordingsDir, aLeg+".wav")
+	_, _ = conn.SendCommand(ctx, command.API{Command: "uuid_setvar", Arguments: aLeg + " RECORD_STEREO true"})
+	resp, err := conn.SendCommand(ctx, command.API{Command: "uuid_record", Arguments: aLeg + " start " + path})
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(resp.Body)), "+OK") {
+		r.log.Warn("call recording failed to start", "call_id", aLeg, "path", path, "err", err)
+		return
+	}
+	if _, err := r.db.Pool.Exec(ctx, r.q.SetCallRecording, aLeg); err != nil {
+		r.log.Error("set recording_url failed", "call_id", aLeg, "err", err)
+		return
+	}
+	r.log.Info("call recording started", "call_id", aLeg, "path", path)
 }
 
 // onBackgroundJob settles call rows whose bgapi originate failed before any

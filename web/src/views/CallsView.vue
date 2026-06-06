@@ -2,12 +2,28 @@
 import { ref, onMounted } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
+import { auth } from "../stores/auth";
 import type { Call, IvrStep } from "../api/types";
 
 const calls = ref<Call[]>([]);
 const loading = ref(true);
 const error = ref("");
 const statusFilter = ref("");
+
+// Recordings are served behind auth, so a plain <a href> can't fetch them.
+// Pull the WAV with the bearer token and open the resulting blob.
+async function playRecording(c: Call) {
+  if (!c.recording_url) return;
+  const token = auth.token();
+  const res = await fetch(c.recording_url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) {
+    error.value = "recording not available yet";
+    return;
+  }
+  window.open(URL.createObjectURL(await res.blob()), "_blank");
+}
 
 // Per-call expand state for the IVR-path detail row.
 const expanded = ref<Set<string>>(new Set());
@@ -152,7 +168,7 @@ onMounted(load);
               <td class="px-5 py-2 text-gray-500">{{ fmt(c.started_at) }}</td>
               <td class="px-5 py-2">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
               <td class="px-5 py-2">
-                <a v-if="c.recording_url" :href="c.recording_url" target="_blank" class="text-gray-600 hover:text-gray-900 underline" @click.stop>play</a>
+                <button v-if="c.recording_url" class="text-gray-600 hover:text-gray-900 underline" @click.stop="playRecording(c)">play</button>
                 <span v-else class="text-gray-300">—</span>
               </td>
               <td class="px-5 py-2">

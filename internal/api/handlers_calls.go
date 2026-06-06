@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -355,6 +357,36 @@ func (s *Server) handleGetCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+// handleGetCallRecording streams a call's WAV recording. Tenant-scoped: the
+// fs_uuid lookup is filtered by tenant so one tenant can't fetch another's
+// recording. The file is written by FreeSWITCH to the shared recordings mount,
+// named by fs_uuid. 404 if the call isn't ours or the file isn't there yet
+// (recording still in progress / never recorded).
+func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var fsUUID string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallFsUUID, id, t.ID).Scan(&fsUUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "call not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	path := filepath.Join(s.recordingsDir, fsUUID+".wav")
+	if _, err := os.Stat(path); err != nil {
+		writeError(w, http.StatusNotFound, "recording not available")
+		return
+	}
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {

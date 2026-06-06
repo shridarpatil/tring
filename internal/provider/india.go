@@ -19,8 +19,8 @@ import (
 // All four enforce Indian E.164 normalization. Switching a tenant from
 // one to another is a config-only operation:
 //
-//   1. POST /v1/numbers with the new provider name + DID.
-//   2. (Optional) Delete the old outbound number so it doesn't get picked.
+//  1. POST /v1/numbers with the new provider name + DID.
+//  2. (Optional) Delete the old outbound number so it doesn't get picked.
 //
 // No code changes, no FreeSWITCH restart, no Tring restart.
 type indianSIPTrunk struct {
