@@ -29,6 +29,73 @@ WHERE id = $2 AND tenant_id = $3
 RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at;
 
 -- ===========================================================================
+-- teams (tenant-scoped agent groups; identified by name)
+-- ===========================================================================
+
+-- name: create-team
+INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at;
+
+-- name: list-teams
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
+FROM teams WHERE tenant_id = $1 ORDER BY name;
+
+-- name: list-team-names
+-- Just the names — for the dashboard queue-depth lookup (one Redis read per team).
+SELECT name FROM teams WHERE tenant_id = $1 ORDER BY name;
+
+-- name: get-team
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
+FROM teams WHERE tenant_id = $1 AND name = $2;
+
+-- name: get-team-moh
+-- Team queue settings + the tenant's system hold music, for the orchestrator's
+-- effective-MOH resolution (team override → tenant hold music → built-in default).
+SELECT t.strategy, t.ring_seconds, t.max_wait_seconds, t.moh_sound,
+       COALESCE((SELECT hold_music FROM tenants WHERE id = t.tenant_id), '')
+FROM teams t WHERE t.tenant_id = $1 AND t.name = $2;
+
+-- name: update-team
+-- Partial update: a NULL arg keeps the existing value (name is the PK, immutable).
+UPDATE teams SET
+    strategy         = COALESCE($3, strategy),
+    ring_seconds     = COALESCE($4, ring_seconds),
+    max_wait_seconds = COALESCE($5, max_wait_seconds),
+    moh_sound        = COALESCE($6, moh_sound)
+WHERE tenant_id = $1 AND name = $2
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at;
+
+-- name: delete-team
+DELETE FROM teams WHERE tenant_id = $1 AND name = $2;
+
+-- name: list-team-agents
+-- Members of a team with their membership position, for the console editor.
+SELECT a.id, a.sip_username, COALESCE(a.display_name, ''), a.available_for_calls, ta.position
+FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+WHERE ta.tenant_id = $1 AND ta.team_name = $2
+ORDER BY ta.position, a.sip_username;
+
+-- name: add-team-agent
+-- Idempotent: re-adding updates position. The SELECT…WHERE EXISTS guards that
+-- the agent belongs to this tenant (cross-tenant add inserts nothing → 0 rows).
+INSERT INTO team_agents (tenant_id, team_name, agent_id, position)
+SELECT $1, $2, $3, $4
+WHERE EXISTS (SELECT 1 FROM agents WHERE id = $3 AND tenant_id = $1)
+ON CONFLICT (tenant_id, team_name, agent_id) DO UPDATE SET position = EXCLUDED.position;
+
+-- name: remove-team-agent
+DELETE FROM team_agents WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3;
+
+-- name: list-team-agent-sips
+-- Ring targets for a team: members the backend hasn't marked unavailable,
+-- ordered by membership position (used directly by the `sequential` strategy).
+SELECT a.sip_username, ta.position
+FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+WHERE ta.tenant_id = $1 AND ta.team_name = $2 AND a.available_for_calls
+ORDER BY ta.position, a.sip_username;
+
+-- ===========================================================================
 -- numbers
 -- ===========================================================================
 
@@ -73,9 +140,39 @@ ORDER BY type, priority ASC, created_at DESC;
 -- name: update-tenant
 UPDATE tenants
 SET outbound_strategy = COALESCE($1, outbound_strategy),
-    failover_causes   = COALESCE($2::TEXT[], failover_causes)
+    failover_causes   = COALESCE($2::TEXT[], failover_causes),
+    hold_music        = COALESCE($4, hold_music)
 WHERE id = $3
-RETURNING id, name, sip_domain, outbound_strategy, failover_causes;
+RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music;
+
+-- name: get-tenant-hold-music
+SELECT hold_music FROM tenants WHERE id = $1;
+
+-- ===========================================================================
+-- audio assets (tenant sound library)
+-- ===========================================================================
+
+-- name: create-audio
+INSERT INTO audio_assets (tenant_id, name, fs_path, format, size_bytes)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, tenant_id, name, fs_path, format, size_bytes, created_at;
+
+-- name: list-audio
+SELECT id, tenant_id, name, fs_path, format, size_bytes, created_at
+FROM audio_assets WHERE tenant_id = $1 ORDER BY created_at DESC;
+
+-- name: get-audio
+SELECT id, tenant_id, name, fs_path, format, size_bytes, created_at
+FROM audio_assets WHERE id = $1 AND tenant_id = $2;
+
+-- name: delete-audio
+DELETE FROM audio_assets WHERE id = $1 AND tenant_id = $2;
+
+-- name: count-active-agent-calls
+-- Live calls currently connected to an agent (answered + an agent stamped, not
+-- yet ended) — powers the dashboard "on call" stat.
+SELECT COUNT(*) FROM calls
+WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
 
 -- ===========================================================================
 -- calls

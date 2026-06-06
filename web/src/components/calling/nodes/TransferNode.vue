@@ -9,6 +9,7 @@ const props = defineProps<{ data: Record<string, any> }>();
 
 const summary = computed(() => {
   const c = props.data?.config || {};
+  if (c.team) return `→ team ${c.team}${c.priority ? " ★ priority" : ""}`;
   if (c.agent_sip) return `→ agent ${c.agent_sip}`;
   return "→ all agents";
 });
@@ -21,6 +22,7 @@ const summary = computed(() => {
     :output-handles="[
       { id: 'completed', label: 'completed' },
       { id: 'no_answer', label: 'no answer' },
+      { id: 'queue_timeout', label: 'queue T/O' },
     ]"
   >
     <template #icon><Users class="w-4 h-4" /></template>

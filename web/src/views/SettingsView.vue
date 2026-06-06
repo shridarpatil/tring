@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
+import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
+import AudioPicker from "../components/AudioPicker.vue";
 import type { Tenant, GuestConfig, Flow } from "../api/types";
 
 const tenant = ref<Tenant | null>(null);
@@ -11,6 +13,8 @@ const saved = ref(false);
 
 const strategy = ref("failover");
 const strategies = ["failover", "round_robin", "manual", "load_based"];
+// System hold music (an uploaded sound's fs_path; "" = built-in default).
+const holdMusic = ref("");
 
 // ─── Guest web-calling config (the tenant's default guest flow) ───────
 const guest = ref<GuestConfig | null>(null);
@@ -27,8 +31,9 @@ async function load() {
   try {
     tenant.value = await api.get<Tenant>("/v1/tenants/me");
     strategy.value = tenant.value.outbound_strategy || "failover";
+    holdMusic.value = tenant.value.hold_music || "";
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
+    error.value = errMessage(e, "failed to load");
   } finally {
     loading.value = false;
   }
@@ -41,7 +46,7 @@ async function load() {
     flows.value = fl;
     defaultFlowId.value = g.default_flow_id || "";
   } catch (e) {
-    guestError.value = e instanceof Error ? e.message : "failed to load guest config";
+    guestError.value = errMessage(e, "failed to load guest config");
   }
 }
 
@@ -52,10 +57,12 @@ async function save() {
   try {
     tenant.value = await api.patch<Tenant>("/v1/tenants/me", {
       outbound_strategy: strategy.value,
+      hold_music: holdMusic.value,
     });
+    holdMusic.value = tenant.value.hold_music || "";
     saved.value = true;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "save failed";
+    error.value = errMessage(e, "save failed");
   } finally {
     saving.value = false;
   }
@@ -72,7 +79,7 @@ async function saveGuest() {
     defaultFlowId.value = guest.value.default_flow_id || "";
     guestSaved.value = true;
   } catch (e) {
-    guestError.value = e instanceof Error ? e.message : "save failed";
+    guestError.value = errMessage(e, "save failed");
   } finally {
     guestSaving.value = false;
   }
@@ -113,6 +120,15 @@ onMounted(load);
         <div class="mt-1 flex flex-wrap gap-1">
           <span v-for="c in tenant.failover_causes" :key="c" class="bg-gray-100 rounded px-2 py-0.5 text-xs font-mono">{{ c }}</span>
         </div>
+      </div>
+
+      <div class="block">
+        <span class="text-sm font-medium text-gray-700">Hold music</span>
+        <p class="text-xs text-gray-400 mb-1">
+          Played to callers waiting in a team's queue. Upload audio under <strong>Sounds</strong>.
+          Default is FreeSWITCH's built-in music.
+        </p>
+        <AudioPicker v-model="holdMusic" default-label="Default (built-in music)" />
       </div>
 
       <div class="flex items-center gap-3">

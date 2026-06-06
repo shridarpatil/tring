@@ -99,6 +99,8 @@ func main() {
 			AgentTransport:   k.String("agent_transport"),
 			AgentGateway:     k.String("agent_gateway"),
 			GatewayPublicURL: k.String("gateway_public_url"),
+			AudioDir:         k.String("audio_dir"),
+			AudioFSDir:       k.String("audio_fs_dir"),
 			Cache:            flowCache,
 			Logger:           logger,
 		}).Router(),

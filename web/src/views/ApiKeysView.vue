@@ -1,27 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref } from "vue";
+import { errMessage } from "../lib/errors";
+import { useList } from "../composables/useList";
 import { api } from "../api/client";
 import type { ApiKey } from "../api/types";
 
-const keys = ref<ApiKey[]>([]);
-const loading = ref(true);
-const error = ref("");
+const { items: keys, loading, error, load } = useList<ApiKey>("/v1/api-keys");
 
 const showForm = ref(false);
 const creating = ref(false);
 const newName = ref("");
 const newKey = ref(""); // plaintext, shown once after create
-
-async function load() {
-  loading.value = true;
-  try {
-    keys.value = await api.get<ApiKey[]>("/v1/api-keys");
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
-  } finally {
-    loading.value = false;
-  }
-}
 
 async function create() {
   creating.value = true;
@@ -34,7 +23,7 @@ async function create() {
     showForm.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "create failed";
+    error.value = errMessage(e, "create failed");
   } finally {
     creating.value = false;
   }
@@ -47,7 +36,7 @@ async function revoke(k: ApiKey) {
     await api.del(`/v1/api-keys/${k.id}`);
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "revoke failed";
+    error.value = errMessage(e, "revoke failed");
   }
 }
 
@@ -58,8 +47,6 @@ function copy(text: string) {
 function fmt(d?: string) {
   return d ? new Date(d).toLocaleString() : "—";
 }
-
-onMounted(load);
 </script>
 
 <template>

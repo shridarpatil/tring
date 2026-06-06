@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref } from "vue";
+import { errMessage } from "../lib/errors";
+import { useList } from "../composables/useList";
 import { api } from "../api/client";
 import type { Webhook } from "../api/types";
 
-const webhooks = ref<Webhook[]>([]);
-const loading = ref(true);
-const error = ref("");
+const { items: webhooks, loading, error, load } = useList<Webhook>("/v1/webhooks");
 
 const showForm = ref(false);
 const saving = ref(false);
@@ -13,17 +13,6 @@ const form = ref({ url: "", events: [] as string[] });
 const newSecret = ref("");
 
 const eventTypes = ["call.ringing", "call.answered", "call.ended"];
-
-async function load() {
-  loading.value = true;
-  try {
-    webhooks.value = await api.get<Webhook[]>("/v1/webhooks");
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
-  } finally {
-    loading.value = false;
-  }
-}
 
 async function create() {
   saving.value = true;
@@ -36,7 +25,7 @@ async function create() {
     showForm.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "create failed";
+    error.value = errMessage(e, "create failed");
   } finally {
     saving.value = false;
   }
@@ -49,11 +38,9 @@ async function remove(w: Webhook) {
     await api.del(`/v1/webhooks/${w.id}`);
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "delete failed";
+    error.value = errMessage(e, "delete failed");
   }
 }
-
-onMounted(load);
 </script>
 
 <template>

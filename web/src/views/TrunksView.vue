@@ -6,7 +6,10 @@
 // + sofia profile rescan, so changes are live without restarting FS.
 // The list auto-refreshes every 10s so the online/offline badge stays
 // current as gateways register / time out.
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, computed } from "vue";
+import { errMessage } from "../lib/errors";
+import { useList } from "../composables/useList";
+import { usePoll } from "../composables/usePoll";
 import { api } from "../api/client";
 import type { Trunk } from "../api/types";
 
@@ -18,9 +21,7 @@ const statusStyle: Record<string, { dot: string; label: string; text: string }> 
   unknown:     { dot: "bg-gray-300",   text: "text-gray-500",   label: "unknown" },
 };
 
-const trunks = ref<Trunk[]>([]);
-const loading = ref(true);
-const error = ref("");
+const { items: trunks, loading, error, load } = useList<Trunk>("/v1/trunks");
 const reloadingFS = ref(false);
 const reloadMsg = ref("");
 
@@ -44,17 +45,6 @@ const providerTypes = ["generic", "exotel", "airtel", "jio", "tata"];
 
 const formTitle = computed(() => (editing.value ? "Edit trunk" : "New trunk"));
 
-async function load() {
-  loading.value = true;
-  error.value = "";
-  try {
-    trunks.value = await api.get<Trunk[]>("/v1/trunks");
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
-  } finally {
-    loading.value = false;
-  }
-}
 
 function newTrunk() {
   editing.value = null;
@@ -104,7 +94,7 @@ async function save() {
     editing.value = null;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "save failed";
+    error.value = errMessage(e, "save failed");
   } finally {
     saving.value = false;
   }
@@ -117,7 +107,7 @@ async function removeTrunk(t: Trunk) {
     await api.del(`/v1/trunks/${t.id}`);
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "delete failed";
+    error.value = errMessage(e, "delete failed");
   }
 }
 
@@ -128,22 +118,15 @@ async function reloadFS() {
     await api.post("/v1/trunks/reload");
     reloadMsg.value = "FS gateway dir + sofia rescan triggered.";
   } catch (e) {
-    reloadMsg.value = e instanceof Error ? e.message : "reload failed";
+    reloadMsg.value = errMessage(e, "reload failed");
   } finally {
     reloadingFS.value = false;
     setTimeout(() => (reloadMsg.value = ""), 4000);
   }
 }
 
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
-
-onMounted(() => {
-  load();
-  refreshTimer = setInterval(load, 10000);
-});
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer);
-});
+// useList loads on mount; re-poll silently every 10s for live trunk status.
+usePoll(() => load({ silent: true }), 10000, { immediate: false });
 </script>
 
 <template>

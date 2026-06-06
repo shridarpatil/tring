@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import type { Call, IvrStep } from "../api/types";
 
@@ -56,7 +57,7 @@ async function load() {
     const q = statusFilter.value ? `?status=${statusFilter.value}&limit=100` : "?limit=100";
     calls.value = await api.get<Call[]>(`/v1/calls${q}`);
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
+    error.value = errMessage(e, "failed to load");
   } finally {
     loading.value = false;
   }
@@ -72,7 +73,7 @@ async function connect() {
     connectForm.value = { agent_number: "", client_number: "" };
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "connect failed";
+    error.value = errMessage(e, "connect failed");
   } finally {
     placing.value = false;
   }
