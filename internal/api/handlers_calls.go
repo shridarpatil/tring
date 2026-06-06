@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -371,8 +372,11 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	var fsUUID string
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallFsUUID, id, t.ID).Scan(&fsUUID)
+	var (
+		fsUUID string
+		s3Key  *string
+	)
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallRecording, id, t.ID).Scan(&fsUUID, &s3Key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return
@@ -381,6 +385,22 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
+
+	// Stored in S3: stream it through (same-origin, header auth — no presign, no
+	// CORS, no token in the URL).
+	if s3Key != nil && *s3Key != "" && s.blob.Enabled() {
+		obj, err := s.blob.Get(r.Context(), *s3Key)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "recording not available")
+			return
+		}
+		defer obj.Close()
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = io.Copy(w, obj)
+		return
+	}
+
+	// Local spool fallback (S3 disabled, or not yet uploaded).
 	path := filepath.Join(s.recordingsDir, fsUUID+".wav")
 	if _, err := os.Stat(path); err != nil {
 		writeError(w, http.StatusNotFound, "recording not available")

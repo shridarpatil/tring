@@ -74,7 +74,9 @@ type Queries struct {
 	SetCallIVRPath      string `query:"set-call-ivr-path"`
 	SetCallAgent        string `query:"set-call-agent"`
 	SetCallRecording    string `query:"set-call-recording"`
-	GetCallFsUUID       string `query:"get-call-fs-uuid"`
+	GetCallRecording    string `query:"get-call-recording"`
+	GetCallForRecording string `query:"get-call-for-recording"`
+	SetCallRecordingS3  string `query:"set-call-recording-s3"`
 	GetAgentBySIP       string `query:"get-agent-by-sip"`
 
 	CreateAPIKey        string `query:"create-api-key"`

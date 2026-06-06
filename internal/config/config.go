@@ -95,6 +95,18 @@ var defaults = map[string]any{
 	// audio_dir, so the path the orchestrator hands uuid_record is exactly what
 	// the API serves from.
 	"recordings_dir": "/usr/share/freeswitch/recordings/tring",
+
+	// S3 (or S3-compatible: MinIO, R2, …) for call recordings. When s3_bucket is
+	// set, a finished recording is uploaded to S3 (date-wise key) and the local
+	// spool deleted; the API serves it back from S3. Empty bucket = local only.
+	// s3_endpoint empty = AWS (s3.amazonaws.com).
+	"s3_bucket":     "",
+	"s3_region":     "",
+	"s3_endpoint":   "",
+	"s3_access_key": "",
+	"s3_secret_key": "",
+	"s3_prefix":     "recordings",
+	"s3_use_ssl":    true,
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
+	"github.com/whatomate/tring/internal/blobstore"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/freeswitch"
@@ -63,6 +64,8 @@ type Config struct {
 	// RecordingsDir is the shared-mount path FreeSWITCH writes call recordings to
 	// and the API serves them from. See handleGetCallRecording.
 	RecordingsDir string
+	// Blob is the optional S3 store recordings are streamed from when uploaded.
+	Blob *blobstore.Store
 
 	// Cache is the shared Redis cache. The API uses it only to invalidate
 	// flow definitions the orchestrator caches (handlers_flows.go). May be
@@ -101,6 +104,9 @@ type Server struct {
 	// recordingsDir: where FreeSWITCH writes call recordings; the API reads them
 	// back from the same shared-mount path to serve. See handleGetCallRecording.
 	recordingsDir string
+	// blob: optional S3 store. When a call's recording lives in S3, the serve
+	// endpoint streams it from here instead of the local dir. nil = local only.
+	blob *blobstore.Store
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
 	// handed to the guest mint. Empty slice == "no ICE servers configured",
@@ -152,6 +158,7 @@ func NewServer(cfg Config) *Server {
 		audioDir:         cfg.AudioDir,
 		audioFSDir:       cfg.AudioFSDir,
 		recordingsDir:    cfg.RecordingsDir,
+		blob:             cfg.Blob,
 		iceServers:       buildICEServers(cfg),
 		simManager:       orchestrator.NewSimManager(),
 		log:              logger,

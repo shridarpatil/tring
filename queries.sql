@@ -160,10 +160,20 @@ SELECT record_calls FROM tenants WHERE id = $1;
 UPDATE calls SET recording_url = '/v1/calls/' || id::text || '/recording'
 WHERE fs_uuid = $1 AND recording_url IS NULL;
 
--- name: get-call-fs-uuid
--- Resolve a call's FreeSWITCH UUID for the recording serve endpoint, scoped to
--- the tenant so one tenant can't fetch another's recording.
-SELECT fs_uuid FROM calls WHERE id = $1 AND tenant_id = $2;
+-- name: get-call-recording
+-- Resolve a call's recording location for the serve endpoint, scoped to the
+-- tenant so one tenant can't fetch another's. recording_s3_key NULL → serve the
+-- local spool by fs_uuid; non-NULL → stream from S3.
+SELECT fs_uuid, recording_s3_key FROM calls WHERE id = $1 AND tenant_id = $2;
+
+-- name: get-call-for-recording
+-- Tenant + start time for an in-flight recording, by FreeSWITCH UUID — used by
+-- the orchestrator on RECORD_STOP to build the date-wise S3 key.
+SELECT tenant_id, started_at FROM calls WHERE fs_uuid = $1;
+
+-- name: set-call-recording-s3
+-- Mark a recording as stored in S3 (after a successful upload).
+UPDATE calls SET recording_s3_key = $2 WHERE fs_uuid = $1;
 
 -- name: get-tenant-hold-music
 SELECT hold_music FROM tenants WHERE id = $1;

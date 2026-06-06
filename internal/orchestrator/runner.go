@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/percipia/eslgo"
 	"github.com/percipia/eslgo/command"
 
+	"github.com/whatomate/tring/internal/blobstore"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/queries"
 	"github.com/whatomate/tring/internal/webhook"
@@ -38,13 +40,23 @@ type Runner struct {
 	// recordingsDir is the FreeSWITCH-side directory recordings are written to
 	// (shared mount the API also reads). Empty disables recording.
 	recordingsDir string
-	log           *slog.Logger
+	// blob is the optional S3 store recordings are uploaded to on completion.
+	// nil/disabled → recordings stay on the local volume.
+	blob *blobstore.Store
+	log  *slog.Logger
 }
 
 // WithRecordings sets the directory FreeSWITCH writes call recordings to and
 // returns the runner for chaining. Empty leaves recording off.
 func (r *Runner) WithRecordings(dir string) *Runner {
 	r.recordingsDir = dir
+	return r
+}
+
+// WithBlobStore attaches the S3 store recordings are uploaded to on RECORD_STOP
+// and returns the runner for chaining. A nil/disabled store keeps them local.
+func (r *Runner) WithBlobStore(b *blobstore.Store) *Runner {
+	r.blob = b
 	return r
 }
 
@@ -143,6 +155,8 @@ func (r *Runner) handleEvent(ctx context.Context, conn *eslgo.Conn, e *eslgo.Eve
 		r.onHangup(ctx, e)
 	case "CHANNEL_BRIDGE":
 		r.onBridge(ctx, conn, e)
+	case "RECORD_STOP":
+		r.onRecordStop(e)
 	case "BACKGROUND_JOB":
 		r.onBackgroundJob(ctx, e)
 	}
@@ -217,6 +231,45 @@ func (r *Runner) maybeRecord(ctx context.Context, conn *eslgo.Conn, aLeg string,
 		return
 	}
 	r.log.Info("call recording started", "call_id", aLeg, "path", path)
+}
+
+// onRecordStop uploads a finished recording to S3 (date-wise key) and deletes
+// the local spool, making S3 the source of truth. RECORD_STOP fires exactly
+// when FreeSWITCH finalizes the WAV and carries its path. No-op when S3 is off
+// (the file then stays on the local volume for the API to serve directly).
+// Best-effort: on any failure the local file is left in place and the API can
+// still serve it. Uses its own longer context — an upload can outlast the 5s
+// event context.
+func (r *Runner) onRecordStop(e *eslgo.Event) {
+	if !r.blob.Enabled() {
+		return
+	}
+	fsUUID := e.GetHeader("Unique-ID")
+	recPath := e.GetHeader("Record-File-Path")
+	if fsUUID == "" || recPath == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var (
+		tenantID  uuid.UUID
+		startedAt time.Time
+	)
+	if err := r.db.Pool.QueryRow(ctx, r.q.GetCallForRecording, fsUUID).Scan(&tenantID, &startedAt); err != nil {
+		return // not a Tring-tracked call
+	}
+	key := r.blob.Key(tenantID.String(), startedAt, fsUUID+".wav")
+	if err := r.blob.PutFile(ctx, key, recPath, "audio/wav"); err != nil {
+		r.log.Error("recording S3 upload failed", "call_id", fsUUID, "key", key, "err", err)
+		return
+	}
+	if _, err := r.db.Pool.Exec(ctx, r.q.SetCallRecordingS3, fsUUID, key); err != nil {
+		r.log.Error("set recording_s3_key failed", "call_id", fsUUID, "err", err)
+		return
+	}
+	_ = os.Remove(recPath) // S3 is the source of truth now; drop the local spool
+	r.log.Info("recording uploaded to S3", "call_id", fsUUID, "key", key)
 }
 
 // onBackgroundJob settles call rows whose bgapi originate failed before any
