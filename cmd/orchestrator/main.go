@@ -67,7 +67,6 @@ func main() {
 	exec := orchestrator.NewExecutor(dbase).WithCache(flowCache).
 		WithAgentTransport(k.String("agent_transport"), k.String("agent_gateway")).
 		WithESL(k.String("esl_addr"), k.String("esl_password")).
-		WithGaplessMOH(k.Bool("queue_gapless_moh")).
 		WithLogger(logger)
 	go func() {
 		logger.Info("ivr executor listening", "addr", ivrAddr)
