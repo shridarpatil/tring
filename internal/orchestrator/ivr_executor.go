@@ -139,15 +139,10 @@ type Executor struct {
 
 	// eslAddr/eslPassword let the queue open a SIDE inbound ESL connection to
 	// uuid_break a caller's hold music: the executor's own outbound socket is
-	// blocked on the (gapless, continuous) playback, so it can't break it itself.
-	// Set via WithESL. Empty → the queue falls back to a chunked playback.
+	// blocked on the continuous playback, so it can't break it itself. Set via
+	// WithESL.
 	eslAddr     string
 	eslPassword string
-
-	// gaplessMOH chooses the queue hold-music strategy: one continuous playback
-	// broken by the side ESL connection (gapless, the default) vs the chunked
-	// playback fallback (a ~2s seam). Set via WithGaplessMOH.
-	gaplessMOH bool
 }
 
 func (e *Executor) httpClient() *http.Client {
@@ -167,13 +162,6 @@ func NewExecutor(d *db.DB) *Executor {
 func (e *Executor) WithESL(addr, password string) *Executor {
 	e.eslAddr = addr
 	e.eslPassword = password
-	return e
-}
-
-// WithGaplessMOH chooses the queue hold-music strategy: gapless continuous
-// playback (the default) vs the chunked-playback fallback.
-func (e *Executor) WithGaplessMOH(on bool) *Executor {
-	e.gaplessMOH = on
 	return e
 }
 
@@ -768,14 +756,11 @@ func (e *Executor) publishDepth(ctx context.Context, tenantID uuid.UUID, team st
 	e.Cache.Set(ctx, QueueDepthKey(tenantID, team), []byte(strconv.Itoa(n)), queueDepthTTL)
 }
 
-// queuePollSeconds is how often (in whole seconds, for FreeSWITCH's sched_api)
-// a queued caller's hold-music chunk ends so the loop re-checks for a free
-// agent. queuePollInterval is the same value as a Duration (the gapless watcher
-// tick). queueSettleDelay lets the caller channel exit the broken playback
-// before the gapless path bridges, so FS doesn't abandon the agent-leg INVITE.
+// queuePollInterval is how often a queued caller's watcher re-checks for a free
+// agent. queueSettleDelay lets the caller channel exit the broken hold-music
+// playback before bridging, so FreeSWITCH doesn't abandon the agent-leg INVITE.
 const (
-	queuePollSeconds  = 2
-	queuePollInterval = queuePollSeconds * time.Second
+	queuePollInterval = 2 * time.Second
 	queueSettleDelay  = 250 * time.Millisecond
 )
 
@@ -840,16 +825,13 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 		if len(avail) > 0 && e.queue.isHead(qkey, waiter) {
 			e.queue.remove(qkey, waiter)           // release our spot so the next waiter can claim too
 			e.publishDepth(ctx, st.tenantID, team) // dashboard: one fewer waiting
-			// Gapless path only: the continuous playback was just broken by the side
-			// connection — let the channel settle before bridging so FreeSWITCH doesn't
-			// abandon the agent-leg INVITE ("transaction terminated"). The chunked
-			// default needs no settle (it bridges between cleanly-ended chunks).
-			if e.gaplessMOH {
-				select {
-				case <-ctx.Done():
-					return "", nil
-				case <-time.After(queueSettleDelay):
-				}
+			// The continuous hold music was just broken by the side connection — let
+			// the channel settle before bridging so FreeSWITCH doesn't abandon the
+			// agent-leg INVITE ("transaction terminated").
+			select {
+			case <-ctx.Done():
+				return "", nil
+			case <-time.After(queueSettleDelay):
 			}
 			// Keep audio going through the ring: hand the hold music to FreeSWITCH as
 			// the bridge ringback so the caller hears it WHILE the agent rings, and FS
@@ -879,36 +861,19 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 
 		e.publishDepth(ctx, st.tenantID, team) // keep the dashboard count fresh while waiting
 
-		if e.gaplessMOH {
-			// Default: one continuous, gapless playback broken by the side ESL
-			// connection the instant we're ready (smooth). The plain uuid_break + the
-			// settle delay before the bridge keep the connect clean.
-			e.holdWithMusicGapless(ctx, conn, st, team, cfg.moh, members, qkey, waiter, deadline)
-			continue
-		}
-
-		// FALLBACK (queue_gapless_moh=false) — hold music for one bounded chunk: a
-		// blocking playback ended by a FreeSWITCH-SCHEDULED uuid_break, so control
-		// returns every ~2s to re-check for a free agent, bridging BETWEEN chunks
-		// when nothing is playing. A local_stream:// source resumes across chunks; a
-		// one-shot file restarts, so there's a brief (audible but minor) seam.
-		grp := "tringmoh_" + st.uuid
-		_, _ = conn.SendCommand(ctx, command.API{Command: "sched_api", Arguments: fmt.Sprintf("+%d %s uuid_break %s", queuePollSeconds, grp, st.uuid)})
-		if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: cfg.moh, Sync: true}); err != nil {
-			st.log.Warn("ivr queue hold-music playback error", "moh", cfg.moh, "err", err)
-		}
-		_, _ = conn.SendCommand(ctx, command.API{Command: "sched_del", Arguments: grp}) // cancel the break if the file ended first
+		// Hold the caller with one continuous, gapless playback broken by the side
+		// ESL connection the instant we're ready; the loop then re-evaluates and
+		// bridges (after the settle delay above).
+		e.holdWithMusic(ctx, conn, st, team, cfg.moh, members, qkey, waiter, deadline)
 	}
 }
 
-// holdWithMusicGapless plays ONE continuous, gapless hold-music playback (the
-// default queue strategy) and returns when a watcher breaks it from the side ESL
-// connection (a
-// member became free and we're head, or the deadline passed) or it ends on its
-// own (caller hung up / one-shot file finished). The caller's loop then
-// re-evaluates and, after a settle delay, bridges. Verbose logging at each step
-// so a residual bridge regression is pinpointable from the log.
-func (e *Executor) holdWithMusicGapless(ctx context.Context, conn *eslgo.Conn, st *callState, team, moh string, members []string, qkey string, waiter int64, deadline time.Time) {
+// holdWithMusic plays ONE continuous, gapless hold-music playback and returns
+// when a watcher breaks it from the side ESL connection (a member became free
+// and we're head, or the deadline passed) or it ends on its own (caller hung up
+// / one-shot file finished). The caller's loop then re-evaluates and, after a
+// settle delay, bridges.
+func (e *Executor) holdWithMusic(ctx context.Context, conn *eslgo.Conn, st *callState, team, moh string, members []string, qkey string, waiter int64, deadline time.Time) {
 	watchCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	go func() {
@@ -922,7 +887,7 @@ func (e *Executor) holdWithMusicGapless(ctx context.Context, conn *eslgo.Conn, s
 				e.publishDepth(watchCtx, st.tenantID, team)
 				ready := len(e.filterAvailable(watchCtx, st.tenantID, members)) > 0 && e.queue.isHead(qkey, waiter)
 				if ready || time.Now().After(deadline) {
-					st.log.Info("ivr queue gapless: breaking hold music", "team", team, "ready", ready)
+					st.log.Info("ivr queue: breaking hold music", "team", team, "ready", ready)
 					e.breakChannel(st.uuid)
 					return
 				}
@@ -934,9 +899,9 @@ func (e *Executor) holdWithMusicGapless(ctx context.Context, conn *eslgo.Conn, s
 	playCtx, cancel := context.WithDeadline(ctx, deadline.Add(5*time.Second))
 	defer cancel()
 	if _, err := conn.SendCommand(playCtx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: moh, Sync: true}); err != nil {
-		st.log.Warn("ivr queue gapless: hold-music playback error", "moh", moh, "err", err)
+		st.log.Warn("ivr queue: hold-music playback error", "moh", moh, "err", err)
 	}
-	st.log.Info("ivr queue gapless: hold music returned", "team", team)
+	st.log.Info("ivr queue: hold music returned", "team", team)
 }
 
 // breakChannel stops a channel's current playback from a FRESH inbound ESL
@@ -946,12 +911,12 @@ func (e *Executor) holdWithMusicGapless(ctx context.Context, conn *eslgo.Conn, s
 // most once per dequeue, so the per-break dial is not a hot path.
 func (e *Executor) breakChannel(channelUUID string) {
 	if e.eslAddr == "" {
-		e.Logger.Warn("queue gapless: no ESL addr configured, cannot break hold music")
+		e.Logger.Warn("queue: no ESL addr configured, cannot break hold music")
 		return
 	}
 	c, err := eslgo.Dial(e.eslAddr, e.eslPassword, func() {})
 	if err != nil {
-		e.Logger.Warn("queue gapless: esl dial for uuid_break failed", "err", err)
+		e.Logger.Warn("queue: esl dial for uuid_break failed", "err", err)
 		return
 	}
 	defer c.Close()
