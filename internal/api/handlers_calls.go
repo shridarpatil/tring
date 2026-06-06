@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/whatomate/tring/internal/agentleg"
 	"github.com/whatomate/tring/internal/freeswitch"
 	"github.com/whatomate/tring/internal/provider"
 	"github.com/whatomate/tring/internal/webhook"
@@ -76,45 +77,22 @@ func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
-// agentALeg builds the FreeSWITCH dial string for an agent's own call leg.
-// With the default "sip" transport the agent registers to FS directly, so the
-// leg is user/<sip>@<domain>. With "gateway" the leg is routed to the media
-// gateway as a SIP endpoint (ADR-001 M4b) carrying the tenant id as a SIP
-// header, so the gateway resolves the right browser and the agent never speaks
-// SIP. The IVR transfer path mirrors this in internal/orchestrator.
+// agentALeg builds the FreeSWITCH dial string for an agent's own call leg via
+// the shared agentleg helper. AutoAnswer is set because this is the backend
+// click-to-call path — the gateway auto-answers the agent's browser. Attribute
+// stays off (the API already knows which agent it dialed); the orchestrator's
+// inbound-transfer path sets Attribute instead. Both share one definition so
+// the leg is identical however the call arrived.
 func (s *Server) agentALeg(sipUsername, sipDomain, tenantID, label string) string {
-	if s.agentTransport == "gateway" {
-		// Headers the gateway reads off the agent-leg INVITE: tenant (resolve the
-		// browser), auto-answer (backend click-to-call), and the agent-facing
-		// label. The dialed number is NEVER put on this leg, so the agent can't
-		// see it. The label is sanitized so it can't break the [..] vars block.
-		vars := fmt.Sprintf("sip_h_X-Tring-Tenant=%s,sip_h_X-Tring-Auto-Answer=1", tenantID)
-		if l := sanitizeLabel(label); l != "" {
-			vars += ",sip_h_X-Tring-Agent-Label=" + l
-		}
-		return fmt.Sprintf("[%s]sofia/gateway/%s/%s", vars, s.agentGateway, sipUsername)
-	}
-	return fmt.Sprintf("user/%s@%s", sipUsername, sipDomain)
-}
-
-// sanitizeLabel strips characters that would break the FreeSWITCH `[k=v,...]`
-// channel-variable block (or inject extra vars) and caps the length, so an
-// agent-facing label is safe to embed in the dial string.
-func sanitizeLabel(s string) string {
-	s = strings.Map(func(r rune) rune {
-		switch r {
-		case ',', '[', ']', '=', '\'', '"', '\n', '\r':
-			return -1
-		}
-		if r < 0x20 {
-			return -1
-		}
-		return r
-	}, s)
-	if len(s) > 64 {
-		s = s[:64]
-	}
-	return strings.TrimSpace(s)
+	return agentleg.Build(agentleg.Options{
+		Transport:  s.agentTransport,
+		Gateway:    s.agentGateway,
+		SIP:        sipUsername,
+		Domain:     sipDomain,
+		TenantID:   tenantID,
+		Label:      label,
+		AutoAnswer: true,
+	})
 }
 
 // originateForAgent is the shared originate path used by both the tenant-
