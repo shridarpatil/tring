@@ -78,7 +78,11 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
 	)
 	if err != nil {
-		writeError(w, http.StatusConflict, "sip_username already exists for this tenant")
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "sip_username already exists for this tenant")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "create agent failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, a)
