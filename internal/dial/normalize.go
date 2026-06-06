@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	ErrEmpty       = errors.New("number is empty")
-	ErrNotIndian   = errors.New("not a valid Indian mobile number")
-	ErrBadFormat   = errors.New("bad number format")
+	ErrEmpty     = errors.New("number is empty")
+	ErrNotIndian = errors.New("not a valid Indian mobile number")
+	ErrBadFormat = errors.New("bad number format")
 )
 
 // indianMobile matches a 10-digit number starting with 6, 7, 8, or 9 —

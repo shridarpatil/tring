@@ -21,10 +21,11 @@ var _ = errors.Is
 // ---- Tenants ------------------------------------------------------------
 
 func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
-	// Copy the auth-resolved tenant and enrich with hold_music (not carried in
-	// the auth context) so the Settings page sees the current selection.
+	// Copy the auth-resolved tenant and enrich with the settings not carried in
+	// the auth context (hold music, record toggle) so the Settings page sees the
+	// current selection.
 	t := *tenantFromCtx(r.Context())
-	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantHoldMusic, t.ID).Scan(&t.HoldMusic)
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -370,6 +371,8 @@ type patchTenantRequest struct {
 	// HoldMusic: an audio asset's fs_path to use as system hold music, or "" to
 	// clear (revert to the built-in default). nil = leave unchanged.
 	HoldMusic *string `json:"hold_music,omitempty"`
+	// RecordCalls toggles call recording. nil = leave unchanged.
+	RecordCalls *bool `json:"record_calls,omitempty"`
 }
 
 // handlePatchMyTenant updates tenant-level settings. Today: outbound
@@ -381,8 +384,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes or hold_music is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music or record_calls is required")
 		return
 	}
 	if req.OutboundStrategy != nil {
@@ -400,8 +403,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
-		req.OutboundStrategy, causes, t.ID, req.HoldMusic).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic)
+		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return

@@ -101,6 +101,7 @@ func main() {
 			GatewayPublicURL: k.String("gateway_public_url"),
 			AudioDir:         k.String("audio_dir"),
 			AudioFSDir:       k.String("audio_fs_dir"),
+			RecordingsDir:    k.String("recordings_dir"),
 			Cache:            flowCache,
 			Logger:           logger,
 		}).Router(),

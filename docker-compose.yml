@@ -41,6 +41,11 @@ services:
       # read-only here since only the api writes. (Nested under the sounds
       # volume above — Docker mounts the more-specific path on top.)
       - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
+      # Call recordings. FreeSWITCH WRITES here (uuid_record on bridge); the api
+      # reads the same named volume to serve them. A named volume (not a host
+      # bind) so FS's uid can write without host-permission fuss, and recordings
+      # survive restarts. Matches the api's recordings_dir default.
+      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
       # Our config overrides are mounted onto the entrypoint's COPY SOURCE
       # (/usr/share/freeswitch/conf/vanilla/*), NOT the destination
       # (/etc/freeswitch/*). On boot the safarov entrypoint runs
@@ -177,6 +182,9 @@ services:
       # reads it (same host path + container path as the freeswitch service, so
       # audio_dir == audio_fs_dir == /usr/share/freeswitch/sounds/tring).
       - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:rw
+      # Call recordings — read-only here; FreeSWITCH writes them, the api serves
+      # them (GET /v1/calls/{id}/recording). Same named volume as the fs service.
+      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring:ro
     restart: unless-stopped
 
   orchestrator:
@@ -240,4 +248,5 @@ services:
 
 volumes:
   freeswitch-sounds:
+  freeswitch-recordings:
   tring-db-data:

@@ -25,6 +25,9 @@ type Tenant struct {
 	// "" for the built-in default). Not populated during auth resolution — only
 	// by the tenant settings handlers (handleGetMyTenant / handlePatchMyTenant).
 	HoldMusic string `json:"hold_music"`
+	// RecordCalls toggles recording a call once the agent and client connect.
+	// Like HoldMusic, populated only by the tenant settings handlers.
+	RecordCalls bool `json:"record_calls"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API

@@ -60,4 +60,3 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 		ICEServers: s.iceServers,
 	})
 }
-
