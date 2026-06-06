@@ -1,6 +1,50 @@
 package orchestrator
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
+
+// reservations holds short-lived "this agent is being rung right now" markers.
+// An agent's presence only flips to on_call when they ANSWER (the gateway's
+// enterCall fires on bridge-connect), not while ringing — so without this, two
+// callers that dequeue at nearly the same moment both see the same idle agent as
+// available and both ring it (the second never queues). When a caller commits to
+// ring an agent we reserve it for the ring window; concurrent callers treat a
+// reserved agent as unavailable and queue instead. Keyed by "tenant/sip", each
+// entry auto-expires (a safety net if an explicit release is ever missed).
+type reservations struct {
+	mu sync.Mutex
+	m  map[string]time.Time // tenant/sip -> expiry
+}
+
+func newReservations() *reservations { return &reservations{m: map[string]time.Time{}} }
+
+func (r *reservations) reserve(key string, ttl time.Duration) {
+	r.mu.Lock()
+	r.m[key] = time.Now().Add(ttl)
+	r.mu.Unlock()
+}
+
+func (r *reservations) release(key string) {
+	r.mu.Lock()
+	delete(r.m, key)
+	r.mu.Unlock()
+}
+
+func (r *reservations) reserved(key string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	exp, ok := r.m[key]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(r.m, key)
+		return false
+	}
+	return true
+}
 
 // callQueue is the in-process, per-team waiting line backing the Transfer
 // node's queue overflow. Each team has two FIFO tiers — priority and normal —

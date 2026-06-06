@@ -133,6 +133,10 @@ type Executor struct {
 	// (Transfer-node queue overflow). One per orchestrator; see callQueue.
 	queue *callQueue
 
+	// reserve marks agents currently being rung so two concurrent dequeues don't
+	// both pick the same idle agent (presence flips to on_call only on answer).
+	reserve *reservations
+
 	// HTTP is the client the http_callback node uses (per-request timeout comes
 	// from the node config). nil → http.DefaultClient; tests inject a fake.
 	HTTP *http.Client
@@ -153,7 +157,7 @@ func (e *Executor) httpClient() *http.Client {
 }
 
 func NewExecutor(d *db.DB) *Executor {
-	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default(), rr: map[string]int{}, queue: newCallQueue()}
+	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default(), rr: map[string]int{}, queue: newCallQueue(), reserve: newReservations()}
 }
 
 // WithESL gives the executor the ESL credentials it needs to open a short-lived
@@ -839,9 +843,22 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "ringback", Value: cfg.moh, Sync: false})
 			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "instant_ringback", Value: "true", Sync: false})
 			dial := e.buildTeamDial(ctx, st.tenantID, team, cfg.strategy, cfg.ringSeconds, avail, domain, label)
+			// Reserve the agents we're about to ring so a concurrently-dequeuing
+			// caller queues instead of double-ringing the same idle agent (presence
+			// flips to on_call only on answer). TTL covers the ring window; we
+			// release on return so a fall-through frees them immediately, while the
+			// answered agent stays excluded via presence on_call.
+			resTTL := time.Duration(cfg.ringSeconds+5) * time.Second
+			for _, sip := range avail {
+				e.reserve.reserve(st.tenantID.String()+"/"+sip, resTTL)
+			}
 			st.log.Info("ivr transfer bridging team", "team", team, "strategy", cfg.strategy, "targets", len(avail))
-			if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: dial, Sync: true}); err != nil {
-				return "", fmt.Errorf("bridge: %w", err)
+			_, bridgeErr := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: dial, Sync: true})
+			for _, sip := range avail {
+				e.reserve.release(st.tenantID.String() + "/" + sip)
+			}
+			if bridgeErr != nil {
+				return "", fmt.Errorf("bridge: %w", bridgeErr)
 			}
 			if l := e.answeredAgentLabel(st.uuid); l != "" {
 				st.stepDetail = l
@@ -1207,6 +1224,11 @@ func (e *Executor) filterAvailable(ctx context.Context, tenantID uuid.UUID, sips
 	// corrupt the caller's member list across queue-poll iterations.
 	avail := make([]string, 0, len(sips))
 	for _, sip := range sips {
+		// Skip agents another caller is already ringing (reserved) — presence
+		// won't show them busy until they answer, so this prevents a double-pick.
+		if e.reserve.reserved(tenantID.String() + "/" + sip) {
+			continue
+		}
 		if pres.Available(ctx, tenantID.String(), sip) {
 			avail = append(avail, sip)
 		}
