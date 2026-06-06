@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from "vue";
+import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import type { Agent, Team, TeamStrategy } from "../api/types";
 
@@ -42,7 +43,7 @@ async function load() {
       api.get<Agent[]>("/v1/agents"),
     ]);
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
+    error.value = errMessage(e, "failed to load");
   } finally {
     loading.value = false;
   }
@@ -57,7 +58,7 @@ async function create() {
     showForm.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "create failed";
+    error.value = errMessage(e, "create failed");
   } finally {
     saving.value = false;
   }
@@ -73,7 +74,7 @@ async function open(t: Team) {
     addAgentId.value = "";
     addPosition.value = (selected.value.members?.length ?? 0) + 1;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "load team failed";
+    error.value = errMessage(e, "load team failed");
   }
 }
 
@@ -91,7 +92,7 @@ async function saveSettings() {
     selected.value = { ...updated, members: selected.value.members };
     await refreshList();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "save failed";
+    error.value = errMessage(e, "save failed");
   }
 }
 
@@ -107,7 +108,7 @@ async function addMember() {
     addAgentId.value = "";
     addPosition.value = (selected.value.members?.length ?? 0) + 1;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "add failed";
+    error.value = errMessage(e, "add failed");
   }
 }
 
@@ -121,7 +122,7 @@ async function removeMember(agentId: string) {
       members: (selected.value.members ?? []).filter((m) => m.agent_id !== agentId),
     };
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "remove failed";
+    error.value = errMessage(e, "remove failed");
   }
 }
 
@@ -133,7 +134,7 @@ async function destroy(t: Team) {
     if (selected.value?.name === t.name) selected.value = null;
     await refreshList();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "delete failed";
+    error.value = errMessage(e, "delete failed");
   }
 }
 

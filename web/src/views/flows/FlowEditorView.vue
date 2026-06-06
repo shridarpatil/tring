@@ -6,6 +6,7 @@
 //   • Main: vue-flow canvas (drag/connect) + properties panel on the right
 // Uses localStorage as the persistence stub until the backend lands.
 import { ref, computed, onMounted, markRaw, watch } from "vue";
+import { errMessage } from "../../lib/errors";
 import { useRoute, useRouter } from "vue-router";
 import {
   VueFlow,
@@ -113,7 +114,7 @@ async function startSimulation() {
       { caller: simCaller.value || undefined },
     );
   } catch (e) {
-    simError.value = e instanceof Error ? e.message : "start failed";
+    simError.value = errMessage(e, "start failed");
   } finally {
     simBusy.value = false;
   }
@@ -133,7 +134,7 @@ async function sendSimInput() {
       { dtmf },
     );
   } catch (e) {
-    simError.value = e instanceof Error ? e.message : "send failed";
+    simError.value = errMessage(e, "send failed");
   } finally {
     simBusy.value = false;
   }
@@ -422,7 +423,7 @@ async function saveFlow() {
     savedMsg.value = "Saved";
     setTimeout(() => (savedMsg.value = ""), 1500);
   } catch (e) {
-    savedMsg.value = e instanceof Error ? e.message : "save failed";
+    savedMsg.value = errMessage(e, "save failed");
   } finally {
     saving.value = false;
   }
@@ -450,7 +451,7 @@ onMounted(async () => {
     }
     availableFlows.value = list;
   } catch (e) {
-    savedMsg.value = e instanceof Error ? e.message : "load failed";
+    savedMsg.value = errMessage(e, "load failed");
   }
 });
 </script>

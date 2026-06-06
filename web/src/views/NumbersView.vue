@@ -3,6 +3,7 @@
 // MUST reference a trunk (where the call lands); inbound/masking numbers
 // can stand alone.
 import { ref, onMounted } from "vue";
+import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import type { PhoneNumber, Trunk, Flow } from "../api/types";
 
@@ -40,7 +41,7 @@ async function load() {
     trunks.value = t;
     flows.value = f;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
+    error.value = errMessage(e, "failed to load");
   } finally {
     loading.value = false;
   }
@@ -62,7 +63,7 @@ async function create() {
     showForm.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "create failed";
+    error.value = errMessage(e, "create failed");
   } finally {
     saving.value = false;
   }
@@ -74,7 +75,7 @@ async function toggleActive(n: PhoneNumber) {
     await api.patch(`/v1/numbers/${n.id}`, { active: !n.active });
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "update failed";
+    error.value = errMessage(e, "update failed");
   }
 }
 
@@ -91,7 +92,7 @@ async function assignFlow(n: PhoneNumber, ev: Event) {
     }
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "update failed";
+    error.value = errMessage(e, "update failed");
   }
 }
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
+import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import AudioPicker from "../components/AudioPicker.vue";
 import type { Tenant, GuestConfig, Flow } from "../api/types";
@@ -32,7 +33,7 @@ async function load() {
     strategy.value = tenant.value.outbound_strategy || "failover";
     holdMusic.value = tenant.value.hold_music || "";
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
+    error.value = errMessage(e, "failed to load");
   } finally {
     loading.value = false;
   }
@@ -45,7 +46,7 @@ async function load() {
     flows.value = fl;
     defaultFlowId.value = g.default_flow_id || "";
   } catch (e) {
-    guestError.value = e instanceof Error ? e.message : "failed to load guest config";
+    guestError.value = errMessage(e, "failed to load guest config");
   }
 }
 
@@ -61,7 +62,7 @@ async function save() {
     holdMusic.value = tenant.value.hold_music || "";
     saved.value = true;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "save failed";
+    error.value = errMessage(e, "save failed");
   } finally {
     saving.value = false;
   }
@@ -78,7 +79,7 @@ async function saveGuest() {
     defaultFlowId.value = guest.value.default_flow_id || "";
     guestSaved.value = true;
   } catch (e) {
-    guestError.value = e instanceof Error ? e.message : "save failed";
+    guestError.value = errMessage(e, "save failed");
   } finally {
     guestSaving.value = false;
   }

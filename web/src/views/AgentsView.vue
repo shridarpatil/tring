@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref } from "vue";
+import { errMessage } from "../lib/errors";
+import { useList } from "../composables/useList";
+import { usePoll } from "../composables/usePoll";
 import { api } from "../api/client";
 import type { Agent, AgentToken } from "../api/types";
 
-const agents = ref<Agent[]>([]);
-const loading = ref(true);
-const error = ref("");
-let poll: number | undefined;
+const { items: agents, loading, error, load } = useList<Agent>("/v1/agents");
+// Live status: silent re-poll every 10s so online/offline tracks registrations.
+usePoll(() => load({ silent: true }), 10_000, { immediate: false });
 
 // Map the backend status to a badge (dot colour + label).
 function badge(status?: string) {
@@ -31,17 +33,6 @@ const saving = ref(false);
 const tokenFor = ref<string>("");
 const token = ref<AgentToken | null>(null);
 
-async function load() {
-  loading.value = true;
-  try {
-    agents.value = await api.get<Agent[]>("/v1/agents");
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
-  } finally {
-    loading.value = false;
-  }
-}
-
 async function create() {
   saving.value = true;
   error.value = "";
@@ -51,7 +42,7 @@ async function create() {
     showForm.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "create failed";
+    error.value = errMessage(e, "create failed");
   } finally {
     saving.value = false;
   }
@@ -63,7 +54,7 @@ async function mintToken(a: Agent) {
   try {
     token.value = await api.get<AgentToken>(`/v1/agents/${a.id}/token`);
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "token failed";
+    error.value = errMessage(e, "token failed");
   }
 }
 
@@ -76,24 +67,10 @@ async function setAvailability(a: Agent, available: boolean) {
     const i = agents.value.findIndex((x) => x.id === a.id);
     if (i >= 0) agents.value[i] = { ...agents.value[i], ...updated };
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "update failed";
+    error.value = errMessage(e, "update failed");
   }
 }
 
-onMounted(() => {
-  load();
-  // Live status: re-poll every 10s so online/offline tracks registrations
-  // without a manual refresh. Silent (no loading spinner) after the first.
-  poll = window.setInterval(() => {
-    api
-      .get<Agent[]>("/v1/agents")
-      .then((a) => (agents.value = a))
-      .catch(() => {});
-  }, 10_000);
-});
-onUnmounted(() => {
-  if (poll) clearInterval(poll);
-});
 </script>
 
 <template>
