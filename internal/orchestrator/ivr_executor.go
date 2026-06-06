@@ -144,9 +144,9 @@ type Executor struct {
 	eslAddr     string
 	eslPassword string
 
-	// gaplessMOH switches the queue wait from the default chunked playback (a ~2s
-	// seam, proven safe) to one continuous playback broken by the side ESL
-	// connection (gapless, experimental). Set via WithGaplessMOH.
+	// gaplessMOH chooses the queue hold-music strategy: one continuous playback
+	// broken by the side ESL connection (gapless, the default) vs the chunked
+	// playback fallback (a ~2s seam). Set via WithGaplessMOH.
 	gaplessMOH bool
 }
 
@@ -170,8 +170,8 @@ func (e *Executor) WithESL(addr, password string) *Executor {
 	return e
 }
 
-// WithGaplessMOH toggles the experimental gapless queue hold music (continuous
-// playback broken via the side ESL connection) vs the default chunked playback.
+// WithGaplessMOH chooses the queue hold-music strategy: gapless continuous
+// playback (the default) vs the chunked-playback fallback.
 func (e *Executor) WithGaplessMOH(on bool) *Executor {
 	e.gaplessMOH = on
 	return e
@@ -880,19 +880,18 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 		e.publishDepth(ctx, st.tenantID, team) // keep the dashboard count fresh while waiting
 
 		if e.gaplessMOH {
-			// EXPERIMENTAL gapless: one continuous playback broken by the side ESL
-			// connection the instant we're ready. Smooth, but the break/bridge is the
-			// path that regressed connect before — guarded by the flag + settle delay.
+			// Default: one continuous, gapless playback broken by the side ESL
+			// connection the instant we're ready (smooth). The plain uuid_break + the
+			// settle delay before the bridge keep the connect clean.
 			e.holdWithMusicGapless(ctx, conn, st, team, cfg.moh, members, qkey, waiter, deadline)
 			continue
 		}
 
-		// DEFAULT — hold music for one bounded chunk: a blocking playback ended by a
-		// FreeSWITCH-SCHEDULED uuid_break, so control returns every ~2s to re-check
-		// for a free agent — and crucially we bridge BETWEEN chunks, when nothing
-		// is playing, so the connect is clean. A local_stream:// source resumes
-		// across chunks; a one-shot file restarts, so there's a brief seam between
-		// chunks — audible but minor.
+		// FALLBACK (queue_gapless_moh=false) — hold music for one bounded chunk: a
+		// blocking playback ended by a FreeSWITCH-SCHEDULED uuid_break, so control
+		// returns every ~2s to re-check for a free agent, bridging BETWEEN chunks
+		// when nothing is playing. A local_stream:// source resumes across chunks; a
+		// one-shot file restarts, so there's a brief (audible but minor) seam.
 		grp := "tringmoh_" + st.uuid
 		_, _ = conn.SendCommand(ctx, command.API{Command: "sched_api", Arguments: fmt.Sprintf("+%d %s uuid_break %s", queuePollSeconds, grp, st.uuid)})
 		if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "playback", AppArgs: cfg.moh, Sync: true}); err != nil {
@@ -902,8 +901,9 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 	}
 }
 
-// holdWithMusicGapless (experimental) plays ONE continuous, gapless hold-music
-// playback and returns when a watcher breaks it from the side ESL connection (a
+// holdWithMusicGapless plays ONE continuous, gapless hold-music playback (the
+// default queue strategy) and returns when a watcher breaks it from the side ESL
+// connection (a
 // member became free and we're head, or the deadline passed) or it ends on its
 // own (caller hung up / one-shot file finished). The caller's loop then
 // re-evaluates and, after a settle delay, bridges. Verbose logging at each step
