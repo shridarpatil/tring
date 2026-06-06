@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 
 	"github.com/google/uuid"
@@ -53,6 +54,7 @@ func TestRecordInboundCallInsertsRow(t *testing.T) {
 		tenantID: f.TenantID,
 		caller:   "+919812345678",
 		called:   "+918001112222",
+		log:      slog.Default(),
 	}
 	exec.recordInboundCall(ctx, st)
 
@@ -79,7 +81,7 @@ func TestSaveIVRPathPersists(t *testing.T) {
 	exec := NewExecutor(f.DB)
 	ctx := context.Background()
 
-	st := &callState{uuid: "fs-uuid-inbound-2", tenantID: f.TenantID, caller: "web", called: "support"}
+	st := &callState{uuid: "fs-uuid-inbound-2", tenantID: f.TenantID, caller: "web", called: "support", log: slog.Default()}
 	exec.recordInboundCall(ctx, st)
 
 	st.steps = []SimStep{
@@ -133,7 +135,7 @@ func TestAnsweredAgentLabelAfterStamp(t *testing.T) {
 	exec := NewExecutor(f.DB)
 	ctx := context.Background()
 
-	st := &callState{uuid: "fs-uuid-answered", tenantID: f.TenantID, caller: "web", called: "support"}
+	st := &callState{uuid: "fs-uuid-answered", tenantID: f.TenantID, caller: "web", called: "support", log: slog.Default()}
 	exec.recordInboundCall(ctx, st)
 
 	// No agent yet → no label.
