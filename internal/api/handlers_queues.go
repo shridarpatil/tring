@@ -31,7 +31,7 @@ func (s *Server) handleListQueues(w http.ResponseWriter, r *http.Request) {
 	var onCall int
 	_ = s.db.Pool.QueryRow(r.Context(), s.q.CountActiveAgentCalls, t.ID).Scan(&onCall)
 
-	rows, err := s.db.Pool.Query(r.Context(), s.q.ListTeams, t.ID)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListTeamNames, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -39,12 +39,12 @@ func (s *Server) handleListQueues(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	var names []string
 	for rows.Next() {
-		var tm Team
-		if err := rows.Scan(&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound, &tm.CreatedAt); err != nil {
+		var name string
+		if err := rows.Scan(&name); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		names = append(names, tm.Name)
+		names = append(names, name)
 	}
 
 	out := queuesResponse{OnCall: onCall, Queues: []queueDepth{}}

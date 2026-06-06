@@ -34,6 +34,7 @@ type Queries struct {
 	// ---- api: teams (GetTeam + ListTeamAgentSips also used by orchestrator) ----
 	CreateTeam        string `query:"create-team"`
 	ListTeams         string `query:"list-teams"`
+	ListTeamNames     string `query:"list-team-names"`
 	GetTeam           string `query:"get-team"`
 	UpdateTeam        string `query:"update-team"`
 	DeleteTeam        string `query:"delete-team"`

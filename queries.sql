@@ -41,6 +41,10 @@ RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, 
 SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
 FROM teams WHERE tenant_id = $1 ORDER BY name;
 
+-- name: list-team-names
+-- Just the names — for the dashboard queue-depth lookup (one Redis read per team).
+SELECT name FROM teams WHERE tenant_id = $1 ORDER BY name;
+
 -- name: get-team
 SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
 FROM teams WHERE tenant_id = $1 AND name = $2;
