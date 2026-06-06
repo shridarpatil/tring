@@ -750,13 +750,18 @@ func QueueDepthKey(tenantID uuid.UUID, team string) string {
 	return "tring:queue:depth:" + tenantID.String() + ":" + team
 }
 
+// queueKey / resKey build the per-tenant in-process keys for the call queue (by
+// team) and agent reservations (by sip).
+func queueKey(tenantID uuid.UUID, team string) string { return tenantID.String() + "/" + team }
+func resKey(tenantID uuid.UUID, sip string) string    { return tenantID.String() + "/" + sip }
+
 // publishDepth writes a team's current queue depth to Redis so the API/dashboard
 // can show it. No-op without a cache.
 func (e *Executor) publishDepth(ctx context.Context, tenantID uuid.UUID, team string) {
 	if e.Cache == nil {
 		return
 	}
-	n := e.queue.depth(tenantID.String() + "/" + team)
+	n := e.queue.depth(queueKey(tenantID, team))
 	e.Cache.Set(ctx, QueueDepthKey(tenantID, team), []byte(strconv.Itoa(n)), queueDepthTTL)
 }
 
@@ -800,7 +805,7 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 		cfg.maxWait = 120
 	}
 
-	qkey := st.tenantID.String() + "/" + team
+	qkey := queueKey(st.tenantID, team)
 	// Stage 3 sets priority from the caller's backend lookup; Stage 2 is all-normal.
 	priority := st.queuePriority
 	waiter := e.queue.enqueue(qkey, priority)
@@ -845,18 +850,13 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 			dial := e.buildTeamDial(ctx, st.tenantID, team, cfg.strategy, cfg.ringSeconds, avail, domain, label)
 			// Reserve the agents we're about to ring so a concurrently-dequeuing
 			// caller queues instead of double-ringing the same idle agent (presence
-			// flips to on_call only on answer). TTL covers the ring window; we
-			// release on return so a fall-through frees them immediately, while the
-			// answered agent stays excluded via presence on_call.
-			resTTL := time.Duration(cfg.ringSeconds+5) * time.Second
-			for _, sip := range avail {
-				e.reserve.reserve(st.tenantID.String()+"/"+sip, resTTL)
-			}
+			// flips to on_call only on answer). Released after the ring so a
+			// fall-through frees them immediately, while an answered agent stays
+			// excluded via presence on_call.
+			release := e.reserveAgents(st.tenantID, avail, time.Duration(cfg.ringSeconds+5)*time.Second)
 			st.log.Info("ivr transfer bridging team", "team", team, "strategy", cfg.strategy, "targets", len(avail))
 			_, bridgeErr := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: dial, Sync: true})
-			for _, sip := range avail {
-				e.reserve.release(st.tenantID.String() + "/" + sip)
-			}
+			release()
 			if bridgeErr != nil {
 				return "", fmt.Errorf("bridge: %w", bridgeErr)
 			}
@@ -1012,10 +1012,7 @@ func (e *Executor) teamMemberSips(ctx context.Context, tenantID uuid.UUID, team 
 // bounded per attempt by originate_timeout.
 func (e *Executor) buildTeamDial(ctx context.Context, tenantID uuid.UUID, team, strategy string, ringSeconds int, sips []string, domain, label string) string {
 	sips = e.orderByStrategy(ctx, tenantID, team, strategy, sips)
-	targets := make([]string, 0, len(sips))
-	for _, sip := range sips {
-		targets = append(targets, e.agentLeg(sip, domain, tenantID.String(), label))
-	}
+	targets := e.buildAgentLegs(sips, domain, tenantID.String(), label)
 	sep := ","
 	if strategy != "" && strategy != "ring_all" {
 		sep = "|"
@@ -1204,11 +1201,7 @@ func (e *Executor) agentBridgeTarget(ctx context.Context, node *ivrNode, tenantI
 		return "", nil, err
 	}
 	sips = e.filterAvailable(ctx, tenantID, sips)
-
-	targets := make([]string, 0, len(sips))
-	for _, sip := range sips {
-		targets = append(targets, e.agentLeg(sip, domain, tenantID.String(), label))
-	}
+	targets := e.buildAgentLegs(sips, domain, tenantID.String(), label)
 	return strings.Join(targets, ","), sips, nil // comma = simultaneous ring
 }
 
@@ -1226,7 +1219,7 @@ func (e *Executor) filterAvailable(ctx context.Context, tenantID uuid.UUID, sips
 	for _, sip := range sips {
 		// Skip agents another caller is already ringing (reserved) — presence
 		// won't show them busy until they answer, so this prevents a double-pick.
-		if e.reserve.reserved(tenantID.String() + "/" + sip) {
+		if e.reserve.reserved(resKey(tenantID, sip)) {
 			continue
 		}
 		if pres.Available(ctx, tenantID.String(), sip) {
@@ -1234,6 +1227,29 @@ func (e *Executor) filterAvailable(ctx context.Context, tenantID uuid.UUID, sips
 		}
 	}
 	return avail
+}
+
+// buildAgentLegs maps each sip to a bridge dial-string leg (see agentLeg).
+func (e *Executor) buildAgentLegs(sips []string, domain, tenant, label string) []string {
+	legs := make([]string, 0, len(sips))
+	for _, sip := range sips {
+		legs = append(legs, e.agentLeg(sip, domain, tenant, label))
+	}
+	return legs
+}
+
+// reserveAgents marks the given agents as being rung (so a concurrent dequeue
+// queues instead of double-picking them) and returns a cleanup that releases
+// them — call it once the ring attempt is done.
+func (e *Executor) reserveAgents(tenantID uuid.UUID, sips []string, ttl time.Duration) func() {
+	for _, sip := range sips {
+		e.reserve.reserve(resKey(tenantID, sip), ttl)
+	}
+	return func() {
+		for _, sip := range sips {
+			e.reserve.release(resKey(tenantID, sip))
+		}
+	}
 }
 
 // orderByStrategy reorders a team's available members for ringing:
