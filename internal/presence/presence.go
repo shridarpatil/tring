@@ -16,6 +16,7 @@ package presence
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/whatomate/tring/internal/cache"
@@ -24,6 +25,12 @@ import (
 // TTL is how long an online marker survives without a refresh. The gateway
 // refreshes well within this window; a crashed gateway's agents age out in TTL.
 const TTL = 30 * time.Second
+
+// FreedTTL bounds how long an agent's last-freed timestamp is retained. Past it
+// (a long idle stretch with no calls) the agent simply reads as "idle longest"
+// — exactly what the longest_wait ring strategy wants — so the value is
+// generous but not load-bearing.
+const FreedTTL = time.Hour
 
 // RefreshInterval is how often the gateway should re-mark a live agent online.
 const RefreshInterval = 10 * time.Second
@@ -54,6 +61,40 @@ func (s *Store) Enabled() bool {
 
 func key(tenant, sip string) string {
 	return "presence:agent:" + tenant + ":" + sip
+}
+
+func freedKey(tenant, sip string) string {
+	return "presence:freed:" + tenant + ":" + sip
+}
+
+// MarkFreed records that an agent just finished a call (became free) at now.
+// The longest_wait ring strategy orders candidates by this; an absent value
+// sorts as "idle longest" (a freshly-connected or long-idle agent), which is
+// the desired behaviour, so this never has to be perfectly durable.
+func (s *Store) MarkFreed(ctx context.Context, tenant, sip string) {
+	if !s.Enabled() {
+		return
+	}
+	ts := strconv.FormatInt(time.Now().UnixNano(), 10)
+	s.c.Set(ctx, freedKey(tenant, sip), []byte(ts), FreedTTL)
+}
+
+// FreedAt returns when an agent last became free. ok=false when unknown (never
+// recorded or expired) — callers treat that as "idle longest". Only meaningful
+// when Enabled().
+func (s *Store) FreedAt(ctx context.Context, tenant, sip string) (time.Time, bool) {
+	if !s.Enabled() {
+		return time.Time{}, false
+	}
+	v, ok := s.c.Get(ctx, freedKey(tenant, sip))
+	if !ok {
+		return time.Time{}, false
+	}
+	ns, err := strconv.ParseInt(string(v), 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, ns), true
 }
 
 // MarkOnline (re)asserts that an agent is online and AVAILABLE, refreshing TTL.

@@ -20,6 +20,8 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: "", name: "dashboard", component: () => import("../views/DashboardView.vue") },
       { path: "agents", name: "agents", component: () => import("../views/AgentsView.vue") },
+      { path: "teams", name: "teams", component: () => import("../views/TeamsView.vue") },
+      { path: "sounds", name: "sounds", component: () => import("../views/SoundsView.vue") },
       { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue") },
       { path: "calls", name: "calls", component: () => import("../views/CallsView.vue") },
       { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue") },

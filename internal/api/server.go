@@ -55,6 +55,12 @@ type Config struct {
 	// returned to visitors in a guest mint response (ADR-001 M5).
 	GatewayPublicURL string
 
+	// AudioDir is where uploaded sound files are written; AudioFSDir is the path
+	// prefix FreeSWITCH plays them from (default equal — one shared mount). See
+	// internal/config and handlers_audio.go.
+	AudioDir   string
+	AudioFSDir string
+
 	// Cache is the shared Redis cache. The API uses it only to invalidate
 	// flow definitions the orchestrator caches (handlers_flows.go). May be
 	// nil — invalidation becomes a no-op (the orchestrator then relies on
@@ -83,6 +89,11 @@ type Server struct {
 	// gatewayPublicURL: browser-reachable gateway base URL, returned to
 	// visitors in a guest mint response.
 	gatewayPublicURL string
+
+	// audioDir / audioFSDir: where uploaded sounds are written vs the path
+	// FreeSWITCH plays them from (default equal). See handlers_audio.go.
+	audioDir   string
+	audioFSDir string
 
 	// Resolved iceServers built once at startup from STUN/TURN config and
 	// handed to the guest mint. Empty slice == "no ICE servers configured",
@@ -131,6 +142,8 @@ func NewServer(cfg Config) *Server {
 		agentTransport:   cfg.AgentTransport,
 		agentGateway:     cfg.AgentGateway,
 		gatewayPublicURL: cfg.GatewayPublicURL,
+		audioDir:         cfg.AudioDir,
+		audioFSDir:       cfg.AudioFSDir,
 		iceServers:       buildICEServers(cfg),
 		simManager:       orchestrator.NewSimManager(),
 		log:              logger,
@@ -207,6 +220,22 @@ func (s *Server) Router() http.Handler {
 			r.Get("/agents/{id}", s.handleGetAgent)
 			r.Post("/agents/{id}/availability", s.handleSetAgentAvailability)
 			r.Get("/agents/{id}/token", s.handleAgentToken)
+			// Teams — agent groups the IVR transfer node rings as a unit.
+			// Identified by name, so the path param is the team name.
+			r.Post("/teams", s.handleCreateTeam)
+			r.Get("/teams", s.handleListTeams)
+			r.Get("/teams/{name}", s.handleGetTeam)
+			r.Patch("/teams/{name}", s.handlePatchTeam)
+			r.Delete("/teams/{name}", s.handleDeleteTeam)
+			r.Post("/teams/{name}/agents", s.handleAddTeamAgent)
+			r.Delete("/teams/{name}/agents/{agentID}", s.handleRemoveTeamAgent)
+			// Live queue depth per team (orchestrator publishes → Redis → here).
+			r.Get("/queues", s.handleListQueues)
+			// Sound library — uploaded audio reused for IVR prompts + hold music.
+			r.Get("/audio", s.handleListAudio)
+			r.Post("/audio", s.handleUploadAudio)
+			r.Get("/audio/{id}/file", s.handleGetAudioFile)
+			r.Delete("/audio/{id}", s.handleDeleteAudio)
 			r.Post("/numbers", s.handleCreateNumber)
 			r.Get("/numbers", s.handleListNumbers)
 			r.Patch("/numbers/{id}", s.handlePatchNumber)

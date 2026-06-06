@@ -1,0 +1,5 @@
+# Uploaded tenant audio (sound library) lands in per-tenant subdirs here at
+# runtime — never commit it. Keep the directory itself in git via .gitkeep.
+*
+!.gitkeep
+!.gitignore

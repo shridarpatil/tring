@@ -48,7 +48,7 @@ import TimingNode from "../../components/calling/nodes/TimingNode.vue";
 import HangupNode from "../../components/calling/nodes/HangupNode.vue";
 import IVRNodeProperties from "../../components/calling/IVRNodeProperties.vue";
 
-import type { Flow, IVRFlowData, IVRNodeType, Agent } from "../../api/types";
+import type { Flow, IVRFlowData, IVRNodeType, Agent, Team } from "../../api/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -231,7 +231,7 @@ const defaultConfigs: Record<IVRNodeType, Record<string, any>> = {
     store_as: "",
   },
   http_callback: { url: "", method: "GET", headers: {}, body_template: "", timeout_seconds: 10 },
-  transfer: { agent_number: "", ring_timeout: 30 },
+  transfer: { team: "", agent_sip: "", priority: false },
   goto_flow: { flow_id: "" },
   timing: {
     schedule: [
@@ -328,6 +328,8 @@ function requestDeleteSelectedNode() {
 const availableFlows = ref<Flow[]>([]);
 // Agents are offered as Transfer-node targets ("ring a specific agent").
 const availableAgents = ref<Agent[]>([]);
+// Teams are the primary Transfer-node target ("ring this team by its strategy").
+const availableTeams = ref<Team[]>([]);
 
 function buildIVRFlowData(): IVRFlowData {
   return {
@@ -428,12 +430,14 @@ async function saveFlow() {
 
 onMounted(async () => {
   try {
-    const [f, list, agents] = await Promise.all([
+    const [f, list, agents, teams] = await Promise.all([
       api.get<Flow>(`/v1/flows/${flowId.value}`),
       api.get<Flow[]>("/v1/flows"),
       api.get<Agent[]>("/v1/agents"),
+      api.get<Team[]>("/v1/teams"),
     ]);
     availableAgents.value = agents;
+    availableTeams.value = teams;
     flowName.value = f.name;
     isActive.value = f.is_active;
     isOutgoingEnd.value = f.is_outgoing_end;
@@ -548,6 +552,7 @@ onMounted(async () => {
           :current-flow-id="flowId"
           :available-flows="availableFlows"
           :available-agents="availableAgents"
+          :available-teams="availableTeams"
           @update:node="onUpdateNode"
           @delete="requestDeleteSelectedNode"
         />

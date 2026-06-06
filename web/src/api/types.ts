@@ -6,6 +6,19 @@ export interface Tenant {
   sip_domain: string;
   outbound_strategy: string;
   failover_causes: string[];
+  // System hold music: an audio asset's fs_path, or "" for the built-in default.
+  hold_music?: string;
+}
+
+// An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.
+export interface Audio {
+  id: string;
+  tenant_id: string;
+  name: string;
+  fs_path: string; // what FreeSWITCH plays; stored in node config / hold_music
+  format: "wav" | "mp3";
+  size_bytes: number;
+  created_at: string;
 }
 
 export interface Agent {
@@ -20,6 +33,41 @@ export interface Agent {
   // Live effective state, populated on list responses: combines connection
   // presence with available_for_calls ("away" = connected but unavailable).
   status?: "online" | "offline" | "on_call" | "away" | "unknown";
+}
+
+// Ring strategies a team can use (mirrors the API's teamStrategies + the
+// orchestrator's orderByStrategy).
+export type TeamStrategy = "ring_all" | "round_robin" | "sequential" | "longest_wait";
+
+// A team is a tenant-scoped group of agents the IVR transfer node rings as a
+// unit. Identified by name (no id). Also its own queue when all members busy.
+export interface Team {
+  tenant_id: string;
+  name: string;
+  strategy: TeamStrategy;
+  ring_seconds: number;
+  max_wait_seconds: number;
+  moh_sound: string;
+  created_at: string;
+  members?: TeamMember[]; // populated only on the single-team GET
+}
+
+export interface TeamMember {
+  agent_id: string;
+  sip_username: string;
+  display_name?: string;
+  available_for_calls: boolean;
+  position: number;
+}
+
+// Live count of callers waiting in each team's queue (GET /v1/queues).
+export interface QueueDepth {
+  team: string;
+  waiting: number;
+}
+export interface Queues {
+  total: number;
+  queues: QueueDepth[];
 }
 
 export interface PhoneNumber {

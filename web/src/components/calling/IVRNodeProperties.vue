@@ -5,7 +5,8 @@
 // node-type config blocks cover all 8 IVR node types.
 import { computed, ref, watch } from "vue";
 import { Trash2, Volume2, Grid3X3, Hash, Globe, Users, ExternalLink, Clock, PhoneOff, Plus, X } from "lucide-vue-next";
-import type { IVRNodeType, Flow, Agent } from "../../api/types";
+import type { IVRNodeType, Flow, Agent, Team } from "../../api/types";
+import AudioPicker from "../AudioPicker.vue";
 
 interface VueFlowNode {
   id: string;
@@ -22,6 +23,7 @@ const props = defineProps<{
   currentFlowId?: string;
   availableFlows?: Flow[];
   availableAgents?: Agent[];
+  availableTeams?: Team[];
 }>();
 
 const emit = defineEmits<{
@@ -75,6 +77,25 @@ function commit() {
 
 watch(label, commit);
 watch(config, commit, { deep: true });
+
+// ─── Transfer target (team | specific agent | all) ──────────────────
+// One select drives two mutually-exclusive config keys: config.team (a team
+// name) or config.agent_sip (one agent). Empty = ring all available agents.
+const transferTarget = computed<string>({
+  get() {
+    if (config.value.team) return `team:${config.value.team}`;
+    if (config.value.agent_sip) return `agent:${config.value.agent_sip}`;
+    return "";
+  },
+  set(v: string) {
+    const next = { ...config.value };
+    delete next.team;
+    delete next.agent_sip;
+    if (v.startsWith("team:")) next.team = v.slice(5);
+    else if (v.startsWith("agent:")) next.agent_sip = v.slice(6);
+    config.value = next;
+  },
+});
 
 // ─── Menu options editor ────────────────────────────────────────────
 const menuOptions = computed<[string, { label: string }][]>(() => {
@@ -173,15 +194,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             placeholder="Say this with TTS, or leave blank and use an audio file"
           />
         </label>
-        <label class="block">
-          <span class="text-xs font-medium text-gray-700">Audio file (path/URL)</span>
-          <input
-            v-model="config.audio_file"
-            type="text"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-            placeholder="/recordings/greeting.wav"
-          />
-        </label>
+        <div class="block">
+          <span class="text-xs font-medium text-gray-700">Audio file (from your sound library)</span>
+          <AudioPicker v-model="config.audio_file" default-label="None (use text-to-speech above)" />
+        </div>
         <label v-if="node.type === 'greeting'" class="flex items-center gap-2">
           <input v-model="config.interruptible" type="checkbox" class="rounded" />
           <span class="text-xs">Interruptible (caller can press a key to skip)</span>
@@ -199,14 +215,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             placeholder="Press 1 for sales, 2 for support…"
           />
         </label>
-        <label class="block">
-          <span class="text-xs font-medium text-gray-700">Audio file (path/URL)</span>
-          <input
-            v-model="config.audio_file"
-            type="text"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-          />
-        </label>
+        <div class="block">
+          <span class="text-xs font-medium text-gray-700">Audio file (from your sound library)</span>
+          <AudioPicker v-model="config.audio_file" default-label="None (use prompt text above)" />
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <label class="block">
             <span class="text-xs font-medium text-gray-700">Timeout (s)</span>
@@ -294,14 +306,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             placeholder="Please enter your account number followed by #"
           />
         </label>
-        <label class="block">
-          <span class="text-xs font-medium text-gray-700">Audio file (path/URL)</span>
-          <input
-            v-model="config.audio_file"
-            type="text"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-          />
-        </label>
+        <div class="block">
+          <span class="text-xs font-medium text-gray-700">Audio file (from your sound library)</span>
+          <AudioPicker v-model="config.audio_file" default-label="None (use prompt text above)" />
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <label class="block">
             <span class="text-xs font-medium text-gray-700">Max digits</span>
@@ -427,39 +435,48 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
         <label class="block">
           <span class="text-xs font-medium text-gray-700">Transfer to</span>
           <select
-            v-model="config.agent_sip"
+            v-model="transferTarget"
             class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
           >
             <option value="">All available agents (ring everyone)</option>
-            <option
-              v-for="a in availableAgents"
-              :key="a.id"
-              :value="a.sip_username"
-            >
-              {{ a.display_name || a.sip_username }}
-            </option>
+            <optgroup v-if="availableTeams && availableTeams.length" label="Teams">
+              <option v-for="t in availableTeams" :key="t.name" :value="`team:${t.name}`">
+                {{ t.name }} ({{ t.strategy }})
+              </option>
+            </optgroup>
+            <optgroup v-if="availableAgents && availableAgents.length" label="Specific agent">
+              <option v-for="a in availableAgents" :key="a.id" :value="`agent:${a.sip_username}`">
+                {{ a.display_name || a.sip_username }}
+              </option>
+            </optgroup>
           </select>
-          <span class="text-[11px] text-gray-400">
-            Rings the registered agent(s) over WebRTC; bridges to the first who
-            answers. "All available agents" rings everyone at once.
-          </span>
         </label>
-        <p
-          v-if="!availableAgents || !availableAgents.length"
-          class="text-[11px] text-amber-600"
-        >
-          No agents yet — add one under <strong>Agents</strong> first.
+
+        <!-- Queue explainer + Priority checkbox — only meaningful for a team. -->
+        <template v-if="transferTarget.startsWith('team:')">
+          <div class="rounded-md bg-blue-50 border border-blue-100 p-3 text-[11px] text-blue-800 leading-relaxed">
+            <span class="font-medium">If everyone on the team is busy,</span> callers hear hold
+            music and wait in line, then connect to the next agent who frees up. The team's
+            strategy, wait time and hold music are set on the <strong>Teams</strong> page.
+          </div>
+
+          <label class="flex items-start gap-2">
+            <input type="checkbox" v-model="config.priority" class="mt-0.5" />
+            <span class="text-xs text-gray-700">
+              <span class="font-medium">Priority caller — let them skip the line</span>
+              <span class="block text-[11px] text-gray-400 mt-0.5">
+                Callers reaching this step wait in a separate front-of-line queue. To route by
+                who's calling, put an <strong>HTTP callback</strong> step before this and wire its
+                <strong>2xx</strong> branch here (priority on) and its <strong>error</strong>
+                branch to a normal Transfer.
+              </span>
+            </span>
+          </label>
+        </template>
+
+        <p v-if="!availableTeams || !availableTeams.length" class="text-[11px] text-amber-600">
+          No teams yet — create one under <strong>Teams</strong> to ring a group with a strategy.
         </p>
-        <label class="block">
-          <span class="text-xs font-medium text-gray-700">Ring timeout (s)</span>
-          <input
-            v-model.number="config.ring_timeout"
-            type="number"
-            min="5"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-            placeholder="30"
-          />
-        </label>
       </template>
 
       <!-- ── GOTO FLOW ─────────────────────────────────────────── -->

@@ -12,6 +12,8 @@ const tenant = ref<Tenant | null>(null);
 const nav = [
   { to: "/", label: "Dashboard" },
   { to: "/agents", label: "Agents" },
+  { to: "/teams", label: "Teams" },
+  { to: "/sounds", label: "Sounds" },
   { to: "/numbers", label: "Numbers" },
   { to: "/trunks", label: "Trunks" },
   { to: "/calls", label: "Calls" },
