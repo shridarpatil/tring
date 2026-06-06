@@ -1,0 +1,25 @@
+<configuration name="local_stream.conf" description="stream files from local dir">
+  <!-- Defines the looping music sources mod_local_stream serves. The safarov
+       image ships no `moh` source, so the default hold music (local_stream://moh,
+       set in vars.xml) logged "Unknown source moh" and played silence. We define
+       `moh` (and `default`) pointing at the music the image downloads via
+       SOUND_TYPES (docker-compose: music:en-us-callie → sounds/music/8000).
+       A local_stream is a single continuous stream shared by all listeners, so a
+       caller joins at the stream's current position — which is why the queue's
+       chunked hold music (play → re-check → play) is seamless on a local_stream
+       but choppy on a tone_stream/file (those restart from the top each chunk). -->
+  <directory name="moh" path="/usr/share/freeswitch/sounds/music/8000">
+    <param name="rate" value="8000"/>
+    <param name="shuffle" value="true"/>
+    <param name="channels" value="1"/>
+    <param name="interval" value="20"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+  <directory name="default" path="$${sounds_dir}/music/8000">
+    <param name="rate" value="8000"/>
+    <param name="shuffle" value="true"/>
+    <param name="channels" value="1"/>
+    <param name="interval" value="20"/>
+    <param name="timer-name" value="soft"/>
+  </directory>
+</configuration>

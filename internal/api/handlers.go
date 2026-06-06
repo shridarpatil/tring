@@ -21,7 +21,11 @@ var _ = errors.Is
 // ---- Tenants ------------------------------------------------------------
 
 func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, tenantFromCtx(r.Context()))
+	// Copy the auth-resolved tenant and enrich with hold_music (not carried in
+	// the auth context) so the Settings page sees the current selection.
+	t := *tenantFromCtx(r.Context())
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantHoldMusic, t.ID).Scan(&t.HoldMusic)
+	writeJSON(w, http.StatusOK, t)
 }
 
 // ---- Agents -------------------------------------------------------------
@@ -74,7 +78,11 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
 	)
 	if err != nil {
-		writeError(w, http.StatusConflict, "sip_username already exists for this tenant")
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "sip_username already exists for this tenant")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "create agent failed")
 		return
 	}
 	writeJSON(w, http.StatusCreated, a)
@@ -359,6 +367,9 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 type patchTenantRequest struct {
 	OutboundStrategy *string  `json:"outbound_strategy,omitempty"`
 	FailoverCauses   []string `json:"failover_causes,omitempty"`
+	// HoldMusic: an audio asset's fs_path to use as system hold music, or "" to
+	// clear (revert to the built-in default). nil = leave unchanged.
+	HoldMusic *string `json:"hold_music,omitempty"`
 }
 
 // handlePatchMyTenant updates tenant-level settings. Today: outbound
@@ -370,8 +381,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy or failover_causes is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes or hold_music is required")
 		return
 	}
 	if req.OutboundStrategy != nil {
@@ -389,8 +400,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
-		req.OutboundStrategy, causes, t.ID).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses)
+		req.OutboundStrategy, causes, t.ID, req.HoldMusic).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return

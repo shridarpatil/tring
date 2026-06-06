@@ -121,7 +121,7 @@ const transferFlow = `{
   "entry_node": "start",
   "nodes": [
     {"id":"start","type":"start","config":{}},
-    {"id":"t","type":"transfer","config":{"agent_number":"1001"}},
+    {"id":"t","type":"transfer","config":{"agent_sip":"1001"}},
     {"id":"end","type":"hangup","config":{}}
   ],
   "edges": [

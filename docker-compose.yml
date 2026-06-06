@@ -34,6 +34,13 @@ services:
       - SOUND_TYPES=music:en-us-callie
     volumes:
       - freeswitch-sounds:/usr/share/freeswitch/sounds
+      # Tenant sound library (uploaded IVR prompts + hold music). The api
+      # container writes uploads here; FreeSWITCH plays them. Same host path at
+      # the same container path in both, so the api's audio_fs_dir default
+      # (/usr/share/freeswitch/sounds/tring) is exactly what FS reads. Mounted
+      # read-only here since only the api writes. (Nested under the sounds
+      # volume above — Docker mounts the more-specific path on top.)
+      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
       # Our config overrides are mounted onto the entrypoint's COPY SOURCE
       # (/usr/share/freeswitch/conf/vanilla/*), NOT the destination
       # (/etc/freeswitch/*). On boot the safarov entrypoint runs
@@ -50,6 +57,9 @@ services:
       # the internal profile's "domains" ACL (otherwise web calls 403). See file.
       - ./freeswitch/conf/autoload_configs/acl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml:ro
       - ./freeswitch/conf/autoload_configs/xml_curl.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/xml_curl.conf.xml:ro
+      # Defines the `moh` local_stream source (the image ships none, so the
+      # default hold music local_stream://moh played silence). See the file.
+      - ./freeswitch/conf/autoload_configs/local_stream.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/local_stream.conf.xml:ro
       # Overrides the default switch.conf.xml to wire the RTP port range
       # to vars.xml's $${rtp_start_port}/$${rtp_end_port} placeholders.
       - ./freeswitch/conf/autoload_configs/switch.conf.xml:/usr/share/freeswitch/conf/vanilla/autoload_configs/switch.conf.xml:ro
@@ -163,6 +173,10 @@ services:
       # Same host path mounted at the same container path so the Go code
       # can write to /etc/freeswitch/... by default.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
+      # Tenant sound library — the api writes uploaded audio here; FreeSWITCH
+      # reads it (same host path + container path as the freeswitch service, so
+      # audio_dir == audio_fs_dir == /usr/share/freeswitch/sounds/tring).
+      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:rw
     restart: unless-stopped
 
   orchestrator:

@@ -6,6 +6,7 @@
 //   • Main: vue-flow canvas (drag/connect) + properties panel on the right
 // Uses localStorage as the persistence stub until the backend lands.
 import { ref, computed, onMounted, markRaw, watch } from "vue";
+import { errMessage } from "../../lib/errors";
 import { useRoute, useRouter } from "vue-router";
 import {
   VueFlow,
@@ -48,7 +49,7 @@ import TimingNode from "../../components/calling/nodes/TimingNode.vue";
 import HangupNode from "../../components/calling/nodes/HangupNode.vue";
 import IVRNodeProperties from "../../components/calling/IVRNodeProperties.vue";
 
-import type { Flow, IVRFlowData, IVRNodeType, Agent } from "../../api/types";
+import type { Flow, IVRFlowData, IVRNodeType, Agent, Team } from "../../api/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -113,7 +114,7 @@ async function startSimulation() {
       { caller: simCaller.value || undefined },
     );
   } catch (e) {
-    simError.value = e instanceof Error ? e.message : "start failed";
+    simError.value = errMessage(e, "start failed");
   } finally {
     simBusy.value = false;
   }
@@ -133,7 +134,7 @@ async function sendSimInput() {
       { dtmf },
     );
   } catch (e) {
-    simError.value = e instanceof Error ? e.message : "send failed";
+    simError.value = errMessage(e, "send failed");
   } finally {
     simBusy.value = false;
   }
@@ -231,7 +232,7 @@ const defaultConfigs: Record<IVRNodeType, Record<string, any>> = {
     store_as: "",
   },
   http_callback: { url: "", method: "GET", headers: {}, body_template: "", timeout_seconds: 10 },
-  transfer: { agent_number: "", ring_timeout: 30 },
+  transfer: { team: "", agent_sip: "", priority: false },
   goto_flow: { flow_id: "" },
   timing: {
     schedule: [
@@ -328,6 +329,8 @@ function requestDeleteSelectedNode() {
 const availableFlows = ref<Flow[]>([]);
 // Agents are offered as Transfer-node targets ("ring a specific agent").
 const availableAgents = ref<Agent[]>([]);
+// Teams are the primary Transfer-node target ("ring this team by its strategy").
+const availableTeams = ref<Team[]>([]);
 
 function buildIVRFlowData(): IVRFlowData {
   return {
@@ -420,7 +423,7 @@ async function saveFlow() {
     savedMsg.value = "Saved";
     setTimeout(() => (savedMsg.value = ""), 1500);
   } catch (e) {
-    savedMsg.value = e instanceof Error ? e.message : "save failed";
+    savedMsg.value = errMessage(e, "save failed");
   } finally {
     saving.value = false;
   }
@@ -428,12 +431,14 @@ async function saveFlow() {
 
 onMounted(async () => {
   try {
-    const [f, list, agents] = await Promise.all([
+    const [f, list, agents, teams] = await Promise.all([
       api.get<Flow>(`/v1/flows/${flowId.value}`),
       api.get<Flow[]>("/v1/flows"),
       api.get<Agent[]>("/v1/agents"),
+      api.get<Team[]>("/v1/teams"),
     ]);
     availableAgents.value = agents;
+    availableTeams.value = teams;
     flowName.value = f.name;
     isActive.value = f.is_active;
     isOutgoingEnd.value = f.is_outgoing_end;
@@ -446,7 +451,7 @@ onMounted(async () => {
     }
     availableFlows.value = list;
   } catch (e) {
-    savedMsg.value = e instanceof Error ? e.message : "load failed";
+    savedMsg.value = errMessage(e, "load failed");
   }
 });
 </script>
@@ -548,6 +553,7 @@ onMounted(async () => {
           :current-flow-id="flowId"
           :available-flows="availableFlows"
           :available-agents="availableAgents"
+          :available-teams="availableTeams"
           @update:node="onUpdateNode"
           @delete="requestDeleteSelectedNode"
         />

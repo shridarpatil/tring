@@ -110,8 +110,9 @@
     <!--<load module="mod_opusfile"/>-->
     <load module="mod_png"/>
     <!-- <load module="mod_shell_stream"/> -->
-    <!--For icecast/mp3 streams/files-->
-    <!--<load module="mod_shout"/>-->
+    <!--For icecast/mp3 streams/files. Enabled so uploaded .mp3 hold music / IVR
+        prompts play (mod_sndfile handles .wav natively). See Sound library.-->
+    <load module="mod_shout"/>
     <!--For local streams (play all the files in a directory)-->
     <load module="mod_local_stream"/>
     <load module="mod_tone_stream"/>

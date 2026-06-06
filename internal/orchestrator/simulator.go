@@ -39,16 +39,45 @@ type SimInput struct {
 	// Now overrides the current time for Timing nodes. Zero value =
 	// time.Now() (so a quick sim without a fixture still works).
 	Now time.Time `json:"now,omitempty"`
+
+	// TransferOutcome forces a Transfer node's outcome so the author can test
+	// the no_answer / queue_timeout branches (the simulator can't actually ring
+	// or queue). Empty = "completed" (an agent answers).
+	TransferOutcome string `json:"transfer_outcome,omitempty"`
+
+	// HTTPOutcome forces an http_callback node's branch so the author can test
+	// both paths — e.g. wiring the success branch to a priority Transfer and the
+	// failure branch to a normal one. Empty/"http:2xx" = success; "http:non2xx".
+	HTTPOutcome string `json:"http_outcome,omitempty"`
+}
+
+// transferOutcome returns the outcome a simulated Transfer node should take:
+// the operator's forced TransferOutcome, validated, else "completed".
+func transferOutcome(in SimInput) string {
+	switch in.TransferOutcome {
+	case "no_answer", "queue_timeout":
+		return in.TransferOutcome
+	default:
+		return "completed"
+	}
+}
+
+// httpOutcome returns the branch a simulated http_callback should take.
+func httpOutcome(in SimInput) string {
+	if in.HTTPOutcome == "http:non2xx" {
+		return "http:non2xx"
+	}
+	return "http:2xx"
 }
 
 // SimStep is one row in the trace.
 type SimStep struct {
 	NodeID    string `json:"node_id"`
 	NodeType  string `json:"node_type"`
-	Action    string `json:"action"`             // play_audio, speak, prompt_dtmf, transfer, hangup, branch, passthrough, http_call
-	Detail    string `json:"detail,omitempty"`   // file path, agent number, URL, etc.
+	Action    string `json:"action"`               // play_audio, speak, prompt_dtmf, transfer, hangup, branch, passthrough, http_call
+	Detail    string `json:"detail,omitempty"`     // file path, agent number, URL, etc.
 	DTMFInput string `json:"dtmf_input,omitempty"` // digit consumed at a menu/gather, if any
-	Outcome   string `json:"outcome"`            // edge handle id taken: "default", "digit:1", "timeout"...
+	Outcome   string `json:"outcome"`              // edge handle id taken: "default", "digit:1", "timeout"...
 }
 
 // SimResult is the full trace returned to the caller.
@@ -209,17 +238,18 @@ func stepFor(node *ivrNode, in *SimInput, dtmfIdx *int, vars map[string]string) 
 			method = "GET"
 		}
 		step.Detail = method + " " + url
-		// No real request — assume happy path. A future mocking surface
-		// could let the operator choose "http:non2xx" here.
-		step.Outcome = "http:2xx"
-		return step, "http:2xx"
+		// No real request — follow the operator's chosen branch so they can test
+		// both the success and failure routes (e.g. priority vs normal Transfer).
+		oc := httpOutcome(*in)
+		step.Outcome = oc
+		return step, oc
 
 	case nodeTransfer:
 		step.Action = "transfer"
-		agent, _ := node.Config["agent_number"].(string)
-		step.Detail = agent
-		step.Outcome = "completed"
-		return step, "completed"
+		step.Detail = transferDetail(node.Config)
+		oc := transferOutcome(*in)
+		step.Outcome = oc
+		return step, oc
 
 	case nodeGotoFlow:
 		step.Action = "branch"
@@ -258,6 +288,23 @@ func stepFor(node *ivrNode, in *SimInput, dtmfIdx *int, vars map[string]string) 
 		step.Outcome = ""
 		return step, ""
 	}
+}
+
+// transferDetail renders the human label for a transfer node in a simulator
+// trace: the pinned agent (agent_sip), the targeted team (with a "(priority)"
+// suffix when the Priority checkbox is on), or "all agents". Kept in sync with
+// runTransfer's stepDetail in ivr_executor.go.
+func transferDetail(c map[string]interface{}) string {
+	if sip := stringFromConfig(c, "agent_sip"); sip != "" {
+		return sip
+	}
+	if team := stringFromConfig(c, "team"); team != "" {
+		if boolFromConfig(c, "priority") {
+			return "team " + team + " (priority)"
+		}
+		return "team " + team
+	}
+	return "all agents"
 }
 
 // nextNode resolves the next node id by matching an outgoing edge whose

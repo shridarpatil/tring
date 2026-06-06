@@ -158,10 +158,17 @@ func (r *agentRegistry) enterCall(k agentKey) {
 
 func (r *agentRegistry) leaveCall(k agentKey) {
 	r.mu.Lock()
+	nowFree := false
 	if g := r.m[k]; g != nil && g.active > 0 {
 		g.active--
+		nowFree = g.active == 0
 	}
 	r.mu.Unlock()
+	// Stamp the moment this agent became free so the longest_wait ring strategy
+	// can order idle agents. Only on the transition to zero active calls.
+	if nowFree {
+		r.presence.MarkFreed(context.Background(), k.tenant, k.sip)
+	}
 	r.publish(k)
 }
 

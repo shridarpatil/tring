@@ -55,19 +55,20 @@ type SimSnapshot struct {
 // session is the in-memory record. Not exported — clients see only
 // the SimSnapshot view.
 type session struct {
-	id           uuid.UUID
-	flow         *ivrFlowData
-	currentNode  string // where to resume; "" once ended
-	vars         map[string]string
-	steps        []SimStep
-	depth        int
-	caller       string
-	awaiting     *AwaitingNode
-	ended        bool
-	endedAt      string
-	hangupCause  string
-	errString    string
-	lastTouched  time.Time
+	id          uuid.UUID
+	flow        *ivrFlowData
+	currentNode string // where to resume; "" once ended
+	vars        map[string]string
+	steps       []SimStep
+	depth       int
+	caller      string
+	awaiting    *AwaitingNode
+	ended       bool
+	endedAt     string
+	hangupCause string
+	errString   string
+	now         time.Time // clock for Timing nodes (from SimInput.Now), fixed at Start
+	lastTouched time.Time
 }
 
 // SimManager owns the live sessions. One instance per api process —
@@ -88,12 +89,16 @@ func (m *SimManager) Start(flowJSON []byte, in SimInput) (*SimSnapshot, error) {
 	if in.Caller == "" {
 		in.Caller = "+10000000000"
 	}
+	if in.Now.IsZero() {
+		in.Now = time.Now() // no fixture clock → wall clock (same default as the batch simulator)
+	}
 	s := &session{
 		id:          uuid.New(),
 		flow:        flow,
 		currentNode: flow.EntryNode,
 		vars:        copyVars(in.Vars),
 		caller:      in.Caller,
+		now:         in.Now,
 		lastTouched: time.Now(),
 	}
 	m.sessions.Store(s.id, s)
@@ -153,7 +158,7 @@ func (m *SimManager) runUntilPause(s *session, input string) {
 			}
 		}
 
-		step, outcome := stepForInteractive(node, input, s.vars)
+		step, outcome := stepForInteractive(node, input, s.vars, s.now)
 		input = "" // input is consumed by exactly one node
 		s.steps = append(s.steps, step)
 
@@ -190,7 +195,7 @@ func (m *SimManager) runUntilPause(s *session, input string) {
 
 // stepForInteractive is the interactive counterpart of stepFor.
 // `input` is the live DTMF for menu/gather; ignored for other nodes.
-func stepForInteractive(node *ivrNode, input string, vars map[string]string) (SimStep, string) {
+func stepForInteractive(node *ivrNode, input string, vars map[string]string, now time.Time) (SimStep, string) {
 	step := SimStep{NodeID: node.ID, NodeType: node.Type}
 
 	switch node.Type {
@@ -248,8 +253,7 @@ func stepForInteractive(node *ivrNode, input string, vars map[string]string) (Si
 
 	case nodeTransfer:
 		step.Action = "transfer"
-		agent, _ := node.Config["agent_number"].(string)
-		step.Detail = agent
+		step.Detail = transferDetail(node.Config)
 		step.Outcome = "completed"
 		return step, "completed"
 
@@ -262,7 +266,7 @@ func stepForInteractive(node *ivrNode, input string, vars map[string]string) (Si
 
 	case nodeTiming:
 		step.Action = "branch"
-		hour := time.Now().Hour()
+		hour := now.Hour()
 		if hour >= 9 && hour < 18 {
 			step.Outcome = "in_hours"
 			step.Detail = "open"

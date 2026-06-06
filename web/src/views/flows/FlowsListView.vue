@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // FlowsListView — list/create/delete IVR flows via the Tring API.
-import { ref, onMounted } from "vue";
+import { ref } from "vue";
+import { errMessage } from "../../lib/errors";
+import { useList } from "../../composables/useList";
 import { useRouter } from "vue-router";
 import { Plus, Trash2, ArrowRight } from "lucide-vue-next";
 import { api } from "../../api/client";
@@ -8,23 +10,9 @@ import type { Flow } from "../../api/types";
 
 const router = useRouter();
 
-const flows = ref<Flow[]>([]);
+const { items: flows, loading, error, load: refresh } = useList<Flow>("/v1/flows");
 const showCreate = ref(false);
 const newName = ref("");
-const loading = ref(true);
-const error = ref("");
-
-async function refresh() {
-  loading.value = true;
-  error.value = "";
-  try {
-    flows.value = await api.get<Flow[]>("/v1/flows");
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
-  } finally {
-    loading.value = false;
-  }
-}
 
 async function createFlow() {
   if (!newName.value.trim()) return;
@@ -33,7 +21,7 @@ async function createFlow() {
     const f = await api.post<Flow>("/v1/flows", { name: newName.value.trim() });
     router.push({ name: "flow-editor", params: { id: f.id } });
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "create failed";
+    error.value = errMessage(e, "create failed");
   }
 }
 
@@ -44,11 +32,9 @@ async function deleteFlow(id: string) {
     await api.del(`/v1/flows/${id}`);
     await refresh();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "delete failed";
+    error.value = errMessage(e, "delete failed");
   }
 }
-
-onMounted(refresh);
 </script>
 
 <template>

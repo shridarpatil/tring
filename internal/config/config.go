@@ -81,6 +81,15 @@ var defaults = map[string]any{
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
 	"redis_addr": "",
+	// Tenant audio library (sound uploads for IVR prompts + hold music).
+	// audio_dir is where the API writes uploaded bytes; audio_fs_dir is the
+	// path prefix FreeSWITCH plays them from. They default equal because the
+	// standard docker deploy bind-mounts one host dir into both the api and
+	// freeswitch containers at the same path (mirrors TRING_GATEWAY_DIR). For
+	// host-run `make api` against a containerised FS, override audio_dir to a
+	// local path while leaving audio_fs_dir at the FS-visible path.
+	"audio_dir":    "/usr/share/freeswitch/sounds/tring",
+	"audio_fs_dir": "/usr/share/freeswitch/sounds/tring",
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid
