@@ -37,6 +37,7 @@ import (
 	"github.com/percipia/eslgo/command"
 	"github.com/percipia/eslgo/command/call"
 
+	"github.com/whatomate/tring/internal/agentleg"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/presence"
@@ -1293,44 +1294,22 @@ func (e *Executor) rrNext(key string, n int) int {
 	return i
 }
 
-// agentLeg builds one bridge dial-string leg for an agent, tagging it with a
-// `tring_agent` channel variable. When the agent answers, the CHANNEL_BRIDGE
-// event lets the orchestrator read this variable off the answered B-leg and
-// attribute the call to that agent — reliable even for a ring-all where we
-// otherwise wouldn't know which of N legs picked up.
-//
-// With the "gateway" transport the leg is routed to the media gateway as a SIP
-// endpoint (carrying the tenant id as a SIP header) instead of user/<sip>, so
-// agents speak WebRTC and never register SIP (ADR-001 M4b). Mirrors
-// (*api.Server).agentALeg.
+// agentLeg builds one bridge dial-string leg for an agent via the shared
+// agentleg helper. Attribute is always set so the CHANNEL_BRIDGE handler can
+// read the tring_agent variable off the answered B-leg and attribute the call —
+// reliable even for a ring-all where we otherwise wouldn't know which leg
+// picked up. Inbound transfers ring the agent for a manual accept, so
+// AutoAnswer stays off (that's the API click-to-call path).
 func (e *Executor) agentLeg(sip, domain, tenantID, label string) string {
-	if e.AgentTransport == "gateway" {
-		vars := fmt.Sprintf("tring_agent=%s,sip_h_X-Tring-Tenant=%s", sip, tenantID)
-		// Agent-facing caller label (e.g. client_ref or "Web Caller"). The
-		// gateway reads X-Tring-Agent-Label in preference to the SIP From, so the
-		// agent never sees the gateway's internal "sipgo" identity.
-		if l := sanitizeAgentLabel(label); l != "" {
-			vars += ",sip_h_X-Tring-Agent-Label=" + l
-		}
-		return fmt.Sprintf("[%s]sofia/gateway/%s/%s", vars, e.AgentGateway, sip)
-	}
-	return fmt.Sprintf("[tring_agent=%s]user/%s@%s", sip, sip, domain)
-}
-
-// sanitizeAgentLabel strips characters that would break the FreeSWITCH
-// `[k=v,...]` channel-variable block (or inject extra vars) and caps the length.
-func sanitizeAgentLabel(s string) string {
-	s = strings.Map(func(r rune) rune {
-		switch {
-		case r == ',', r == '[', r == ']', r == '=', r == '\'', r == '"', r < 0x20:
-			return -1
-		}
-		return r
-	}, s)
-	if len(s) > 64 {
-		s = s[:64]
-	}
-	return strings.TrimSpace(s)
+	return agentleg.Build(agentleg.Options{
+		Transport: e.AgentTransport,
+		Gateway:   e.AgentGateway,
+		SIP:       sip,
+		Domain:    domain,
+		TenantID:  tenantID,
+		Label:     label,
+		Attribute: true,
+	})
 }
 
 func (e *Executor) runHangup(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
