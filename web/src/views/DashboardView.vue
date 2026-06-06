@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, computed } from "vue";
+import { errMessage } from "../lib/errors";
+import { usePoll } from "../composables/usePoll";
 import { api } from "../api/client";
 import type { Tenant, Call, Agent, PhoneNumber, Queues } from "../api/types";
 
@@ -10,7 +12,6 @@ const numbers = ref<PhoneNumber[]>([]);
 const queues = ref<Queues>({ total: 0, on_call: 0, queues: [] });
 const loading = ref(true);
 const error = ref("");
-let poll: number | undefined;
 
 // Teams with at least one caller waiting, for the breakdown under the card.
 const waitingTeams = computed(() => queues.value.queues.filter((q) => q.waiting > 0));
@@ -36,17 +37,14 @@ onMounted(async () => {
     agents.value = a;
     numbers.value = n;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
+    error.value = errMessage(e, "failed to load");
   } finally {
     loading.value = false;
   }
-  await loadQueues();
-  // Live queue depth: re-poll every 5s so the dashboard tracks callers waiting.
-  poll = window.setInterval(loadQueues, 5000);
 });
-onUnmounted(() => {
-  if (poll) clearInterval(poll);
-});
+
+// Live queue depth + on-call: re-poll every 5s (loads immediately on mount).
+usePoll(loadQueues, 5000);
 
 const activeOutbound = () =>
   numbers.value.filter((n) => n.type === "outbound" && n.active).length;

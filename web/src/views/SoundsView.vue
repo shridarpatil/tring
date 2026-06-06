@@ -1,27 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref } from "vue";
+import { errMessage } from "../lib/errors";
+import { useList } from "../composables/useList";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
 import type { Audio } from "../api/types";
 
-const sounds = ref<Audio[]>([]);
-const loading = ref(true);
-const error = ref("");
+const { items: sounds, loading, error, load } = useList<Audio>("/v1/audio");
 const uploading = ref(false);
 const name = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 const previewUrl = ref<Record<string, string>>({});
-
-async function load() {
-  loading.value = true;
-  try {
-    sounds.value = await api.get<Audio[]>("/v1/audio");
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "failed to load";
-  } finally {
-    loading.value = false;
-  }
-}
 
 async function upload() {
   const f = fileInput.value?.files?.[0];
@@ -37,7 +26,7 @@ async function upload() {
     if (fileInput.value) fileInput.value.value = "";
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "upload failed";
+    error.value = errMessage(e, "upload failed");
   } finally {
     uploading.value = false;
   }
@@ -50,7 +39,7 @@ async function destroy(s: Audio) {
     await api.del<void>(`/v1/audio/${s.id}`);
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "delete failed";
+    error.value = errMessage(e, "delete failed");
   }
 }
 
@@ -72,8 +61,6 @@ async function preview(s: Audio) {
 function fmtSize(n: number) {
   return n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
 }
-
-onMounted(load);
 </script>
 
 <template>
