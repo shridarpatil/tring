@@ -10,10 +10,12 @@ const loading = ref(true);
 const error = ref("");
 const statusFilter = ref("");
 
-// Recordings are served behind auth, so a plain <a href> can't fetch them.
-// Pull the WAV with the bearer token and open the resulting blob.
+// Recordings are served behind auth, so a plain <a href>/<audio src> can't send
+// the bearer token. Fetch the WAV as a blob and bind it to an inline <audio>
+// player (a blob URL opened in a new tab would just download).
+const recUrl = ref<Record<string, string>>({});
 async function playRecording(c: Call) {
-  if (!c.recording_url) return;
+  if (!c.recording_url || recUrl.value[c.id]) return;
   const token = auth.token();
   const res = await fetch(c.recording_url, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -22,7 +24,7 @@ async function playRecording(c: Call) {
     error.value = "recording not available yet";
     return;
   }
-  window.open(URL.createObjectURL(await res.blob()), "_blank");
+  recUrl.value = { ...recUrl.value, [c.id]: URL.createObjectURL(await res.blob()) };
 }
 
 // Per-call expand state for the IVR-path detail row.
@@ -168,7 +170,8 @@ onMounted(load);
               <td class="px-5 py-2 text-gray-500">{{ fmt(c.started_at) }}</td>
               <td class="px-5 py-2">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
               <td class="px-5 py-2">
-                <button v-if="c.recording_url" class="text-gray-600 hover:text-gray-900 underline" @click.stop="playRecording(c)">play</button>
+                <audio v-if="recUrl[c.id]" :src="recUrl[c.id]" controls autoplay class="h-8" @click.stop></audio>
+                <button v-else-if="c.recording_url" class="text-gray-600 hover:text-gray-900 underline" @click.stop="playRecording(c)">play</button>
                 <span v-else class="text-gray-300">—</span>
               </td>
               <td class="px-5 py-2">
