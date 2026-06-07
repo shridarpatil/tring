@@ -63,6 +63,7 @@ services:
       POSTGRES_USER: tring
       POSTGRES_PASSWORD: tring_dev
       POSTGRES_DB: tring
+      TZ: ${TZ:-Asia/Kolkata}
     ports:
       - "5434:5432"
     volumes:
@@ -89,6 +90,8 @@ services:
     # Pure cache — no persistence. The IVR flow cache is repopulated from
     # Postgres on a miss, so losing it on restart only costs a few DB reads.
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
     ports:
       - "6379:6379"
     healthcheck:

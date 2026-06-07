@@ -266,13 +266,11 @@ func stepForInteractive(node *ivrNode, input string, vars map[string]string, now
 
 	case nodeTiming:
 		step.Action = "branch"
-		hour := now.Hour()
-		if hour >= 9 && hour < 18 {
-			step.Outcome = "in_hours"
-			step.Detail = "open"
-		} else {
-			step.Outcome = "out_of_hours"
+		step.Outcome = evalTimingOutcome(node.Config, now)
+		if step.Outcome == "out_of_hours" {
 			step.Detail = "closed"
+		} else {
+			step.Detail = "open"
 		}
 		return step, step.Outcome
 

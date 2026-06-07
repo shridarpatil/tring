@@ -612,9 +612,12 @@ func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode,
 	case nodeHTTPCallback:
 		return e.runHTTPCallback(ctx, conn, node, st)
 	case nodeTiming:
-		// TODO: evaluate config.schedule against time.Now in tenant TZ → "in_hours" / "out_of_hours"
-		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "in_hours")
-		return "in_hours", nil
+		// Evaluate the node's per-day schedule against the current time (server
+		// local / deployment TZ). Same logic the simulator uses (evalTimingOutcome).
+		outcome := evalTimingOutcome(node.Config, time.Now())
+		st.stepAction = "branch"
+		st.log.Info("ivr timing", "node", node.ID, "outcome", outcome)
+		return outcome, nil
 	case nodeGotoFlow:
 		// TODO: load flow_id, recurse into walk() against new flow.entry_node
 		st.log.Warn("ivr node not yet implemented, ending call", "type", node.Type, "node", node.ID)
