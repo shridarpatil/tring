@@ -1,38 +1,58 @@
 package orchestrator
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/whatomate/tring/internal/cache"
 )
 
-// reservations holds short-lived "this agent is being rung right now" markers.
-// An agent's presence only flips to on_call when they ANSWER (the gateway's
-// enterCall fires on bridge-connect), not while ringing — so without this, two
-// callers that dequeue at nearly the same moment both see the same idle agent as
-// available and both ring it (the second never queues). When a caller commits to
-// ring an agent we reserve it for the ring window; concurrent callers treat a
-// reserved agent as unavailable and queue instead. Keyed by "tenant/sip", each
-// entry auto-expires (a safety net if an explicit release is ever missed).
-type reservations struct {
-	mu sync.Mutex
-	m  map[string]time.Time // tenant/sip -> expiry
+// This file backs the Transfer-node queue: which callers are waiting for a team
+// (Queue) and which agents are mid-ring (Reservations). Both have a Redis
+// backend — the production path, shared across orchestrators that serve the same
+// agents and durable across an orchestrator restart — and an in-memory backend
+// used only when Redis isn't configured (host dev / unit tests).
+//
+// Why shared state matters: agents are a global resource. With >1 orchestrator
+// (1:1 with FreeSWITCH), a call on unit A and a call on unit B can both want the
+// same agent; only a shared reservation prevents a cross-unit double-ring, and a
+// shared queue gives one global priority-then-FIFO line per team.
+
+// ─── Reservations ───────────────────────────────────────────────────
+
+// Reservations marks an agent as "being rung right now". Presence only flips to
+// on_call when the agent ANSWERS, so without this two callers dequeuing at once
+// both see the same idle agent as free and double-ring it.
+type Reservations interface {
+	reserve(ctx context.Context, key string, ttl time.Duration)
+	release(ctx context.Context, key string)
+	reserved(ctx context.Context, key string) bool
 }
 
-func newReservations() *reservations { return &reservations{m: map[string]time.Time{}} }
+// memReservations is the in-memory fallback (one orchestrator, no Redis).
+type memReservations struct {
+	mu sync.Mutex
+	m  map[string]time.Time // key -> expiry
+}
 
-func (r *reservations) reserve(key string, ttl time.Duration) {
+func newMemReservations() *memReservations { return &memReservations{m: map[string]time.Time{}} }
+
+func (r *memReservations) reserve(_ context.Context, key string, ttl time.Duration) {
 	r.mu.Lock()
 	r.m[key] = time.Now().Add(ttl)
 	r.mu.Unlock()
 }
 
-func (r *reservations) release(key string) {
+func (r *memReservations) release(_ context.Context, key string) {
 	r.mu.Lock()
 	delete(r.m, key)
 	r.mu.Unlock()
 }
 
-func (r *reservations) reserved(key string) bool {
+func (r *memReservations) reserved(_ context.Context, key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	exp, ok := r.m[key]
@@ -46,93 +66,140 @@ func (r *reservations) reserved(key string) bool {
 	return true
 }
 
-// callQueue is the in-process, per-team waiting line backing the Transfer
-// node's queue overflow. Each team has two FIFO tiers — priority and normal —
-// drained priority-first: who is calling decides the tier (Stage 3), both
-// strictly FIFO. Stage 2 uses the normal tier only.
-//
-// Scope is one orchestrator per FreeSWITCH (same as the masking pool), so an
-// in-memory registry is the right fit; a restart drops waiting callers, which
-// is acceptable and documented. A waiter holds a monotonic ticket id; it is at
-// the head of line when it is the front of the priority tier (if any priority
-// waiters exist) or otherwise the front of the normal tier.
-type callQueue struct {
+// redisReservations is the production backend: a TTL'd Redis key per agent,
+// visible to every orchestrator sharing the cache. Redis handles expiry.
+type redisReservations struct{ c *cache.Cache }
+
+func newRedisReservations(c *cache.Cache) *redisReservations { return &redisReservations{c: c} }
+
+func resvRedisKey(key string) string { return "tring:resv:" + key }
+
+func (r *redisReservations) reserve(ctx context.Context, key string, ttl time.Duration) {
+	r.c.Set(ctx, resvRedisKey(key), []byte("1"), ttl)
+}
+func (r *redisReservations) release(ctx context.Context, key string) {
+	_ = r.c.Delete(ctx, resvRedisKey(key))
+}
+func (r *redisReservations) reserved(ctx context.Context, key string) bool {
+	_, ok := r.c.Get(ctx, resvRedisKey(key))
+	return ok
+}
+
+// ─── Queue ──────────────────────────────────────────────────────────
+
+// Queue is a per-team waiting line with two FIFO tiers (priority, normal),
+// drained priority-first. A waiter holds a unique ticket; it is head-of-line
+// when it is the front of the priority tier (if any priority waiters exist) or
+// otherwise the front of the normal tier — the only waiter allowed to claim a
+// freed agent, keeping dispatch strictly priority-then-FIFO.
+type Queue interface {
+	enqueue(ctx context.Context, key string, priority bool) string
+	isHead(ctx context.Context, key, ticket string) bool
+	remove(ctx context.Context, key, ticket string)
+	depth(ctx context.Context, key string) int
+}
+
+// memQueue is the in-memory fallback.
+type memQueue struct {
 	mu       sync.Mutex
-	seq      int64
-	priority map[string][]int64
-	normal   map[string][]int64
+	priority map[string][]string
+	normal   map[string][]string
 }
 
-func newCallQueue() *callQueue {
-	return &callQueue{priority: map[string][]int64{}, normal: map[string][]int64{}}
+func newMemQueue() *memQueue {
+	return &memQueue{priority: map[string][]string{}, normal: map[string][]string{}}
 }
 
-// depth returns how many callers are currently waiting for a team (both tiers).
-func (c *callQueue) depth(key string) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.priority[key]) + len(c.normal[key])
-}
-
-// enqueue appends a waiter to the team's priority or normal tier and returns
-// its ticket id.
-func (c *callQueue) enqueue(key string, priority bool) int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.seq++
-	id := c.seq
+func (q *memQueue) enqueue(_ context.Context, key string, priority bool) string {
+	t := uuid.NewString()
+	q.mu.Lock()
 	if priority {
-		c.priority[key] = append(c.priority[key], id)
+		q.priority[key] = append(q.priority[key], t)
 	} else {
-		c.normal[key] = append(c.normal[key], id)
+		q.normal[key] = append(q.normal[key], t)
 	}
-	return id
+	q.mu.Unlock()
+	return t
 }
 
-// isHead reports whether id is first in line for the team: the front of the
-// priority tier when any priority waiters exist, else the front of the normal
-// tier. The head is the only waiter allowed to claim a freed agent, which keeps
-// the dispatch order strictly priority-then-FIFO.
-func (c *callQueue) isHead(key string, id int64) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if p := c.priority[key]; len(p) > 0 {
-		return p[0] == id
+func (q *memQueue) isHead(_ context.Context, key, ticket string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if p := q.priority[key]; len(p) > 0 {
+		return p[0] == ticket
 	}
-	if n := c.normal[key]; len(n) > 0 {
-		return n[0] == id
+	if n := q.normal[key]; len(n) > 0 {
+		return n[0] == ticket
 	}
 	return false
 }
 
-// remove drops a waiter from whichever tier holds it. Idempotent — removing a
-// ticket that is no longer queued is a no-op, so callers can defer it safely.
-func (c *callQueue) remove(key string, id int64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if q := removeID(c.normal[key], id); q != nil {
-		c.normal[key] = q
-	} else {
-		delete(c.normal, key)
+func (q *memQueue) remove(_ context.Context, key, ticket string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.priority[key] = removeTicket(q.priority[key], ticket); len(q.priority[key]) == 0 {
+		delete(q.priority, key)
 	}
-	if q := removeID(c.priority[key], id); q != nil {
-		c.priority[key] = q
-	} else {
-		delete(c.priority, key)
+	if q.normal[key] = removeTicket(q.normal[key], ticket); len(q.normal[key]) == 0 {
+		delete(q.normal, key)
 	}
 }
 
-// removeID returns q without id, or nil when the result is empty (so the caller
-// can drop the map entry). Returns q unchanged when id isn't present.
-func removeID(q []int64, id int64) []int64 {
+func (q *memQueue) depth(_ context.Context, key string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.priority[key]) + len(q.normal[key])
+}
+
+func removeTicket(q []string, t string) []string {
 	for i, x := range q {
-		if x == id {
-			q = append(q[:i], q[i+1:]...)
-			break
+		if x == t {
+			return append(q[:i], q[i+1:]...)
 		}
 	}
-	if len(q) == 0 {
-		return nil
-	}
 	return q
+}
+
+// redisQueue is the production backend: two Redis lists per team (priority,
+// normal). RPUSH appends to the tail; the head (LINDEX 0) is the oldest waiter,
+// so the lists are the FIFO and the ticket just identifies a waiter for
+// isHead/remove. One global queue per team across all orchestrators.
+type redisQueue struct{ c *cache.Cache }
+
+func newRedisQueue(c *cache.Cache) *redisQueue { return &redisQueue{c: c} }
+
+// queueTTL is a safety net so a fully-abandoned queue key self-expires; it's
+// refreshed on every enqueue. Far longer than any real wait.
+const queueTTL = time.Hour
+
+func queuePKey(key string) string { return "tring:queue:p:" + key }
+func queueNKey(key string) string { return "tring:queue:n:" + key }
+
+func (q *redisQueue) enqueue(ctx context.Context, key string, priority bool) string {
+	t := uuid.NewString()
+	if priority {
+		q.c.RPush(ctx, queuePKey(key), t, queueTTL)
+	} else {
+		q.c.RPush(ctx, queueNKey(key), t, queueTTL)
+	}
+	return t
+}
+
+func (q *redisQueue) isHead(ctx context.Context, key, ticket string) bool {
+	if h, ok := q.c.LHead(ctx, queuePKey(key)); ok {
+		return h == ticket // priority tier drains first
+	}
+	if h, ok := q.c.LHead(ctx, queueNKey(key)); ok {
+		return h == ticket
+	}
+	return false
+}
+
+func (q *redisQueue) remove(ctx context.Context, key, ticket string) {
+	q.c.LRem(ctx, queuePKey(key), ticket)
+	q.c.LRem(ctx, queueNKey(key), ticket)
+}
+
+func (q *redisQueue) depth(ctx context.Context, key string) int {
+	return q.c.LLen(ctx, queuePKey(key)) + q.c.LLen(ctx, queueNKey(key))
 }

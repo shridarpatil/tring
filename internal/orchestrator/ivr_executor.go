@@ -131,12 +131,14 @@ type Executor struct {
 	rr   map[string]int
 
 	// queue holds callers waiting for a team whose members are all busy
-	// (Transfer-node queue overflow). One per orchestrator; see callQueue.
-	queue *callQueue
+	// (Transfer-node queue overflow). Redis-backed (shared across orchestrators)
+	// when a cache is configured, else in-memory. See queue.go.
+	queue Queue
 
-	// reserve marks agents currently being rung so two concurrent dequeues don't
-	// both pick the same idle agent (presence flips to on_call only on answer).
-	reserve *reservations
+	// reserve marks agents currently being rung so two concurrent dequeues —
+	// within or, when Redis-backed, across orchestrators — don't both pick the
+	// same idle agent (presence flips to on_call only on answer).
+	reserve Reservations
 
 	// HTTP is the client the http_callback node uses (per-request timeout comes
 	// from the node config). nil → http.DefaultClient; tests inject a fake.
@@ -158,7 +160,9 @@ func (e *Executor) httpClient() *http.Client {
 }
 
 func NewExecutor(d *db.DB) *Executor {
-	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default(), rr: map[string]int{}, queue: newCallQueue(), reserve: newReservations()}
+	// Default to the in-memory backends; WithCache swaps in the Redis-backed
+	// (shared, cross-orchestrator) ones when a cache is configured.
+	return &Executor{DB: d, Q: queries.MustLoad(), Logger: slog.Default(), rr: map[string]int{}, queue: newMemQueue(), reserve: newMemReservations()}
 }
 
 // WithESL gives the executor the ESL credentials it needs to open a short-lived
@@ -180,10 +184,16 @@ func (e *Executor) WithLogger(l *slog.Logger) *Executor {
 	return e
 }
 
-// WithCache attaches a Redis cache for flow definitions and returns the
-// executor for chaining. Passing a nil cache leaves caching disabled.
+// WithCache attaches a Redis cache and returns the executor for chaining. When a
+// cache is configured it also swaps the queue + reservations to their Redis
+// backends, so they're shared across orchestrators serving the same agents and
+// survive an orchestrator restart. A nil cache leaves the in-memory backends.
 func (e *Executor) WithCache(c *cache.Cache) *Executor {
 	e.Cache = c
+	if c != nil {
+		e.queue = newRedisQueue(c)
+		e.reserve = newRedisReservations(c)
+	}
 	return e
 }
 
@@ -762,7 +772,7 @@ func (e *Executor) publishDepth(ctx context.Context, tenantID uuid.UUID, team st
 	if e.Cache == nil {
 		return
 	}
-	n := e.queue.depth(queueKey(tenantID, team))
+	n := e.queue.depth(ctx, queueKey(tenantID, team))
 	e.Cache.Set(ctx, QueueDepthKey(tenantID, team), []byte(strconv.Itoa(n)), queueDepthTTL)
 }
 
@@ -809,10 +819,12 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 	qkey := queueKey(st.tenantID, team)
 	// Stage 3 sets priority from the caller's backend lookup; Stage 2 is all-normal.
 	priority := st.queuePriority
-	waiter := e.queue.enqueue(qkey, priority)
+	waiter := e.queue.enqueue(ctx, qkey, priority)
 	defer func() {
-		e.queue.remove(qkey, waiter)
-		e.publishDepth(context.Background(), st.tenantID, team) // reflect this caller leaving
+		// Background ctx: this runs on exit, when the call ctx may already be done.
+		bg := context.Background()
+		e.queue.remove(bg, qkey, waiter)
+		e.publishDepth(bg, st.tenantID, team) // reflect this caller leaving
 	}()
 
 	// Surface the resolved hold-music source so a silent/unreadable MOH is
@@ -832,8 +844,8 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 		// Dequeue: a member is free AND we're at the head of line. Nothing is
 		// playing here (the hold music below has returned), so we bridge directly.
 		avail := e.filterAvailable(ctx, st.tenantID, members)
-		if len(avail) > 0 && e.queue.isHead(qkey, waiter) {
-			e.queue.remove(qkey, waiter)           // release our spot so the next waiter can claim too
+		if len(avail) > 0 && e.queue.isHead(ctx, qkey, waiter) {
+			e.queue.remove(ctx, qkey, waiter)      // release our spot so the next waiter can claim too
 			e.publishDepth(ctx, st.tenantID, team) // dashboard: one fewer waiting
 			// The continuous hold music was just broken by the side connection — let
 			// the channel settle before bridging so FreeSWITCH doesn't abandon the
@@ -854,7 +866,7 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 			// flips to on_call only on answer). Released after the ring so a
 			// fall-through frees them immediately, while an answered agent stays
 			// excluded via presence on_call.
-			release := e.reserveAgents(st.tenantID, avail, time.Duration(cfg.ringSeconds+5)*time.Second)
+			release := e.reserveAgents(ctx, st.tenantID, avail, time.Duration(cfg.ringSeconds+5)*time.Second)
 			st.log.Info("ivr transfer bridging team", "team", team, "strategy", cfg.strategy, "targets", len(avail))
 			_, bridgeErr := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: dial, Sync: true})
 			release()
@@ -867,7 +879,7 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 			}
 			// Nobody answered (raced busy / declined) — rejoin the line and wait.
 			st.log.Info("ivr transfer team bridge fell through, requeueing", "team", team)
-			waiter = e.queue.enqueue(qkey, priority)
+			waiter = e.queue.enqueue(ctx, qkey, priority)
 			continue
 		}
 
@@ -891,7 +903,7 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 // and we're head, or the deadline passed) or it ends on its own (caller hung up
 // / one-shot file finished). The caller's loop then re-evaluates and, after a
 // settle delay, bridges.
-func (e *Executor) holdWithMusic(ctx context.Context, conn *eslgo.Conn, st *callState, team, moh string, members []string, qkey string, waiter int64, deadline time.Time) {
+func (e *Executor) holdWithMusic(ctx context.Context, conn *eslgo.Conn, st *callState, team, moh string, members []string, qkey, waiter string, deadline time.Time) {
 	watchCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	go func() {
@@ -903,7 +915,7 @@ func (e *Executor) holdWithMusic(ctx context.Context, conn *eslgo.Conn, st *call
 				return
 			case <-t.C:
 				e.publishDepth(watchCtx, st.tenantID, team)
-				ready := len(e.filterAvailable(watchCtx, st.tenantID, members)) > 0 && e.queue.isHead(qkey, waiter)
+				ready := len(e.filterAvailable(watchCtx, st.tenantID, members)) > 0 && e.queue.isHead(watchCtx, qkey, waiter)
 				if ready || time.Now().After(deadline) {
 					st.log.Info("ivr queue: breaking hold music", "team", team, "ready", ready)
 					e.breakChannel(st.uuid)
@@ -1220,7 +1232,7 @@ func (e *Executor) filterAvailable(ctx context.Context, tenantID uuid.UUID, sips
 	for _, sip := range sips {
 		// Skip agents another caller is already ringing (reserved) — presence
 		// won't show them busy until they answer, so this prevents a double-pick.
-		if e.reserve.reserved(resKey(tenantID, sip)) {
+		if e.reserve.reserved(ctx, resKey(tenantID, sip)) {
 			continue
 		}
 		if pres.Available(ctx, tenantID.String(), sip) {
@@ -1239,16 +1251,20 @@ func (e *Executor) buildAgentLegs(sips []string, domain, tenant, label string) [
 	return legs
 }
 
-// reserveAgents marks the given agents as being rung (so a concurrent dequeue
-// queues instead of double-picking them) and returns a cleanup that releases
-// them — call it once the ring attempt is done.
-func (e *Executor) reserveAgents(tenantID uuid.UUID, sips []string, ttl time.Duration) func() {
+// reserveAgents marks the given agents as being rung (so a concurrent dequeue —
+// within or, when Redis-backed, across orchestrators — queues instead of
+// double-picking them) and returns a cleanup that releases them. The release
+// uses a fresh background context so it still runs after the (Sync) bridge, when
+// the call context may already be done; the TTL is the backstop if it doesn't.
+func (e *Executor) reserveAgents(ctx context.Context, tenantID uuid.UUID, sips []string, ttl time.Duration) func() {
 	for _, sip := range sips {
-		e.reserve.reserve(resKey(tenantID, sip), ttl)
+		e.reserve.reserve(ctx, resKey(tenantID, sip), ttl)
 	}
 	return func() {
+		rctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
 		for _, sip := range sips {
-			e.reserve.release(resKey(tenantID, sip))
+			e.reserve.release(rctx, resKey(tenantID, sip))
 		}
 	}
 }
