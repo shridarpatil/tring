@@ -10,6 +10,8 @@ export interface Tenant {
   hold_music?: string;
   // Record a call once the agent and client connect.
   record_calls?: boolean;
+  // Max call duration in seconds (also the ephemeral TURN credential lifetime).
+  max_call_seconds?: number;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.

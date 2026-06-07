@@ -112,6 +112,7 @@ func main() {
 			TURNURL:          k.String("turn_url"),
 			TURNUsername:     k.String("turn_username"),
 			TURNPassword:     k.String("turn_password"),
+			TURNSecret:       k.String("turn_secret"),
 			AgentTransport:   k.String("agent_transport"),
 			AgentGateway:     k.String("agent_gateway"),
 			GatewayPublicURL: k.String("gateway_public_url"),

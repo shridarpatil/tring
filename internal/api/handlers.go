@@ -25,7 +25,7 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// the auth context (hold music, record toggle) so the Settings page sees the
 	// current selection.
 	t := *tenantFromCtx(r.Context())
-	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls)
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -373,6 +373,9 @@ type patchTenantRequest struct {
 	HoldMusic *string `json:"hold_music,omitempty"`
 	// RecordCalls toggles call recording. nil = leave unchanged.
 	RecordCalls *bool `json:"record_calls,omitempty"`
+	// MaxCallSeconds caps call duration (and sets the TURN credential lifetime).
+	// nil = leave unchanged.
+	MaxCallSeconds *int `json:"max_call_seconds,omitempty"`
 }
 
 // handlePatchMyTenant updates tenant-level settings. Today: outbound
@@ -384,8 +387,12 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music or record_calls is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls or max_call_seconds is required")
+		return
+	}
+	if req.MaxCallSeconds != nil && (*req.MaxCallSeconds < 60 || *req.MaxCallSeconds > 86400) {
+		writeError(w, http.StatusBadRequest, "max_call_seconds must be between 60 and 86400 (1 min–24 h)")
 		return
 	}
 	if req.OutboundStrategy != nil {
@@ -403,8 +410,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
-		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls)
+		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return

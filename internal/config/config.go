@@ -39,8 +39,16 @@ var defaults = map[string]any{
 	// unusual topologies. TURN (TRING_TURN_*) is the real fallback for clients
 	// on UDP-blocking networks.
 	"stun_url": "",
-	"api_addr": ":8085",
-	"ivr_addr": ":8086",
+	// TURN auth. With turn_secret set, the API mints EPHEMERAL coturn REST-API
+	// credentials per call-token request (HMAC over an expiry, secret stays
+	// server-side) instead of handing the static turn_username/turn_password to
+	// clients — important once creds ship inside mobile app binaries. coturn must
+	// run `use-auth-secret` + `static-auth-secret=<turn_secret>`. The credential
+	// LIFETIME is the tenant's max_call_seconds setting (so it covers the whole
+	// call), not a global value — see internal/api iceServersFor / turnTTLFor.
+	"turn_secret": "",
+	"api_addr":    ":8085",
+	"ivr_addr":    ":8086",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).

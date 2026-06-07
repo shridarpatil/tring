@@ -89,7 +89,7 @@ func (s *Server) mintGatewayCall(w http.ResponseWriter, r *http.Request, tenantI
 		GatewayURL: s.gatewayPublicURL,
 		FlowID:     flowID.String(),
 		Token:      token,
-		ICEServers: s.iceServers,
+		ICEServers: s.iceServersFor(clientRef, s.turnTTLFor(r.Context(), tenantID)),
 	})
 }
 

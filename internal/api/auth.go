@@ -28,6 +28,9 @@ type Tenant struct {
 	// RecordCalls toggles recording a call once the agent and client connect.
 	// Like HoldMusic, populated only by the tenant settings handlers.
 	RecordCalls bool `json:"record_calls"`
+	// MaxCallSeconds is the tenant's max call duration (also the ephemeral TURN
+	// credential lifetime). Populated only by the tenant settings handlers.
+	MaxCallSeconds int `json:"max_call_seconds"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API

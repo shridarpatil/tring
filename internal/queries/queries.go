@@ -51,11 +51,12 @@ type Queries struct {
 	ListNumbers              string `query:"list-numbers"`
 
 	// ---- api: tenants ----
-	UpdateTenant         string `query:"update-tenant"`
-	GetTenantSipDomain   string `query:"get-tenant-sip-domain"`
-	GetTenantHoldMusic   string `query:"get-tenant-hold-music"`
-	GetTenantSettings    string `query:"get-tenant-settings"`
-	GetTenantRecordCalls string `query:"get-tenant-record-calls"`
+	UpdateTenant            string `query:"update-tenant"`
+	GetTenantSipDomain      string `query:"get-tenant-sip-domain"`
+	GetTenantHoldMusic      string `query:"get-tenant-hold-music"`
+	GetTenantSettings       string `query:"get-tenant-settings"`
+	GetTenantRecordCalls    string `query:"get-tenant-record-calls"`
+	GetTenantMaxCallSeconds string `query:"get-tenant-max-call-seconds"`
 
 	// ---- api: audio library (sound assets) ----
 	CreateAudio string `query:"create-audio"`

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -44,6 +45,11 @@ type Config struct {
 	TURNURL      string
 	TURNUsername string
 	TURNPassword string
+	// TURNSecret, when set, switches TURN auth to ephemeral coturn REST-API
+	// credentials minted per request (HMAC over an expiry; the secret never
+	// reaches clients) instead of the static TURNUsername/TURNPassword. The
+	// credential lifetime is the tenant's max_call_seconds (see turnTTLFor).
+	TURNSecret string
 
 	// AgentTransport routes the agent's own call leg: "sip" (agent registers
 	// to FS directly) or "gateway" (leg routed to the media gateway as a SIP
@@ -108,10 +114,12 @@ type Server struct {
 	// endpoint streams it from here instead of the local dir. nil = local only.
 	blob *blobstore.Store
 
-	// Resolved iceServers built once at startup from STUN/TURN config and
-	// handed to the guest mint. Empty slice == "no ICE servers configured",
-	// which is valid (works on LANs).
+	// iceServers holds the STATIC ICE entries (STUN, and static TURN as a
+	// fallback when no turnSecret is set), built once at startup. When turnSecret
+	// is set, an ephemeral TURN entry is appended per request — see iceServersFor.
 	iceServers []iceServer
+	turnURL    string // for per-request ephemeral TURN entries
+	turnSecret string // empty → static TURN (legacy); set → ephemeral
 
 	// Round-robin trunk selection state. Lazily initialised in
 	// nextRoundRobin (see trunks.go).
@@ -160,21 +168,24 @@ func NewServer(cfg Config) *Server {
 		recordingsDir:    cfg.RecordingsDir,
 		blob:             cfg.Blob,
 		iceServers:       buildICEServers(cfg),
+		turnURL:          cfg.TURNURL,
+		turnSecret:       cfg.TURNSecret,
 		simManager:       orchestrator.NewSimManager(),
 		log:              logger,
 	}
 }
 
-// buildICEServers turns the STUN/TURN env config into the iceServers
-// array the SDK passes to RTCPeerConnection. Order matters: STUN first
-// so the browser tries direct candidates before falling back to TURN
-// relay (which costs the operator bandwidth).
+// buildICEServers turns the STUN/TURN env config into the STATIC iceServers
+// array. Order matters: STUN first so the client tries direct candidates before
+// falling back to TURN relay (which costs the operator bandwidth). Static TURN
+// is included ONLY as the legacy fallback — when a TURN URL is set but no
+// turn_secret; with a secret, TURN is minted per request (iceServersFor).
 func buildICEServers(cfg Config) []iceServer {
 	out := []iceServer{}
 	if cfg.STUNURL != "" {
 		out = append(out, iceServer{URLs: cfg.STUNURL})
 	}
-	if cfg.TURNURL != "" {
+	if cfg.TURNURL != "" && cfg.TURNSecret == "" {
 		out = append(out, iceServer{
 			URLs:       cfg.TURNURL,
 			Username:   cfg.TURNUsername,
@@ -182,6 +193,47 @@ func buildICEServers(cfg Config) []iceServer {
 		})
 	}
 	return out
+}
+
+// iceServersFor returns the ICE list to hand a client: the static STUN (and
+// legacy static TURN) entries, plus — when turn_secret is configured — a freshly
+// minted EPHEMERAL TURN entry valid for ttl. userid (a client_ref or agent id)
+// is folded into the TURN username for traceability. Generated per request so
+// each client gets its own short-lived, non-reusable credential. ttl should be
+// the tenant's max call duration plus a setup buffer (see turnTTLFor).
+func (s *Server) iceServersFor(userid string, ttl time.Duration) []iceServer {
+	if s.turnSecret == "" || s.turnURL == "" {
+		return s.iceServers
+	}
+	user, cred := turnCredential(s.turnSecret, userid, ttl)
+	out := make([]iceServer, 0, len(s.iceServers)+1)
+	out = append(out, s.iceServers...)
+	out = append(out, iceServer{URLs: s.turnURL, Username: user, Credential: cred})
+	return out
+}
+
+// turnSetupBuffer pads the TURN credential lifetime beyond the tenant's max call
+// duration to cover the mint→call-start gap (and clock skew), so a credential
+// minted at "talk to human" comfortably outlives a full-length call.
+const turnSetupBuffer = 5 * time.Minute
+
+// defaultMaxCallSeconds is the fallback TURN-credential lifetime basis when a
+// tenant's max_call_seconds is unreadable (4h) — generous enough not to cut a
+// real call short.
+const defaultMaxCallSeconds = 14400
+
+// turnTTLFor returns the ephemeral-TURN credential lifetime for a tenant: its
+// configured max_call_seconds + the setup buffer. Returns 0 (and skips the DB
+// read) when ephemeral TURN is off, so a static/no-TURN deploy pays nothing.
+func (s *Server) turnTTLFor(ctx context.Context, tenantID uuid.UUID) time.Duration {
+	if s.turnSecret == "" {
+		return 0
+	}
+	secs := defaultMaxCallSeconds
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetTenantMaxCallSeconds, tenantID).Scan(&secs); err != nil || secs <= 0 {
+		secs = defaultMaxCallSeconds
+	}
+	return time.Duration(secs)*time.Second + turnSetupBuffer
 }
 
 func (s *Server) Router() http.Handler {
