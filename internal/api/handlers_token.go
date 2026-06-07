@@ -57,6 +57,6 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 		Token:      tok,
 		ExpiresAt:  exp,
 		GatewayURL: s.gatewayPublicURL,
-		ICEServers: s.iceServers,
+		ICEServers: s.iceServersFor(sipUsername, s.turnTTLFor(r.Context(), t.ID)),
 	})
 }

@@ -17,6 +17,8 @@ const strategies = ["failover", "round_robin", "manual", "load_based"];
 const holdMusic = ref("");
 // Record a call once the agent and client connect.
 const recordCalls = ref(true);
+// Max call duration in MINUTES (UI); stored as seconds on the tenant.
+const maxCallMinutes = ref(240);
 
 // ─── Guest web-calling config (the tenant's default guest flow) ───────
 const guest = ref<GuestConfig | null>(null);
@@ -35,6 +37,7 @@ async function load() {
     strategy.value = tenant.value.outbound_strategy || "failover";
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
+    maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
   } catch (e) {
     error.value = errMessage(e, "failed to load");
   } finally {
@@ -62,9 +65,11 @@ async function save() {
       outbound_strategy: strategy.value,
       hold_music: holdMusic.value,
       record_calls: recordCalls.value,
+      max_call_seconds: Math.round(maxCallMinutes.value * 60),
     });
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
+    maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
     saved.value = true;
   } catch (e) {
     error.value = errMessage(e, "save failed");
@@ -144,6 +149,21 @@ onMounted(load);
         <p class="text-xs text-gray-400 mt-1">
           Record each call once the agent and caller connect. Recordings appear in the
           <strong>Calls</strong> log. Make sure recording is permitted and disclosed where you operate.
+        </p>
+      </div>
+
+      <div class="block">
+        <span class="text-sm font-medium text-gray-700">Max call duration (minutes)</span>
+        <input
+          v-model.number="maxCallMinutes"
+          type="number"
+          min="1"
+          max="1440"
+          class="mt-1 w-40 rounded-md border border-gray-300 px-3 py-2 text-sm"
+        />
+        <p class="text-xs text-gray-400 mt-1">
+          Longest a call may last. Also sets the TURN relay credential lifetime, so it must
+          cover your longest call. 1–1440 min.
         </p>
       </div>
 
