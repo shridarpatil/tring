@@ -103,6 +103,59 @@ func (c *Cache) Delete(ctx context.Context, key string) error {
 	return c.rdb.Del(ctx, key).Err()
 }
 
+// ─── List ops (FIFO queues) ─────────────────────────────────────────
+//
+// These back the orchestrator's cross-process call queue. Still generic Redis
+// primitives (no domain types). Best-effort like the K/V reads/writes: a nil
+// cache or a Redis error degrades to "empty list" rather than failing — the
+// caller (a queued caller's poll loop) then just keeps waiting.
+
+// RPush appends val to the list at key (FIFO tail) and refreshes the list's TTL
+// so a fully-abandoned queue self-expires. Best-effort.
+func (c *Cache) RPush(ctx context.Context, key, val string, ttl time.Duration) {
+	if c == nil {
+		return
+	}
+	pipe := c.rdb.TxPipeline()
+	pipe.RPush(ctx, key, val)
+	pipe.Expire(ctx, key, ttl)
+	_, _ = pipe.Exec(ctx)
+}
+
+// LHead returns the first (oldest) element of the list at key — the head of
+// line. ok=false on a nil cache, empty list, or Redis error.
+func (c *Cache) LHead(ctx context.Context, key string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	s, err := c.rdb.LIndex(ctx, key, 0).Result()
+	if err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// LRem removes all occurrences of val from the list at key (tickets are unique,
+// so this drops exactly the one waiter). Best-effort.
+func (c *Cache) LRem(ctx context.Context, key, val string) {
+	if c == nil {
+		return
+	}
+	_ = c.rdb.LRem(ctx, key, 0, val).Err()
+}
+
+// LLen returns the list length (0 on a nil cache, miss, or error).
+func (c *Cache) LLen(ctx context.Context, key string) int {
+	if c == nil {
+		return 0
+	}
+	n, err := c.rdb.LLen(ctx, key).Result()
+	if err != nil {
+		return 0
+	}
+	return int(n)
+}
+
 // Close releases the Redis connection pool. Safe on a nil cache.
 func (c *Cache) Close() error {
 	if c == nil {

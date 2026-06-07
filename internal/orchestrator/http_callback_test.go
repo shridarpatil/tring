@@ -24,7 +24,7 @@ func TestRunHTTPCallback2xxStashesVars(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: newCallQueue(), rr: map[string]int{}}
+	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: newMemQueue(), rr: map[string]int{}}
 	st := &callState{
 		uuid:     "u1",
 		tenantID: uuid.New(),
@@ -65,7 +65,7 @@ func TestRunHTTPCallbackNon2xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: newCallQueue(), rr: map[string]int{}}
+	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: newMemQueue(), rr: map[string]int{}}
 	st := &callState{uuid: "u1", tenantID: uuid.New(), vars: map[string]string{}, log: slog.Default()}
 	node := &ivrNode{ID: "h", Type: nodeHTTPCallback, Config: map[string]interface{}{"url": srv.URL}}
 
