@@ -263,18 +263,14 @@ func stepFor(node *ivrNode, in *SimInput, dtmfIdx *int, vars map[string]string) 
 
 	case nodeTiming:
 		step.Action = "branch"
-		// Use the simulator-supplied clock so tests are deterministic.
-		hour := in.Now.Hour()
-		// Simplified: 9–18 local time = in hours, else closed. Phase 3
-		// will add per-tenant schedules; mirror that logic here when it
-		// lands.
-		if hour >= 9 && hour < 18 {
-			step.Outcome = "in_hours"
-			step.Detail = fmt.Sprintf("now=%s → open", in.Now.Format(time.RFC3339))
-		} else {
-			step.Outcome = "out_of_hours"
-			step.Detail = fmt.Sprintf("now=%s → closed", in.Now.Format(time.RFC3339))
+		// Evaluate the node's per-day schedule against the simulator clock so the
+		// test panel matches a live call (see evalTimingOutcome).
+		step.Outcome = evalTimingOutcome(node.Config, in.Now)
+		open := "open"
+		if step.Outcome == "out_of_hours" {
+			open = "closed"
 		}
+		step.Detail = fmt.Sprintf("%s → %s", in.Now.Format("Mon 15:04"), open)
 		return step, step.Outcome
 
 	case nodeHangup:

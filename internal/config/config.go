@@ -15,6 +15,13 @@ package config
 import (
 	"strings"
 
+	// Embed the IANA timezone database into every binary. The Go images run on
+	// distroless/static, which has no /usr/share/zoneinfo, so without this the
+	// TZ env var can't resolve (time.Local silently falls back to UTC) — and the
+	// IVR Timing node would evaluate business hours in the wrong zone. Imported
+	// here because all three binaries import this package.
+	_ "time/tzdata"
+
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"
 	"github.com/knadh/koanf/v2"

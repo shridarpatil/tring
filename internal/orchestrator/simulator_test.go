@@ -165,7 +165,7 @@ const timingFlow = `{
   "entry_node": "start",
   "nodes": [
     {"id":"start","type":"start","config":{}},
-    {"id":"t","type":"timing","config":{}},
+    {"id":"t","type":"timing","config":{"schedule":[{"day":"friday","enabled":true,"start_time":"09:00","end_time":"18:00"}]}},
     {"id":"open","type":"hangup","config":{}},
     {"id":"closed","type":"hangup","config":{}}
   ],
