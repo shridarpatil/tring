@@ -1,12 +1,20 @@
-name: Tests
+name: CI
 
-# Two-stage test pipeline. The fast `unit` job runs on every push + PR and
-# covers everything that doesn't need FreeSWITCH: pure-function tests, JWT,
-# masking, webhook signing, plus DB-backed handler/trunks tests against a
-# Postgres service container. The slower `integration` job boots the full
-# docker-compose stack and runs the FreeSWITCH-tagged tests against a real
-# ESL endpoint. PRs don't get the integration job (gating on FS boot would
-# wedge unrelated PRs); it runs only on main + manual dispatch.
+# Full CI pipeline: test → build/push images → release. Image and release jobs
+# all `needs: [unit, integration]`, so nothing ships unless the tests are green.
+#
+# Test stage: the fast `unit` job runs on every push + PR and covers everything
+# that doesn't need FreeSWITCH: pure-function tests, JWT, masking, webhook
+# signing, plus DB-backed handler/trunks tests against a Postgres service
+# container. The slower `integration` job boots the full docker-compose stack
+# and runs the FreeSWITCH-tagged tests against a real ESL endpoint. PRs don't get
+# the integration job (gating on FS boot would wedge unrelated PRs); it runs only
+# on main + manual dispatch.
+#
+# Build/release stage (gated on the tests, push events only):
+#   - images : all four images -> :develop on main, :<tag> on a v* tag, to
+#              GHCR + Docker Hub.
+#   - release: GoReleaser on a v* tag -> binaries + GitHub Release.
 
 on:
   push:
