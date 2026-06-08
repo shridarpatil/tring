@@ -244,6 +244,7 @@ export class AgentGateway {
 class GatewayCall implements AgentCall {
   private pc: RTCPeerConnection | null = null;
   private mic: MediaStream | null = null;
+  private sender: RTCRtpSender | null = null;
   private audioEl: HTMLAudioElement | null = null;
   private dtmf: RTCDTMFSender | null = null;
   private stateCb: ((s: AgentCallState) => void) | null = null;
@@ -288,8 +289,8 @@ class GatewayCall implements AgentCall {
     this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     const track = this.mic.getAudioTracks()[0];
     if (!track) throw new Error("no microphone track available");
-    const sender = pc.addTrack(track, this.mic);
-    this.dtmf = sender.dtmf ?? null;
+    this.sender = pc.addTrack(track, this.mic);
+    this.dtmf = this.sender.dtmf ?? null;
 
     const offer = await pc.createOffer({ offerToReceiveAudio: true });
     await pc.setLocalDescription(offer);
@@ -321,6 +322,10 @@ class GatewayCall implements AgentCall {
 
   setMuted(muted: boolean): void {
     this._muted = muted;
+    // Mute the ACTUAL sent track (the sender's), which is authoritative — the
+    // peer then receives silence. Also flip the captured stream's tracks (the
+    // same object) belt-and-suspenders.
+    if (this.sender?.track) this.sender.track.enabled = !muted;
     this.mic?.getAudioTracks().forEach((t) => (t.enabled = !muted));
   }
 
@@ -340,6 +345,7 @@ class GatewayCall implements AgentCall {
   teardown(): void {
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
+    this.sender = null;
     this.dtmf = null;
     if (this.pc) {
       this.pc.onconnectionstatechange = null;

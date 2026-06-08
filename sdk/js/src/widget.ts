@@ -33,6 +33,13 @@ export interface WidgetOpts {
 
 const PANEL_ID = "tring-call-panel";
 
+// Inline SVG icons for the call controls (no asset to ship).
+const ICON_MIC = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
+const ICON_MIC_OFF = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zM15 11.16V5a3 3 0 0 0-6 0v.18l6 5.98zM4.27 3 3 4.27l6 6V11a3 3 0 0 0 3 3c.22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52a5 5 0 0 1-5-5H5a7 7 0 0 0 6 6.92V21h2v-3.08c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>`;
+const ICON_HOLD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>`;
+const ICON_RESUME = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+const ICON_PHONE = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
+
 export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   // The token endpoint can also carry the gateway URL + ICE servers (the API's
   // /v1/agents/{id}/token returns them), so the <script> tag needs only
@@ -204,9 +211,9 @@ function createPanel(controlUrl?: string): Panel {
       <button type="button" class="tring-decline">Decline</button>
     </div>
     <div class="tring-panel-row tring-panel-actions">
-      <button type="button" class="tring-mute">Mute</button>
-      <button type="button" class="tring-hold">Hold</button>
-      <button type="button" class="tring-hangup">Hang up</button>
+      <button type="button" class="tring-ctl tring-mute" title="Mute" aria-label="Mute">${ICON_MIC}</button>
+      <button type="button" class="tring-ctl tring-hold" title="Hold" aria-label="Hold">${ICON_HOLD}</button>
+      <button type="button" class="tring-ctl tring-hangup" title="Hang up" aria-label="Hang up">${ICON_PHONE}</button>
     </div>
   `;
 
@@ -220,18 +227,17 @@ function createPanel(controlUrl?: string): Panel {
   const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
   const declineBtn = root.querySelector<HTMLButtonElement>(".tring-decline")!;
 
-  // Hold is backend-mediated (the CRM proxies to Tring with its API key); with
-  // no control URL configured there's nothing to call, so hide the button.
-  if (!controlUrl) holdBtn.style.display = "none";
   let held = false;
 
   // Reset the mute/hold controls to default — called whenever a fresh call
   // appears, since each is a new object starting un-muted and un-held.
   function resetMute() {
-    muteBtn.textContent = "Mute";
+    muteBtn.innerHTML = ICON_MIC;
+    muteBtn.title = "Mute";
     muteBtn.classList.remove("is-active");
     held = false;
-    holdBtn.textContent = "Hold";
+    holdBtn.innerHTML = ICON_HOLD;
+    holdBtn.title = "Hold";
     holdBtn.classList.remove("is-active");
     holdBtn.disabled = false;
   }
@@ -264,18 +270,24 @@ function createPanel(controlUrl?: string): Panel {
     if (!active) return;
     const next = !active.muted;
     active.setMuted(next);
-    muteBtn.textContent = next ? "Unmute" : "Mute";
+    muteBtn.innerHTML = next ? ICON_MIC_OFF : ICON_MIC;
+    muteBtn.title = next ? "Unmute" : "Mute";
     muteBtn.classList.toggle("is-active", next);
   });
   holdBtn.addEventListener("click", async () => {
     if (!active) return;
+    if (!controlUrl) {
+      console.warn("[tring] Hold needs data-control-url (a CRM endpoint that proxies to POST /v1/calls/{id}/hold)");
+      return;
+    }
     const want = !held;
     holdBtn.disabled = true;
     const ok = await postControl(want ? "hold" : "resume");
     holdBtn.disabled = false;
     if (ok) {
       held = want;
-      holdBtn.textContent = held ? "Resume" : "Hold";
+      holdBtn.innerHTML = held ? ICON_RESUME : ICON_HOLD;
+      holdBtn.title = held ? "Resume" : "Hold";
       holdBtn.classList.toggle("is-active", held);
     }
   });
@@ -431,28 +443,19 @@ function injectStyles(): void {
     #${PANEL_ID} .tring-accept:hover { background: #15803d; }
     #${PANEL_ID} .tring-decline { background: #dc2626; }
     #${PANEL_ID} .tring-decline:hover { background: #b91c1c; }
-    #${PANEL_ID} .tring-panel-actions { display: flex; gap: .5rem; }
-    #${PANEL_ID} .tring-hangup {
-      background: #dc2626; color: white; border: none;
-      padding: .5rem .75rem; border-radius: 6px;
-      font: inherit; cursor: pointer; flex: 1;
+    #${PANEL_ID} .tring-panel-actions { display: flex; gap: .75rem; justify-content: center; }
+    /* Round icon buttons for the in-call controls. */
+    #${PANEL_ID} .tring-ctl {
+      width: 48px; height: 48px; border-radius: 50%;
+      border: none; cursor: pointer; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #374151; color: #fff;
     }
+    #${PANEL_ID} .tring-ctl:hover { background: #4b5563; }
+    #${PANEL_ID} .tring-ctl:disabled { opacity: .5; cursor: default; }
+    #${PANEL_ID} .tring-ctl.is-active { background: #f59e0b; color: #111827; }
+    #${PANEL_ID} .tring-hangup { background: #dc2626; }
     #${PANEL_ID} .tring-hangup:hover { background: #b91c1c; }
-    #${PANEL_ID} .tring-mute {
-      background: #374151; color: white; border: none;
-      padding: .5rem .75rem; border-radius: 6px;
-      font: inherit; cursor: pointer; flex: 1;
-    }
-    #${PANEL_ID} .tring-mute:hover { background: #4b5563; }
-    #${PANEL_ID} .tring-mute.is-active { background: #f59e0b; color: #111827; }
-    #${PANEL_ID} .tring-hold {
-      background: #374151; color: white; border: none;
-      padding: .5rem .75rem; border-radius: 6px;
-      font: inherit; cursor: pointer; flex: 1;
-    }
-    #${PANEL_ID} .tring-hold:hover { background: #4b5563; }
-    #${PANEL_ID} .tring-hold:disabled { opacity: .5; cursor: default; }
-    #${PANEL_ID} .tring-hold.is-active { background: #f59e0b; color: #111827; }
     /* Dialpad is hidden until the call is connected. Sending DTMF
        before answer would be a no-op on the FS side anyway. */
     #${PANEL_ID} .tring-panel-dialpad {
