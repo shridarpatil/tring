@@ -17,6 +17,16 @@
 // tenant API key). The browser never sees the API key. The widget only
 // connects the gateway WebSocket and renders the in-call panel — it does NOT
 // place calls (origination is backend-only; see widget.ts).
+//
+// Optional call control (Hold):
+//
+//   <script src=".../sdk/agent.js" data-token-url="/tring/token"
+//           data-control-url="/tring/call-control" />
+//
+// The Hold button POSTs `{ call_id, action: "hold"|"resume" }` (with
+// credentials) to data-control-url — a same-origin endpoint on YOUR backend
+// that proxies to Tring's POST /v1/calls/{id}/hold with the tenant API key.
+// Omit data-control-url and the Hold button is hidden.
 
 import { bootstrap } from "./widget";
 import { Tring } from "./tring";
@@ -45,6 +55,7 @@ function readOpts() {
     token: s.getAttribute("data-token") || undefined,
     tokenUrl: s.getAttribute("data-token-url") || undefined,
     gatewayUrl: s.getAttribute("data-gateway-url") || undefined,
+    controlUrl: s.getAttribute("data-control-url") || undefined,
   };
 }
 

@@ -21,6 +21,14 @@ export interface WidgetOpts {
    * the gateway WebSocket. Required.
    */
   gatewayUrl?: string;
+  /**
+   * Same-origin CRM endpoint the Hold (and later Transfer) button POSTs to:
+   * `{ call_id, action: "hold" | "resume" }` with credentials. The CRM backend
+   * (which holds the tenant API key) proxies to Tring's POST /v1/calls/{id}/hold
+   * — the SDK never holds the API key (ADR-001). Omit it and the Hold button is
+   * hidden (call control isn't wired).
+   */
+  controlUrl?: string;
 }
 
 const PANEL_ID = "tring-call-panel";
@@ -51,7 +59,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   }
 
   injectStyles();
-  const panel = createPanel();
+  const panel = createPanel(opts.controlUrl);
   document.body.appendChild(panel.root);
   const badge = createStatusBadge();
   document.body.appendChild(badge.root);
@@ -169,7 +177,7 @@ interface Panel {
   hide(): void;
 }
 
-function createPanel(): Panel {
+function createPanel(controlUrl?: string): Panel {
   const root = document.createElement("div");
   root.id = PANEL_ID;
   root.setAttribute("data-state", "idle");
@@ -197,6 +205,7 @@ function createPanel(): Panel {
     </div>
     <div class="tring-panel-row tring-panel-actions">
       <button type="button" class="tring-mute">Mute</button>
+      <button type="button" class="tring-hold">Hold</button>
       <button type="button" class="tring-hangup">Hang up</button>
     </div>
   `;
@@ -206,15 +215,42 @@ function createPanel(): Panel {
   const dialedEl = root.querySelector<HTMLElement>(".tring-panel-dialed")!;
   const hangupBtn = root.querySelector<HTMLButtonElement>(".tring-hangup")!;
   const muteBtn = root.querySelector<HTMLButtonElement>(".tring-mute")!;
+  const holdBtn = root.querySelector<HTMLButtonElement>(".tring-hold")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
   const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
   const declineBtn = root.querySelector<HTMLButtonElement>(".tring-decline")!;
 
-  // Reset the mute control to its default (un-muted) — called whenever a fresh
-  // call appears, since each call is a new object starting un-muted.
+  // Hold is backend-mediated (the CRM proxies to Tring with its API key); with
+  // no control URL configured there's nothing to call, so hide the button.
+  if (!controlUrl) holdBtn.style.display = "none";
+  let held = false;
+
+  // Reset the mute/hold controls to default — called whenever a fresh call
+  // appears, since each is a new object starting un-muted and un-held.
   function resetMute() {
     muteBtn.textContent = "Mute";
     muteBtn.classList.remove("is-active");
+    held = false;
+    holdBtn.textContent = "Hold";
+    holdBtn.classList.remove("is-active");
+    holdBtn.disabled = false;
+  }
+
+  // postControl asks the CRM backend (which holds the API key) to hold/resume
+  // the agent's current call. The widget never calls Tring directly (ADR-001).
+  async function postControl(action: "hold" | "resume"): Promise<boolean> {
+    if (!controlUrl) return false;
+    try {
+      const res = await fetch(controlUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ call_id: active?.id, action }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 
   const ringer = new Ringer();
@@ -230,6 +266,18 @@ function createPanel(): Panel {
     active.setMuted(next);
     muteBtn.textContent = next ? "Unmute" : "Mute";
     muteBtn.classList.toggle("is-active", next);
+  });
+  holdBtn.addEventListener("click", async () => {
+    if (!active) return;
+    const want = !held;
+    holdBtn.disabled = true;
+    const ok = await postControl(want ? "hold" : "resume");
+    holdBtn.disabled = false;
+    if (ok) {
+      held = want;
+      holdBtn.textContent = held ? "Resume" : "Hold";
+      holdBtn.classList.toggle("is-active", held);
+    }
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
@@ -397,6 +445,14 @@ function injectStyles(): void {
     }
     #${PANEL_ID} .tring-mute:hover { background: #4b5563; }
     #${PANEL_ID} .tring-mute.is-active { background: #f59e0b; color: #111827; }
+    #${PANEL_ID} .tring-hold {
+      background: #374151; color: white; border: none;
+      padding: .5rem .75rem; border-radius: 6px;
+      font: inherit; cursor: pointer; flex: 1;
+    }
+    #${PANEL_ID} .tring-hold:hover { background: #4b5563; }
+    #${PANEL_ID} .tring-hold:disabled { opacity: .5; cursor: default; }
+    #${PANEL_ID} .tring-hold.is-active { background: #f59e0b; color: #111827; }
     /* Dialpad is hidden until the call is connected. Sending DTMF
        before answer would be a no-op on the FS side anyway. */
     #${PANEL_ID} .tring-panel-dialpad {
