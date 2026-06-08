@@ -42,6 +42,21 @@
       </condition>
     </extension>
 
+    <!-- Agent-initiated transfer target. The API blind-transfers the client
+         leg here (uuid_transfer ... tring_transfer XML default) after setting
+         two channel vars: transfer_target (the bridge dial-string — may contain
+         commas for a ring-all team, which is why this is a var, not inline) and
+         transfer_ringback (hold music while it rings). The bridge does the work;
+         on no-answer/failure the leg hangs up (blind transfer has no fallback). -->
+    <extension name="tring_transfer">
+      <condition field="destination_number" expression="^tring_transfer$">
+        <action application="set" data="ringback=${transfer_ringback}"/>
+        <action application="set" data="instant_ringback=true"/>
+        <action application="bridge" data="${transfer_target}"/>
+        <action application="hangup"/>
+      </condition>
+    </extension>
+
     <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
          listener BEFORE answering, so the executor decides whether to
          answer/playback/bridge/etc. based on the flow attached to this
