@@ -5,9 +5,11 @@
 // WSS to FreeSWITCH. The gateway terminates the browser leg and (milestone 2+)
 // bridges media into a PRIVATE FreeSWITCH. Milestone 1 = loopback echo.
 //
-// Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL/_USERNAME/_PASSWORD,
+// Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL, and either
 //
-//	TRING_PUBLIC_IP, TRING_GATEWAY_UDP_MIN/_MAX.
+//	TRING_TURN_USERNAME/_PASSWORD (static creds) or TRING_TURN_SECRET (the
+//	gateway mints its own ephemeral coturn creds, lifetime TRING_TURN_TTL_SECONDS),
+//	TRING_TURN_RELAY_ONLY, TRING_PUBLIC_IP, TRING_GATEWAY_UDP_MIN/_MAX.
 package main
 
 import (
@@ -32,13 +34,21 @@ func main() {
 	logger := logging.New(k.String("log_format"), k.String("log_level"))
 	slog.SetDefault(logger)
 
+	turnURL := k.String("turn_url")
+	turnSecret := k.String("turn_secret")
+
 	var ice []gateway.ICEServer
 	if stun := k.String("stun_url"); stun != "" {
 		ice = append(ice, gateway.ICEServer{URLs: []string{stun}})
 	}
-	if turn := k.String("turn_url"); turn != "" {
+	// Static TURN creds are the legacy fallback — added ONLY when no secret is
+	// set. With a secret the gateway mints EPHEMERAL coturn creds per
+	// PeerConnection (gateway.newPeerConnection). A static turn_url with no
+	// username/password would make pion reject the PeerConnection outright
+	// ("turn server credentials required"), so we never add a credential-less one.
+	if turnURL != "" && turnSecret == "" {
 		ice = append(ice, gateway.ICEServer{
-			URLs:       []string{turn},
+			URLs:       []string{turnURL},
 			Username:   k.String("turn_username"),
 			Credential: k.String("turn_password"),
 		})
@@ -83,6 +93,9 @@ func main() {
 		UDPPortMax:       uint16(k.Int("gateway_udp_max")),
 		PublicIP:         k.String("public_ip"),
 		RelayOnly:        k.Bool("turn_relay_only"),
+		TURNURL:          turnURL,
+		TURNSecret:       turnSecret,
+		TURNTTL:          time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
 		FS:               fs,
 		JWTSecret:        []byte(k.String("jwt_secret")),
 		RequireAuth:      k.Bool("gateway_require_auth"),

@@ -53,9 +53,16 @@ var defaults = map[string]any{
 	// run `use-auth-secret` + `static-auth-secret=<turn_secret>`. The credential
 	// LIFETIME is the tenant's max_call_seconds setting (so it covers the whole
 	// call), not a global value — see internal/api iceServersFor / turnTTLFor.
+	// The gateway is ALSO a TURN client when turn_secret is set: it mints its
+	// own ephemeral credential per PeerConnection (lifetime = turn_ttl_seconds)
+	// so it gathers a relay candidate — see internal/gateway newPeerConnection.
 	"turn_secret": "",
-	"api_addr":    ":8085",
-	"ivr_addr":    ":8086",
+	// Ephemeral-TURN credential lifetime for the gateway's own relay candidate
+	// (the API uses the tenant's max_call_seconds instead). Must outlive the
+	// longest call; 4h05m = 4h call + setup buffer.
+	"turn_ttl_seconds": 14700,
+	"api_addr":         ":8085",
+	"ivr_addr":         ":8086",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).

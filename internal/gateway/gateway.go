@@ -24,6 +24,7 @@ import (
 
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/presence"
+	"github.com/whatomate/tring/internal/turn"
 )
 
 // Config controls ICE/media behaviour. ICE servers (STUN/TURN) are handed to
@@ -36,6 +37,15 @@ type Config struct {
 	PublicIP string
 	// RelayOnly forces all media through TURN (no host candidates).
 	RelayOnly bool
+	// TURNURL + TURNSecret make the gateway a TURN client: when both are set it
+	// mints an EPHEMERAL coturn credential per PeerConnection (see
+	// newPeerConnection) so it gathers its own relay candidate — needed for a
+	// browser that can only reach the gateway via TURN, and for RelayOnly to
+	// work end-to-end. Static TURN creds (no secret) come in via ICEServers
+	// instead. TURNTTL is the credential lifetime; it must outlive the call.
+	TURNURL    string
+	TURNSecret string
+	TURNTTL    time.Duration
 	// FS, when set, enables the FreeSWITCH bridge (the gateway SIP-dials FS).
 	// nil keeps the gateway in standalone echo mode (milestone 1).
 	FS *FSConfig
@@ -168,7 +178,7 @@ func (g *Gateway) TestFSLeg(ctx context.Context) (int, error) {
 
 // newPeerConnection builds a PC with the configured ICE servers.
 func (g *Gateway) newPeerConnection() (*webrtc.PeerConnection, error) {
-	ice := make([]webrtc.ICEServer, 0, len(g.cfg.ICEServers))
+	ice := make([]webrtc.ICEServer, 0, len(g.cfg.ICEServers)+1)
 	for _, s := range g.cfg.ICEServers {
 		e := webrtc.ICEServer{URLs: s.URLs}
 		if s.Username != "" {
@@ -177,6 +187,24 @@ func (g *Gateway) newPeerConnection() (*webrtc.PeerConnection, error) {
 			e.CredentialType = webrtc.ICECredentialTypePassword
 		}
 		ice = append(ice, e)
+	}
+	// With a shared TURN secret the gateway is itself a TURN client: mint a fresh
+	// ephemeral coturn credential per PeerConnection so it gathers its own relay
+	// candidate. This lets a browser that can only reach us through TURN connect,
+	// and makes RelayOnly work for the gateway leg too. The secret never leaves
+	// the process — only the short-lived HMAC credential is given to pion.
+	if g.cfg.TURNSecret != "" && g.cfg.TURNURL != "" {
+		ttl := g.cfg.TURNTTL
+		if ttl <= 0 {
+			ttl = 4 * time.Hour
+		}
+		user, cred := turn.Credential(g.cfg.TURNSecret, "gateway", ttl)
+		ice = append(ice, webrtc.ICEServer{
+			URLs:           []string{g.cfg.TURNURL},
+			Username:       user,
+			Credential:     cred,
+			CredentialType: webrtc.ICECredentialTypePassword,
+		})
 	}
 	cfg := webrtc.Configuration{ICEServers: ice}
 	if g.cfg.RelayOnly {
