@@ -64,6 +64,10 @@ export interface Call {
   hangup(): Promise<void>;
   /** Send a DTMF digit (0-9, *, #) mid-call. */
   sendDTMF(digit: string): Promise<void>;
+  /** Mute or unmute the agent's microphone (local — stops sending audio). */
+  setMuted(muted: boolean): void;
+  /** Whether the agent's mic is currently muted. */
+  readonly muted: boolean;
 }
 
 export type CallStatus = "ringing" | "connected" | "ended";

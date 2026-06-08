@@ -196,6 +196,7 @@ function createPanel(): Panel {
       <button type="button" class="tring-decline">Decline</button>
     </div>
     <div class="tring-panel-row tring-panel-actions">
+      <button type="button" class="tring-mute">Mute</button>
       <button type="button" class="tring-hangup">Hang up</button>
     </div>
   `;
@@ -204,9 +205,17 @@ function createPanel(): Panel {
   const statusEl = root.querySelector<HTMLElement>(".tring-panel-status")!;
   const dialedEl = root.querySelector<HTMLElement>(".tring-panel-dialed")!;
   const hangupBtn = root.querySelector<HTMLButtonElement>(".tring-hangup")!;
+  const muteBtn = root.querySelector<HTMLButtonElement>(".tring-mute")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
   const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
   const declineBtn = root.querySelector<HTMLButtonElement>(".tring-decline")!;
+
+  // Reset the mute control to its default (un-muted) — called whenever a fresh
+  // call appears, since each call is a new object starting un-muted.
+  function resetMute() {
+    muteBtn.textContent = "Mute";
+    muteBtn.classList.remove("is-active");
+  }
 
   const ringer = new Ringer();
   let active: Call | null = null;
@@ -214,6 +223,13 @@ function createPanel(): Panel {
 
   hangupBtn.addEventListener("click", async () => {
     if (active) await active.hangup();
+  });
+  muteBtn.addEventListener("click", () => {
+    if (!active) return;
+    const next = !active.muted;
+    active.setMuted(next);
+    muteBtn.textContent = next ? "Unmute" : "Mute";
+    muteBtn.classList.toggle("is-active", next);
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
@@ -246,6 +262,7 @@ function createPanel(): Panel {
       active = call;
       dialed = "";
       dialedEl.textContent = "";
+      resetMute();
       toEl.textContent = call.to;
       statusEl.textContent = status;
       root.setAttribute("data-state", status);
@@ -255,6 +272,7 @@ function createPanel(): Panel {
       active = call;
       dialed = "";
       dialedEl.textContent = "";
+      resetMute();
       toEl.textContent = call.displayName || call.to || "Unknown caller";
       statusEl.textContent = "Incoming call";
       root.setAttribute("data-state", "incoming");
@@ -365,12 +383,20 @@ function injectStyles(): void {
     #${PANEL_ID} .tring-accept:hover { background: #15803d; }
     #${PANEL_ID} .tring-decline { background: #dc2626; }
     #${PANEL_ID} .tring-decline:hover { background: #b91c1c; }
+    #${PANEL_ID} .tring-panel-actions { display: flex; gap: .5rem; }
     #${PANEL_ID} .tring-hangup {
       background: #dc2626; color: white; border: none;
       padding: .5rem .75rem; border-radius: 6px;
-      font: inherit; cursor: pointer; width: 100%;
+      font: inherit; cursor: pointer; flex: 1;
     }
     #${PANEL_ID} .tring-hangup:hover { background: #b91c1c; }
+    #${PANEL_ID} .tring-mute {
+      background: #374151; color: white; border: none;
+      padding: .5rem .75rem; border-radius: 6px;
+      font: inherit; cursor: pointer; flex: 1;
+    }
+    #${PANEL_ID} .tring-mute:hover { background: #4b5563; }
+    #${PANEL_ID} .tring-mute.is-active { background: #f59e0b; color: #111827; }
     /* Dialpad is hidden until the call is connected. Sending DTMF
        before answer would be a no-op on the FS side anyway. */
     #${PANEL_ID} .tring-panel-dialpad {
