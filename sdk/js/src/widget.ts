@@ -41,33 +41,44 @@ const ICON_RESUME = `<svg viewBox="0 0 24 24" width="22" height="22" fill="curre
 const ICON_PHONE = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
 const ICON_USER = `<svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4 0-9 2-9 6v1h18v-1c0-4-5-6-9-6z"/></svg>`;
 const ICON_KEYPAD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="5" r="1.7"/><circle cx="12" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="12" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg>`;
+const ICON_TRANSFER = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 7l-1.4 1.4L17.2 11H8v2h9.2l-2.6 2.6L16 17l5-5-5-5zM4 5h7V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7v-2H4V5z"/></svg>`;
 
-// HoldControl puts the agent's own active call on hold / resumes it. Returns
-// true on success. Undefined when no apiBase is known (Hold then no-ops).
-type HoldControl = (action: "hold" | "resume") => Promise<boolean>;
+// CallControl drives the agent's OWN active call (hold/resume, blind transfer)
+// against Tring's agent-JWT endpoints. Undefined when no apiBase is known.
+interface CallControl {
+  hold(action: "hold" | "resume"): Promise<boolean>;
+  transfer(toSip: string): Promise<boolean>;
+}
 
-// makeHoldControl builds the Hold handler: it calls Tring's agent-JWT endpoint
-// POST {apiBase}/v1/sdk/calls/{action} directly with a FRESH agent token (the
-// 5-min JWT may have rolled over mid-call), so the widget needs no CRM proxy.
-function makeHoldControl(
+// makeCallControl posts to POST {apiBase}/v1/sdk/calls/* with a FRESH agent
+// token (the 5-min JWT may have rolled over mid-call), so the widget drives call
+// control directly — no CRM proxy.
+function makeCallControl(
   apiBase: string | undefined,
   tokenUrl: string | undefined,
   staticToken: string,
-): HoldControl | undefined {
+): CallControl | undefined {
   if (!apiBase) return undefined;
   const freshToken = tokenUrl
     ? async () => (await fetchCredentials(tokenUrl)).token || staticToken
     : async () => staticToken;
-  return async (action) => {
+  const post = async (path: string, body?: unknown): Promise<boolean> => {
     try {
-      const res = await fetch(`${apiBase}/v1/sdk/calls/${action}`, {
+      const headers: Record<string, string> = { Authorization: `Bearer ${await freshToken()}` };
+      if (body) headers["Content-Type"] = "application/json";
+      const res = await fetch(`${apiBase}${path}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${await freshToken()}` },
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
       });
       return res.ok;
     } catch {
       return false;
     }
+  };
+  return {
+    hold: (action) => post(`/v1/sdk/calls/${action}`),
+    transfer: (toSip) => post(`/v1/sdk/calls/transfer`, { to_sip: toSip }),
   };
 }
 
@@ -97,8 +108,8 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   }
 
   injectStyles();
-  const holdControl = makeHoldControl(opts.apiBase, opts.tokenUrl, token);
-  const panel = createPanel(holdControl);
+  const control = makeCallControl(opts.apiBase, opts.tokenUrl, token);
+  const panel = createPanel(control);
   document.body.appendChild(panel.root);
   const badge = createStatusBadge();
   document.body.appendChild(badge.root);
@@ -216,7 +227,7 @@ interface Panel {
   hide(): void;
 }
 
-function createPanel(holdControl?: HoldControl): Panel {
+function createPanel(control?: CallControl): Panel {
   const root = document.createElement("div");
   root.id = PANEL_ID;
   root.setAttribute("data-state", "idle");
@@ -248,6 +259,7 @@ function createPanel(holdControl?: HoldControl): Panel {
       <button type="button" class="tring-ctl tring-mute" title="Mute" aria-label="Mute">${ICON_MIC}</button>
       <button type="button" class="tring-ctl tring-keypad" title="Keypad" aria-label="Keypad">${ICON_KEYPAD}</button>
       <button type="button" class="tring-ctl tring-hold" title="Hold" aria-label="Hold">${ICON_HOLD}</button>
+      <button type="button" class="tring-ctl tring-transfer" title="Transfer" aria-label="Transfer">${ICON_TRANSFER}</button>
       <button type="button" class="tring-ctl tring-hangup" title="Hang up" aria-label="Hang up">${ICON_PHONE}</button>
     </div>
   `;
@@ -258,6 +270,7 @@ function createPanel(holdControl?: HoldControl): Panel {
   const hangupBtn = root.querySelector<HTMLButtonElement>(".tring-hangup")!;
   const muteBtn = root.querySelector<HTMLButtonElement>(".tring-mute")!;
   const holdBtn = root.querySelector<HTMLButtonElement>(".tring-hold")!;
+  const transferBtn = root.querySelector<HTMLButtonElement>(".tring-transfer")!;
   const keypadBtn = root.querySelector<HTMLButtonElement>(".tring-keypad")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
   const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
@@ -297,6 +310,7 @@ function createPanel(holdControl?: HoldControl): Panel {
     holdBtn.title = "Hold";
     holdBtn.classList.remove("is-active");
     holdBtn.disabled = false;
+    transferBtn.disabled = false;
     keypadBtn.classList.remove("is-active");
     root.classList.remove("tring-keypad-open");
     dialedEl.textContent = "";
@@ -324,13 +338,13 @@ function createPanel(holdControl?: HoldControl): Panel {
   });
   holdBtn.addEventListener("click", async () => {
     if (!active) return;
-    if (!holdControl) {
-      console.warn("[tring] Hold needs the Tring API base (auto-derived from agent.js src, or set data-api-base)");
+    if (!control) {
+      console.warn("[tring] Call control needs the Tring API base (auto-derived from agent.js src, or set data-api-base)");
       return;
     }
     const want = !held;
     holdBtn.disabled = true;
-    const ok = await holdControl(want ? "hold" : "resume");
+    const ok = await control.hold(want ? "hold" : "resume");
     holdBtn.disabled = false;
     if (ok) {
       held = want;
@@ -338,6 +352,20 @@ function createPanel(holdControl?: HoldControl): Panel {
       holdBtn.title = held ? "Resume" : "Hold";
       holdBtn.classList.toggle("is-active", held);
     }
+  });
+  transferBtn.addEventListener("click", async () => {
+    if (!active || !control) return;
+    // eslint-disable-next-line no-alert
+    const to = prompt("Transfer to agent (SIP username):");
+    if (!to || !to.trim()) return;
+    transferBtn.disabled = true;
+    const ok = await control.transfer(to.trim());
+    transferBtn.disabled = false;
+    if (!ok) {
+      // eslint-disable-next-line no-alert
+      alert("Transfer failed — the agent may be offline or unknown.");
+    }
+    // On success the original agent's leg ends; the gateway will fire 'ended'.
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
