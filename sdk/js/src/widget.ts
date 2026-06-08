@@ -43,11 +43,18 @@ const ICON_USER = `<svg viewBox="0 0 24 24" width="34" height="34" fill="current
 const ICON_KEYPAD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="5" r="1.7"/><circle cx="12" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="12" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg>`;
 const ICON_TRANSFER = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 7l-1.4 1.4L17.2 11H8v2h9.2l-2.6 2.6L16 17l5-5-5-5zM4 5h7V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7v-2H4V5z"/></svg>`;
 
+// Transfer targets the agent can pick from (online agents by name + teams).
+interface TransferTargets {
+  agents: { sip: string; name: string }[];
+  teams: string[];
+}
+
 // CallControl drives the agent's OWN active call (hold/resume, blind transfer)
 // against Tring's agent-JWT endpoints. Undefined when no apiBase is known.
 interface CallControl {
   hold(action: "hold" | "resume"): Promise<boolean>;
-  transfer(toSip: string): Promise<boolean>;
+  transfer(body: { to_sip?: string; to_team?: string }): Promise<boolean>;
+  targets(): Promise<TransferTargets | null>;
 }
 
 // makeCallControl posts to POST {apiBase}/v1/sdk/calls/* with a FRESH agent
@@ -76,10 +83,28 @@ function makeCallControl(
       return false;
     }
   };
+  const getJSON = async (path: string): Promise<unknown> => {
+    try {
+      const res = await fetch(`${apiBase}${path}`, {
+        headers: { Authorization: `Bearer ${await freshToken()}` },
+      });
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  };
   return {
     hold: (action) => post(`/v1/sdk/calls/${action}`),
-    transfer: (toSip) => post(`/v1/sdk/calls/transfer`, { to_sip: toSip }),
+    transfer: (body) => post(`/v1/sdk/calls/transfer`, body),
+    targets: () => getJSON(`/v1/sdk/transfer-targets`) as Promise<TransferTargets | null>,
   };
+}
+
+// escapeHTML keeps names/teams (from the backend) safe to inject into innerHTML.
+function escapeHTML(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!,
+  );
 }
 
 export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
@@ -250,6 +275,7 @@ function createPanel(control?: CallControl): Panel {
       <div class="tring-panel-sub"></div>
     </div>
     <div class="tring-panel-row tring-panel-dialed"></div>
+    <div class="tring-panel-row tring-panel-picker"></div>
     <div class="tring-panel-row tring-panel-dialpad">${dtmfButtonsHTML}</div>
     <div class="tring-panel-row tring-panel-incoming">
       <button type="button" class="tring-ctl tring-decline" title="Decline" aria-label="Decline">${ICON_PHONE}</button>
@@ -272,6 +298,7 @@ function createPanel(control?: CallControl): Panel {
   const holdBtn = root.querySelector<HTMLButtonElement>(".tring-hold")!;
   const transferBtn = root.querySelector<HTMLButtonElement>(".tring-transfer")!;
   const keypadBtn = root.querySelector<HTMLButtonElement>(".tring-keypad")!;
+  const pickerEl = root.querySelector<HTMLElement>(".tring-panel-picker")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
   const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
   const declineBtn = root.querySelector<HTMLButtonElement>(".tring-decline")!;
@@ -313,6 +340,7 @@ function createPanel(control?: CallControl): Panel {
     transferBtn.disabled = false;
     keypadBtn.classList.remove("is-active");
     root.classList.remove("tring-keypad-open");
+    root.classList.remove("tring-picker-open");
     dialedEl.textContent = "";
     dialed = "";
   }
@@ -353,19 +381,51 @@ function createPanel(control?: CallControl): Panel {
       holdBtn.classList.toggle("is-active", held);
     }
   });
+  // Transfer: open a picker of online agents + teams (fetched live), pick one
+  // to blind-transfer the caller. On success the original agent's leg ends.
+  function closePicker() {
+    root.classList.remove("tring-picker-open");
+  }
   transferBtn.addEventListener("click", async () => {
     if (!active || !control) return;
-    // eslint-disable-next-line no-alert
-    const to = prompt("Transfer to agent (SIP username):");
-    if (!to || !to.trim()) return;
-    transferBtn.disabled = true;
-    const ok = await control.transfer(to.trim());
-    transferBtn.disabled = false;
+    pickerEl.innerHTML = `<div class="tring-picker-title">Loading…</div>`;
+    root.classList.add("tring-picker-open");
+    const t = await control.targets();
+    if (!t) {
+      pickerEl.innerHTML = `<div class="tring-picker-title">Couldn't load targets</div><button class="tring-picker-cancel">Back</button>`;
+      return;
+    }
+    let html = `<div class="tring-picker-title">Transfer to</div>`;
+    for (const a of t.agents) {
+      html += `<button class="tring-picker-item" data-sip="${escapeHTML(a.sip)}">${escapeHTML(a.name)}</button>`;
+    }
+    if (t.teams.length) {
+      html += `<div class="tring-picker-sub">Teams</div>`;
+      for (const tm of t.teams) {
+        html += `<button class="tring-picker-item" data-team="${escapeHTML(tm)}">${escapeHTML(tm)}</button>`;
+      }
+    }
+    if (!t.agents.length && !t.teams.length) {
+      html += `<div class="tring-picker-empty">No one available right now</div>`;
+    }
+    html += `<button class="tring-picker-cancel">Cancel</button>`;
+    pickerEl.innerHTML = html;
+  });
+  pickerEl.addEventListener("click", async (ev) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button");
+    if (!btn || !control) return;
+    if (btn.classList.contains("tring-picker-cancel")) {
+      closePicker();
+      return;
+    }
+    if (!btn.classList.contains("tring-picker-item")) return;
+    closePicker();
+    const body = btn.dataset.sip ? { to_sip: btn.dataset.sip } : { to_team: btn.dataset.team };
+    const ok = await control.transfer(body);
     if (!ok) {
       // eslint-disable-next-line no-alert
-      alert("Transfer failed — the agent may be offline or unknown.");
+      alert("Transfer failed — the target may be offline.");
     }
-    // On success the original agent's leg ends; the gateway will fire 'ended'.
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
@@ -539,6 +599,25 @@ function injectStyles(): void {
       display: none; grid-template-columns: repeat(3, 1fr); gap: .35rem;
     }
     #${PANEL_ID}.tring-keypad-open .tring-panel-dialpad { display: grid; }
+    /* Transfer picker: a live list of agents + teams; replaces the controls. */
+    #${PANEL_ID} .tring-panel-picker { display: none; max-height: 220px; overflow-y: auto; }
+    #${PANEL_ID}.tring-picker-open .tring-panel-picker { display: block; }
+    #${PANEL_ID}.tring-picker-open .tring-panel-actions,
+    #${PANEL_ID}.tring-picker-open .tring-panel-dialpad { display: none; }
+    #${PANEL_ID} .tring-picker-title { font-size: 13px; color: #9ca3af; margin-bottom: .35rem; }
+    #${PANEL_ID} .tring-picker-sub { font-size: 11px; color: #6b7280; text-transform: uppercase; margin: .5rem 0 .25rem; }
+    #${PANEL_ID} .tring-picker-empty { font-size: 13px; color: #9ca3af; padding: .5rem 0; }
+    #${PANEL_ID} .tring-picker-item {
+      display: block; width: 100%; text-align: left;
+      background: #1f2937; color: #f9fafb; border: 1px solid #374151;
+      padding: .55rem .65rem; border-radius: 6px; margin-bottom: .35rem;
+      font: inherit; cursor: pointer;
+    }
+    #${PANEL_ID} .tring-picker-item:hover { background: #374151; }
+    #${PANEL_ID} .tring-picker-cancel {
+      width: 100%; background: none; color: #9ca3af; border: 0;
+      padding: .4rem; font: inherit; cursor: pointer; text-decoration: underline;
+    }
     #${PANEL_ID} .tring-dtmf {
       background: #1f2937; color: #f9fafb; border: 1px solid #374151;
       padding: .55rem 0; border-radius: 6px;
