@@ -149,7 +149,7 @@ func TestAnsweredAgentLabelAfterStamp(t *testing.T) {
 	if err := f.DB.Pool.QueryRow(ctx, exec.Q.GetAgentBySIP, f.TenantID, "alice").Scan(&agentID, &label); err != nil {
 		t.Fatalf("get-agent-by-sip: %v", err)
 	}
-	if _, err := f.DB.Pool.Exec(ctx, exec.Q.SetCallAgent, agentID, st.uuid); err != nil {
+	if _, err := f.DB.Pool.Exec(ctx, exec.Q.SetCallAgent, agentID, st.uuid, st.uuid+"-bleg"); err != nil {
 		t.Fatalf("set-call-agent: %v", err)
 	}
 
