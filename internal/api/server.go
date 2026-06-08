@@ -338,7 +338,15 @@ func (s *Server) Router() http.Handler {
 			r.Post("/trunks/reload", s.handleReloadTrunks)
 		})
 
-		// No agent-JWT-scoped routes: the SDK has NO Tring API access (ADR-001).
+		// Agent-JWT scoped SDK routes. ADR-001 keeps origination backend-only,
+		// but SELF call-control (hold/transfer of the agent's OWN active call) is
+		// a safe agent capability — the JWT scopes it to that agent, so the widget
+		// drives it directly with the token it already holds (no CRM proxy).
+		r.Group(func(r chi.Router) {
+			r.Use(s.AgentAuthRequired)
+			r.Post("/sdk/calls/hold", s.handleSdkHold)
+			r.Post("/sdk/calls/resume", s.handleSdkResume)
+		})
 		// Outbound origination is backend-only (POST /v1/calls, API key); the
 		// agent JWT authenticates the gateway WebSocket and nothing else.
 	})

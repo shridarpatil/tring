@@ -259,6 +259,16 @@ SELECT COALESCE(c.agent_fs_uuid, c.fs_uuid), c.status, t.hold_music
 FROM calls c JOIN tenants t ON t.id = c.tenant_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
+-- name: get-agent-active-call-leg
+-- The agent's currently-connected call, for SDK self-control (hold). Resolved
+-- from the agent JWT (tenant + agent id), so the agent can only control their
+-- OWN call. Returns the agent leg + the tenant's hold music; newest answered
+-- call wins if somehow more than one.
+SELECT COALESCE(c.agent_fs_uuid, c.fs_uuid), t.hold_music
+FROM calls c JOIN tenants t ON t.id = c.tenant_id
+WHERE c.tenant_id = $1 AND c.agent_id = $2 AND c.status = 'answered'
+ORDER BY c.answered_at DESC NULLS LAST LIMIT 1;
+
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute
 -- the answered transfer leg. Label falls back to the SIP username.
