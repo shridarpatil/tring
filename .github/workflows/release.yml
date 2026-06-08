@@ -1,18 +1,18 @@
-name: Build images
+name: FreeSWITCH image
 
-# Builds and pushes all four Tring images to GHCR:
-#   ghcr.io/<owner>/tring-{api,orchestrator,gateway,freeswitch}
+# Builds and pushes ONLY the tring-freeswitch image to GHCR + Docker Hub:
+#   - push to main   → tag `develop`
+#   - push a git tag → tag = the tag name (e.g. v0.1.0)
 #
-# - push to main  → tag `develop` (matches docker-compose's TRING_TAG default)
-# - push a v* tag → tags `X.Y.Z` and `X.Y`  (set meta.tring_version in Nomad to X.Y.Z)
-#
-# The three Go images share the root Dockerfile (--build-arg CMD=<binary>);
-# freeswitch is a small FROM safarov/freeswitch + baked static config.
+# The three Go images follow the SAME convention but are built elsewhere:
+# test.yml's `build-develop` pushes :develop on main, and GoReleaser pushes
+# :<tag> on a git tag (both registries, multi-arch). FreeSWITCH is a non-Go
+# image GoReleaser can't build, so it lives here — same tags, same registries.
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["*"]
   workflow_dispatch:
 
 permissions:
@@ -20,34 +20,13 @@ permissions:
   packages: write
 
 concurrency:
-  group: images-${{ github.ref }}
+  group: freeswitch-image-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  images:
-    name: ${{ matrix.name }}
+  freeswitch:
+    name: tring-freeswitch
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: api
-            context: .
-            dockerfile: Dockerfile
-            build-args: CMD=api
-          - name: orchestrator
-            context: .
-            dockerfile: Dockerfile
-            build-args: CMD=orchestrator
-          - name: gateway
-            context: .
-            dockerfile: Dockerfile
-            build-args: CMD=gateway
-          - name: freeswitch
-            context: freeswitch
-            dockerfile: freeswitch/Dockerfile
-            build-args: ""
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,25 +51,21 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Push every image to BOTH registries (GHCR + Docker Hub). Docker Hub
-          # repos can be public even while the source repo stays private, so a
-          # server can pull without a GHCR token.
           images: |
-            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.name }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.name }}
+            ghcr.io/${{ github.repository_owner }}/tring-freeswitch
+            ${{ secrets.DOCKERHUB_USERNAME }}/tring-freeswitch
+          # main -> develop ; git tag vX.Y.Z -> vX.Y.Z (the tag name verbatim)
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=develop,enable={{is_default_branch}}
+            type=ref,event=tag
 
       - name: Build & push
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          build-args: ${{ matrix.build-args }}
+          context: freeswitch
+          file: freeswitch/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          cache-from: type=gha,scope=freeswitch
+          cache-to: type=gha,mode=max,scope=freeswitch
