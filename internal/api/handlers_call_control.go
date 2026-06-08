@@ -2,12 +2,17 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/whatomate/tring/internal/agentleg"
 )
 
 // Call control (hold/resume; later transfer/conference). Two entry points reach
@@ -83,6 +88,89 @@ func (s *Server) sdkHold(w http.ResponseWriter, r *http.Request, hold bool) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"held": hold})
+}
+
+type sdkTransferRequest struct {
+	ToSip string `json:"to_sip"`
+}
+
+// handleSdkTransfer blind-transfers the agent's current call to another agent:
+// the client is re-bridged to the target (hearing the tenant's hold music as
+// ringback while it rings) and the requesting agent's leg drops. A re-bridge —
+// NOT uuid_hold — avoids a SIP re-INVITE, so the media-gateway legs survive.
+// Blind has no fallback: if the target can't take it the caller is dropped, so
+// we require the target to be a real, available agent. Attended transfer and
+// conference (3-way + everyone-recorded) come later.
+func (s *Server) handleSdkTransfer(w http.ResponseWriter, r *http.Request) {
+	claims := agentFromCtx(r.Context())
+	if claims == nil {
+		writeError(w, http.StatusUnauthorized, "no agent")
+		return
+	}
+	agentID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "bad agent id")
+		return
+	}
+	var req sdkTransferRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	target := strings.TrimSpace(req.ToSip)
+	if target == "" {
+		writeError(w, http.StatusBadRequest, "to_sip required")
+		return
+	}
+
+	var targetID uuid.UUID
+	var label string
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetAgentBySIP, claims.TenantID, target).Scan(&targetID, &label); err != nil {
+		writeError(w, http.StatusNotFound, "unknown target agent")
+		return
+	}
+	if targetID == agentID {
+		writeError(w, http.StatusBadRequest, "cannot transfer to yourself")
+		return
+	}
+	if s.presence.Enabled() && !s.presence.Available(r.Context(), claims.TenantID.String(), target) {
+		writeError(w, http.StatusConflict, "target agent is not available")
+		return
+	}
+
+	// The client leg (the party to move) + the tenant's hold music for ringback.
+	var leg, holdMusic string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentActiveCallLeg, claims.TenantID, agentID).Scan(&leg, &holdMusic)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "no active call")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if leg == "" {
+		writeError(w, http.StatusConflict, "call has no media leg yet")
+		return
+	}
+
+	moh := holdMusic
+	if moh == "" {
+		moh = defaultMOH
+	}
+	// Single channel var (tenant header) → no comma → safe for the inline
+	// dialplan. (Attribution of the transferred-to agent on the CDR needs
+	// tring_agent too, which adds a comma — a follow-up via a dialplan ext.)
+	dest := agentleg.Build(agentleg.Options{
+		Transport: "gateway",
+		Gateway:   s.agentGateway,
+		SIP:       target,
+		TenantID:  claims.TenantID.String(),
+	})
+	inline := fmt.Sprintf("set:ringback=%s,set:instant_ringback=true,bridge:%s", moh, dest)
+	if _, err := s.fs.Command(r.Context(), "uuid_transfer", leg+" '"+inline+"' inline"); err != nil {
+		s.log.Error("transfer failed", "agent", agentID, "to", target, "err", err)
+		writeError(w, http.StatusBadGateway, "transfer command failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"transferred_to": target})
 }
 
 // ── CRM backend (tenant API key) — control any call by id ────────────────────
