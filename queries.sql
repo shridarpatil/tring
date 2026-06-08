@@ -251,10 +251,13 @@ UPDATE calls SET ivr_path = $1::jsonb WHERE fs_uuid = $2;
 UPDATE calls SET agent_id = $1, agent_fs_uuid = $3 WHERE fs_uuid = $2;
 
 -- name: get-call-control-leg
--- The FS leg call-control acts on (the AGENT leg) + the call's status, scoped to
--- the tenant. COALESCE: inbound transfers store agent_fs_uuid; outbound calls
--- leave it NULL because fs_uuid already is the agent leg.
-SELECT COALESCE(agent_fs_uuid, fs_uuid), status FROM calls WHERE id = $1 AND tenant_id = $2;
+-- The FS leg call-control acts on (the AGENT leg), the call's status, and the
+-- tenant's configured hold music — all scoped to the tenant. COALESCE: inbound
+-- transfers store agent_fs_uuid; outbound calls leave it NULL because fs_uuid
+-- already is the agent leg. hold_music is "" when the tenant uses the default.
+SELECT COALESCE(c.agent_fs_uuid, c.fs_uuid), c.status, t.hold_music
+FROM calls c JOIN tenants t ON t.id = c.tenant_id
+WHERE c.id = $1 AND c.tenant_id = $2;
 
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute

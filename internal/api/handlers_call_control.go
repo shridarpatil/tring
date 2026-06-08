@@ -34,8 +34,8 @@ func (s *Server) setCallHold(w http.ResponseWriter, r *http.Request, hold bool) 
 		return
 	}
 
-	var leg, status string
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallControlLeg, id, t.ID).Scan(&leg, &status)
+	var leg, status, holdMusic string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallControlLeg, id, t.ID).Scan(&leg, &status, &holdMusic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return
@@ -51,6 +51,16 @@ func (s *Server) setCallHold(w http.ResponseWriter, r *http.Request, hold bool) 
 	if leg == "" {
 		writeError(w, http.StatusConflict, "call has no media leg yet")
 		return
+	}
+
+	// Brand the hold music: point the held leg's hold_music at the tenant's
+	// configured MOH file before holding, so the customer hears it instead of
+	// FreeSWITCH's default. Empty = leave the FS default. uuid_hold reads
+	// hold_music at hold time, so set it first.
+	if hold && holdMusic != "" {
+		if _, err := s.fs.Command(r.Context(), "uuid_setvar", leg+" hold_music "+holdMusic); err != nil {
+			s.log.Warn("set hold_music failed, using default", "call", id, "err", err)
+		}
 	}
 
 	// uuid_hold <uuid> holds; "off <uuid>" resumes. The held leg's bridged peer
