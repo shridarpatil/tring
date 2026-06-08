@@ -201,7 +201,9 @@ func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event)
 		r.log.Error("bridge agent lookup failed", "call_id", aLeg, "sip", sip, "err", err)
 		return
 	}
-	if _, err := r.db.Pool.Exec(ctx, r.q.SetCallAgent, agentID, aLeg); err != nil {
+	// Store the agent's leg (bLeg) too so call control (hold/transfer) can act on
+	// the right side — holding the agent leg makes the customer hear MOH.
+	if _, err := r.db.Pool.Exec(ctx, r.q.SetCallAgent, agentID, aLeg, bLeg); err != nil {
 		r.log.Error("stamp agent on call failed", "call_id", aLeg, "err", err)
 		return
 	}

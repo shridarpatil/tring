@@ -246,8 +246,15 @@ UPDATE calls SET ivr_path = $1::jsonb WHERE fs_uuid = $2;
 
 -- name: set-call-agent
 -- Stamp the agent who answered an inbound/IVR call (on transfer connect), so
--- the call log shows who handled it. Matched by FreeSWITCH channel UUID.
-UPDATE calls SET agent_id = $1 WHERE fs_uuid = $2;
+-- the call log shows who handled it, plus the agent's FreeSWITCH leg ($3) for
+-- call control (hold/transfer). Matched by the caller leg's channel UUID.
+UPDATE calls SET agent_id = $1, agent_fs_uuid = $3 WHERE fs_uuid = $2;
+
+-- name: get-call-control-leg
+-- The FS leg call-control acts on (the AGENT leg) + the call's status, scoped to
+-- the tenant. COALESCE: inbound transfers store agent_fs_uuid; outbound calls
+-- leave it NULL because fs_uuid already is the agent leg.
+SELECT COALESCE(agent_fs_uuid, fs_uuid), status FROM calls WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute

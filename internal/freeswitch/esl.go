@@ -133,6 +133,29 @@ func (c *Client) Originate(ctx context.Context, req OriginateRequest) (Originate
 	}, nil
 }
 
+// Command runs a synchronous FreeSWITCH API command on a fresh ESL connection
+// and returns the reply. Used for call-control actions on an existing channel —
+// e.g. Command(ctx, "uuid_hold", "<uuid>") to hold, "uuid_hold", "off <uuid>" to
+// resume, "uuid_transfer", "<uuid> <dest>" to transfer. Returns an error if FS
+// replies -ERR (e.g. the channel no longer exists).
+func (c *Client) Command(ctx context.Context, cmd, args string) (string, error) {
+	conn, err := eslgo.Dial(c.addr, c.password, func() {})
+	if err != nil {
+		return "", fmt.Errorf("esl dial: %w", err)
+	}
+	defer conn.Close()
+
+	resp, err := conn.SendCommand(ctx, command.API{Command: cmd, Arguments: args})
+	if err != nil {
+		return "", fmt.Errorf("send %s: %w", cmd, err)
+	}
+	reply := strings.TrimSpace(resp.GetReply())
+	if strings.HasPrefix(reply, "-ERR") || strings.HasPrefix(reply, "-USAGE") {
+		return "", fmt.Errorf("freeswitch %s rejected: %s", cmd, reply)
+	}
+	return reply, nil
+}
+
 // parseJobUUID extracts the job-uuid from a bgapi reply like:
 //
 //	+OK Job-UUID: 7a873c14-4fac-4957-97cd-567916b72d8b

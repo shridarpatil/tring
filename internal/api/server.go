@@ -312,6 +312,9 @@ func (s *Server) Router() http.Handler {
 			r.Get("/calls", s.handleListCalls)
 			r.Get("/calls/{id}", s.handleGetCall)
 			r.Get("/calls/{id}/recording", s.handleGetCallRecording)
+			// Backend-mediated call control (CRM backend, API key). ADR-001.
+			r.Post("/calls/{id}/hold", s.handleHoldCall)
+			r.Post("/calls/{id}/resume", s.handleResumeCall)
 
 			r.Post("/webhooks", s.handleCreateWebhook)
 			r.Get("/webhooks", s.handleListWebhooks)
