@@ -11,10 +11,9 @@ name: Tests
 on:
   push:
     branches: [main]
-    # Tag pushes go through the same test gate before the image/release jobs
-    # below build them: build-develop / freeswitch-image (:develop on main,
-    # :<tag> on a tag) and the GoReleaser `release` job (binaries + GitHub
-    # Release + version-tagged Go images).
+    # Tag pushes go through the same test gate before the image jobs build them:
+    # the `images` job (all four → :develop on main, :<tag> on a tag, both
+    # registries) and the GoReleaser `release` job (binaries + GitHub Release).
     tags: ["v*"]
   pull_request:
     branches: [main]
@@ -155,10 +154,18 @@ jobs:
   #                                          release notes + version-
   #                                          tagged multi-arch images)
 
-  build-develop:
-    name: Build & push :develop
+  # ONE job builds & pushes ALL FOUR images on BOTH triggers, gated on the tests
+  # above:
+  #   push to main   -> :develop
+  #   push a v* tag  -> :<tag>   (the tag name verbatim, e.g. v0.1.0)
+  # to GHCR + Docker Hub. The three Go binaries share the root Dockerfile
+  # (--build-arg CMD); freeswitch is its own image (amd64 only — its base
+  # safarov/freeswitch has no arm64). GoReleaser (the `release` job) no longer
+  # builds images — only binaries + the GitHub Release.
+  images:
+    name: image · ${{ matrix.name }}
     needs: [unit, integration]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -166,7 +173,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binary: [api, orchestrator, gateway]
+        include:
+          - { name: api,          context: ".",          file: Dockerfile,             args: "CMD=api",          platforms: "linux/amd64,linux/arm64" }
+          - { name: orchestrator, context: ".",          file: Dockerfile,             args: "CMD=orchestrator", platforms: "linux/amd64,linux/arm64" }
+          - { name: gateway,      context: ".",          file: Dockerfile,             args: "CMD=gateway",      platforms: "linux/amd64,linux/arm64" }
+          - { name: freeswitch,   context: "freeswitch", file: "freeswitch/Dockerfile", args: "",                 platforms: "linux/amd64" }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -190,60 +201,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push develop image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          build-args: |
-            CMD=${{ matrix.binary }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.binary }}:develop
-            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.binary }}:develop
-          cache-from: type=gha,scope=tring-${{ matrix.binary }}
-          cache-to: type=gha,mode=max,scope=tring-${{ matrix.binary }}
-
-  # FreeSWITCH is a non-Go image (FROM safarov/freeswitch + baked config) that
-  # GoReleaser can't build, so it gets its own job — but gated on the same tests
-  # as the Go images, and following the SAME tag convention: main -> :develop,
-  # git tag vX.Y.Z -> :vX.Y.Z, on both registries.
-  freeswitch-image:
-    name: Build & push freeswitch
-    needs: [unit, integration]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/tring-freeswitch
-            ${{ secrets.DOCKERHUB_USERNAME }}/tring-freeswitch
+            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.name }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.name }}
           tags: |
             type=raw,value=develop,enable={{is_default_branch}}
             type=ref,event=tag
@@ -251,13 +215,15 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: freeswitch
-          file: freeswitch/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.args }}
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=freeswitch
-          cache-to: type=gha,mode=max,scope=freeswitch
+          cache-from: type=gha,scope=tring-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=tring-${{ matrix.name }}
 
   release:
     name: Release (GoReleaser + version-tagged images)
