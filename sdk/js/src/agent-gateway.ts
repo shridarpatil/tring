@@ -322,9 +322,13 @@ class GatewayCall implements AgentCall {
 
   setMuted(muted: boolean): void {
     this._muted = muted;
-    // Mute the ACTUAL sent track (the sender's), which is authoritative — the
-    // peer then receives silence. Also flip the captured stream's tracks (the
-    // same object) belt-and-suspenders.
+    // Disable EVERY audio track actually being sent on the peer connection —
+    // authoritative, independent of any cached mic/sender reference. A disabled
+    // track transmits silence, so the remote (the customer) hears nothing.
+    this.pc?.getSenders().forEach((s) => {
+      if (s.track && s.track.kind === "audio") s.track.enabled = !muted;
+    });
+    // Belt-and-suspenders: the captured stream's tracks (same objects).
     if (this.sender?.track) this.sender.track.enabled = !muted;
     this.mic?.getAudioTracks().forEach((t) => (t.enabled = !muted));
   }
