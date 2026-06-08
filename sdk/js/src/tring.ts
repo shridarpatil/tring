@@ -98,6 +98,10 @@ export class Tring extends Emitter<TringEvent> {
       sendDTMF: async (digit: string) => {
         ac.sendDTMF(digit);
       },
+      setMuted: (m: boolean) => ac.setMuted(m),
+      get muted() {
+        return ac.muted;
+      },
     };
 
     ac.onState((s) => {

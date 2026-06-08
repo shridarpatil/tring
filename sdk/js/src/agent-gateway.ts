@@ -34,6 +34,8 @@ export interface AgentCall {
   hangup(): Promise<void>;
   sendDTMF(digit: string): void;
   setMuted(muted: boolean): void;
+  /** Whether the mic is currently muted. */
+  readonly muted: boolean;
   /** Register the lifecycle callback (connected → ended). */
   onState(cb: (s: AgentCallState) => void): void;
 }
