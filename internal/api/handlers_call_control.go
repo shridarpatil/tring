@@ -21,20 +21,28 @@ import (
 //
 // Both hold the AGENT leg so the bridged customer hears hold music.
 
-// holdLeg points the held leg's hold_music at the tenant's configured MOH (when
-// set) and issues uuid_hold / resume. uuid_hold reads hold_music at hold time,
-// so it's set first; a failure there just falls back to the FS default.
+// defaultMOH is FreeSWITCH's looping hold-music stream (local_stream://moh,
+// defined in local_stream.conf.xml) — used when the tenant configured none.
+const defaultMOH = "local_stream://moh"
+
+// holdLeg plays hold music INTO the customer leg by media injection
+// (uuid_displace), so the bridged agent's audio is replaced by MOH. It does NOT
+// use uuid_hold: that re-INVITEs the leg, and a media-gateway leg can't
+// renegotiate — FreeSWITCH then marks the gateway DOWN and the call drops.
+// Resume stops the displacement. Source = the tenant's hold music, else the
+// looping default (a single uploaded file plays once; the default loops).
 func (s *Server) holdLeg(ctx context.Context, leg, holdMusic string, hold bool) error {
-	if hold && holdMusic != "" {
-		if _, err := s.fs.Command(ctx, "uuid_setvar", leg+" hold_music "+holdMusic); err != nil {
-			s.log.Warn("set hold_music failed, using default", "err", err)
-		}
+	src := holdMusic
+	if src == "" {
+		src = defaultMOH
 	}
-	args := leg
-	if !hold {
-		args = "off " + leg
+	var args string
+	if hold {
+		args = leg + " start " + src + " 0" // 0 = no time limit
+	} else {
+		args = leg + " stop " + src
 	}
-	_, err := s.fs.Command(ctx, "uuid_hold", args)
+	_, err := s.fs.Command(ctx, "uuid_displace", args)
 	return err
 }
 

@@ -191,7 +191,14 @@ func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event)
 
 	sip, _ := getChannelVar(ctx, conn, bLeg, "tring_agent")
 	if sip == "" {
-		return // bridged leg isn't a tagged agent leg (e.g. not a transfer)
+		// No agent tag on the B-leg → this is the customer leg of an outbound
+		// click-to-call (the agent is the A-leg). Record it so hold plays MOH to
+		// the customer. Inbound is unaffected: there the customer is the A-leg
+		// (= fs_uuid), which control resolves via COALESCE.
+		if _, err := r.db.Pool.Exec(ctx, r.q.SetCallCustomerLeg, bLeg, aLeg); err != nil {
+			r.log.Error("stamp customer leg failed", "call_id", aLeg, "err", err)
+		}
+		return
 	}
 	var (
 		agentID uuid.UUID
