@@ -13,6 +13,7 @@ type ctxKey int
 
 const (
 	tenantCtxKey ctxKey = iota
+	agentCtxKey
 )
 
 type Tenant struct {
@@ -96,6 +97,30 @@ func (s *Server) tenantForAPIKey(ctx context.Context, plaintext string) (uuid.UU
 func tenantFromCtx(ctx context.Context) *Tenant {
 	if t, ok := ctx.Value(tenantCtxKey).(*Tenant); ok {
 		return t
+	}
+	return nil
+}
+
+// AgentAuthRequired validates the agent JWT (aud tring.sdk) and stashes the
+// claims. This is a NARROW surface: the agent SDK uses it to control its OWN
+// active call (hold; later transfer). Unlike origination — which stays
+// backend-only (ADR-001) — self call-control is a safe agent capability: the
+// JWT scopes every action to that one agent's current call.
+func (s *Server) AgentAuthRequired(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims, err := s.ParseAgentToken(bearerToken(r))
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid agent token")
+			return
+		}
+		ctx := context.WithValue(r.Context(), agentCtxKey, claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func agentFromCtx(ctx context.Context) *AgentClaims {
+	if c, ok := ctx.Value(agentCtxKey).(*AgentClaims); ok {
+		return c
 	}
 	return nil
 }
