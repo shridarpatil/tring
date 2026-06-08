@@ -482,7 +482,7 @@ function injectStyles(): void {
   style.textContent = `
     #${PANEL_ID} {
       position: fixed; right: 1.5rem; bottom: 1.5rem;
-      width: 280px; padding: 1rem 1.25rem;
+      width: 320px; padding: 1rem 1.25rem;
       background: #111827; color: white; border-radius: 12px;
       box-shadow: 0 10px 40px rgba(0,0,0,.35);
       font: 14px/1.4 system-ui, sans-serif;
@@ -517,10 +517,10 @@ function injectStyles(): void {
     #${PANEL_ID} .tring-panel-incoming { display: none; gap: 1.75rem; justify-content: center; }
     #${PANEL_ID}[data-state="incoming"] .tring-panel-incoming { display: flex; }
     #${PANEL_ID}[data-state="incoming"] .tring-panel-actions { display: none; }
-    #${PANEL_ID} .tring-panel-actions { display: flex; gap: .75rem; justify-content: center; }
+    #${PANEL_ID} .tring-panel-actions { display: flex; gap: .5rem; justify-content: center; flex-wrap: wrap; }
     /* Round icon buttons for all call controls. */
     #${PANEL_ID} .tring-ctl {
-      width: 48px; height: 48px; border-radius: 50%;
+      width: 44px; height: 44px; border-radius: 50%;
       border: none; cursor: pointer; padding: 0;
       display: inline-flex; align-items: center; justify-content: center;
       background: #374151; color: #fff;
