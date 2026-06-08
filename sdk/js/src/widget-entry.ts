@@ -51,11 +51,16 @@ function readOpts() {
   }
   // data-gateway-url is optional: when omitted, the token endpoint
   // (data-token-url) supplies the gateway URL (+ ICE) in its response.
+  // apiBase for SDK call-control: data-api-base wins; else derive from this
+  // script's own URL (agent.js is served from {apiBase}/sdk/agent.js).
+  const apiBase =
+    s.getAttribute("data-api-base") ||
+    (s.src ? s.src.replace(/\/sdk\/agent\.js(\?.*)?$/, "") : undefined);
   return {
     token: s.getAttribute("data-token") || undefined,
     tokenUrl: s.getAttribute("data-token-url") || undefined,
     gatewayUrl: s.getAttribute("data-gateway-url") || undefined,
-    controlUrl: s.getAttribute("data-control-url") || undefined,
+    apiBase: apiBase || undefined,
   };
 }
 
