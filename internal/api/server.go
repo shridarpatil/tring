@@ -346,6 +346,7 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.AgentAuthRequired)
 			r.Post("/sdk/calls/hold", s.handleSdkHold)
 			r.Post("/sdk/calls/resume", s.handleSdkResume)
+			r.Get("/sdk/transfer-targets", s.handleSdkTransferTargets)
 			r.Post("/sdk/calls/transfer", s.handleSdkTransfer)
 		})
 		// Outbound origination is backend-only (POST /v1/calls, API key); the
