@@ -906,6 +906,14 @@ func (e *Executor) runTeamTransfer(ctx context.Context, conn *eslgo.Conn, st *ca
 			if bridgeErr != nil {
 				return "", fmt.Errorf("bridge: %w", bridgeErr)
 			}
+			// The agent who answered may have blind-transferred the caller away; the
+			// caller is now in a new bridge, so end without walking on to a hangup
+			// node or the post-walk HangupCall (same as the single-agent path).
+			if e.wasBlindTransferred(st.uuid) {
+				st.transferred = true
+				st.log.Info("ivr team transfer: caller blind-transferred away, ending flow without hangup", "team", team)
+				return "", nil
+			}
 			if l := e.answeredAgentLabel(st.uuid); l != "" {
 				st.stepDetail = l
 				return "completed", nil
