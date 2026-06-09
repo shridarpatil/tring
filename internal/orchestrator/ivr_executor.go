@@ -732,6 +732,16 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	}
 	st.log.Info("ivr transfer bridging", "node", node.ID, "bridge_to", bridgeTo, "agents", sips)
 
+	// Keep audio going through the ring: hand FreeSWITCH the tenant's hold music
+	// as the bridge ringback (instant, so it starts at once) — otherwise an
+	// already-answered web caller hears silence until the agent picks up. Mirrors
+	// the team-transfer path. Best-effort: a query miss falls back to built-in MOH.
+	var holdMusic string
+	_ = e.DB.Pool.QueryRow(ctx, e.Q.GetTenantHoldMusic, st.tenantID).Scan(&holdMusic)
+	moh := effectiveMOH("", holdMusic)
+	_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "ringback", Value: moh, Sync: false})
+	_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "instant_ringback", Value: "true", Sync: false})
+
 	if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: bridgeTo, Sync: true}); err != nil {
 		return "", fmt.Errorf("bridge: %w", err)
 	}
