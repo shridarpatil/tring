@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -141,11 +142,36 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agents)
 }
 
+// resolveAgentRef resolves an agent path param that may be EITHER a UUID or a
+// sip_username, so integrators can key agents by their own CRM user id (set as
+// the sip_username) and skip a list→id lookup. Returns the agent's UUID id and
+// sip_username; pgx.ErrNoRows when no agent matches (callers map it to 404).
+func (s *Server) resolveAgentRef(ctx context.Context, tenantID uuid.UUID, ref string) (uuid.UUID, string, error) {
+	if id, err := uuid.Parse(ref); err == nil {
+		var sip string
+		if err := s.db.Pool.QueryRow(ctx, s.q.GetAgentSipUsername, id, tenantID).Scan(&sip); err != nil {
+			return uuid.Nil, "", err
+		}
+		return id, sip, nil
+	}
+	// Not a UUID → treat the param as a sip_username.
+	var id uuid.UUID
+	var label string
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetAgentBySIP, tenantID, ref).Scan(&id, &label); err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, ref, nil
+}
+
 func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	id, _, err := s.resolveAgentRef(r.Context(), t.ID, chi.URLParam(r, "id"))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
 	var a Agent
