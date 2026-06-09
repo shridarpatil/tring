@@ -35,7 +35,11 @@ const defaultMOH = "local_stream://moh"
 // use uuid_hold: that re-INVITEs the leg, and a media-gateway leg can't
 // renegotiate — FreeSWITCH then marks the gateway DOWN and the call drops.
 // Resume stops the displacement. Source = the tenant's hold music, else the
-// looping default (a single uploaded file plays once; the default loops).
+// looping default. The "l" flag LOOPS the source (switch_ivr_displace_session):
+// without it a single uploaded file plays once and then goes silent for the
+// rest of the hold — only stream sources like local_stream://moh loop on their
+// own. With "l", an uploaded file behaves like the default MOH (and the flag is
+// a harmless no-op for a stream that never hits EOF). "0" = no time limit.
 func (s *Server) holdLeg(ctx context.Context, leg, holdMusic string, hold bool) error {
 	src := holdMusic
 	if src == "" {
@@ -43,7 +47,7 @@ func (s *Server) holdLeg(ctx context.Context, leg, holdMusic string, hold bool) 
 	}
 	var args string
 	if hold {
-		args = leg + " start " + src + " 0" // 0 = no time limit
+		args = leg + " start " + src + " 0 l"
 	} else {
 		args = leg + " stop " + src
 	}
