@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,16 +28,10 @@ type tokenResponse struct {
 // key directly.
 func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return
-	}
-
-	var sipUsername string
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentSipUsername,
-		id, t.ID,
-	).Scan(&sipUsername)
+	// The {id} param accepts either the agent UUID or its sip_username, so an
+	// integrator can mint a token straight from their CRM user id (= sip_username)
+	// without a separate id lookup.
+	id, sipUsername, err := s.resolveAgentRef(r.Context(), t.ID, chi.URLParam(r, "id"))
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
