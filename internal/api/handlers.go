@@ -199,9 +199,15 @@ type setAgentAvailabilityRequest struct {
 // ringing them. Emits an agent.status webhook so the CRM can track the change.
 func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	// {id} accepts the agent UUID or its sip_username (= the integrator's CRM
+	// user id), so the Away/Break toggle can be driven by that id directly.
+	id, _, err := s.resolveAgentRef(r.Context(), t.ID, chi.URLParam(r, "id"))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid id")
+		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
 	var req setAgentAvailabilityRequest
