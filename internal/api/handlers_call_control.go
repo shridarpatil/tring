@@ -241,6 +241,11 @@ func (s *Server) handleSdkTransfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.fs.Command(r.Context(), "uuid_setvar", leg+" transfer_ringback "+moh)
+	// Mark the leg so the orchestrator's IVR executor knows this bridge ended
+	// because of a blind transfer (caller handed to a new bridge), not a normal
+	// hangup — so it doesn't walk on to a hangup node or post-walk HangupCall and
+	// drop the transferred caller. Read back via wasBlindTransferred.
+	_, _ = s.fs.Command(r.Context(), "uuid_setvar", leg+" tring_blind_transfer true")
 	if _, err := s.fs.Command(r.Context(), "uuid_transfer", leg+" tring_transfer XML default"); err != nil {
 		s.log.Error("transfer failed", "agent", agentID, "err", err)
 		writeError(w, http.StatusBadGateway, "transfer command failed")
