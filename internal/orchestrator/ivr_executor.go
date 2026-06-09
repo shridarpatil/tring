@@ -297,7 +297,11 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 
 	// Best-effort hangup if the call's still up. Hangup nodes already do
 	// this; this catches paths that fall through (e.g. no outgoing edge).
-	_ = conn.HangupCall(ctx, uuidStr, "NORMAL_CLEARING")
+	// Skip it when the caller was blind-transferred away — the channel is now in
+	// a new bridge and hanging it up would drop the transferred call.
+	if !state.transferred {
+		_ = conn.HangupCall(ctx, uuidStr, "NORMAL_CLEARING")
+	}
 }
 
 // ResolvedFlow is what resolveFlow returns: the tenant that owns the
@@ -481,6 +485,13 @@ type callState struct {
 	// graph (which Transfer the call reaches) decides it — e.g. a caller-lookup
 	// success branch points at a priority Transfer.
 	queuePriority bool
+
+	// transferred is set when a blind SDK transfer moved this caller off to a new
+	// bridge (the agent pressed Transfer). The bridge ending then means "handed
+	// off", NOT "call over", so the executor must NOT walk on to a wired hangup
+	// node or run the post-walk HangupCall — either would kill the transferred
+	// caller mid-conversation. See runTransfer / HandleInboundCall.
+	transferred bool
 
 	// log is the per-call logger: the executor's base logger with call_id +
 	// tenant bound, so every walk/node line correlates to this one call.
@@ -745,6 +756,15 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	if _, err := conn.SendCommand(ctx, &call.Execute{UUID: st.uuid, AppName: "bridge", AppArgs: bridgeTo, Sync: true}); err != nil {
 		return "", fmt.Errorf("bridge: %w", err)
 	}
+	// The bridge ended. If the agent blind-transferred the caller away, the
+	// caller is now in a NEW bridge (the tring_transfer dialplan) — ending here
+	// without walking on to a wired hangup node, and flagging st so the post-walk
+	// HangupCall is skipped. Otherwise this hangs up the just-transferred caller.
+	if e.wasBlindTransferred(st.uuid) {
+		st.transferred = true
+		st.log.Info("ivr transfer: caller blind-transferred away, ending flow without hangup", "node", node.ID)
+		return "", nil
+	}
 	// Source of truth for "did an agent answer" is the CHANNEL_BRIDGE event
 	// (handled in runner.go), which stamps calls.agent_id with the answering
 	// agent during the bridge. We read it back here rather than probing a
@@ -952,6 +972,30 @@ func (e *Executor) holdWithMusic(ctx context.Context, conn *eslgo.Conn, st *call
 // hold-music playback, so it can't break it itself. A plain uuid_break (NOT
 // "all", which was part of the earlier connect regression). A break happens at
 // most once per dequeue, so the per-break dial is not a hot path.
+// wasBlindTransferred reports whether the API blind-transferred this caller off
+// to a new bridge (handleSdkTransfer sets tring_blind_transfer on the leg right
+// before uuid_transfer). Read over a fresh side ESL connection because the
+// executor's own outbound socket is detached the moment the channel is
+// transferred. Fails closed to false (treat as a normal bridge end) if we can't
+// read it, so a read hiccup never strands a normal caller off-hook.
+func (e *Executor) wasBlindTransferred(channelUUID string) bool {
+	if e.eslAddr == "" {
+		return false
+	}
+	c, err := eslgo.Dial(e.eslAddr, e.eslPassword, func() {})
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	resp, err := c.SendCommand(ctx, command.API{Command: "uuid_getvar", Arguments: channelUUID + " tring_blind_transfer"})
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(resp.Body)) == "true"
+}
+
 func (e *Executor) breakChannel(channelUUID string) {
 	if e.eslAddr == "" {
 		e.Logger.Warn("queue: no ESL addr configured, cannot break hold music")
