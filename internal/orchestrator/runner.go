@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,10 @@ type Runner struct {
 	// recordingsDir is the FreeSWITCH-side directory recordings are written to
 	// (shared mount the API also reads). Empty disables recording.
 	recordingsDir string
+	// recordSampleRate downsamples the recording WAV to this rate (Hz). The
+	// gateway leg is Opus@48k, so left alone FS records at 48kHz — needlessly
+	// large for voice. 0 leaves it at the session-native rate.
+	recordSampleRate int
 	// blob is the optional S3 store recordings are uploaded to on completion.
 	// nil/disabled → recordings stay on the local volume.
 	blob *blobstore.Store
@@ -47,9 +52,11 @@ type Runner struct {
 }
 
 // WithRecordings sets the directory FreeSWITCH writes call recordings to and
-// returns the runner for chaining. Empty leaves recording off.
-func (r *Runner) WithRecordings(dir string) *Runner {
+// the WAV sample rate (Hz; 0 = session-native), returning the runner for
+// chaining. Empty dir leaves recording off.
+func (r *Runner) WithRecordings(dir string, sampleRate int) *Runner {
 	r.recordingsDir = dir
+	r.recordSampleRate = sampleRate
 	return r
 }
 
@@ -230,6 +237,11 @@ func (r *Runner) maybeRecord(ctx context.Context, conn *eslgo.Conn, aLeg string,
 	}
 	path := filepath.Join(r.recordingsDir, aLeg+".wav")
 	_, _ = conn.SendCommand(ctx, command.API{Command: "uuid_setvar", Arguments: aLeg + " RECORD_STEREO true"})
+	// Downsample the WAV from the session-native rate (48kHz on the Opus gateway
+	// leg) so voice recordings stay small — 8kHz stereo is ~32KB/s vs ~192KB/s.
+	if r.recordSampleRate > 0 {
+		_, _ = conn.SendCommand(ctx, command.API{Command: "uuid_setvar", Arguments: aLeg + " record_sample_rate " + strconv.Itoa(r.recordSampleRate)})
+	}
 	resp, err := conn.SendCommand(ctx, command.API{Command: "uuid_record", Arguments: aLeg + " start " + path})
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(resp.Body)), "+OK") {
 		r.log.Warn("call recording failed to start", "call_id", aLeg, "path", path, "err", err)
