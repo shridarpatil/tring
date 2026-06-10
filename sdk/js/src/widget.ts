@@ -429,7 +429,17 @@ function createPanel(control?: CallControl): Panel {
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
-    if (active) await active.accept();
+    if (!active) return;
+    // The WebRTC handshake (mic prompt + ICE gathering + offer/answer) takes a
+    // visible beat. Flip to a "connecting" state on the click itself so the
+    // button never feels ignored; "connected" replaces it when media is up.
+    subEl.textContent = "Connecting…";
+    root.setAttribute("data-state", "connecting");
+    try {
+      await active.accept();
+    } catch {
+      // accept() failures surface via the error event → panel.setStatus("error").
+    }
   });
   declineBtn.addEventListener("click", async () => {
     ringer.stop();
@@ -572,6 +582,10 @@ function injectStyles(): void {
     #${PANEL_ID}[data-state="ringing"] .tring-panel-sub { color: #fbbf24; }
     #${PANEL_ID}[data-state="incoming"] .tring-panel-sub,
     #${PANEL_ID}[data-state="connected"] .tring-panel-sub { color: #34d399; }
+    /* Connecting: amber + pulse so the wait reads as "working", not "stuck". */
+    #${PANEL_ID}[data-state="connecting"] .tring-panel-sub {
+      color: #fbbf24; animation: tring-pulse 1s ease-in-out infinite;
+    }
     #${PANEL_ID}[data-state="error"] .tring-panel-sub { color: #f87171; }
     /* Accept/Decline shown only while an inbound call is ringing. */
     #${PANEL_ID} .tring-panel-incoming { display: none; gap: 1.75rem; justify-content: center; }
