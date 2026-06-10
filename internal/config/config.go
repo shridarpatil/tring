@@ -96,6 +96,13 @@ var defaults = map[string]any{
 	// pointing at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
 	"agent_transport": "gateway",
 	"agent_gateway":   "tring-gw",
+	// agent_jitter_msec installs a FreeSWITCH jitter buffer (jitterbuffer_msec)
+	// on the gateway agent leg so the agent's internet/TURN uplink — which
+	// arrives jittered/reordered/lossy — is smoothed (and Opus inband-FEC made
+	// usable) before it's bridged to the far party. Without it, packet jitter is
+	// heard as breaks in the agent's voice at the other end. "min:max" adaptive
+	// ms; "" disables (fine for agents on the same LAN as the gateway).
+	"agent_jitter_msec": "60:200",
 	// How long (seconds) an inbound agent leg rings at the gateway before it
 	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
 	"gateway_agent_ring_timeout": 45,

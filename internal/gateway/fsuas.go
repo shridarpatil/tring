@@ -37,6 +37,12 @@ func (g *Gateway) ringTimeout() time.Duration {
 const (
 	// tenantHeader disambiguates agents whose SIP usernames collide across tenants.
 	tenantHeader = "X-Tring-Tenant"
+	// agentSipHeader carries the agent's SIP username out-of-band. The username
+	// can't ride the request-URI user, because an email-style one
+	// (kalpesh@zerodha.com) makes FreeSWITCH read the @domain as the SIP host and
+	// misroute the INVITE away from the gateway. We match on this header and
+	// fall back to the URI user only for older originators that don't send it.
+	agentSipHeader = "X-Tring-Agent-Sip"
 	// agentLabelHeader is the non-PII string shown to the agent for this call
 	// (e.g. a ticket/account ref). The backend sets it on a click-to-call so the
 	// agent NEVER receives the dialed customer number. Absent ⇒ generic.
@@ -65,7 +71,12 @@ func (g *Gateway) registerFSUAS() {
 
 // handleFSInvite bridges one FS-delivered agent leg to the agent's browser.
 func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
-	sipUser := req.Recipient.User
+	// Prefer the out-of-band header (handles @-containing usernames the URI user
+	// can't carry); fall back to the request-URI user for older originators.
+	sipUser := headerValue(req, agentSipHeader)
+	if sipUser == "" {
+		sipUser = req.Recipient.User
+	}
 	tenant := headerValue(req, tenantHeader)
 	// What the agent sees: the explicit label (click-to-call sets it and never
 	// the dialed number), falling back to the SIP caller-ID for inbound / IVR

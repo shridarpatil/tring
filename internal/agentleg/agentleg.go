@@ -30,29 +30,57 @@ type Options struct {
 	// agent's browser — used by backend-initiated click-to-call, not inbound
 	// transfers (which ring the agent for a manual accept).
 	AutoAnswer bool
+	// JitterMsec, when non-empty, sets jitterbuffer_msec on the gateway leg so FS
+	// de-jitters the agent's (internet/TURN) uplink before bridging — "min:max"
+	// adaptive ms. Empty omits it. Gateway transport only; the legacy SIP path is
+	// LAN-local and doesn't need it.
+	JitterMsec string
 }
 
 // Build returns the FreeSWITCH bridge dial-string for the leg.
 func Build(o Options) string {
 	if o.Transport == "gateway" {
-		vars := make([]string, 0, 4)
+		vars := make([]string, 0, 6)
+		if o.JitterMsec != "" {
+			vars = append(vars, "jitterbuffer_msec="+o.JitterMsec)
+		}
 		if o.Attribute {
 			vars = append(vars, "tring_agent="+o.SIP)
 		}
 		vars = append(vars, "sip_h_X-Tring-Tenant="+o.TenantID)
+		// The agent's SIP username travels in a header, NOT the request-URI user:
+		// an email-style username (kalpesh@zerodha.com) in the dial-string user
+		// position makes FreeSWITCH treat the @domain as the SIP host and misroute
+		// the INVITE away from the gateway. The gateway matches on this header
+		// (fsuas.go); we route on an @-free user below.
+		vars = append(vars, "sip_h_X-Tring-Agent-Sip="+o.SIP)
 		if o.AutoAnswer {
 			vars = append(vars, "sip_h_X-Tring-Auto-Answer=1")
 		}
 		if l := sanitizeLabel(o.Label); l != "" {
 			vars = append(vars, "sip_h_X-Tring-Agent-Label="+l)
 		}
-		return fmt.Sprintf("[%s]sofia/gateway/%s/%s", strings.Join(vars, ","), o.Gateway, o.SIP)
+		return fmt.Sprintf("[%s]sofia/gateway/%s/%s", strings.Join(vars, ","), o.Gateway, routingUser(o.SIP))
 	}
 	// Legacy direct-SIP transport: the agent registers to FreeSWITCH itself.
 	if o.Attribute {
 		return fmt.Sprintf("[tring_agent=%s]user/%s@%s", o.SIP, o.SIP, o.Domain)
 	}
 	return fmt.Sprintf("user/%s@%s", o.SIP, o.Domain)
+}
+
+// routingUser renders a SIP username safe for the request-URI user position of
+// the gateway dial-string. An '@' (email-style username) would make FreeSWITCH
+// read the part after it as the SIP host and misroute the INVITE, so we route on
+// the local-part only — the full username travels in X-Tring-Agent-Sip and is
+// what the gateway matches on. Plain usernames are returned unchanged, so
+// existing agents (and an older gateway still reading the URI user) are
+// unaffected.
+func routingUser(sip string) string {
+	if i := strings.IndexByte(sip, '@'); i >= 0 {
+		return sip[:i]
+	}
+	return sip
 }
 
 // sanitizeLabel strips characters that would break the FreeSWITCH `[k=v,...]`

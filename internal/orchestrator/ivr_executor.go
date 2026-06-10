@@ -122,6 +122,9 @@ type Executor struct {
 	// endpoint, ADR-001 M4b). Set via WithAgentTransport. Empty = "sip".
 	AgentTransport string
 	AgentGateway   string
+	// AgentJitter sets jitterbuffer_msec on the gateway agent leg ("min:max" ms;
+	// "" disables) so FS smooths the agent's internet/TURN uplink before bridging.
+	AgentJitter string
 
 	// rrMu/rr back the round_robin team strategy: a per-team counter that
 	// rotates which member rings first each call. In-process (one orchestrator
@@ -197,11 +200,13 @@ func (e *Executor) WithCache(c *cache.Cache) *Executor {
 	return e
 }
 
-// WithAgentTransport sets how agent bridge legs are routed and returns the
-// executor for chaining. Empty transport leaves the default ("sip").
-func (e *Executor) WithAgentTransport(transport, gateway string) *Executor {
+// WithAgentTransport sets how agent bridge legs are routed (and the jitter
+// buffer applied to gateway legs) and returns the executor for chaining. Empty
+// transport leaves the default ("sip"); empty jitter omits the buffer.
+func (e *Executor) WithAgentTransport(transport, gateway, jitter string) *Executor {
 	e.AgentTransport = transport
 	e.AgentGateway = gateway
+	e.AgentJitter = jitter
 	return e
 }
 
@@ -1383,13 +1388,14 @@ func (e *Executor) rrNext(key string, n int) int {
 // AutoAnswer stays off (that's the API click-to-call path).
 func (e *Executor) agentLeg(sip, domain, tenantID, label string) string {
 	return agentleg.Build(agentleg.Options{
-		Transport: e.AgentTransport,
-		Gateway:   e.AgentGateway,
-		SIP:       sip,
-		Domain:    domain,
-		TenantID:  tenantID,
-		Label:     label,
-		Attribute: true,
+		Transport:  e.AgentTransport,
+		Gateway:    e.AgentGateway,
+		SIP:        sip,
+		Domain:     domain,
+		TenantID:   tenantID,
+		Label:      label,
+		Attribute:  true,
+		JitterMsec: e.AgentJitter,
 	})
 }
 

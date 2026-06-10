@@ -118,9 +118,9 @@ func TestAgentLegTagsSIP(t *testing.T) {
 // With the "gateway" transport the leg routes to the media gateway as a SIP
 // endpoint and carries the tenant id as a SIP header (ADR-001 M4b).
 func TestAgentLegGatewayTransport(t *testing.T) {
-	e := (&Executor{}).WithAgentTransport("gateway", "tring-gw")
+	e := (&Executor{}).WithAgentTransport("gateway", "tring-gw", "60:200")
 	got := e.agentLeg("alice", "d.tring.local", "t1", "")
-	want := "[tring_agent=alice,sip_h_X-Tring-Tenant=t1]sofia/gateway/tring-gw/alice"
+	want := "[jitterbuffer_msec=60:200,tring_agent=alice,sip_h_X-Tring-Tenant=t1,sip_h_X-Tring-Agent-Sip=alice]sofia/gateway/tring-gw/alice"
 	if got != want {
 		t.Errorf("agentLeg = %q, want %q", got, want)
 	}
