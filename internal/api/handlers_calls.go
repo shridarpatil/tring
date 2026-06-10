@@ -360,7 +360,21 @@ func (s *Server) handleGetCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
-// handleGetCallRecording streams a call's WAV recording. Tenant-scoped: the
+// recordingMIME maps a recording file extension to its Content-Type. Explicit
+// (not mime.TypeByExtension) because the stdlib table lacks ".wav" on some
+// platforms. Mirrors the orchestrator's mapping in runner.go.
+func recordingMIME(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".mp3":
+		return "audio/mpeg"
+	case ".opus", ".ogg":
+		return "audio/ogg"
+	default:
+		return "audio/wav"
+	}
+}
+
+// handleGetCallRecording streams a call's recording. Tenant-scoped: the
 // fs_uuid lookup is filtered by tenant so one tenant can't fetch another's
 // recording. The file is written by FreeSWITCH to the shared recordings mount,
 // named by fs_uuid. 404 if the call isn't ours or the file isn't there yet
@@ -395,13 +409,20 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		defer obj.Close()
-		w.Header().Set("Content-Type", "audio/wav")
+		// Content-Type from the stored key's extension (mp3/wav/opus), not a
+		// hardcoded WAV — the format is configurable and may differ per object.
+		w.Header().Set("Content-Type", recordingMIME(filepath.Ext(*s3Key)))
 		_, _ = io.Copy(w, obj)
 		return
 	}
 
-	// Local spool fallback (S3 disabled, or not yet uploaded).
-	path := filepath.Join(s.recordingsDir, fsUUID+".wav")
+	// Local spool fallback (S3 disabled, or not yet uploaded). The extension
+	// matches the configured record format; http.ServeFile sets Content-Type.
+	format := s.recordingsFormat
+	if format == "" {
+		format = "wav"
+	}
+	path := filepath.Join(s.recordingsDir, fsUUID+"."+format)
 	if _, err := os.Stat(path); err != nil {
 		writeError(w, http.StatusNotFound, "recording not available")
 		return

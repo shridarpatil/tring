@@ -119,6 +119,7 @@ func main() {
 			AudioDir:         k.String("audio_dir"),
 			AudioFSDir:       k.String("audio_fs_dir"),
 			RecordingsDir:    k.String("recordings_dir"),
+			RecordingsFormat: k.String("record_format"),
 			Blob:             blob,
 			Cache:            flowCache,
 			Logger:           logger,
