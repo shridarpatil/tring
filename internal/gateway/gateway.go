@@ -92,8 +92,15 @@ func New(cfg Config) (*Gateway, error) {
 
 	me := &webrtc.MediaEngine{}
 	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2},
-		PayloadType:        111,
+		// useinbandfec=1 tells the browser's Opus encoder to carry forward-error-
+		// correction so the far side can reconstruct an isolated lost packet
+		// instead of hearing a gap; minptime=10 keeps 20ms framing. This is the
+		// standard WebRTC Opus fmtp — without it, light loss = audible breaks.
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
+		},
+		PayloadType: 111,
 	}, webrtc.RTPCodecTypeAudio); err != nil {
 		return nil, fmt.Errorf("register opus: %w", err)
 	}
