@@ -117,12 +117,19 @@ var defaults = map[string]any{
 	// audio_dir, so the path the orchestrator hands uuid_record is exactly what
 	// the API serves from.
 	"recordings_dir": "/usr/share/freeswitch/recordings/tring",
-	// record_sample_rate: the WAV sample rate (Hz) for call recordings. The
-	// gateway leg is Opus@48k, so without this FreeSWITCH records at the
-	// session-native 48kHz — a stereo 16-bit WAV is then ~192KB/s (~31MB for
-	// under 3 min). 8000 (telephony narrowband) cuts that 6x with no audible
-	// loss for voice; bump to 16000 for wideband. 0 = leave at session rate.
+	// record_sample_rate: the recording sample rate (Hz). The gateway leg is
+	// Opus@48k, so without this FreeSWITCH records at the session-native 48kHz —
+	// a stereo 16-bit WAV is then ~192KB/s (~31MB for under 3 min). 8000
+	// (telephony narrowband) cuts that 6x with no audible loss for voice; bump
+	// to 16000 for wideband. 0 = leave at session rate.
 	"record_sample_rate": 8000,
+	// record_format: the recording file format / extension, which selects the
+	// FreeSWITCH file handler. "ogg" (mod_sndfile → Ogg Vorbis) records
+	// compressed stereo directly — ~25x smaller than WAV, both channels kept,
+	// no extra module. "mp3" (mod_shout) is similar size with universal browser
+	// playback (Safari/iOS can't play Ogg Vorbis). "wav" is the uncompressed
+	// fallback. True Opus needs mod_opusfile baked into the image (not present).
+	"record_format": "ogg",
 
 	// S3 (or S3-compatible: MinIO, R2, …) for call recordings. When s3_bucket is
 	// set, a finished recording is uploaded to S3 (date-wise key) and the local

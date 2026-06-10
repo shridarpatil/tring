@@ -62,7 +62,7 @@ func main() {
 	}
 
 	r := orchestrator.New(dbase, k.String("esl_addr"), k.String("esl_password")).
-		WithRecordings(k.String("recordings_dir"), k.Int("record_sample_rate")).
+		WithRecordings(k.String("recordings_dir"), k.Int("record_sample_rate"), k.String("record_format")).
 		WithBlobStore(blob).
 		WithLogger(logger)
 

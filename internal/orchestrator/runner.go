@@ -41,22 +41,28 @@ type Runner struct {
 	// recordingsDir is the FreeSWITCH-side directory recordings are written to
 	// (shared mount the API also reads). Empty disables recording.
 	recordingsDir string
-	// recordSampleRate downsamples the recording WAV to this rate (Hz). The
-	// gateway leg is Opus@48k, so left alone FS records at 48kHz — needlessly
-	// large for voice. 0 leaves it at the session-native rate.
+	// recordSampleRate downsamples the recording to this rate (Hz). The gateway
+	// leg is Opus@48k, so left alone FS records at 48kHz — needlessly large for
+	// voice. 0 leaves it at the session-native rate.
 	recordSampleRate int
+	// recordFormat is the recording file extension (no dot) — "ogg" (mod_sndfile
+	// → compressed Ogg Vorbis), "mp3" (mod_shout) or "wav" (mod_sndfile, raw).
+	// It selects the FreeSWITCH file handler. Empty defaults to "wav".
+	recordFormat string
 	// blob is the optional S3 store recordings are uploaded to on completion.
 	// nil/disabled → recordings stay on the local volume.
 	blob *blobstore.Store
 	log  *slog.Logger
 }
 
-// WithRecordings sets the directory FreeSWITCH writes call recordings to and
-// the WAV sample rate (Hz; 0 = session-native), returning the runner for
-// chaining. Empty dir leaves recording off.
-func (r *Runner) WithRecordings(dir string, sampleRate int) *Runner {
+// WithRecordings sets the directory FreeSWITCH writes call recordings to, the
+// sample rate (Hz; 0 = session-native), and the file format ("mp3"/"wav"),
+// returning the runner for chaining. Empty dir leaves recording off; empty
+// format defaults to "wav".
+func (r *Runner) WithRecordings(dir string, sampleRate int, format string) *Runner {
 	r.recordingsDir = dir
 	r.recordSampleRate = sampleRate
+	r.recordFormat = format
 	return r
 }
 
@@ -235,7 +241,14 @@ func (r *Runner) maybeRecord(ctx context.Context, conn *eslgo.Conn, aLeg string,
 	if err := r.db.Pool.QueryRow(ctx, r.q.GetTenantRecordCalls, tenantID).Scan(&enabled); err != nil || !enabled {
 		return
 	}
-	path := filepath.Join(r.recordingsDir, aLeg+".wav")
+	// The extension selects the FS file handler: ".ogg" → mod_sndfile (Ogg
+	// Vorbis, compressed), ".mp3" → mod_shout, ".wav" → mod_sndfile (raw PCM).
+	// All keep the stereo split (RECORD_STEREO) below.
+	format := r.recordFormat
+	if format == "" {
+		format = "wav"
+	}
+	path := filepath.Join(r.recordingsDir, aLeg+"."+format)
 	_, _ = conn.SendCommand(ctx, command.API{Command: "uuid_setvar", Arguments: aLeg + " RECORD_STEREO true"})
 	// Downsample the WAV from the session-native rate (48kHz on the Opus gateway
 	// leg) so voice recordings stay small — 8kHz stereo is ~32KB/s vs ~192KB/s.
@@ -254,9 +267,23 @@ func (r *Runner) maybeRecord(ctx context.Context, conn *eslgo.Conn, aLeg string,
 	r.log.Info("call recording started", "call_id", aLeg, "path", path)
 }
 
+// recordingMIME maps a recording file extension to its Content-Type. Kept
+// explicit (not mime.TypeByExtension) because the stdlib type table doesn't
+// carry ".wav" on all platforms.
+func recordingMIME(ext string) string {
+	switch strings.ToLower(ext) {
+	case ".mp3":
+		return "audio/mpeg"
+	case ".opus", ".ogg":
+		return "audio/ogg"
+	default:
+		return "audio/wav"
+	}
+}
+
 // onRecordStop uploads a finished recording to S3 (date-wise key) and deletes
 // the local spool, making S3 the source of truth. RECORD_STOP fires exactly
-// when FreeSWITCH finalizes the WAV and carries its path. No-op when S3 is off
+// when FreeSWITCH finalizes the file and carries its path. No-op when S3 is off
 // (the file then stays on the local volume for the API to serve directly).
 // Best-effort: on any failure the local file is left in place and the API can
 // still serve it. Uses its own longer context — an upload can outlast the 5s
@@ -280,8 +307,11 @@ func (r *Runner) onRecordStop(e *eslgo.Event) {
 	if err := r.db.Pool.QueryRow(ctx, r.q.GetCallForRecording, fsUUID).Scan(&tenantID, &startedAt); err != nil {
 		return // not a Tring-tracked call
 	}
-	key := r.blob.Key(tenantID.String(), startedAt, fsUUID+".wav")
-	if err := r.blob.PutFile(ctx, key, recPath, "audio/wav"); err != nil {
+	// Derive the extension + MIME from the file FreeSWITCH actually wrote, not
+	// from config — robust if the format changed between record and upload.
+	ext := filepath.Ext(recPath) // ".mp3" / ".wav"
+	key := r.blob.Key(tenantID.String(), startedAt, fsUUID+ext)
+	if err := r.blob.PutFile(ctx, key, recPath, recordingMIME(ext)); err != nil {
 		r.log.Error("recording S3 upload failed", "call_id", fsUUID, "key", key, "err", err)
 		return
 	}
