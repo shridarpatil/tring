@@ -117,6 +117,12 @@ var defaults = map[string]any{
 	// audio_dir, so the path the orchestrator hands uuid_record is exactly what
 	// the API serves from.
 	"recordings_dir": "/usr/share/freeswitch/recordings/tring",
+	// record_sample_rate: the WAV sample rate (Hz) for call recordings. The
+	// gateway leg is Opus@48k, so without this FreeSWITCH records at the
+	// session-native 48kHz — a stereo 16-bit WAV is then ~192KB/s (~31MB for
+	// under 3 min). 8000 (telephony narrowband) cuts that 6x with no audible
+	// loss for voice; bump to 16000 for wideband. 0 = leave at session rate.
+	"record_sample_rate": 8000,
 
 	// S3 (or S3-compatible: MinIO, R2, …) for call recordings. When s3_bucket is
 	// set, a finished recording is uploaded to S3 (date-wise key) and the local
