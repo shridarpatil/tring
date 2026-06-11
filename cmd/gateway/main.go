@@ -159,6 +159,7 @@ func main() {
 		TURNSecret: turnSecret,
 		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
 		Grace:      time.Duration(k.Int("media_grace_seconds")) * time.Second,
+		DevTokens:  k.Bool("rtc_dev_tokens"),
 		Logger:     logger,
 	})
 	rtcAddr := k.String("rtc_addr")
