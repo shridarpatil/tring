@@ -1,0 +1,147 @@
+package signaling
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/google/uuid"
+	"github.com/pion/webrtc/v4"
+
+	"github.com/whatomate/tring/internal/ivr"
+	"github.com/whatomate/tring/internal/media/ivrdrive"
+	"github.com/whatomate/tring/internal/media/prompt"
+	"github.com/whatomate/tring/internal/media/room"
+)
+
+// ivrSession is a running IVR for one room: the prompt player injected as the
+// IVR participant, the driver the walker drives, and a cancel to stop it when
+// the caller leaves.
+type ivrSession struct {
+	pid    room.ParticipantID
+	player *prompt.Player
+	driver *ivrdrive.Driver
+	cancel context.CancelFunc
+}
+
+// startIVR loads the pinned flow and runs it as a participant in the room. Once
+// per room — a second flow-pinned join is a no-op. The IVR's prompt player is
+// injected via the SFU so the caller hears it; the caller's DTMF (routeDTMF)
+// drives menus. When the flow ends (or the caller leaves) the IVR is torn down.
+func (s *Server) startIVR(roomID room.RoomID, flowID string) {
+	s.mu.Lock()
+	if s.ivr[roomID] != nil {
+		s.mu.Unlock()
+		return // already running for this room
+	}
+	pid := room.ParticipantID("ivr-" + uuid.NewString())
+	player := prompt.NewPlayer(pid, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	driver := ivrdrive.New(ivrdrive.Config{
+		Prompts: &filePrompts{dir: s.cfg.AudioDir, player: player},
+		Logger:  s.log,
+	})
+	s.ivr[roomID] = &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel}
+	s.mu.Unlock()
+
+	flow, err := s.cfg.Flows.Load(ctx, flowID)
+	if err != nil || flow == nil {
+		s.log.Warn("ivr: flow load failed", "room", roomID, "flow", flowID, "err", err)
+		s.stopIVR(roomID)
+		return
+	}
+
+	// Inject the IVR's voice into the room (existing peers subscribe to it).
+	if err := s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+	}); err != nil {
+		s.log.Error("ivr: inject source failed", "room", roomID, "err", err)
+		s.stopIVR(roomID)
+		return
+	}
+
+	s.log.Info("ivr started", "room", roomID, "flow", flowID, "entry", flow.EntryNode)
+	go func() {
+		path, walkErr := ivr.Walk(ctx, flow, flow.EntryNode, driver)
+		s.log.Info("ivr flow ended", "room", roomID, "steps", len(path), "err", walkErr)
+		s.stopIVR(roomID) // teardown: remove the IVR participant + close the player
+	}()
+}
+
+// routeDTMF delivers a caller keypress to the room's IVR, if one is running.
+func (s *Server) routeDTMF(roomID room.RoomID, digit string) {
+	s.mu.Lock()
+	sess := s.ivr[roomID]
+	s.mu.Unlock()
+	if sess != nil && digit != "" {
+		sess.driver.DTMF(digit)
+	}
+}
+
+// stopIVR tears down a room's IVR: cancels the walk, removes the injected
+// participant, and closes the player. Idempotent.
+func (s *Server) stopIVR(roomID room.RoomID) {
+	s.mu.Lock()
+	sess := s.ivr[roomID]
+	delete(s.ivr, roomID)
+	s.mu.Unlock()
+	if sess == nil {
+		return
+	}
+	sess.cancel()
+	s.sfu.RemoveSource(roomID, sess.pid)
+	_ = sess.player.Close()
+	s.log.Info("ivr stopped", "room", roomID)
+}
+
+// filePrompts plays Ogg/Opus prompt files (from AudioDir) through the IVR's
+// player, caching decoded frames so a repeated prompt isn't re-read.
+type filePrompts struct {
+	dir    string
+	player *prompt.Player
+
+	mu    sync.Mutex
+	cache map[string][][]byte
+}
+
+// Play streams the named prompt file and blocks until it finishes (or ctx ends).
+func (p *filePrompts) Play(ctx context.Context, file string) error {
+	frames, err := p.load(file)
+	if err != nil {
+		return err
+	}
+	done := p.player.Play(frames)
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *filePrompts) load(file string) ([][]byte, error) {
+	p.mu.Lock()
+	if p.cache == nil {
+		p.cache = map[string][][]byte{}
+	}
+	if frames, ok := p.cache[file]; ok {
+		p.mu.Unlock()
+		return frames, nil
+	}
+	p.mu.Unlock()
+
+	f, err := os.Open(filepath.Join(p.dir, filepath.Clean("/"+file)))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	frames, err := prompt.LoadOggOpus(f)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	p.cache[file] = frames
+	p.mu.Unlock()
+	return frames, nil
+}
