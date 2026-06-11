@@ -147,6 +147,37 @@ func (c *client) publishOpus(t *testing.T, closers *[]func()) {
 	}()
 }
 
+// addScreenShare adds a VP8 video track (writing dummy frames) the client will
+// attach once the server invites it via Publish. Added before connect; idle
+// until the server's publish renegotiation references its m-line.
+func (c *client) addScreenShare(t *testing.T, closers *[]func()) {
+	t.Helper()
+	track, err := webrtc.NewTrackLocalStaticSample(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000},
+		"video", "screen-"+string(c.server.ID()),
+	)
+	if err != nil {
+		t.Fatalf("video track: %v", err)
+	}
+	if _, err := c.pc.AddTrack(track); err != nil {
+		t.Fatalf("add video track: %v", err)
+	}
+	stop := make(chan struct{})
+	*closers = append(*closers, func() { close(stop) })
+	go func() {
+		tick := time.NewTicker(33 * time.Millisecond) // ~30fps
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				_ = track.WriteSample(media.Sample{Data: make([]byte, 200), Duration: 33 * time.Millisecond})
+			}
+		}
+	}()
+}
+
 // connect kicks off the server's initial offer (the server is the sole offerer).
 func (c *client) connect() { c.server.Negotiate() }
 
@@ -209,4 +240,79 @@ func forwardOnce(t *testing.T) bool {
 	case <-time.After(4 * time.Second):
 		return false
 	}
+}
+
+func TestForwardsScreenShareWithoutDroppingAudio(t *testing.T) {
+	const attempts = 8
+	for i := 1; i <= attempts; i++ {
+		if screenShareOnce(t) {
+			return
+		}
+		t.Logf("attempt %d/%d: screen-share video did not flow (in-process ICE), retrying", i, attempts)
+	}
+	t.Fatalf("B never received A's forwarded screen-share video after %d attempts", attempts)
+}
+
+// screenShareOnce runs one attempt: A and B connect with audio, A starts screen
+// share (server Publish → renegotiation), and we require that B receives A's
+// VIDEO track while its AUDIO keeps flowing (audio must not drop).
+func screenShareOnce(t *testing.T) bool {
+	t.Helper()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	var closers []func()
+	defer func() {
+		for _, c := range closers {
+			c()
+		}
+	}()
+
+	a := newClient(t, s, clientAPI(t), "call", "a", &closers)
+	b := newClient(t, s, clientAPI(t), "call", "b", &closers)
+
+	var bAudio, bVideo int64
+	gotAudio := make(chan struct{})
+	var audioOnce sync.Once
+	b.pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		isVideo := tr.Kind() == webrtc.RTPCodecTypeVideo
+		for {
+			if _, _, err := tr.ReadRTP(); err != nil {
+				return
+			}
+			if isVideo {
+				atomic.AddInt64(&bVideo, 1)
+			} else if atomic.AddInt64(&bAudio, 1) >= 15 {
+				audioOnce.Do(func() { close(gotAudio) })
+			}
+		}
+	})
+
+	a.publishOpus(t, &closers)
+	b.publishOpus(t, &closers)
+	a.addScreenShare(t, &closers) // track added; server invites it via Publish below
+	a.connect()
+	b.connect()
+
+	// Wait for audio first.
+	select {
+	case <-gotAudio:
+	case <-time.After(4 * time.Second):
+		return false
+	}
+
+	// Start screen share: the server adds a recvonly video transceiver and
+	// renegotiates; A answers attaching its video; B subscribes to it.
+	a.server.Publish(webrtc.RTPCodecTypeVideo)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt64(&bVideo) >= 10 {
+			// Video arrived AND audio kept flowing throughout.
+			return atomic.LoadInt64(&bAudio) >= 15
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
 }

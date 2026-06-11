@@ -43,7 +43,8 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 		sig:    sig,
 		sfu:    s,
 		log:    s.log.With("room", roomID, "participant", pid),
-		subs:   make(map[room.ParticipantID][]*webrtc.RTPSender),
+		subs:   make(map[room.ParticipantID]map[*webrtc.TrackLocalStaticRTP]*webrtc.RTPSender),
+		recv:   map[webrtc.RTPCodecType]bool{webrtc.RTPCodecTypeAudio: true}, // recvonly audio added above
 	}
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
@@ -204,6 +205,52 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 	}
 }
 
+// Unpublish stops one of a participant's tracks (e.g. screen-share video ended):
+// it drops that kind's fan-out track and removes the matching sender from every
+// subscriber, renegotiating them. The participant's other tracks (audio) are
+// untouched — they're separate transceivers — so stopping screen share never
+// disrupts the call's audio.
+func (s *SFU) Unpublish(roomID room.RoomID, pid room.ParticipantID, kind webrtc.RTPCodecType) {
+	s.mu.Lock()
+	r := s.rooms[roomID]
+	if r == nil {
+		s.mu.Unlock()
+		return
+	}
+	pub := r.pubs[pid]
+	var track *webrtc.TrackLocalStaticRTP
+	if pub != nil {
+		track = pub.tracks[kind]
+		delete(pub.tracks, kind)
+	}
+	var others []*Peer
+	for opid, q := range r.peers {
+		if opid != pid {
+			others = append(others, q)
+		}
+	}
+	s.mu.Unlock()
+	if track == nil {
+		return
+	}
+
+	for _, q := range others {
+		q.mu.Lock()
+		sender := q.subs[pid][track]
+		if sender != nil {
+			delete(q.subs[pid], track)
+			q.dirty = true
+		}
+		q.mu.Unlock()
+		if sender != nil {
+			if err := q.pc.RemoveTrack(sender); err != nil {
+				q.log.Debug("remove track on unpublish", "err", err)
+			}
+			q.Negotiate()
+		}
+	}
+}
+
 // Leave is the TERMINAL teardown (explicit bye or grace expiry, via the room's
 // left event): it removes the participant's peer and publication, removes its
 // fan-out tracks from every subscriber (renegotiating them), and closes the PC.
@@ -227,11 +274,15 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 	}
 	s.mu.Unlock()
 
-	// Remove this source's tracks from each remaining subscriber, then resync.
+	// Remove all of this source's tracks from each remaining subscriber, resync.
 	for _, q := range remaining {
 		q.mu.Lock()
-		senders := q.subs[pid]
+		byTrack := q.subs[pid]
 		delete(q.subs, pid)
+		senders := make([]*webrtc.RTPSender, 0, len(byTrack))
+		for _, sender := range byTrack {
+			senders = append(senders, sender)
+		}
 		if len(senders) > 0 {
 			q.dirty = true
 		}

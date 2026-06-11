@@ -34,8 +34,10 @@ Requires the gateway running with <code>TRING_RTC_DEV_TOKENS=true</code>.</small
 <div class="row">
   <button id="join">Join</button>
   <button id="mute" disabled>Mute</button>
+  <button id="share" disabled>Share screen</button>
   <button id="leave" disabled>Leave</button>
 </div>
+<div id="videos" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem"></div>
 
 <div id="status">idle</div>
 <h2 style="font-size:1rem">Participants</h2>
@@ -126,9 +128,18 @@ function ensurePC(iceServers) {
   for (const track of mic.getTracks()) pc.addTrack(track, mic);
   pc.onicecandidate = (e) => { if (e.candidate) send({ type: "ice", candidate: e.candidate.toJSON() }); };
   pc.ontrack = (e) => {
-    const el = document.createElement("audio");
-    el.autoplay = true; el.srcObject = e.streams[0] || new MediaStream([e.track]);
-    document.body.appendChild(el);
+    const stream = e.streams[0] || new MediaStream([e.track]);
+    if (e.track.kind === "video") {
+      const v = document.createElement("video");
+      v.autoplay = true; v.playsInline = true; v.muted = true;
+      v.style.maxWidth = "300px"; v.srcObject = stream;
+      $("videos").appendChild(v);
+      e.track.onended = () => v.remove();
+    } else {
+      const a = document.createElement("audio");
+      a.autoplay = true; a.srcObject = stream;
+      document.body.appendChild(a);
+    }
   };
   pc.onconnectionstatechange = () => setStatus("pc: " + pc.connectionState);
   return pc;
@@ -140,7 +151,7 @@ async function onMessage(m) {
       sessionStorage.setItem(`tring-rtc:${$("room").value}`, m.session_token);
       setStatus(`joined as ${m.participant_id.slice(0, 8)}…`);
       ensurePC(m.ice_servers);
-      $("mute").disabled = false; $("leave").disabled = false;
+      $("mute").disabled = false; $("leave").disabled = false; $("share").disabled = false;
       break;
     case "offer": {
       const p = ensurePC();
@@ -170,9 +181,12 @@ async function onMessage(m) {
 
 function teardown() {
   clearTimeout(reconnectTimer);
-  $("join").disabled = false; $("mute").disabled = true; $("leave").disabled = true;
+  $("join").disabled = false; $("mute").disabled = true; $("leave").disabled = true; $("share").disabled = true;
+  $("share").textContent = "Share screen";
   resetPC();
   if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
+  if (screenStream) { screenStream.getTracks().forEach((t) => t.stop()); screenStream = null; screenSender = null; }
+  $("videos").innerHTML = "";
   peers.clear(); renderRoster();
 }
 
@@ -182,6 +196,30 @@ $("mute").onclick = () => {
   if (mic) mic.getAudioTracks().forEach((t) => (t.enabled = !muted));
   $("mute").textContent = muted ? "Unmute" : "Mute";
 };
+let screenStream = null, screenSender = null;
+$("share").onclick = async () => {
+  if (!pc) return;
+  if (screenStream) { // stop sharing
+    screenStream.getTracks().forEach((t) => t.stop());
+    if (screenSender) { try { pc.removeTrack(screenSender); } catch {} }
+    send({ type: "unpublish", kind: "video" });
+    screenStream = null; screenSender = null;
+    $("share").textContent = "Share screen";
+    return;
+  }
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+  } catch (e) { setStatus("screen share cancelled: " + e.message); return; }
+  const track = screenStream.getVideoTracks()[0];
+  track.contentHint = "detail"; // screen content: prioritize sharpness over framerate
+  track.onended = () => $("share").click(); // browser "Stop sharing" bar
+  screenSender = pc.addTrack(track, screenStream);
+  // Ask the server to invite the video track (it renegotiates; the server stays
+  // the sole offerer — we never offer, we answer its offer attaching this track).
+  send({ type: "publish", kind: "video" });
+  $("share").textContent = "Stop sharing";
+};
+
 $("leave").onclick = () => {
   userClosed = true;
   sessionStorage.removeItem(`tring-rtc:${$("room").value}`);

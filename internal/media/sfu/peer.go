@@ -41,15 +41,42 @@ type Peer struct {
 	OnConnected func()
 	OnClosed    func()
 
-	mu          sync.Mutex
-	haveRemote  bool                                       // an answer has been applied → candidates can be added
-	pending     []webrtc.ICECandidateInit                  // candidates that arrived before the first answer
-	subs        map[room.ParticipantID][]*webrtc.RTPSender // senders delivering each source's tracks to me
-	started     bool                                       // the initial offer has been sent
-	dirty       bool                                       // a subscription was removed (Leave) → needs a renegotiation
-	negotiating bool                                       // an offer is outstanding (awaiting the client's answer)
-	needSync    bool                                       // tracks changed while negotiating → renegotiate after the answer
+	mu         sync.Mutex
+	haveRemote bool                      // an answer has been applied → candidates can be added
+	pending    []webrtc.ICECandidateInit // candidates that arrived before the first answer
+	// subs maps each source participant → (its fan-out track → the sender
+	// delivering it to me). Keyed per-TRACK, not per-source, so a participant
+	// adding a second track later (screen share) is picked up, not skipped.
+	subs        map[room.ParticipantID]map[*webrtc.TrackLocalStaticRTP]*webrtc.RTPSender
+	recv        map[webrtc.RTPCodecType]bool // recvonly transceivers we've added to invite the client's media
+	started     bool                         // the initial offer has been sent
+	dirty       bool                         // a subscription was removed (Leave) → needs a renegotiation
+	negotiating bool                         // an offer is outstanding (awaiting the client's answer)
+	needSync    bool                         // tracks changed while negotiating → renegotiate after the answer
 	closed      bool
+}
+
+// Publish invites the client to send an additional media kind (screen-share
+// video) by adding a recvonly transceiver and renegotiating. The server stays
+// the sole offerer — the client never offers; it answers this offer attaching
+// its track. No-op if that kind is already invited.
+func (p *Peer) Publish(kind webrtc.RTPCodecType) {
+	p.mu.Lock()
+	if p.closed || p.recv[kind] {
+		p.mu.Unlock()
+		return
+	}
+	if _, err := p.pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{
+		Direction: webrtc.RTPTransceiverDirectionRecvonly,
+	}); err != nil {
+		p.mu.Unlock()
+		p.log.Warn("publish add transceiver", "kind", kind, "err", err)
+		return
+	}
+	p.recv[kind] = true
+	p.dirty = true // force a renegotiation even with no subscription change
+	p.mu.Unlock()
+	p.Negotiate()
 }
 
 // markReplaced marks this peer superseded by a reconnect: it won't be torn down
@@ -137,10 +164,15 @@ func (p *Peer) Negotiate() {
 	first := !p.started
 	added := false
 	for _, src := range sources {
-		if _, ok := p.subs[src.pid]; ok {
-			continue
+		byTrack := p.subs[src.pid]
+		if byTrack == nil {
+			byTrack = make(map[*webrtc.TrackLocalStaticRTP]*webrtc.RTPSender)
+			p.subs[src.pid] = byTrack
 		}
 		for _, track := range src.tracks {
+			if _, ok := byTrack[track]; ok {
+				continue // already subscribed to this specific track
+			}
 			tr, err := p.pc.AddTransceiverFromTrack(track, webrtc.RTPTransceiverInit{
 				Direction: webrtc.RTPTransceiverDirectionSendonly,
 			})
@@ -148,7 +180,7 @@ func (p *Peer) Negotiate() {
 				p.log.Warn("subscribe add transceiver", "from", src.pid, "err", err)
 				continue
 			}
-			p.subs[src.pid] = append(p.subs[src.pid], tr.Sender())
+			byTrack[track] = tr.Sender()
 			drainSender(tr.Sender())
 			added = true
 		}
