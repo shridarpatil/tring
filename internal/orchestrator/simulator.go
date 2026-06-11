@@ -70,16 +70,6 @@ func httpOutcome(in SimInput) string {
 	return "http:2xx"
 }
 
-// SimStep is one row in the trace.
-type SimStep struct {
-	NodeID    string `json:"node_id"`
-	NodeType  string `json:"node_type"`
-	Action    string `json:"action"`               // play_audio, speak, prompt_dtmf, transfer, hangup, branch, passthrough, http_call
-	Detail    string `json:"detail,omitempty"`     // file path, agent number, URL, etc.
-	DTMFInput string `json:"dtmf_input,omitempty"` // digit consumed at a menu/gather, if any
-	Outcome   string `json:"outcome"`              // edge handle id taken: "default", "digit:1", "timeout"...
-}
-
 // SimResult is the full trace returned to the caller.
 type SimResult struct {
 	Steps       []SimStep         `json:"steps"`

@@ -64,45 +64,8 @@ type flowCacheEntry struct {
 	Definition string    `json:"definition"`
 }
 
-// ─── Flow data model (matches the frontend / API JSON shape) ────────
-
-type ivrNodePosition struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-}
-
-type ivrNode struct {
-	ID       string                 `json:"id"`
-	Type     string                 `json:"type"` // see ivrNodeType constants below
-	Label    string                 `json:"label"`
-	Position ivrNodePosition        `json:"position"`
-	Config   map[string]interface{} `json:"config"`
-}
-
-type ivrEdge struct {
-	From      string `json:"from"`
-	To        string `json:"to"`
-	Condition string `json:"condition"` // source handle id
-}
-
-type ivrFlowData struct {
-	Version   int       `json:"version"`
-	Nodes     []ivrNode `json:"nodes"`
-	Edges     []ivrEdge `json:"edges"`
-	EntryNode string    `json:"entry_node"`
-}
-
-const (
-	nodeStart        = "start"
-	nodeGreeting     = "greeting"
-	nodeMenu         = "menu"
-	nodeGather       = "gather"
-	nodeHTTPCallback = "http_callback"
-	nodeTransfer     = "transfer"
-	nodeGotoFlow     = "goto_flow"
-	nodeTiming       = "timing"
-	nodeHangup       = "hangup"
-)
+// The flow data model + node-type constants live in internal/ivr (aliased in
+// ivr_aliases.go).
 
 // ─── Executor ──────────────────────────────────────────────────────
 
@@ -460,22 +423,6 @@ func (e *Executor) loadFlow(ctx context.Context, flowID uuid.UUID) (*ivrFlowData
 	return flow, tenantID, name, err
 }
 
-// parseFlowDef unmarshals a flow definition and enforces the one invariant
-// the executor relies on: a non-empty entry node.
-func parseFlowDef(defJSON []byte) (*ivrFlowData, error) {
-	if len(defJSON) == 0 {
-		return nil, nil
-	}
-	var flow ivrFlowData
-	if err := json.Unmarshal(defJSON, &flow); err != nil {
-		return nil, fmt.Errorf("bad flow JSON: %w", err)
-	}
-	if flow.EntryNode == "" {
-		return nil, fmt.Errorf("flow has no entry node")
-	}
-	return &flow, nil
-}
-
 // callState is the per-call mutable state — variables gathered via
 // Gather nodes, the caller/callee identifiers, and tenant context.
 type callState struct {
@@ -579,24 +526,6 @@ func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData
 		nodeID = next
 	}
 	return errors.New("flow walk exceeded max depth (64)")
-}
-
-func findNode(flow *ivrFlowData, id string) (*ivrNode, bool) {
-	for i := range flow.Nodes {
-		if flow.Nodes[i].ID == id {
-			return &flow.Nodes[i], true
-		}
-	}
-	return nil, false
-}
-
-func findNextNode(flow *ivrFlowData, fromID, condition string) string {
-	for _, e := range flow.Edges {
-		if e.From == fromID && e.Condition == condition {
-			return e.To
-		}
-	}
-	return ""
 }
 
 // runNode dispatches to the node-type-specific executor. Returns the
@@ -1197,39 +1126,6 @@ func (e *Executor) stashResponse(ctx context.Context, conn *eslgo.Conn, st *call
 	}
 }
 
-// substituteVars replaces {{key}} tokens in a template with vars[key]. Unknown
-// tokens are left as-is (visible in logs so the author can spot a typo).
-func substituteVars(tmpl string, vars map[string]string) string {
-	if !strings.Contains(tmpl, "{{") {
-		return tmpl
-	}
-	for k, v := range vars {
-		tmpl = strings.ReplaceAll(tmpl, "{{"+k+"}}", v)
-	}
-	return tmpl
-}
-
-// stringifyJSON renders a JSON value as the plain string stored in a flow/channel
-// var (so {"priority":true} → "true", {"team":"sales"} → "sales").
-func stringifyJSON(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
-	case float64:
-		return strconv.FormatFloat(t, 'f', -1, 64)
-	case nil:
-		return ""
-	default:
-		b, _ := json.Marshal(t)
-		return string(b)
-	}
-}
-
 // answeredAgentLabel returns the display label of the agent attributed to this
 // call (stamped by the CHANNEL_BRIDGE handler), or "" if none answered. Uses a
 // fresh short context so it works even after the call's ctx is cancelled.
@@ -1411,52 +1307,7 @@ func (e *Executor) runHangup(ctx context.Context, conn *eslgo.Conn, node *ivrNod
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
-func intFromConfig(c map[string]interface{}, key string, def int) int {
-	if v, ok := c[key]; ok {
-		switch n := v.(type) {
-		case float64:
-			return int(n)
-		case int:
-			return n
-		}
-	}
-	return def
-}
-
-func stringFromConfig(c map[string]interface{}, key string) string {
-	if v, ok := c[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func boolFromConfig(c map[string]interface{}, key string) bool {
-	if v, ok := c[key].(bool); ok {
-		return v
-	}
-	return false
-}
-
-func mapFromConfig(c map[string]interface{}, key string) map[string]interface{} {
-	if v, ok := c[key].(map[string]interface{}); ok {
-		return v
-	}
-	return nil
-}
-
-// mapStringFromConfig reads a JSON object config field as map[string]string,
-// dropping non-string values (used for http_callback headers).
-func mapStringFromConfig(c map[string]interface{}, key string) map[string]string {
-	out := map[string]string{}
-	if m, ok := c[key].(map[string]interface{}); ok {
-		for k, v := range m {
-			if s, ok := v.(string); ok {
-				out[k] = s
-			}
-		}
-	}
-	return out
-}
+// Config readers + var templating live in internal/ivr (aliased in ivr_aliases.go).
 
 // getChannelVar reads ${var} off the live channel via `uuid_getvar`.
 // FreeSWITCH responds with the raw value in the body; we trim it.
