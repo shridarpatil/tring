@@ -1,11 +1,12 @@
 // Package ivrdrive is the IVR as a pion participant: an ivr.CallDriver that runs
 // a flow against a room with no FreeSWITCH. Prompts are played as the IVR's own
 // audio track (a prompt.Player injected via SFU.InjectSource); the caller's DTMF
-// arrives over /rtc signaling and is fed to DTMF(). Routing a call to a human
-// (Transfer) is a membership change handled in M9; here it's a stub.
+// arrives over /rtc signaling and is fed to DTMF(). Transfer routes the call to
+// a human via the Agents seam — a room membership change (the agent joins, the
+// IVR participant leaves) implemented by the signaling layer.
 //
-// The graph traversal is ivr.Walk — the SAME walker the FreeSWITCH executor will
-// use — so the phone IVR and the web IVR can't diverge.
+// The graph traversal is ivr.Walk — the SAME walker the FreeSWITCH executor
+// uses — so the phone IVR and the web IVR can't diverge.
 package ivrdrive
 
 import (
@@ -25,24 +26,47 @@ type Prompts interface {
 	Play(ctx context.Context, file string) error
 }
 
+// Target identifies who a Transfer node routes to.
+type Target struct {
+	Team     string // ring a team (with its strategy/queue) — takes precedence
+	AgentSIP string // ring one specific agent
+	Label    string // what the agent's incoming-call UI shows (never an internal id)
+}
+
+// Agents rings an agent into the call's room — the transfer membership change.
+// It blocks until an agent joins the room (outcome "completed") or nobody
+// answers in time / there are no agents ("no_answer"). The IVR participant
+// leaves once an agent is admitted; from the caller's side the IVR voice is
+// simply replaced by the agent. The signaling layer implements this against
+// agent presence; tests fake it. A nil Agents means transfer reports no_answer.
+type Agents interface {
+	Ring(ctx context.Context, room string, t Target) (outcome string, err error)
+}
+
 // Driver implements ivr.CallDriver against the pion media plane.
 type Driver struct {
-	prompts Prompts
-	dtmf    chan string       // caller DTMF digits (fed by DTMF())
-	now     func() time.Time  // clock for Timing (injectable in tests)
-	http    *http.Client      // http_callback client
-	vars    map[string]string // flow vars gathered along the way
-	log     *slog.Logger
+	prompts   Prompts
+	agents    Agents
+	room      string            // the call's room id (where a transfer admits the agent)
+	clientRef string            // caller label shown to the agent on transfer
+	dtmf      chan string       // caller DTMF digits (fed by DTMF())
+	now       func() time.Time  // clock for Timing (injectable in tests)
+	http      *http.Client      // http_callback client
+	vars      map[string]string // flow vars gathered along the way
+	log       *slog.Logger
 
 	played []string // prompt files played, in order (trace/test visibility)
 }
 
 // Config builds a Driver.
 type Config struct {
-	Prompts Prompts
-	Now     func() time.Time // nil → time.Now
-	HTTP    *http.Client     // nil → http.DefaultClient
-	Logger  *slog.Logger
+	Prompts   Prompts
+	Agents    Agents           // rings agents on Transfer; nil → transfer reports no_answer
+	Room      string           // the call's room id (transfer admits the agent here)
+	ClientRef string           // caller label shown to the agent (empty → "Web Caller")
+	Now       func() time.Time // nil → time.Now
+	HTTP      *http.Client     // nil → http.DefaultClient
+	Logger    *slog.Logger
 }
 
 // New builds a pion IVR driver. The DTMF inbox is buffered so a digit that
@@ -58,12 +82,15 @@ func New(cfg Config) *Driver {
 		cfg.Logger = slog.Default()
 	}
 	return &Driver{
-		prompts: cfg.Prompts,
-		dtmf:    make(chan string, 4),
-		now:     cfg.Now,
-		http:    cfg.HTTP,
-		vars:    map[string]string{},
-		log:     cfg.Logger.With("component", "ivrdrive"),
+		prompts:   cfg.Prompts,
+		agents:    cfg.Agents,
+		room:      cfg.Room,
+		clientRef: cfg.ClientRef,
+		dtmf:      make(chan string, 4),
+		now:       cfg.Now,
+		http:      cfg.HTTP,
+		vars:      map[string]string{},
+		log:       cfg.Logger.With("component", "ivrdrive"),
 	}
 }
 
@@ -192,12 +219,36 @@ func (d *Driver) Timing(_ context.Context, n *ivr.Node) (ivr.NodeResult, error) 
 	return ivr.NodeResult{Outcome: ivr.EvalTimingOutcome(n.Config, d.now()), Action: "branch"}, nil
 }
 
-// Transfer is a stub on the pion plane until M9 (routing = a room membership
-// change: ring the agent, agent joins, IVR participant leaves). For now it
-// reports no_answer so flows remain walkable.
-func (d *Driver) Transfer(_ context.Context, _ *ivr.Node) (ivr.NodeResult, error) {
-	d.log.Warn("ivrdrive transfer not implemented yet (M9), reporting no_answer")
-	return ivr.NodeResult{Outcome: "no_answer", Action: "transfer"}, nil
+// Transfer routes the call to an agent (or team) by ringing them into the room
+// — the membership change. When an agent joins, the IVR participant leaves and
+// the caller is connected; the outcome is "completed". If nobody answers (or no
+// Agents/agents), it's "no_answer" so the flow can branch.
+func (d *Driver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	label := d.clientRef
+	if label == "" {
+		label = "Web Caller"
+	}
+	target := Target{
+		Team:     ivr.StringFromConfig(n.Config, "team"),
+		AgentSIP: ivr.StringFromConfig(n.Config, "agent_sip"),
+		Label:    label,
+	}
+	detail := target.Team
+	if detail == "" {
+		detail = target.AgentSIP
+	}
+	if detail == "" {
+		detail = "all agents"
+	}
+	if d.agents == nil {
+		d.log.Warn("ivrdrive transfer: no agent ring configured, reporting no_answer")
+		return ivr.NodeResult{Outcome: "no_answer", Action: "transfer", Detail: detail}, nil
+	}
+	outcome, err := d.agents.Ring(ctx, d.room, target)
+	if err != nil {
+		return ivr.NodeResult{Action: "transfer", Detail: detail}, err
+	}
+	return ivr.NodeResult{Outcome: outcome, Action: "transfer", Detail: detail}, nil
 }
 
 // GotoFlow is not yet implemented (matches the executor's TODO stub): end.

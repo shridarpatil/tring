@@ -68,6 +68,19 @@ func newDriver(fake *fakePrompts, now func() time.Time) *ivrdrive.Driver {
 	return ivrdrive.New(ivrdrive.Config{Prompts: fake, Now: now})
 }
 
+// fakeAgents records the ring target and returns a scripted outcome.
+type fakeAgents struct {
+	outcome string
+	gotRoom string
+	gotTgt  ivrdrive.Target
+}
+
+func (a *fakeAgents) Ring(_ context.Context, room string, t ivrdrive.Target) (string, error) {
+	a.gotRoom = room
+	a.gotTgt = t
+	return a.outcome, nil
+}
+
 // menuFlow: start → greeting(greeting.ogg) → menu(menu.ogg) --digit:1--> hangup(bye.ogg)
 //
 //	--timeout--> hangup2(timeout.ogg)
@@ -140,6 +153,75 @@ func TestGatherCollectsAndStores(t *testing.T) {
 	}
 	if got := d.Vars()["pin"]; got != "123" {
 		t.Fatalf("gathered pin = %q, want 123", got)
+	}
+}
+
+func TestTransferRoutesToAgent(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "tenant/call", ClientRef: "Ticket #42"})
+	flow := &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"team": "sales"}},
+			{ID: "done", Type: ivr.NodeHangup},
+			{ID: "vm", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "x", Condition: "default"},
+			{From: "x", To: "done", Condition: "completed"},
+			{From: "x", To: "vm", Condition: "no_answer"},
+		},
+	}
+	path := runFlow(t, d, fake, flow, nil)
+	if want := []string{"s", "x", "done"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v (transfer → completed)", ids(path), want)
+	}
+	if agents.gotRoom != "tenant/call" {
+		t.Fatalf("ring room = %q, want tenant/call", agents.gotRoom)
+	}
+	if agents.gotTgt.Team != "sales" || agents.gotTgt.Label != "Ticket #42" {
+		t.Fatalf("ring target = %+v, want team=sales label=Ticket #42", agents.gotTgt)
+	}
+}
+
+func TestTransferNoAnswerBranches(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "no_answer"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r"})
+	flow := &ivr.Flow{
+		EntryNode: "x",
+		Nodes: []ivr.Node{
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"agent_sip": "alice"}},
+			{ID: "done", Type: ivr.NodeHangup},
+			{ID: "vm", Type: ivr.NodeHangup, Config: map[string]interface{}{"audio_file": "voicemail.ogg"}},
+		},
+		Edges: []ivr.Edge{
+			{From: "x", To: "done", Condition: "completed"},
+			{From: "x", To: "vm", Condition: "no_answer"},
+		},
+	}
+	path := runFlow(t, d, fake, flow, nil)
+	if want := []string{"x", "vm"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v (no_answer → voicemail)", ids(path), want)
+	}
+}
+
+func TestTransferWithoutAgentsReportsNoAnswer(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake}) // no Agents configured
+	flow := &ivr.Flow{
+		EntryNode: "x",
+		Nodes: []ivr.Node{
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"team": "sales"}},
+			{ID: "vm", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{{From: "x", To: "vm", Condition: "no_answer"}},
+	}
+	path := runFlow(t, d, fake, flow, nil)
+	if want := []string{"x", "vm"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v", ids(path), want)
 	}
 }
 
