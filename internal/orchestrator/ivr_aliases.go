@@ -8,10 +8,8 @@ import "github.com/whatomate/tring/internal/ivr"
 // unchanged — only the definitions moved. See docs/MEDIA_PLANE_PLAN.md (M7).
 
 type (
-	ivrNodePosition = ivr.NodePosition
-	ivrNode         = ivr.Node
-	ivrEdge         = ivr.Edge
-	ivrFlowData     = ivr.Flow
+	ivrNode     = ivr.Node
+	ivrFlowData = ivr.Flow
 	// SimStep is the public trace row (consumed by the API). Aliased to ivr.Step.
 	SimStep = ivr.Step
 )
