@@ -15,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
 )
@@ -88,12 +89,20 @@ func (c *wsClient) readUntil(wantType string) map[string]any {
 
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return newServerCfg(t, signaling.Config{})
+}
+
+// newServerCfg builds a signaling server with the given extra config (SFU +
+// secret are filled in).
+func newServerCfg(t *testing.T, cfg signaling.Config) *httptest.Server {
+	t.Helper()
 	s, err := sfu.New(sfu.Config{})
 	if err != nil {
 		t.Fatalf("new sfu: %v", err)
 	}
-	srv := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret})
-	ts := httptest.NewServer(srv.Handler())
+	cfg.SFU = s
+	cfg.JWTSecret = testSecret
+	ts := httptest.NewServer(signaling.New(cfg).Handler())
 	t.Cleanup(ts.Close)
 	return ts
 }
@@ -233,6 +242,56 @@ func TestPeerSeesReconnectingOnDrop(t *testing.T) {
 		if st["state"] == "left" {
 			t.Fatal("A saw B left, want reconnecting (grace window)")
 		}
+	}
+}
+
+// transferFlows is a fake FlowLoader returning start → transfer(team=sales).
+type transferFlows struct{}
+
+func (transferFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]any{"team": "sales"}},
+		},
+		Edges: []ivr.Edge{{From: "s", To: "x", Condition: "default"}},
+	}, nil
+}
+
+// TestTransferRingsAgentIntoRoom is the M9 membership-change end-to-end (minus
+// real media): a visitor enters a flow-pinned room whose IVR immediately
+// transfers; an online agent is rung, joins the room, and the visitor sees the
+// agent as a peer. No FreeSWITCH involved.
+func TestTransferRingsAgentIntoRoom(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{Flows: transferFlows{}})
+	tenant := uuid.New()
+
+	// Agent registers presence and waits for a ring.
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+
+	// Visitor joins the flow-pinned room → IVR spawns → transfers → rings agents.
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	// Agent is rung for the same room.
+	inc := agent.readUntil("incoming")
+	if inc["room"] != "call" {
+		t.Fatalf("incoming room = %v, want call", inc["room"])
+	}
+
+	// Agent answers by joining the room → the transfer completes and the visitor
+	// sees the agent join as a peer.
+	answer := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	answer.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
+	answer.readUntil("joined")
+
+	pj := visitor.readUntil("peer-joined")
+	if pj["name"] != "Alice" {
+		t.Fatalf("visitor peer-joined name = %v, want Alice", pj["name"])
 	}
 }
 

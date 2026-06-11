@@ -40,6 +40,8 @@ func (s *Server) startIVR(roomID room.RoomID, flowID string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	driver := ivrdrive.New(ivrdrive.Config{
 		Prompts: &filePrompts{dir: s.cfg.AudioDir, player: player},
+		Agents:  s, // Server implements ivrdrive.Agents (rings agents into the room)
+		Room:    string(roomID),
 		Logger:  s.log,
 	})
 	s.ivr[roomID] = &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel}
