@@ -11,35 +11,8 @@ import (
 	"github.com/whatomate/tring/internal/dbtest"
 )
 
-// recordStep is pure (no DB / no ESL), so this asserts the journey shape that
-// feeds calls.ivr_path and the console — including the "transfer A no-answer,
-// then transfer B answered" sequence the call log needs to show.
-func TestRecordStepBuildsJourney(t *testing.T) {
-	st := &callState{}
-
-	st.stepAction, st.stepDTMF = "prompt_dtmf", "1"
-	st.recordStep(&ivrNode{ID: "m1", Type: "menu"}, "digit:1")
-
-	st.stepAction, st.stepDetail, st.stepDTMF = "transfer", "alice", ""
-	st.recordStep(&ivrNode{ID: "t1", Type: "transfer"}, "no_answer")
-
-	st.stepAction, st.stepDetail = "transfer", "bob"
-	st.recordStep(&ivrNode{ID: "t2", Type: "transfer"}, "completed")
-
-	if len(st.steps) != 3 {
-		t.Fatalf("steps = %d, want 3", len(st.steps))
-	}
-	want := []SimStep{
-		{NodeID: "m1", NodeType: "menu", Action: "prompt_dtmf", DTMFInput: "1", Outcome: "digit:1"},
-		{NodeID: "t1", NodeType: "transfer", Action: "transfer", Detail: "alice", Outcome: "no_answer"},
-		{NodeID: "t2", NodeType: "transfer", Action: "transfer", Detail: "bob", Outcome: "completed"},
-	}
-	for i, w := range want {
-		if st.steps[i] != w {
-			t.Errorf("step %d = %+v, want %+v", i, st.steps[i], w)
-		}
-	}
-}
+// (The journey-shape assertion moved to internal/ivr: TestWalkRecordsRichSteps,
+// since step recording is now owned by the shared ivr.Walk.)
 
 // recordInboundCall must insert a logged calls row (direction=inbound,
 // status=ringing) so inbound/guest web calls show up in the call log —

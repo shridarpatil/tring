@@ -27,15 +27,12 @@ const (
 )
 
 var (
-	parseFlowDef        = ivr.Parse
-	findNode            = ivr.FindNode
-	findNextNode        = ivr.FindNextNode
-	intFromConfig       = ivr.IntFromConfig
-	stringFromConfig    = ivr.StringFromConfig
-	boolFromConfig      = ivr.BoolFromConfig
-	mapFromConfig       = ivr.MapFromConfig
-	mapStringFromConfig = ivr.MapStringFromConfig
-	substituteVars      = ivr.SubstituteVars
-	stringifyJSON       = ivr.StringifyJSON
-	evalTimingOutcome   = ivr.EvalTimingOutcome
+	parseFlowDef      = ivr.Parse
+	findNode          = ivr.FindNode
+	intFromConfig     = ivr.IntFromConfig
+	stringFromConfig  = ivr.StringFromConfig
+	boolFromConfig    = ivr.BoolFromConfig
+	mapFromConfig     = ivr.MapFromConfig
+	substituteVars    = ivr.SubstituteVars
+	evalTimingOutcome = ivr.EvalTimingOutcome
 )

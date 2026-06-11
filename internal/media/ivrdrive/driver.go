@@ -10,8 +10,6 @@ package ivrdrive
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -84,15 +82,16 @@ func (d *Driver) Played() []string { return append([]string(nil), d.played...) }
 // Vars returns the flow variables gathered so far.
 func (d *Driver) Vars() map[string]string { return d.vars }
 
-// play plays a node's audio_file prompt (no-op when absent). greeting_text-only
-// nodes are skipped on the web path (no server-side TTS yet).
-func (d *Driver) play(ctx context.Context, n *ivr.Node) error {
+// play plays a node's audio_file prompt (no-op when absent) and returns the file
+// played (for the trace Detail). greeting_text-only nodes are skipped on the web
+// path (no server-side TTS yet).
+func (d *Driver) play(ctx context.Context, n *ivr.Node) (string, error) {
 	file := ivr.StringFromConfig(n.Config, "audio_file")
 	if file == "" {
-		return nil
+		return "", nil
 	}
 	d.played = append(d.played, file)
-	return d.prompts.Play(ctx, file)
+	return file, d.prompts.Play(ctx, file)
 }
 
 // drainDTMF clears any buffered digits so a menu doesn't consume a stale one.
@@ -119,56 +118,61 @@ func (d *Driver) awaitDigit(ctx context.Context, timeout time.Duration) (string,
 }
 
 // Greeting plays the greeting and continues.
-func (d *Driver) Greeting(ctx context.Context, n *ivr.Node) (string, error) {
-	if err := d.play(ctx, n); err != nil {
-		return "", err
+func (d *Driver) Greeting(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	file, err := d.play(ctx, n)
+	if err != nil {
+		return ivr.NodeResult{}, err
 	}
-	return "default", nil
+	return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: file}, nil
 }
 
 // Menu plays the prompt and collects one digit, retrying on an invalid choice.
 // Outcomes mirror the FreeSWITCH executor: "digit:<n>" on a valid option,
 // "timeout" when no digit arrives, "max_retries" when the caller keeps pressing
 // invalid digits.
-func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (string, error) {
+func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	options := ivr.MapFromConfig(n.Config, "options")
 	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
 	retries := ivr.IntFromConfig(n.Config, "max_retries", 3)
 
+	var file string
 	for attempt := 0; attempt <= retries; attempt++ {
 		d.drainDTMF()
-		if err := d.play(ctx, n); err != nil {
-			return "", err
+		f, err := d.play(ctx, n)
+		if err != nil {
+			return ivr.NodeResult{}, err
 		}
+		file = f
 		digit, ok := d.awaitDigit(ctx, timeout)
 		if !ok {
-			return "timeout", nil
+			return ivr.NodeResult{Outcome: "timeout", Action: "prompt_dtmf", Detail: file}, nil
 		}
 		if _, valid := options[digit]; valid {
-			return "digit:" + digit, nil
+			return ivr.NodeResult{Outcome: "digit:" + digit, Action: "prompt_dtmf", Detail: file, DTMF: digit}, nil
 		}
 		// invalid → retry (replay prompt)
 	}
-	return "max_retries", nil
+	return ivr.NodeResult{Outcome: "max_retries", Action: "prompt_dtmf", Detail: file}, nil
 }
 
 // Gather plays the prompt and collects up to num_digits digits, ending early on
 // a terminator ('#') or timeout. Stores the collected digits in vars[store_as].
-func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (string, error) {
+func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	ndigits := ivr.IntFromConfig(n.Config, "num_digits", 1)
 	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
 	store := ivr.StringFromConfig(n.Config, "store_as")
 
 	d.drainDTMF()
-	if err := d.play(ctx, n); err != nil {
-		return "", err
+	file, err := d.play(ctx, n)
+	if err != nil {
+		return ivr.NodeResult{}, err
 	}
 	var collected strings.Builder
 	for collected.Len() < ndigits {
 		digit, ok := d.awaitDigit(ctx, timeout)
 		if !ok {
 			if collected.Len() == 0 {
-				return "timeout", nil
+				return ivr.NodeResult{Outcome: "timeout", Action: "gather", Detail: file}, nil
 			}
 			break // partial input, ended by timeout
 		}
@@ -180,80 +184,46 @@ func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (string, error) {
 	if store != "" {
 		d.vars[store] = collected.String()
 	}
-	return "default", nil
+	return ivr.NodeResult{Outcome: "default", Action: "gather", Detail: file, DTMF: collected.String()}, nil
 }
 
 // Timing branches on the node schedule against the driver's clock.
-func (d *Driver) Timing(_ context.Context, n *ivr.Node) (string, error) {
-	return ivr.EvalTimingOutcome(n.Config, d.now()), nil
+func (d *Driver) Timing(_ context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{Outcome: ivr.EvalTimingOutcome(n.Config, d.now()), Action: "branch"}, nil
 }
 
 // Transfer is a stub on the pion plane until M9 (routing = a room membership
 // change: ring the agent, agent joins, IVR participant leaves). For now it
 // reports no_answer so flows remain walkable.
-func (d *Driver) Transfer(_ context.Context, _ *ivr.Node) (string, error) {
+func (d *Driver) Transfer(_ context.Context, _ *ivr.Node) (ivr.NodeResult, error) {
 	d.log.Warn("ivrdrive transfer not implemented yet (M9), reporting no_answer")
-	return "no_answer", nil
+	return ivr.NodeResult{Outcome: "no_answer", Action: "transfer"}, nil
 }
 
 // GotoFlow is not yet implemented (matches the executor's TODO stub): end.
-func (d *Driver) GotoFlow(_ context.Context, _ *ivr.Node) (string, error) {
-	return "", nil
+func (d *Driver) GotoFlow(_ context.Context, _ *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{}, nil
 }
 
 // Hangup plays an optional goodbye and ends the call (terminal).
-func (d *Driver) Hangup(ctx context.Context, n *ivr.Node) (string, error) {
-	_ = d.play(ctx, n)
-	return "", nil
+func (d *Driver) Hangup(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	file, _ := d.play(ctx, n)
+	return ivr.NodeResult{Action: "hangup", Detail: file}, nil
 }
 
-// HTTPCallback calls the integrator's backend so the flow can route on data only
-// they have, stashing top-level 2xx JSON fields into flow vars. Branches
-// http:2xx / http:non2xx; never errors the call.
-func (d *Driver) HTTPCallback(ctx context.Context, n *ivr.Node) (string, error) {
-	url := ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "url"), d.vars)
-	if url == "" {
-		return "http:non2xx", nil
-	}
-	method := strings.ToUpper(ivr.StringFromConfig(n.Config, "method"))
-	if method == "" {
-		method = "GET"
-	}
+// HTTPCallback calls the integrator's backend (via the shared, transport-
+// agnostic ivr.RunHTTPCallback) so the flow can route on data only they have,
+// stashing top-level 2xx JSON fields into flow vars. Branches http:2xx /
+// http:non2xx; never errors the call.
+func (d *Driver) HTTPCallback(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var body io.Reader
-	if tmpl := ivr.StringFromConfig(n.Config, "body_template"); tmpl != "" {
-		body = strings.NewReader(ivr.SubstituteVars(tmpl, d.vars))
+	outcome, stash, _ := ivr.RunHTTPCallback(rctx, n, d.vars, d.http)
+	for k, v := range stash {
+		d.vars[k] = v // pion plane: flow vars only (no FS channel vars)
 	}
-	req, err := http.NewRequestWithContext(rctx, method, url, body)
-	if err != nil {
-		return "http:non2xx", nil
-	}
-	for k, v := range ivr.MapStringFromConfig(n.Config, "headers") {
-		req.Header.Set(k, v)
-	}
-	resp, err := d.http.Do(req)
-	if err != nil {
-		return "http:non2xx", nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "http:non2xx", nil
-	}
-	d.stash(resp.Body)
-	return "http:2xx", nil
-}
-
-// stash writes each top-level key of a JSON-object response into flow vars.
-func (d *Driver) stash(r io.Reader) {
-	body, _ := io.ReadAll(io.LimitReader(r, 1<<20))
-	var obj map[string]any
-	if json.Unmarshal(body, &obj) != nil {
-		return
-	}
-	for k, v := range obj {
-		d.vars[k] = ivr.StringifyJSON(v)
-	}
+	detail := strings.ToUpper(ivr.StringFromConfig(n.Config, "method")) + " " + ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "url"), d.vars)
+	return ivr.NodeResult{Outcome: outcome, Action: "http_call", Detail: detail}, nil
 }
