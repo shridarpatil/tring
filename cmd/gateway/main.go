@@ -24,6 +24,8 @@ import (
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/gateway"
 	"github.com/whatomate/tring/internal/logging"
+	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/whatomate/tring/internal/media/signaling"
 )
 
 func main() {
@@ -119,6 +121,55 @@ func main() {
 		logger.Info("dial-test ok: freeswitch leg established", "inbound_rtp_packets_4s", n)
 		return
 	}
+
+	// Pion SFU media plane (internal/media) — the N-party web-calling path, served
+	// on its own /rtc signaling port alongside the legacy WebRTC↔FS bridge. Same
+	// ICE/TURN/public-IP config as the bridge; shares the media UDP range.
+	var sfuICE []sfu.ICEServer
+	if stun := k.String("stun_url"); stun != "" {
+		sfuICE = append(sfuICE, sfu.ICEServer{URLs: []string{stun}})
+	}
+	if turnURL != "" && turnSecret == "" {
+		sfuICE = append(sfuICE, sfu.ICEServer{
+			URLs:       []string{turnURL},
+			Username:   k.String("turn_username"),
+			Credential: k.String("turn_password"),
+		})
+	}
+	mediaSFU, err := sfu.New(sfu.Config{
+		ICEServers: sfuICE,
+		UDPPortMin: uint16(k.Int("gateway_udp_min")),
+		UDPPortMax: uint16(k.Int("gateway_udp_max")),
+		PublicIP:   k.String("public_ip"),
+		RelayOnly:  k.Bool("turn_relay_only"),
+		TURNURL:    turnURL,
+		TURNSecret: turnSecret,
+		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Logger:     logger,
+	})
+	if err != nil {
+		logger.Error("sfu init failed", "err", err)
+		os.Exit(1)
+	}
+	sig := signaling.New(signaling.Config{
+		SFU:        mediaSFU,
+		JWTSecret:  []byte(k.String("jwt_secret")),
+		STUNURL:    k.String("stun_url"),
+		TURNURL:    turnURL,
+		TURNSecret: turnSecret,
+		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Grace:      time.Duration(k.Int("media_grace_seconds")) * time.Second,
+		Logger:     logger,
+	})
+	rtcAddr := k.String("rtc_addr")
+	rtcSrv := &http.Server{Addr: rtcAddr, Handler: sig.Handler(), ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		logger.Info("rtc signaling listening", "addr", rtcAddr)
+		if err := rtcSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("rtc serve failed", "err", err)
+			os.Exit(1)
+		}
+	}()
 
 	addr := k.String("gateway_addr")
 	srv := &http.Server{
