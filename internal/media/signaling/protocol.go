@@ -13,10 +13,12 @@ import "encoding/json"
 // stores session_token from `joined` and re-sends it in a later `join`.
 const (
 	// client → server
-	msgJoin   = "join"   // {room, name, session_token?}
-	msgAnswer = "answer" // {sdp} — answer to a server offer
-	msgICE    = "ice"    // {candidate}
-	msgBye    = "bye"
+	msgJoin      = "join"      // {room, name, session_token?}
+	msgAnswer    = "answer"    // {sdp} — answer to a server offer
+	msgICE       = "ice"       // {candidate}
+	msgPublish   = "publish"   // {kind} — ask the server to invite an extra track (screen-share video)
+	msgUnpublish = "unpublish" // {kind} — stop publishing that track
+	msgBye       = "bye"
 
 	// server → client
 	msgJoined     = "joined"      // {participant_id, session_token, ice_servers}
@@ -38,6 +40,9 @@ type msg struct {
 
 	// offer / answer
 	SDP string `json:"sdp,omitempty"`
+
+	// publish / unpublish — "audio" | "video"
+	Kind string `json:"kind,omitempty"`
 
 	// ice — a webrtc.ICECandidateInit, passed through opaquely
 	Candidate json.RawMessage `json:"candidate,omitempty"`

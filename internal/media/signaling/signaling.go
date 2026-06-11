@@ -218,6 +218,12 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 					}
 				}
 			}
+		case msgPublish:
+			if c.peer != nil {
+				c.peer.Publish(codecKind(m.Kind))
+			}
+		case msgUnpublish:
+			s.sfu.Unpublish(p.Room().ID(), p.ID(), codecKind(m.Kind))
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
@@ -353,6 +359,15 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// codecKind maps a publish/unpublish kind string to a pion codec type
+// (defaults to video, the only extra track in M5 — screen share).
+func codecKind(kind string) webrtc.RTPCodecType {
+	if kind == "audio" {
+		return webrtc.RTPCodecTypeAudio
+	}
+	return webrtc.RTPCodecTypeVideo
 }
 
 func bearer(r *http.Request) string {
