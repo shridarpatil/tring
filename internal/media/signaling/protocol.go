@@ -1,0 +1,60 @@
+package signaling
+
+import "encoding/json"
+
+// Wire protocol for the /rtc WebSocket. One JSON envelope type carries every
+// message; unused fields are omitted. The SFU is the sole offerer, so the
+// directions are:
+//
+//	client → server:  join, answer, ice, bye
+//	server → client:  joined, offer, ice, peer-joined, peer-state, peer-left, error
+//
+// Trickle ICE rides `ice` in both directions. Session resumption: the client
+// stores session_token from `joined` and re-sends it in a later `join`.
+const (
+	// client → server
+	msgJoin   = "join"   // {room, name, session_token?}
+	msgAnswer = "answer" // {sdp} — answer to a server offer
+	msgICE    = "ice"    // {candidate}
+	msgBye    = "bye"
+
+	// server → client
+	msgJoined     = "joined"      // {participant_id, session_token, ice_servers}
+	msgOffer      = "offer"       // {sdp}
+	msgPeerJoined = "peer-joined" // {participant_id, name}
+	msgPeerState  = "peer-state"  // {participant_id, state}
+	msgPeerLeft   = "peer-left"   // {participant_id}
+	msgError      = "error"       // {reason}
+)
+
+// msg is the single envelope for every /rtc message.
+type msg struct {
+	Type string `json:"type"`
+
+	// join
+	Room  string `json:"room,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Token string `json:"session_token,omitempty"`
+
+	// offer / answer
+	SDP string `json:"sdp,omitempty"`
+
+	// ice — a webrtc.ICECandidateInit, passed through opaquely
+	Candidate json.RawMessage `json:"candidate,omitempty"`
+
+	// joined / peer-* events
+	Participant string      `json:"participant_id,omitempty"`
+	State       string      `json:"state,omitempty"`
+	ICEServers  []ICEServer `json:"ice_servers,omitempty"`
+
+	// error / bye
+	Reason string `json:"reason,omitempty"`
+}
+
+// ICEServer is the browser-facing STUN/TURN entry sent in `joined` (ephemeral
+// TURN creds are minted per join from the shared secret).
+type ICEServer struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}

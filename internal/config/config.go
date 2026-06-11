@@ -70,6 +70,12 @@ var defaults = map[string]any{
 	"gateway_addr":       ":8087",
 	"gateway_udp_min":    10000,
 	"gateway_udp_max":    10100,
+	// rtc_addr: the pion SFU media-plane signaling WebSocket (/rtc) — the new
+	// N-party web-calling path (internal/media). Served by cmd/gateway alongside
+	// the legacy WebRTC↔FS bridge. media_grace_seconds is the room reconnect
+	// window: how long a dropped participant's slot is held for a page-refresh.
+	"rtc_addr":            ":8088",
+	"media_grace_seconds": 30,
 	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
 	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
 	"gateway_sip_port":  5090,
