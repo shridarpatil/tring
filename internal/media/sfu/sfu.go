@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
@@ -81,8 +82,12 @@ type sfuRoom struct {
 
 // publication is one participant's fan-out tracks, one per codec kind. The
 // tracks are created lazily on first publish and reused across reconnects.
+// sinks are downstream consumers (recording, STT, an IVR's ear) that get a copy
+// of every RTP packet teed off the copy loop; stored atomically so the hot loop
+// reads them without locking.
 type publication struct {
 	tracks map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP
+	sinks  atomic.Pointer[[]room.TrackSink]
 }
 
 // New builds an SFU. It validates the media config by building one API up front

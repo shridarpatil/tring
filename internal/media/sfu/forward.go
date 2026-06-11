@@ -189,9 +189,9 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 		q.Negotiate()
 	}
 
-	// Copy loop: remote → fan-out track. Ends when the remote track closes (the PC
-	// was closed — hangup or a reconnect swap). On a swap, the new PC's OnTrack
-	// starts a fresh loop into the SAME track.
+	// Copy loop: remote → fan-out track (and tee to any sinks). Ends when the
+	// remote track closes (the PC was closed — hangup or a reconnect swap). On a
+	// swap, the new PC's OnTrack starts a fresh loop into the SAME track.
 	for {
 		pkt, _, err := remote.ReadRTP()
 		if err != nil {
@@ -202,6 +202,7 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 			p.log.Debug("fan-out write ended", "err", err)
 			return
 		}
+		teeSinks(pub, p.pid, pkt)
 	}
 }
 
