@@ -66,9 +66,11 @@ type Server struct {
 	rooms *room.Manager
 	log   *slog.Logger
 
-	mu    sync.Mutex
-	conns map[room.ParticipantID]*conn
-	ivr   map[room.RoomID]*ivrSession // running IVR per room (when flow-pinned)
+	mu     sync.Mutex
+	conns  map[room.ParticipantID]*conn
+	ivr    map[room.RoomID]*ivrSession   // running IVR per room (when flow-pinned)
+	agents map[string]map[string]*conn   // online agents: tenant → sip → presence socket
+	rings  map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -78,11 +80,13 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	s := &Server{
-		cfg:   cfg,
-		sfu:   cfg.SFU,
-		log:   cfg.Logger.With("component", "signaling"),
-		conns: make(map[room.ParticipantID]*conn),
-		ivr:   make(map[room.RoomID]*ivrSession),
+		cfg:    cfg,
+		sfu:    cfg.SFU,
+		log:    cfg.Logger.With("component", "signaling"),
+		conns:  make(map[room.ParticipantID]*conn),
+		ivr:    make(map[room.RoomID]*ivrSession),
+		agents: make(map[string]map[string]*conn),
+		rings:  make(map[room.RoomID]chan struct{}),
 	}
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
@@ -125,10 +129,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	c := &conn{Conn: netConn}
 
-	// First message must be a join.
+	// First message decides the socket's role: `register` = an available agent
+	// (presence, can be rung into a call); `join` = a call participant.
 	first, err := c.read()
-	if err != nil || first.Type != msgJoin {
-		_ = c.send(msg{Type: msgError, Reason: "expected join"})
+	if err != nil {
+		_ = netConn.Close()
+		return
+	}
+	if first.Type == msgRegister {
+		s.handleAgentPresence(c, tenant, cl.SipUsername)
+		return
+	}
+	if first.Type != msgJoin {
+		_ = c.send(msg{Type: msgError, Reason: "expected join or register"})
 		_ = netConn.Close()
 		return
 	}
@@ -192,6 +205,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if first.FlowID != "" && s.cfg.Flows != nil {
 		s.startIVR(roomID, first.FlowID)
 	}
+	// If a transfer is ringing for this room, this join is the agent answering —
+	// complete the ring (the IVR's Transfer then returns "completed").
+	s.signalRing(roomID)
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
 	s.readLoop(c, p)

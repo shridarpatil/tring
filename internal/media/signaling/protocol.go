@@ -13,7 +13,8 @@ import "encoding/json"
 // stores session_token from `joined` and re-sends it in a later `join`.
 const (
 	// client → server
-	msgJoin      = "join"      // {room, name, session_token?}
+	msgJoin      = "join"      // {room, name, session_token?, flow_id?}
+	msgRegister  = "register"  // agent presence: this socket is an available agent
 	msgAnswer    = "answer"    // {sdp} — answer to a server offer
 	msgICE       = "ice"       // {candidate}
 	msgPublish   = "publish"   // {kind} — ask the server to invite an extra track (screen-share video)
@@ -27,6 +28,8 @@ const (
 	msgPeerJoined = "peer-joined" // {participant_id, name}
 	msgPeerState  = "peer-state"  // {participant_id, state}
 	msgPeerLeft   = "peer-left"   // {participant_id}
+	msgIncoming   = "incoming"    // s→agent: a call is ringing — {room, from}
+	msgReady      = "ready"       // s→agent: presence registered
 	msgError      = "error"       // {reason}
 )
 
@@ -56,6 +59,9 @@ type msg struct {
 	Participant string      `json:"participant_id,omitempty"`
 	State       string      `json:"state,omitempty"`
 	ICEServers  []ICEServer `json:"ice_servers,omitempty"`
+
+	// incoming (s→agent): who's calling (the IVR transfer label)
+	From string `json:"from,omitempty"`
 
 	// error / bye
 	Reason string `json:"reason,omitempty"`
