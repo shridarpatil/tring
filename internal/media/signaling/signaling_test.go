@@ -179,5 +179,62 @@ func TestCrossTenantRoomsAreIsolated(t *testing.T) {
 	}
 }
 
+func TestReattachKeepsSameParticipant(t *testing.T) {
+	ts := newServer(t)
+	tenant := uuid.New()
+	tok := mintToken(t, tenant, "a")
+
+	a := dial(t, ts.URL, tok)
+	a.send(map[string]any{"type": "join", "room": "call", "name": "A"})
+	joined1 := a.readUntil("joined")
+	pid1, _ := joined1["participant_id"].(string)
+	token, _ := joined1["session_token"].(string)
+	if pid1 == "" || token == "" {
+		t.Fatalf("missing pid/token: %v", joined1)
+	}
+
+	// Simulate a hard refresh: the socket drops...
+	_ = a.conn.Close()
+	// ...and the client reconnects within the grace window, presenting the token.
+	a2 := dial(t, ts.URL, tok)
+	a2.send(map[string]any{"type": "join", "room": "call", "name": "A", "session_token": token})
+	joined2 := a2.readUntil("joined")
+	pid2, _ := joined2["participant_id"].(string)
+	if pid2 != pid1 {
+		t.Fatalf("reattach gave a new participant %q, want same slot %q", pid2, pid1)
+	}
+}
+
+func TestPeerSeesReconnectingOnDrop(t *testing.T) {
+	ts := newServer(t)
+	tenant := uuid.New()
+
+	a := dial(t, ts.URL, mintToken(t, tenant, "a"))
+	a.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
+	a.readUntil("joined")
+
+	b := dial(t, ts.URL, mintToken(t, tenant, "b"))
+	b.send(map[string]any{"type": "join", "room": "call", "name": "Bob"})
+	b.readUntil("joined")
+	a.readUntil("peer-joined") // A learns about B
+
+	// B refreshes (socket drops) → A must be told B is reconnecting (grace window),
+	// NOT that B left. (Skip past B's earlier `joining` peer-state.)
+	_ = b.conn.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("A never saw B reconnecting")
+		}
+		st := a.readUntil("peer-state")
+		if st["state"] == "reconnecting" {
+			break
+		}
+		if st["state"] == "left" {
+			t.Fatal("A saw B left, want reconnecting (grace window)")
+		}
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()

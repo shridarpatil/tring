@@ -49,6 +49,8 @@ const peers = new Map(); // participant_id -> {name}
 
 let ws, pc, mic, muted = false;
 let remoteDescSet = false;
+let userClosed = false;
+let reconnectTimer = null;
 const pendingIce = [];
 
 function renderRoster() {
@@ -68,8 +70,9 @@ async function devToken(base, name) {
 }
 
 async function join() {
-  const base = $("base").value, room = $("room").value, name = $("name").value;
+  const base = $("base").value, name = $("name").value;
   $("join").disabled = true;
+  userClosed = false;
   setStatus("getting mic…");
   try {
     mic = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -78,21 +81,39 @@ async function join() {
   }
 
   setStatus("minting dev token…");
-  let token;
-  try { token = await devToken(base, name); }
+  try { window._token = await devToken(base, name); }
   catch (e) { setStatus(e.message); $("join").disabled = false; return; }
 
+  connect();
+}
+
+// connect (re)opens the signaling socket and joins, re-presenting the stored
+// session_token so a reconnect reattaches to the SAME slot (M4 resumption). A
+// fresh PeerConnection is negotiated each time — the old one is gone.
+function connect() {
+  const base = $("base").value, room = $("room").value, name = $("name").value;
   const wsBase = base.replace(/\/$/, "").replace(/^http/, "ws");
-  ws = new WebSocket(`${wsBase}/rtc?token=${encodeURIComponent(token)}`);
+  resetPC();
+  ws = new WebSocket(`${wsBase}/rtc?token=${encodeURIComponent(window._token)}`);
   ws.onopen = () => {
     setStatus("connected, joining…");
-    // session_token (if any) survives a refresh → reattach to the same slot (M4).
     const saved = sessionStorage.getItem(`tring-rtc:${room}`);
     send({ type: "join", room, name, session_token: saved || undefined });
   };
   ws.onmessage = (ev) => onMessage(JSON.parse(ev.data));
-  ws.onclose = () => { setStatus("disconnected"); teardown(); };
+  ws.onclose = () => {
+    if (userClosed) { teardown(); return; }
+    // Unexpected drop: auto-reconnect within the grace window, keeping the mic.
+    setStatus("reconnecting…");
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connect, 1000);
+  };
   ws.onerror = () => setStatus("socket error");
+}
+
+function resetPC() {
+  remoteDescSet = false; pendingIce.length = 0;
+  if (pc) { try { pc.close(); } catch {} pc = null; }
 }
 
 function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
@@ -148,10 +169,10 @@ async function onMessage(m) {
 }
 
 function teardown() {
+  clearTimeout(reconnectTimer);
   $("join").disabled = false; $("mute").disabled = true; $("leave").disabled = true;
-  if (pc) { pc.getSenders().forEach((s) => s.track && s.track.stop()); pc.close(); pc = null; }
+  resetPC();
   if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
-  remoteDescSet = false; pendingIce.length = 0;
   peers.clear(); renderRoster();
 }
 
@@ -161,7 +182,11 @@ $("mute").onclick = () => {
   if (mic) mic.getAudioTracks().forEach((t) => (t.enabled = !muted));
   $("mute").textContent = muted ? "Unmute" : "Mute";
 };
-$("leave").onclick = () => { send({ type: "bye" }); if (ws) ws.close(); teardown(); setStatus("left"); };
+$("leave").onclick = () => {
+  userClosed = true;
+  sessionStorage.removeItem(`tring-rtc:${$("room").value}`);
+  send({ type: "bye" }); if (ws) ws.close(); teardown(); setStatus("left");
+};
 renderRoster();
 </script>
 </body>

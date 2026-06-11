@@ -67,7 +67,22 @@ type SFU struct {
 	log *slog.Logger
 
 	mu    sync.Mutex
-	rooms map[room.RoomID]map[room.ParticipantID]*Peer
+	rooms map[room.RoomID]*sfuRoom
+}
+
+// sfuRoom holds a room's live peers plus its publications. A publication (a
+// participant's fan-out tracks) is keyed by participant id and OUTLIVES the
+// peer's PeerConnection: on reconnect the new PC re-points its copy loop into
+// the same fan-out track, so subscribers never renegotiate (M4 resumption).
+type sfuRoom struct {
+	peers map[room.ParticipantID]*Peer
+	pubs  map[room.ParticipantID]*publication
+}
+
+// publication is one participant's fan-out tracks, one per codec kind. The
+// tracks are created lazily on first publish and reused across reconnects.
+type publication struct {
+	tracks map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP
 }
 
 // New builds an SFU. It validates the media config by building one API up front
@@ -80,7 +95,7 @@ func New(cfg Config) (*SFU, error) {
 	s := &SFU{
 		cfg:   cfg,
 		log:   cfg.Logger.With("component", "sfu"),
-		rooms: make(map[room.RoomID]map[room.ParticipantID]*Peer),
+		rooms: make(map[room.RoomID]*sfuRoom),
 	}
 	if _, err := s.buildAPI(); err != nil {
 		return nil, err
