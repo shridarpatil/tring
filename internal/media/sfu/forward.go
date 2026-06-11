@@ -9,11 +9,20 @@ import (
 	"github.com/whatomate/tring/internal/media/room"
 )
 
-// Join creates a PeerConnection for a participant and registers it in the room.
-// The server is the sole offerer: after wiring its client-side handlers, the
-// caller calls Peer.Negotiate to send the initial offer, then drives signaling
-// through HandleAnswer / HandleCandidate. Set Peer.OnConnected / OnClosed to
-// mirror transport state onto the room.Participant.
+// sourcePub is a snapshot of one other participant's publication, used to wire
+// subscriptions during Negotiate.
+type sourcePub struct {
+	pid    room.ParticipantID
+	tracks []*webrtc.TrackLocalStaticRTP
+}
+
+// Join creates a PeerConnection for a participant and registers it. If the
+// participant already has a peer (a reattach after a refresh), the old PC is
+// closed but its publication and subscribers are KEPT — the new PC re-points
+// into the same fan-out track, so the other peers never renegotiate. The server
+// is the sole offerer: after wiring its client-side handlers, the caller calls
+// Peer.Negotiate to send the initial offer, then drives HandleAnswer /
+// HandleCandidate. Set Peer.OnConnected / OnClosed to mirror transport state.
 func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*Peer, error) {
 	pc, err := s.newPeerConnection()
 	if err != nil {
@@ -37,7 +46,6 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 		subs:   make(map[room.ParticipantID][]*webrtc.RTPSender),
 	}
 
-	// Outbound trickle ICE.
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
 			return
@@ -46,12 +54,9 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 			p.log.Warn("send candidate", "err", err)
 		}
 	})
-
-	// A client track arrived → publish it to the room.
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		s.onPublish(p, remote)
 	})
-
 	pc.OnICEConnectionStateChange(func(st webrtc.ICEConnectionState) {
 		p.log.Debug("ice state", "state", st.String())
 	})
@@ -63,105 +68,164 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 				p.OnConnected()
 			}
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
-			s.Leave(roomID, pid)
+			// Only the CURRENT peer's transport loss matters — a replaced (stale)
+			// peer's PC closing during a reattach must NOT touch the slot. And we do
+			// NOT tear the publication down here: that's the room's job via the grace
+			// window (OnClosed → participant.Drop → eventual SFU.Leave on the left
+			// event). Tearing down here would defeat refresh resumption.
+			if s.currentPeer(roomID, pid) == p && p.OnClosed != nil {
+				p.OnClosed()
+			}
 		}
 	})
 
 	s.mu.Lock()
 	r := s.rooms[roomID]
 	if r == nil {
-		r = make(map[room.ParticipantID]*Peer)
+		r = &sfuRoom{
+			peers: make(map[room.ParticipantID]*Peer),
+			pubs:  make(map[room.ParticipantID]*publication),
+		}
 		s.rooms[roomID] = r
 	}
-	r[pid] = p
+	old := r.peers[pid]
+	r.peers[pid] = p
 	s.mu.Unlock()
+
+	// Reattach: drop the old transport but keep the publication + subscribers.
+	if old != nil {
+		old.markReplaced()
+		_ = old.pc.Close()
+		p.log.Info("participant reattached (fresh PC, publication kept)")
+	}
 	return p, nil
 }
 
-// peersInRoom returns a snapshot of the live peers in a room.
-func (s *SFU) peersInRoom(roomID room.RoomID) []*Peer {
+// currentPeer returns the peer currently registered for (room, pid), or nil.
+func (s *SFU) currentPeer(roomID room.RoomID, pid room.ParticipantID) *Peer {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := s.rooms[roomID]
-	out := make([]*Peer, 0, len(r))
-	for _, p := range r {
-		out = append(out, p)
+	if r == nil {
+		return nil
+	}
+	return r.peers[pid]
+}
+
+// publicationsExcept snapshots every OTHER participant's fan-out tracks, so a
+// peer can wire its subscriptions without taking another peer's lock.
+func (s *SFU) publicationsExcept(roomID room.RoomID, pid room.ParticipantID) []sourcePub {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil {
+		return nil
+	}
+	var out []sourcePub
+	for opid, pub := range r.pubs {
+		if opid == pid {
+			continue
+		}
+		tracks := make([]*webrtc.TrackLocalStaticRTP, 0, len(pub.tracks))
+		for _, t := range pub.tracks {
+			tracks = append(tracks, t)
+		}
+		if len(tracks) > 0 {
+			out = append(out, sourcePub{pid: opid, tracks: tracks})
+		}
 	}
 	return out
 }
 
-// onPublish turns a publisher's remote track into a room-owned fan-out track:
-// it copies the remote RTP into a TrackLocalStaticRTP keyed by the participant,
-// then renegotiates every OTHER peer in the room so they receive it. The
-// fan-out track is owned by the peer slot, so a future reconnect (M4) re-points
-// this copy loop into the same track without touching subscribers.
+// onPublish copies a publisher's remote RTP into its room-owned fan-out track,
+// creating the track on first publish (and then notifying other peers to
+// subscribe) or REUSING it on a reconnect republish (subscribers stay bound —
+// no renegotiation). The track is keyed by participant + codec kind.
 func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
-	local, err := webrtc.NewTrackLocalStaticRTP(
-		remote.Codec().RTPCodecCapability,
-		// Unique track id; stream id = participant so the browser groups a
-		// participant's audio+screen tracks together.
-		"t-"+uuid.NewString(), string(p.pid),
-	)
-	if err != nil {
-		p.log.Error("create fan-out track", "err", err)
-		return
-	}
-	p.addPublished(local)
-	p.log.Info("participant published", "codec", remote.Codec().MimeType, "kind", remote.Kind().String())
+	kind := remote.Kind()
 
-	// Wire existing peers to receive it.
-	for _, q := range s.peersInRoom(p.roomID) {
-		if q.pid != p.pid {
-			q.Negotiate()
-		}
-	}
-
-	// Copy loop: remote → fan-out track. Ends when the remote track closes
-	// (ReadRTP errors), e.g. on hangup or transport teardown.
-	go func() {
-		for {
-			pkt, _, err := remote.ReadRTP()
-			if err != nil {
-				p.log.Debug("publisher read loop ended", "err", err)
-				return
-			}
-			if err := local.WriteRTP(pkt); err != nil {
-				p.log.Debug("fan-out write ended", "err", err)
-				return
-			}
-		}
-	}()
-}
-
-// Leave removes a participant: it drops the peer from the room, removes its
-// fan-out tracks from every subscriber (and renegotiates them), closes the PC,
-// and fires OnClosed. Idempotent — a second call (e.g. state-change after an
-// explicit leave) is a no-op.
-func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 	s.mu.Lock()
-	r := s.rooms[roomID]
-	p := r[pid]
-	if p == nil {
+	r := s.rooms[p.roomID]
+	if r == nil {
 		s.mu.Unlock()
 		return
 	}
-	delete(r, pid)
-	if len(r) == 0 {
-		delete(s.rooms, roomID)
+	pub := r.pubs[p.pid]
+	if pub == nil {
+		pub = &publication{tracks: make(map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP)}
+		r.pubs[p.pid] = pub
 	}
-	remaining := make([]*Peer, 0, len(r))
-	for _, q := range r {
-		remaining = append(remaining, q)
+	track := pub.tracks[kind]
+	fresh := track == nil
+	if fresh {
+		var err error
+		track, err = webrtc.NewTrackLocalStaticRTP(
+			remote.Codec().RTPCodecCapability,
+			"t-"+uuid.NewString(), string(p.pid),
+		)
+		if err != nil {
+			s.mu.Unlock()
+			p.log.Error("create fan-out track", "err", err)
+			return
+		}
+		pub.tracks[kind] = track
+	}
+	var others []*Peer
+	if fresh {
+		for opid, q := range r.peers {
+			if opid != p.pid {
+				others = append(others, q)
+			}
+		}
 	}
 	s.mu.Unlock()
 
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
+	p.log.Info("participant published", "codec", remote.Codec().MimeType, "kind", kind.String(), "fresh", fresh)
+
+	// Only a brand-new publication needs subscribers wired; a reconnect reuses the
+	// existing track, so the other peers are already subscribed.
+	for _, q := range others {
+		q.Negotiate()
+	}
+
+	// Copy loop: remote → fan-out track. Ends when the remote track closes (the PC
+	// was closed — hangup or a reconnect swap). On a swap, the new PC's OnTrack
+	// starts a fresh loop into the SAME track.
+	for {
+		pkt, _, err := remote.ReadRTP()
+		if err != nil {
+			p.log.Debug("publisher read loop ended", "err", err)
+			return
+		}
+		if err := track.WriteRTP(pkt); err != nil {
+			p.log.Debug("fan-out write ended", "err", err)
+			return
+		}
+	}
+}
+
+// Leave is the TERMINAL teardown (explicit bye or grace expiry, via the room's
+// left event): it removes the participant's peer and publication, removes its
+// fan-out tracks from every subscriber (renegotiating them), and closes the PC.
+// Idempotent.
+func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
+	s.mu.Lock()
+	r := s.rooms[roomID]
+	if r == nil {
+		s.mu.Unlock()
 		return
 	}
-	p.closed = true
-	p.mu.Unlock()
+	p := r.peers[pid]
+	delete(r.peers, pid)
+	delete(r.pubs, pid)
+	if len(r.peers) == 0 && len(r.pubs) == 0 {
+		delete(s.rooms, roomID)
+	}
+	remaining := make([]*Peer, 0, len(r.peers))
+	for _, q := range r.peers {
+		remaining = append(remaining, q)
+	}
+	s.mu.Unlock()
 
 	// Remove this source's tracks from each remaining subscriber, then resync.
 	for _, q := range remaining {
@@ -169,7 +233,7 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 		senders := q.subs[pid]
 		delete(q.subs, pid)
 		if len(senders) > 0 {
-			q.dirty = true // removal needs a renegotiation to take effect
+			q.dirty = true
 		}
 		q.mu.Unlock()
 		for _, sender := range senders {
@@ -182,9 +246,17 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 		}
 	}
 
-	_ = p.pc.Close()
-	if p.OnClosed != nil {
-		p.OnClosed()
+	if p != nil {
+		p.mu.Lock()
+		p.closed = true
+		p.mu.Unlock()
+		_ = p.pc.Close()
+		if p.OnClosed != nil {
+			// Already gone from the slot; OnClosed here would re-Drop a participant
+			// that's already leaving. The room left event that triggered Leave is the
+			// authority, so we don't call it.
+			_ = p.OnClosed
+		}
+		p.log.Info("participant left (terminal teardown)")
 	}
-	p.log.Info("participant left")
 }

@@ -181,8 +181,20 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 // participant into the grace window.
 func (s *Server) readLoop(c *conn, p *room.Participant) {
 	defer func() {
-		s.dropConn(p.ID())
-		p.Drop() // WS gone → reconnecting; grace expiry (or bye) finalizes teardown
+		// Only act if THIS socket is still the participant's current one. A reattach
+		// (page refresh) replaces conns[pid] with the new socket; when this (old)
+		// readLoop then exits it must NOT close the new socket or drop the shared
+		// slot. Identity check makes teardown order-independent.
+		s.mu.Lock()
+		current := s.conns[p.ID()] == c
+		if current {
+			delete(s.conns, p.ID())
+		}
+		s.mu.Unlock()
+		_ = c.Close()
+		if current {
+			p.Drop() // live socket lost → reconnecting; grace expiry (or bye) finalizes teardown
+		}
 	}()
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(90 * time.Second))

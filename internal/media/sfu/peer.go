@@ -44,13 +44,22 @@ type Peer struct {
 	mu          sync.Mutex
 	haveRemote  bool                                       // an answer has been applied → candidates can be added
 	pending     []webrtc.ICECandidateInit                  // candidates that arrived before the first answer
-	published   []*webrtc.TrackLocalStaticRTP              // this peer's fan-out tracks (what others subscribe to)
 	subs        map[room.ParticipantID][]*webrtc.RTPSender // senders delivering each source's tracks to me
 	started     bool                                       // the initial offer has been sent
 	dirty       bool                                       // a subscription was removed (Leave) → needs a renegotiation
 	negotiating bool                                       // an offer is outstanding (awaiting the client's answer)
 	needSync    bool                                       // tracks changed while negotiating → renegotiate after the answer
 	closed      bool
+}
+
+// markReplaced marks this peer superseded by a reconnect: it won't be torn down
+// as the current slot, and its OnClosed is cleared so closing its (old) PC
+// doesn't drop the participant. The publication it fed lives on for the new PC.
+func (p *Peer) markReplaced() {
+	p.mu.Lock()
+	p.closed = true
+	p.OnClosed = nil
+	p.mu.Unlock()
 }
 
 // ID returns the peer's participant id.
@@ -106,20 +115,9 @@ func (p *Peer) flushPendingLocked() {
 // initial offer even with no subscriptions, because the recvonly publish
 // transceiver added at Join needs an offer to invite the client's mic.
 func (p *Peer) Negotiate() {
-	// Snapshot the other peers' fan-out tracks WITHOUT holding p.mu — calling
-	// another peer's lock-taking methods while holding our own would let two
-	// peers negotiating at once deadlock.
-	type source struct {
-		pid    room.ParticipantID
-		tracks []*webrtc.TrackLocalStaticRTP
-	}
-	var sources []source
-	for _, src := range p.sfu.peersInRoom(p.roomID) {
-		if src.pid == p.pid {
-			continue
-		}
-		sources = append(sources, source{src.pid, src.publishedTracks()})
-	}
+	// Snapshot the other participants' fan-out tracks WITHOUT holding p.mu (it
+	// locks the SFU, not peer locks, so no peer↔peer lock cycle).
+	sources := p.sfu.publicationsExcept(p.roomID, p.pid)
 
 	p.mu.Lock()
 	if p.closed {
@@ -184,20 +182,6 @@ func (p *Peer) Negotiate() {
 	if err := p.sig.SendOffer(offer.SDP); err != nil {
 		p.log.Warn("send offer", "err", err)
 	}
-}
-
-// publishedTracks returns a snapshot of this peer's fan-out tracks.
-func (p *Peer) publishedTracks() []*webrtc.TrackLocalStaticRTP {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]*webrtc.TrackLocalStaticRTP(nil), p.published...)
-}
-
-// addPublished records a new fan-out track for this peer.
-func (p *Peer) addPublished(t *webrtc.TrackLocalStaticRTP) {
-	p.mu.Lock()
-	p.published = append(p.published, t)
-	p.mu.Unlock()
 }
 
 // drainSender reads (and discards) a sender's RTCP so its receive buffer doesn't
