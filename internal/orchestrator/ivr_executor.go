@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -40,6 +39,7 @@ import (
 	"github.com/whatomate/tring/internal/agentleg"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queries"
 )
@@ -259,7 +259,13 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	}
 	clog.Info("ivr answered, walking flow", "entry_node", flow.EntryNode)
 
-	if err := e.walk(ctx, conn, &flow, flow.EntryNode, state); err != nil {
+	// Drive the SHARED walker (internal/ivr) with the FreeSWITCH driver — the
+	// same ivr.Walk the pion web IVR uses, so the two can't diverge. The driver
+	// records each node's trace detail; Walk returns the path we persist.
+	drv := &eslDriver{e: e, conn: conn, st: state}
+	path, err := ivr.Walk(ctx, &flow, flow.EntryNode, drv)
+	state.steps = path
+	if err != nil {
 		clog.Error("ivr walk error", "err", err)
 	}
 
@@ -476,102 +482,9 @@ func (st *callState) templateVars() map[string]string {
 	return m
 }
 
-// recordStep appends one step to the IVR journey from the scratch fields the
-// node handler set plus the resolved outcome.
-func (st *callState) recordStep(node *ivrNode, outcome string) {
-	st.steps = append(st.steps, SimStep{
-		NodeID:    node.ID,
-		NodeType:  node.Type,
-		Action:    st.stepAction,
-		Detail:    st.stepDetail,
-		DTMFInput: st.stepDTMF,
-		Outcome:   outcome,
-	})
-}
-
-// walk runs the node identified by nodeID, then follows the outgoing
-// edge corresponding to the node's outcome and recurses. Cycles are not
-// detected — flows are caller-authored and a cycle would be a flow bug;
-// the FreeSWITCH side will hang up after the per-call media timeout.
-//
-// Max depth: 64 (prevents runaway recursion).
-func (e *Executor) walk(ctx context.Context, conn *eslgo.Conn, flow *ivrFlowData, nodeID string, st *callState) error {
-	for depth := 0; depth < 64; depth++ {
-		node, ok := findNode(flow, nodeID)
-		if !ok {
-			return fmt.Errorf("node %s not found", nodeID)
-		}
-		st.log.Info("ivr walk node", "depth", depth, "node", node.ID, "type", node.Type)
-
-		// Clear per-node scratch; the handler fills it in, then we record
-		// one step from it below (after the outcome is known).
-		st.stepAction, st.stepDetail, st.stepDTMF = "", "", ""
-		outcome, err := e.runNode(ctx, conn, node, st)
-		if err != nil {
-			st.recordStep(node, "error")
-			return fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
-		}
-		st.log.Info("ivr node outcome", "node", node.ID, "outcome", outcome)
-		st.recordStep(node, outcome)
-		if outcome == "" {
-			// Terminal node (hangup) or executor explicitly ended.
-			return nil
-		}
-
-		next := findNextNode(flow, nodeID, outcome)
-		if next == "" {
-			st.log.Info("ivr node has no outgoing edge, ending", "node", node.ID, "outcome", outcome)
-			return nil
-		}
-		nodeID = next
-	}
-	return errors.New("flow walk exceeded max depth (64)")
-}
-
-// runNode dispatches to the node-type-specific executor. Returns the
-// outcome string (matches edge.condition / source handle id) or "" for
-// terminal nodes (hangup). An empty string with no error means "end the
-// call gracefully" — used by Hangup.
-func (e *Executor) runNode(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
-	switch node.Type {
-	case nodeStart:
-		// No-op passthrough — the Start node is purely a UI anchor so
-		// flows have a fixed entry point. Walk to whatever's wired to
-		// its "default" output.
-		st.stepAction = "passthrough"
-		return "default", nil
-	case nodeGreeting:
-		return e.runGreeting(ctx, conn, node, st)
-	case nodeMenu:
-		return e.runMenu(ctx, conn, node, st)
-	case nodeTransfer:
-		return e.runTransfer(ctx, conn, node, st)
-	case nodeHangup:
-		return e.runHangup(ctx, conn, node, st)
-
-	// ─── TODO scaffolds (see docs/PHASE_3_IVR_EXECUTION.md) ──────────
-	case nodeGather:
-		// TODO: play prompt → read N digits up to terminator → st.vars[store_as] = digits → "default" / "timeout" / "max_retries"
-		st.log.Warn("ivr node not yet implemented, following default outcome", "type", node.Type, "node", node.ID, "outcome", "default")
-		return "default", nil
-	case nodeHTTPCallback:
-		return e.runHTTPCallback(ctx, conn, node, st)
-	case nodeTiming:
-		// Evaluate the node's per-day schedule against the current time (server
-		// local / deployment TZ). Same logic the simulator uses (evalTimingOutcome).
-		outcome := evalTimingOutcome(node.Config, time.Now())
-		st.stepAction = "branch"
-		st.log.Info("ivr timing", "node", node.ID, "outcome", outcome)
-		return outcome, nil
-	case nodeGotoFlow:
-		// TODO: load flow_id, recurse into walk() against new flow.entry_node
-		st.log.Warn("ivr node not yet implemented, ending call", "type", node.Type, "node", node.ID)
-		return "", nil
-
-	default:
-		return "", fmt.Errorf("unknown node type %q", node.Type)
-	}
-}
+// The graph walk + per-node dispatch live in internal/ivr (ivr.Walk +
+// ivr.CallDriver); the FreeSWITCH effects are the eslDriver in ivr_esldriver.go.
+// Walk records each Step from the NodeResult the driver returns.
 
 // ─── Node implementations (real) ────────────────────────────────────
 
@@ -1048,82 +961,31 @@ func channelAlive(ctx context.Context, conn *eslgo.Conn, channelUUID string) boo
 
 // ─── http_callback node ─────────────────────────────────────────────
 
-// httpRespBodyCap bounds how much of a callback response we read, so a huge or
-// hostile body can't exhaust memory.
-const httpRespBodyCap = 1 << 20 // 1 MiB
-
 // runHTTPCallback calls the integrator's backend so the flow can route on data
-// only they have (who is calling → which team/queue/priority). It templates
-// {{vars}} into the URL + body, performs the request, and on a 2xx stashes the
-// top-level JSON fields into both flow vars (for downstream nodes like Transfer)
-// and channel vars (tring_<key>, visible to the CDR). Branches http:2xx /
-// http:non2xx; never errors the call (a backend problem routes to the error
-// edge, it doesn't drop the caller).
+// only they have (who is calling → which team/queue/priority). The HTTP +
+// templating + 2xx-JSON parsing is the SHARED ivr.RunHTTPCallback (same code the
+// pion web IVR uses); here we additionally mirror each returned field into a
+// channel var (tring_<key>, visible to the CDR). Branches http:2xx / http:non2xx.
 func (e *Executor) runHTTPCallback(ctx context.Context, conn *eslgo.Conn, node *ivrNode, st *callState) (string, error) {
 	tv := st.templateVars()
-	url := substituteVars(stringFromConfig(node.Config, "url"), tv)
 	method := strings.ToUpper(stringFromConfig(node.Config, "method"))
 	if method == "" {
 		method = "GET"
 	}
-	st.stepAction, st.stepDetail = "http_call", method+" "+url
-	if url == "" {
-		st.log.Warn("ivr http_callback has no url, routing non2xx", "node", node.ID)
-		return "http:non2xx", nil
-	}
+	st.stepAction, st.stepDetail = "http_call", method+" "+substituteVars(stringFromConfig(node.Config, "url"), tv)
 
 	timeout := time.Duration(intFromConfig(node.Config, "timeout_seconds", 10)) * time.Second
 	rctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var body io.Reader
-	bodyTmpl := stringFromConfig(node.Config, "body_template")
-	if bodyTmpl != "" {
-		body = strings.NewReader(substituteVars(bodyTmpl, tv))
-	}
-	req, err := http.NewRequestWithContext(rctx, method, url, body)
-	if err != nil {
-		st.log.Error("ivr http_callback bad request", "node", node.ID, "err", err)
-		return "http:non2xx", nil
-	}
-	if bodyTmpl != "" {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	for k, v := range mapStringFromConfig(node.Config, "headers") {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := e.httpClient().Do(req)
-	if err != nil {
-		st.log.Warn("ivr http_callback request failed, routing non2xx", "node", node.ID, "err", err)
-		return "http:non2xx", nil
-	}
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, httpRespBodyCap))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		st.log.Info("ivr http_callback non-2xx", "node", node.ID, "status", resp.StatusCode)
-		return "http:non2xx", nil
-	}
-	e.stashResponse(ctx, conn, st, respBody)
-	return "http:2xx", nil
-}
-
-// stashResponse writes each top-level key of a JSON-object response into flow
-// vars (st.vars[key]) and a channel var (tring_<key>), so later nodes can route
-// on backend data. A non-object body is ignored (best-effort).
-func (e *Executor) stashResponse(ctx context.Context, conn *eslgo.Conn, st *callState, body []byte) {
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
-		st.log.Info("ivr http_callback response not a JSON object, no vars stashed")
-		return
-	}
-	for k, v := range obj {
-		val := stringifyJSON(v)
-		st.vars[k] = val
+	outcome, stash, _ := ivr.RunHTTPCallback(rctx, node, tv, e.httpClient())
+	for k, v := range stash {
+		st.vars[k] = v   // downstream flow vars (Transfer routing, etc.)
 		if conn != nil { // nil in unit tests; live calls always have a channel
-			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "tring_" + k, Value: val, Sync: false})
+			_, _ = conn.SendCommand(ctx, &call.Set{UUID: st.uuid, Key: "tring_" + k, Value: v, Sync: false})
 		}
 	}
+	return outcome, nil
 }
 
 // answeredAgentLabel returns the display label of the agent attributed to this
