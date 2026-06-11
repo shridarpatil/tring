@@ -1,0 +1,259 @@
+// Package ivrdrive is the IVR as a pion participant: an ivr.CallDriver that runs
+// a flow against a room with no FreeSWITCH. Prompts are played as the IVR's own
+// audio track (a prompt.Player injected via SFU.InjectSource); the caller's DTMF
+// arrives over /rtc signaling and is fed to DTMF(). Routing a call to a human
+// (Transfer) is a membership change handled in M9; here it's a stub.
+//
+// The graph traversal is ivr.Walk — the SAME walker the FreeSWITCH executor will
+// use — so the phone IVR and the web IVR can't diverge.
+package ivrdrive
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/whatomate/tring/internal/ivr"
+)
+
+// Prompts plays a prompt audio file into the room, blocking until it finishes
+// (or ctx is done). The real implementation streams an Ogg/Opus file through a
+// prompt.Player; tests fake it.
+type Prompts interface {
+	Play(ctx context.Context, file string) error
+}
+
+// Driver implements ivr.CallDriver against the pion media plane.
+type Driver struct {
+	prompts Prompts
+	dtmf    chan string       // caller DTMF digits (fed by DTMF())
+	now     func() time.Time  // clock for Timing (injectable in tests)
+	http    *http.Client      // http_callback client
+	vars    map[string]string // flow vars gathered along the way
+	log     *slog.Logger
+
+	played []string // prompt files played, in order (trace/test visibility)
+}
+
+// Config builds a Driver.
+type Config struct {
+	Prompts Prompts
+	Now     func() time.Time // nil → time.Now
+	HTTP    *http.Client     // nil → http.DefaultClient
+	Logger  *slog.Logger
+}
+
+// New builds a pion IVR driver. The DTMF inbox is buffered so a digit that
+// arrives just before a menu starts waiting isn't lost.
+func New(cfg Config) *Driver {
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.HTTP == nil {
+		cfg.HTTP = http.DefaultClient
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	return &Driver{
+		prompts: cfg.Prompts,
+		dtmf:    make(chan string, 4),
+		now:     cfg.Now,
+		http:    cfg.HTTP,
+		vars:    map[string]string{},
+		log:     cfg.Logger.With("component", "ivrdrive"),
+	}
+}
+
+// DTMF delivers a caller digit (from /rtc signaling) to a waiting menu/gather.
+// Non-blocking: if nothing is collecting, the digit is dropped.
+func (d *Driver) DTMF(digit string) {
+	select {
+	case d.dtmf <- digit:
+	default:
+	}
+}
+
+// Played returns the prompt files played, in order (test/trace visibility).
+func (d *Driver) Played() []string { return append([]string(nil), d.played...) }
+
+// Vars returns the flow variables gathered so far.
+func (d *Driver) Vars() map[string]string { return d.vars }
+
+// play plays a node's audio_file prompt (no-op when absent). greeting_text-only
+// nodes are skipped on the web path (no server-side TTS yet).
+func (d *Driver) play(ctx context.Context, n *ivr.Node) error {
+	file := ivr.StringFromConfig(n.Config, "audio_file")
+	if file == "" {
+		return nil
+	}
+	d.played = append(d.played, file)
+	return d.prompts.Play(ctx, file)
+}
+
+// drainDTMF clears any buffered digits so a menu doesn't consume a stale one.
+func (d *Driver) drainDTMF() {
+	for {
+		select {
+		case <-d.dtmf:
+		default:
+			return
+		}
+	}
+}
+
+// awaitDigit waits up to timeout for a caller digit. ok=false on timeout.
+func (d *Driver) awaitDigit(ctx context.Context, timeout time.Duration) (string, bool) {
+	select {
+	case digit := <-d.dtmf:
+		return digit, true
+	case <-time.After(timeout):
+		return "", false
+	case <-ctx.Done():
+		return "", false
+	}
+}
+
+// Greeting plays the greeting and continues.
+func (d *Driver) Greeting(ctx context.Context, n *ivr.Node) (string, error) {
+	if err := d.play(ctx, n); err != nil {
+		return "", err
+	}
+	return "default", nil
+}
+
+// Menu plays the prompt and collects one digit, retrying on an invalid choice.
+// Outcomes mirror the FreeSWITCH executor: "digit:<n>" on a valid option,
+// "timeout" when no digit arrives, "max_retries" when the caller keeps pressing
+// invalid digits.
+func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (string, error) {
+	options := ivr.MapFromConfig(n.Config, "options")
+	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
+	retries := ivr.IntFromConfig(n.Config, "max_retries", 3)
+
+	for attempt := 0; attempt <= retries; attempt++ {
+		d.drainDTMF()
+		if err := d.play(ctx, n); err != nil {
+			return "", err
+		}
+		digit, ok := d.awaitDigit(ctx, timeout)
+		if !ok {
+			return "timeout", nil
+		}
+		if _, valid := options[digit]; valid {
+			return "digit:" + digit, nil
+		}
+		// invalid → retry (replay prompt)
+	}
+	return "max_retries", nil
+}
+
+// Gather plays the prompt and collects up to num_digits digits, ending early on
+// a terminator ('#') or timeout. Stores the collected digits in vars[store_as].
+func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (string, error) {
+	ndigits := ivr.IntFromConfig(n.Config, "num_digits", 1)
+	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
+	store := ivr.StringFromConfig(n.Config, "store_as")
+
+	d.drainDTMF()
+	if err := d.play(ctx, n); err != nil {
+		return "", err
+	}
+	var collected strings.Builder
+	for collected.Len() < ndigits {
+		digit, ok := d.awaitDigit(ctx, timeout)
+		if !ok {
+			if collected.Len() == 0 {
+				return "timeout", nil
+			}
+			break // partial input, ended by timeout
+		}
+		if digit == "#" {
+			break
+		}
+		collected.WriteString(digit)
+	}
+	if store != "" {
+		d.vars[store] = collected.String()
+	}
+	return "default", nil
+}
+
+// Timing branches on the node schedule against the driver's clock.
+func (d *Driver) Timing(_ context.Context, n *ivr.Node) (string, error) {
+	return ivr.EvalTimingOutcome(n.Config, d.now()), nil
+}
+
+// Transfer is a stub on the pion plane until M9 (routing = a room membership
+// change: ring the agent, agent joins, IVR participant leaves). For now it
+// reports no_answer so flows remain walkable.
+func (d *Driver) Transfer(_ context.Context, _ *ivr.Node) (string, error) {
+	d.log.Warn("ivrdrive transfer not implemented yet (M9), reporting no_answer")
+	return "no_answer", nil
+}
+
+// GotoFlow is not yet implemented (matches the executor's TODO stub): end.
+func (d *Driver) GotoFlow(_ context.Context, _ *ivr.Node) (string, error) {
+	return "", nil
+}
+
+// Hangup plays an optional goodbye and ends the call (terminal).
+func (d *Driver) Hangup(ctx context.Context, n *ivr.Node) (string, error) {
+	_ = d.play(ctx, n)
+	return "", nil
+}
+
+// HTTPCallback calls the integrator's backend so the flow can route on data only
+// they have, stashing top-level 2xx JSON fields into flow vars. Branches
+// http:2xx / http:non2xx; never errors the call.
+func (d *Driver) HTTPCallback(ctx context.Context, n *ivr.Node) (string, error) {
+	url := ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "url"), d.vars)
+	if url == "" {
+		return "http:non2xx", nil
+	}
+	method := strings.ToUpper(ivr.StringFromConfig(n.Config, "method"))
+	if method == "" {
+		method = "GET"
+	}
+	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var body io.Reader
+	if tmpl := ivr.StringFromConfig(n.Config, "body_template"); tmpl != "" {
+		body = strings.NewReader(ivr.SubstituteVars(tmpl, d.vars))
+	}
+	req, err := http.NewRequestWithContext(rctx, method, url, body)
+	if err != nil {
+		return "http:non2xx", nil
+	}
+	for k, v := range ivr.MapStringFromConfig(n.Config, "headers") {
+		req.Header.Set(k, v)
+	}
+	resp, err := d.http.Do(req)
+	if err != nil {
+		return "http:non2xx", nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "http:non2xx", nil
+	}
+	d.stash(resp.Body)
+	return "http:2xx", nil
+}
+
+// stash writes each top-level key of a JSON-object response into flow vars.
+func (d *Driver) stash(r io.Reader) {
+	body, _ := io.ReadAll(io.LimitReader(r, 1<<20))
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return
+	}
+	for k, v := range obj {
+		d.vars[k] = ivr.StringifyJSON(v)
+	}
+}
