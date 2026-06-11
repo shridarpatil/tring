@@ -76,6 +76,10 @@ var defaults = map[string]any{
 	// window: how long a dropped participant's slot is held for a page-refresh.
 	"rtc_addr":            ":8088",
 	"media_grace_seconds": 30,
+	// rtc_dev_tokens mounts an UNAUTHENTICATED agent-token mint at /rtc/dev-token
+	// so the local test client (examples/rtc-test.html) works with `make gateway`
+	// alone. Dev only — never enable in production.
+	"rtc_dev_tokens": false,
 	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
 	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
 	"gateway_sip_port":  5090,

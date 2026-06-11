@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tring media plane — /rtc test client</title>
+<style>
+  body { font: 14px system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; }
+  label { display: block; margin: .5rem 0 .15rem; font-weight: 600; }
+  input { width: 100%; padding: .4rem; box-sizing: border-box; }
+  .row { display: flex; gap: .5rem; margin-top: 1rem; }
+  button { padding: .5rem 1rem; cursor: pointer; }
+  #status { margin-top: 1rem; padding: .5rem .75rem; border-radius: 6px; background: #eee; }
+  #roster { list-style: none; padding: 0; }
+  #roster li { padding: .3rem .5rem; border-bottom: 1px solid #eee; }
+  .muted { color: #999; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+<h1>Tring media plane — /rtc test client</h1>
+<p><small>Open this in two tabs (or two browsers), use the same <b>room</b> and
+different <b>names</b>, and Join in each. You should hear the other tab.
+Requires the gateway running with <code>TRING_RTC_DEV_TOKENS=true</code>.</small></p>
+
+<label>Gateway base URL</label>
+<input id="base" value="http://localhost:8088" />
+<label>Room</label>
+<input id="room" value="demo" />
+<label>Your name</label>
+<input id="name" value="alice" />
+
+<div class="row">
+  <button id="join">Join</button>
+  <button id="mute" disabled>Mute</button>
+  <button id="leave" disabled>Leave</button>
+</div>
+
+<div id="status">idle</div>
+<h2 style="font-size:1rem">Participants</h2>
+<ul id="roster"></ul>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), rosterEl = $("roster");
+const setStatus = (s) => { statusEl.textContent = s; };
+const peers = new Map(); // participant_id -> {name}
+
+let ws, pc, mic, muted = false;
+let remoteDescSet = false;
+const pendingIce = [];
+
+function renderRoster() {
+  rosterEl.innerHTML = "";
+  for (const [id, p] of peers) {
+    const li = document.createElement("li");
+    li.textContent = `${p.name || "(anon)"} — ${p.state || "joined"}`;
+    rosterEl.appendChild(li);
+  }
+  if (peers.size === 0) rosterEl.innerHTML = '<li class="muted">no other participants</li>';
+}
+
+async function devToken(base, name) {
+  const r = await fetch(`${base.replace(/\/$/, "")}/rtc/dev-token?name=${encodeURIComponent(name)}`);
+  if (!r.ok) throw new Error(`dev-token failed (${r.status}) — is TRING_RTC_DEV_TOKENS=true?`);
+  return (await r.json()).token;
+}
+
+async function join() {
+  const base = $("base").value, room = $("room").value, name = $("name").value;
+  $("join").disabled = true;
+  setStatus("getting mic…");
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    setStatus("mic blocked: " + e.message); $("join").disabled = false; return;
+  }
+
+  setStatus("minting dev token…");
+  let token;
+  try { token = await devToken(base, name); }
+  catch (e) { setStatus(e.message); $("join").disabled = false; return; }
+
+  const wsBase = base.replace(/\/$/, "").replace(/^http/, "ws");
+  ws = new WebSocket(`${wsBase}/rtc?token=${encodeURIComponent(token)}`);
+  ws.onopen = () => {
+    setStatus("connected, joining…");
+    // session_token (if any) survives a refresh → reattach to the same slot (M4).
+    const saved = sessionStorage.getItem(`tring-rtc:${room}`);
+    send({ type: "join", room, name, session_token: saved || undefined });
+  };
+  ws.onmessage = (ev) => onMessage(JSON.parse(ev.data));
+  ws.onclose = () => { setStatus("disconnected"); teardown(); };
+  ws.onerror = () => setStatus("socket error");
+}
+
+function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+
+function ensurePC(iceServers) {
+  if (pc) return pc;
+  pc = new RTCPeerConnection({ iceServers: iceServers || [] });
+  // Add our mic up front so the answer to the server's recvonly-audio offer
+  // carries it (server is the sole offerer).
+  for (const track of mic.getTracks()) pc.addTrack(track, mic);
+  pc.onicecandidate = (e) => { if (e.candidate) send({ type: "ice", candidate: e.candidate.toJSON() }); };
+  pc.ontrack = (e) => {
+    const el = document.createElement("audio");
+    el.autoplay = true; el.srcObject = e.streams[0] || new MediaStream([e.track]);
+    document.body.appendChild(el);
+  };
+  pc.onconnectionstatechange = () => setStatus("pc: " + pc.connectionState);
+  return pc;
+}
+
+async function onMessage(m) {
+  switch (m.type) {
+    case "joined":
+      sessionStorage.setItem(`tring-rtc:${$("room").value}`, m.session_token);
+      setStatus(`joined as ${m.participant_id.slice(0, 8)}…`);
+      ensurePC(m.ice_servers);
+      $("mute").disabled = false; $("leave").disabled = false;
+      break;
+    case "offer": {
+      const p = ensurePC();
+      await p.setRemoteDescription({ type: "offer", sdp: m.sdp });
+      remoteDescSet = true;
+      for (const c of pendingIce.splice(0)) await p.addIceCandidate(c);
+      const answer = await p.createAnswer();
+      await p.setLocalDescription(answer);
+      send({ type: "answer", sdp: answer.sdp });
+      break;
+    }
+    case "ice":
+      if (!m.candidate) break;
+      if (remoteDescSet) await pc.addIceCandidate(m.candidate);
+      else pendingIce.push(m.candidate);
+      break;
+    case "peer-joined":
+      peers.set(m.participant_id, { name: m.name, state: "joined" }); renderRoster(); break;
+    case "peer-state":
+      if (peers.has(m.participant_id)) peers.get(m.participant_id).state = m.state; renderRoster(); break;
+    case "peer-left":
+      peers.delete(m.participant_id); renderRoster(); break;
+    case "error":
+      setStatus("server error: " + m.reason); break;
+  }
+}
+
+function teardown() {
+  $("join").disabled = false; $("mute").disabled = true; $("leave").disabled = true;
+  if (pc) { pc.getSenders().forEach((s) => s.track && s.track.stop()); pc.close(); pc = null; }
+  if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
+  remoteDescSet = false; pendingIce.length = 0;
+  peers.clear(); renderRoster();
+}
+
+$("join").onclick = join;
+$("mute").onclick = () => {
+  muted = !muted;
+  if (mic) mic.getAudioTracks().forEach((t) => (t.enabled = !muted));
+  $("mute").textContent = muted ? "Unmute" : "Mute";
+};
+$("leave").onclick = () => { send({ type: "bye" }); if (ws) ws.close(); teardown(); setStatus("left"); };
+renderRoster();
+</script>
+</body>
+</html>

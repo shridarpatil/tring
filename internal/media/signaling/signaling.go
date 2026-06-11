@@ -39,8 +39,11 @@ type Config struct {
 	TURNSecret string
 	TURNTTL    time.Duration
 	// Grace is the room reconnect window (0 → room.DefaultGrace).
-	Grace  time.Duration
-	Logger *slog.Logger
+	Grace time.Duration
+	// DevTokens mounts an UNAUTHENTICATED token-mint at /rtc/dev-token for the
+	// local test client. Dev only — never enable in production.
+	DevTokens bool
+	Logger    *slog.Logger
 }
 
 // Server is the /rtc signaling surface.
@@ -79,6 +82,10 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/rtc", s.handleWS)
+	if s.cfg.DevTokens {
+		s.log.Warn("rtc dev-token mint ENABLED at /rtc/dev-token — dev only, never in production")
+		mux.HandleFunc("/rtc/dev-token", s.handleDevToken)
+	}
 	return cors(mux)
 }
 
