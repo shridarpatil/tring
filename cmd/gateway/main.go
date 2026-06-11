@@ -22,6 +22,8 @@ import (
 
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
+	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/flowstore"
 	"github.com/whatomate/tring/internal/gateway"
 	"github.com/whatomate/tring/internal/logging"
 	"github.com/whatomate/tring/internal/media/sfu"
@@ -151,6 +153,16 @@ func main() {
 		logger.Error("sfu init failed", "err", err)
 		os.Exit(1)
 	}
+	// Read-only DB for loading IVR flows (web-to-web IVR runs on the media plane).
+	// Best-effort: if the DB is unreachable, web calls are plain peer-to-peer
+	// (no IVR) rather than failing the gateway.
+	var flows signaling.FlowLoader
+	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
+		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
+	} else {
+		flows = flowstore.New(database)
+	}
+
 	sig := signaling.New(signaling.Config{
 		SFU:        mediaSFU,
 		JWTSecret:  []byte(k.String("jwt_secret")),
@@ -160,6 +172,8 @@ func main() {
 		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
 		Grace:      time.Duration(k.Int("media_grace_seconds")) * time.Second,
 		DevTokens:  k.Bool("rtc_dev_tokens"),
+		Flows:      flows,
+		AudioDir:   k.String("audio_dir"),
 		Logger:     logger,
 	})
 	rtcAddr := k.String("rtc_addr")

@@ -9,6 +9,7 @@
 package signaling
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"github.com/gobwas/ws/wsutil"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/turn"
@@ -43,7 +45,18 @@ type Config struct {
 	// DevTokens mounts an UNAUTHENTICATED token-mint at /rtc/dev-token for the
 	// local test client. Dev only — never enable in production.
 	DevTokens bool
-	Logger    *slog.Logger
+	// Flows loads an IVR flow definition by id (read-only). When set, a join
+	// carrying flow_id spawns the IVR as a participant in that room. nil → web
+	// calls are plain peer-to-peer (no IVR).
+	Flows FlowLoader
+	// AudioDir is where IVR prompt files (Ogg/Opus) are read from.
+	AudioDir string
+	Logger   *slog.Logger
+}
+
+// FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
+type FlowLoader interface {
+	Load(ctx context.Context, flowID string) (*ivr.Flow, error)
 }
 
 // Server is the /rtc signaling surface.
@@ -55,6 +68,7 @@ type Server struct {
 
 	mu    sync.Mutex
 	conns map[room.ParticipantID]*conn
+	ivr   map[room.RoomID]*ivrSession // running IVR per room (when flow-pinned)
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -68,6 +82,7 @@ func New(cfg Config) *Server {
 		sfu:   cfg.SFU,
 		log:   cfg.Logger.With("component", "signaling"),
 		conns: make(map[room.ParticipantID]*conn),
+		ivr:   make(map[room.RoomID]*ivrSession),
 	}
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
@@ -173,6 +188,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Kick off the initial server offer.
 	peer.Negotiate()
 
+	// Flow-pinned room → run the IVR as a participant (once per room).
+	if first.FlowID != "" && s.cfg.Flows != nil {
+		s.startIVR(roomID, first.FlowID)
+	}
+
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
 	s.readLoop(c, p)
 }
@@ -224,6 +244,8 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 			}
 		case msgUnpublish:
 			s.sfu.Unpublish(p.Room().ID(), p.ID(), codecKind(m.Kind))
+		case msgDTMF:
+			s.routeDTMF(p.Room().ID(), m.Digit)
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
@@ -240,6 +262,10 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
+		// If no human participants remain, stop the room's IVR (if any).
+		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
+			s.stopIVR(e.Room)
+		}
 	}
 
 	var out msg

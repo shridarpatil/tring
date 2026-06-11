@@ -18,6 +18,7 @@ const (
 	msgICE       = "ice"       // {candidate}
 	msgPublish   = "publish"   // {kind} — ask the server to invite an extra track (screen-share video)
 	msgUnpublish = "unpublish" // {kind} — stop publishing that track
+	msgDTMF      = "dtmf"      // {digit} — a caller keypress, routed to the room's IVR
 	msgBye       = "bye"
 
 	// server → client
@@ -34,9 +35,13 @@ type msg struct {
 	Type string `json:"type"`
 
 	// join
-	Room  string `json:"room,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Token string `json:"session_token,omitempty"`
+	Room   string `json:"room,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Token  string `json:"session_token,omitempty"`
+	FlowID string `json:"flow_id,omitempty"` // pins an IVR flow to run in this room
+
+	// dtmf
+	Digit string `json:"digit,omitempty"`
 
 	// offer / answer
 	SDP string `json:"sdp,omitempty"`
