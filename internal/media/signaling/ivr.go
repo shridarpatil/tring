@@ -2,6 +2,7 @@ package signaling
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,6 +24,25 @@ type ivrSession struct {
 	player *prompt.Player
 	driver *ivrdrive.Driver
 	cancel context.CancelFunc
+}
+
+// devFlowID is the magic flow id that, with dev tokens on, runs the built-in
+// dev transfer flow (no DB needed) so the example clients demo a call→agent ring.
+const devFlowID = "dev"
+
+// errNoFlowLoader is logged when a flow is pinned but no loader is configured.
+var errNoFlowLoader = errors.New("no flow loader configured")
+
+// devTransferFlow is start → transfer (ring all online agents). Dev only.
+func devTransferFlow() *ivr.Flow {
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]any{}}, // no team/agent → ring all online
+		},
+		Edges: []ivr.Edge{{From: "s", To: "x", Condition: "default"}},
+	}
 }
 
 // startIVR loads the pinned flow and runs it as a participant in the room. Once
@@ -47,7 +67,18 @@ func (s *Server) startIVR(roomID room.RoomID, flowID string) {
 	s.ivr[roomID] = &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel}
 	s.mu.Unlock()
 
-	flow, err := s.cfg.Flows.Load(ctx, flowID)
+	var (
+		flow *ivr.Flow
+		err  error
+	)
+	switch {
+	case flowID == devFlowID && s.cfg.DevTokens:
+		flow = devTransferFlow() // built-in: ring an agent, no DB needed
+	case s.cfg.Flows != nil:
+		flow, err = s.cfg.Flows.Load(ctx, flowID)
+	default:
+		err = errNoFlowLoader
+	}
 	if err != nil || flow == nil {
 		s.log.Warn("ivr: flow load failed", "room", roomID, "flow", flowID, "err", err)
 		s.stopIVR(roomID)

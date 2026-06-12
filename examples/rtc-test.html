@@ -32,6 +32,8 @@ picker excludes this call tab so it can't mirror back into the call.</small></p>
 <input id="room" value="demo" />
 <label>Your name</label>
 <input id="name" value="alice" />
+<label>Flow id <small>(use <code>dev</code> to ring an online agent; blank = plain call)</small></label>
+<input id="flow" value="" />
 
 <div class="row">
   <button id="join">Join</button>
@@ -102,7 +104,7 @@ function connect() {
   ws.onopen = () => {
     setStatus("connected, joining…");
     const saved = sessionStorage.getItem(`tring-rtc:${room}`);
-    send({ type: "join", room, name, session_token: saved || undefined });
+    send({ type: "join", room, name, flow_id: $("flow").value || undefined, session_token: saved || undefined });
   };
   ws.onmessage = (ev) => onMessage(JSON.parse(ev.data));
   ws.onclose = () => {
