@@ -55,6 +55,14 @@ type pstnCall struct {
 	opusPT uint8
 	dtmfPT uint8
 
+	// proceed is closed once a FINAL SIP response went out (Answer's 200 or
+	// Reject's 486). handleInvite blocks on it: sipgo terminates the INVITE
+	// transaction when the OnInvite handler returns, so the handler must stay
+	// alive until the final response is sent (same reason the agent-leg handler
+	// blocks). proceedOnce guards the close.
+	proceed     chan struct{}
+	proceedOnce sync.Once
+
 	// set on Answer
 	rtp  *net.UDPConn
 	src  *pstnSource
@@ -62,6 +70,9 @@ type pstnCall struct {
 	done chan struct{}
 	once sync.Once
 }
+
+// finalSent marks that a final SIP response went out, releasing handleInvite.
+func (c *pstnCall) finalSent() { c.proceedOnce.Do(func() { close(c.proceed) }) }
 
 func newPstnAdapter(g *Gateway) *PstnAdapter {
 	return &PstnAdapter{g: g, calls: map[room.CallID]*pstnCall{}}
@@ -98,10 +109,12 @@ func (a *PstnAdapter) handleInvite(req *sip.Request, tx sip.ServerTransaction, d
 		a.g.log.Error("pstn: read invite failed", "err", err)
 		return
 	}
-	_ = dlg.Respond(sip.StatusRinging, "Ringing", nil)
+	if err := dlg.Respond(sip.StatusRinging, "Ringing", nil); err != nil {
+		a.g.log.Error("pstn: 180 failed", "err", err)
+	}
 
 	id := room.CallID(uuid.NewString())
-	call := &pstnCall{dlg: dlg, fsAddr: fsAddr, opusPT: opusPT, dtmfPT: dtmfPT}
+	call := &pstnCall{dlg: dlg, fsAddr: fsAddr, opusPT: opusPT, dtmfPT: dtmfPT, proceed: make(chan struct{})}
 	a.mu.Lock()
 	a.calls[id] = call
 	handler := a.inbound
@@ -115,23 +128,26 @@ func (a *PstnAdapter) handleInvite(req *sip.Request, tx sip.ServerTransaction, d
 		return
 	}
 
-	// Pre-answer teardown paths: caller hangs up mid-ring (CANCEL), or the
-	// consumer never answers (timeout → 408).
-	tx.OnCancel(func(*sip.Request) { a.drop(id) }) // sipgo auto-487s
-	go func() {
-		time.Sleep(answerTimeout)
-		a.mu.Lock()
-		c := a.calls[id]
-		unanswered := c != nil && c.rtp == nil
-		a.mu.Unlock()
-		if unanswered {
-			a.g.log.Warn("pstn: call not answered by consumer, 408", "call", id)
-			_ = dlg.Respond(sip.StatusRequestTimeout, "No Answer", nil)
-			a.drop(id)
-		}
-	}()
+	// Caller hangs up mid-ring → CANCEL (sipgo auto-487s; we just clean up).
+	cancelled := make(chan struct{})
+	var cancelOnce sync.Once
+	tx.OnCancel(func(*sip.Request) { cancelOnce.Do(func() { close(cancelled) }) })
 
 	handler(room.InboundCall{CallID: id, From: from, To: did})
+
+	// Block until a FINAL response went out (Answer/Reject from the consumer),
+	// the caller cancelled, or the consumer never decided (→ 408). Returning
+	// earlier would let sipgo terminate the INVITE transaction under us.
+	select {
+	case <-call.proceed:
+	case <-cancelled:
+		a.g.log.Info("pstn: caller hung up mid-ring", "call", id)
+		a.drop(id)
+	case <-time.After(answerTimeout):
+		a.g.log.Warn("pstn: call not answered by consumer, 408", "call", id)
+		_ = dlg.Respond(sip.StatusRequestTimeout, "No Answer", nil)
+		a.drop(id)
+	}
 }
 
 // Answer implements room.PstnGateway: 200-OK the leg and start media. The
@@ -151,8 +167,10 @@ func (a *PstnAdapter) Answer(id room.CallID) (*room.PstnLeg, error) {
 	localPort := rtpConn.LocalAddr().(*net.UDPAddr).Port
 	if err := call.dlg.RespondSDP([]byte(buildSDP(a.g.fs.cfg.AdvertIP, localPort, call.opusPT, call.dtmfPT))); err != nil {
 		rtpConn.Close()
+		call.finalSent() // release handleInvite either way
 		return nil, fmt.Errorf("pstn: 200 ok: %w", err)
 	}
+	call.finalSent()
 
 	call.rtp = rtpConn
 	call.src = &pstnSource{id: room.ParticipantID("pstn-" + string(id)), pkts: make(chan *rtp.Packet, 64)}
@@ -188,6 +206,7 @@ func (a *PstnAdapter) Reject(id room.CallID) error {
 		return errUnknownCall
 	}
 	_ = call.dlg.Respond(sip.StatusBusyHere, "Rejected", nil)
+	call.finalSent()
 	a.drop(id)
 	return nil
 }
