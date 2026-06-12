@@ -12,7 +12,7 @@
 // Lazy by design: nothing connects until the visitor actually calls.
 
 import { Emitter } from "./events";
-import { GatewayAdapter } from "./gateway";
+import { RtcCall } from "./rtc";
 import type {
   GuestCredentialsResponse,
   GuestEvent,
@@ -20,7 +20,7 @@ import type {
 } from "./types";
 
 export class TringGuest extends Emitter<GuestEvent> {
-  private gw: GatewayAdapter | null = null;
+  private rtc: RtcCall | null = null;
   private muted = false;
 
   constructor(private readonly opts: GuestInitOpts) {
@@ -32,11 +32,11 @@ export class TringGuest extends Emitter<GuestEvent> {
   }
 
   get inCall(): boolean {
-    return this.gw !== null;
+    return this.rtc !== null;
   }
 
   /**
-   * Acquire the mic, negotiate WebRTC with the gateway, and place the call
+   * Acquire the mic, connect to the media plane over /rtc, and place the call
    * into the IVR. Emits connecting → ringing → connected → ended. Throws
    * (and emits `error`) on credential resolution or media failure.
    */
@@ -45,21 +45,25 @@ export class TringGuest extends Emitter<GuestEvent> {
     this.emit({ type: "connecting" });
 
     // Capture the mic FIRST — synchronously in the click/tap that started this
-    // call, BEFORE the credentials fetch below. iOS Safari (and some Android
-    // cases) only grant getUserMedia while the gesture is active, so capturing
-    // it after an await throws a permission error.
-    const gw = new GatewayAdapter();
-    this.gw = gw;
-    this.muted = false;
+    // call, BEFORE the credentials fetch below. iOS Safari only grants
+    // getUserMedia while the gesture is active, so capturing after an await
+    // throws. Needs HTTPS (mobile Safari has no mediaDevices on http://).
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      const e = new Error(
+        "Microphone needs HTTPS — load this page over https:// (it won't work over http on mobile).",
+      );
+      this.emit({ type: "error", error: e });
+      throw e;
+    }
+    let mic: MediaStream;
     try {
-      await gw.captureMic();
+      mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (e) {
       this.emit({ type: "error", error: e as Error });
-      await this.cleanup();
       throw e;
     }
 
-    // Resolve gateway connection details: BYOC (trusted) overrides config.
+    // Resolve connection details: BYOC (trusted) overrides config.
     let gatewayUrl = this.opts.gatewayUrl;
     let flowId = this.opts.flowId;
     let token = this.opts.token;
@@ -78,11 +82,13 @@ export class TringGuest extends Emitter<GuestEvent> {
         iceServers = creds.ice_servers ?? iceServers;
       }
     } catch (e) {
+      mic.getTracks().forEach((t) => t.stop());
       this.emit({ type: "error", error: e as Error });
       throw e;
     }
 
     if (!gatewayUrl) {
+      mic.getTracks().forEach((t) => t.stop());
       const e = new Error(
         "TringGuest: gatewayUrl (or credentialsUrl/fetchCredentials) is required",
       );
@@ -90,21 +96,30 @@ export class TringGuest extends Emitter<GuestEvent> {
       throw e;
     }
 
+    // One room per call; the edge namespaces it by tenant (from the token). The
+    // visitor's flow is pinned server-side by the token — flowId here is only a
+    // hint for the dev/agent-token path.
+    const room = "v-" + randomId();
+    const call = new RtcCall({
+      gatewayUrl,
+      room,
+      token: token ?? "",
+      flowId,
+      iceServers,
+      mic,
+    });
+    this.rtc = call;
+    this.muted = false;
+    call.on("connected", () => this.emit({ type: "connected" }));
+    call.on("ended", (e) => {
+      this.emit({ type: "ended", reason: e.reason });
+      void this.cleanup();
+    });
+    call.on("error", (e) => this.emit({ type: "error", error: e.error }));
+
     try {
-      await gw.start({
-        gatewayUrl,
-        flowId,
-        token,
-        iceServers,
-        onState: (state) => {
-          if (state === "ringing") this.emit({ type: "ringing" });
-          else if (state === "connected") this.emit({ type: "connected" });
-          else if (state === "ended") {
-            this.emit({ type: "ended" });
-            void this.cleanup();
-          }
-        },
-      });
+      await call.join();
+      this.emit({ type: "ringing" }); // placed into the IVR, awaiting answer
     } catch (e) {
       this.emit({ type: "error", error: e as Error });
       await this.cleanup();
@@ -114,21 +129,21 @@ export class TringGuest extends Emitter<GuestEvent> {
 
   /** Hang up (or cancel a not-yet-answered) call. Safe to call any time. */
   async hangup(): Promise<void> {
-    if (!this.gw) return;
-    await this.gw.stop();
+    if (!this.rtc) return;
+    this.rtc.hangup();
     this.emit({ type: "ended" });
     await this.cleanup();
   }
 
-  /** Send a DTMF digit (0-9, *, #) to the IVR mid-call (RFC 4733). */
+  /** Send a DTMF digit (0-9, *, #) to the IVR mid-call. */
   async sendDTMF(digit: string): Promise<void> {
-    await this.gw?.sendDTMF(digit);
+    this.rtc?.sendDtmf(digit);
   }
 
   /** Mute/unmute the visitor's microphone. */
   async mute(muted: boolean): Promise<void> {
-    if (!this.gw) return;
-    this.gw.setMuted(muted);
+    if (!this.rtc) return;
+    this.rtc.setMuted(muted);
     this.muted = muted;
   }
 
@@ -140,11 +155,17 @@ export class TringGuest extends Emitter<GuestEvent> {
   }
 
   private async cleanup(): Promise<void> {
-    const gw = this.gw;
-    this.gw = null;
+    const call = this.rtc;
+    this.rtc = null;
     this.muted = false;
-    await gw?.stop().catch(() => {});
+    call?.hangup();
   }
+}
+
+// randomId is a per-call room id (crypto.randomUUID where available).
+function randomId(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 // fetchCreds pulls gateway connection details from the integrator's backend

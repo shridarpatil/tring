@@ -58,6 +58,12 @@ export interface RtcCallOpts {
   flowId?: string;
   /** Extra ICE servers; the edge also sends its own in `joined`. */
   iceServers?: RTCIceServer[];
+  /**
+   * Pre-captured mic. Pass this when the mic was acquired earlier in the user
+   * gesture (e.g. before a credentials fetch) so iOS Safari grants it; join()
+   * then skips its own getUserMedia. Omit to let join() capture the mic.
+   */
+  mic?: MediaStream;
   /** Reconnect attempts on an unexpected socket drop (default 3; 0 disables). */
   reconnectAttempts?: number;
 }
@@ -93,12 +99,16 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   /** join captures the mic and connects. Call SYNCHRONOUSLY inside the user
    *  gesture (before any unrelated await) so iOS Safari grants the mic. */
   async join(): Promise<void> {
-    const problem = secureContextProblem();
-    if (problem) throw new Error(problem);
-    try {
-      this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-      throw micError(e);
+    if (this.opts.mic) {
+      this.mic = this.opts.mic; // captured earlier in the gesture
+    } else {
+      const problem = secureContextProblem();
+      if (problem) throw new Error(problem);
+      try {
+        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        throw micError(e);
+      }
     }
     this.openSocket();
   }
