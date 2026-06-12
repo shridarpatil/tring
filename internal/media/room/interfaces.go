@@ -1,8 +1,6 @@
 package room
 
 import (
-	"context"
-
 	"github.com/pion/rtp"
 )
 
@@ -54,20 +52,34 @@ type Supervisor interface {
 type InboundCall struct {
 	CallID CallID
 	From   string // caller line identity (E.164)
-	To     string // dialed number
+	To     string // dialed number (the DID — resolves the tenant + IVR flow)
 }
 
-// PstnGateway is the control contract for the phone side: inbound events,
-// outbound origination, call lifecycle, and PSTN DTMF. It hands the room its
-// media as a ParticipantSource. FreeSWITCH is the FIRST adapter, never a
-// dependency — all FS-specific code (ESL, dialplan, mod_*) lives in one adapter
-// package that nothing in internal/media imports. Swapping gateways = writing a
-// sibling adapter, never touching the core.
+// PstnLeg is one ANSWERED phone call's media + events, ready to plug into a room
+// (sfu.AttachPort): the caller's audio enters as Source, the room's audio goes
+// back via Write, keypresses arrive on DTMF, and Done closes when the carrier
+// side hangs up. Source always yields Opus — the adapter owns any transcode, so
+// the media plane never sees a PSTN codec.
+type PstnLeg struct {
+	Source ParticipantSource
+	Write  func(pkt *rtp.Packet) error
+	DTMF   <-chan string
+	Done   <-chan struct{}
+}
+
+// PstnGateway is the control contract for the phone side — THE PLUG. FreeSWITCH
+// is the first adapter, never a dependency: all FS-specific code (SIP toward FS,
+// dialplan assumptions) lives in one adapter package that nothing in
+// internal/media imports. Swapping carriers/stacks (a sipgo trunk, a WebRTC
+// trunk provider) = writing a sibling adapter, never touching the core.
+//
+// Outbound origination (Originate) is intentionally absent for now — inbound
+// lands first; the contract grows when click-to-call moves onto the plane.
 type PstnGateway interface {
+	// OnInbound registers the single consumer for incoming calls. The consumer
+	// must Answer or Reject promptly (the adapter times the call out otherwise).
 	OnInbound(func(InboundCall))
-	Originate(ctx context.Context, to string) (ParticipantSource, error)
-	Answer(id CallID) error
+	Answer(id CallID) (*PstnLeg, error)
 	Reject(id CallID) error
 	Hangup(id CallID) error
-	DTMF(id CallID, digit string)
 }
