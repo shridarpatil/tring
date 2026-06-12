@@ -36,6 +36,7 @@ with <code>TRING_RTC_DEV_TOKENS=true</code>.</small></p>
 </div>
 
 <div id="status">offline</div>
+<div id="videos" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem"></div>
 
 <div id="ring">
   <b>Incoming call</b> — <span id="from"></span>
@@ -111,9 +112,19 @@ function ensurePC(iceServers) {
   for (const track of mic.getTracks()) pc.addTrack(track, mic);
   pc.onicecandidate = (e) => { if (e.candidate) callSend({ type: "ice", candidate: e.candidate.toJSON() }); };
   pc.ontrack = (e) => {
-    const el = document.createElement("audio");
-    el.autoplay = true; el.srcObject = e.streams[0] || new MediaStream([e.track]);
-    document.body.appendChild(el);
+    const stream = e.streams[0] || new MediaStream([e.track]);
+    if (e.track.kind === "video") {
+      // The caller's screen share — render it so the agent can actually see it.
+      const v = document.createElement("video");
+      v.autoplay = true; v.playsInline = true; v.muted = true;
+      v.style.maxWidth = "100%"; v.srcObject = stream;
+      $("videos").appendChild(v);
+      e.track.onended = () => v.remove();
+    } else {
+      const a = document.createElement("audio");
+      a.autoplay = true; a.srcObject = stream;
+      document.body.appendChild(a);
+    }
   };
   pc.onconnectionstatechange = () => setStatus("call: " + pc.connectionState);
   return pc;
@@ -155,6 +166,7 @@ function callTeardown() {
   if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
   if (callWS) { try { callWS.close(); } catch {} callWS = null; }
   document.querySelectorAll("audio").forEach((a) => a.remove());
+  $("videos").innerHTML = "";
 }
 
 $("online").onclick = goOnline;
