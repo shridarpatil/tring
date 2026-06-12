@@ -97,8 +97,15 @@ export class Tring extends Emitter<TringEvent> {
         rtc.on("error", ({ error }) => this.emit({ type: "error", error }));
       },
       hangup: async () => {
-        if (rtc) rtc.hangup();
-        else this.agent.decline();
+        if (rtc) {
+          rtc.hangup();
+        } else {
+          // Declining a ringing call (never answered) → clear it and surface the
+          // end so the widget hides the panel.
+          this.agent.decline();
+          call.status = "ended";
+          this.emit({ type: "call:ended", call });
+        }
       },
       sendDTMF: async (digit: string) => {
         rtc?.sendDtmf(digit);

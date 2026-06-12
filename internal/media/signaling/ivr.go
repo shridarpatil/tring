@@ -131,6 +131,9 @@ func (s *Server) stopIVR(roomID room.RoomID) {
 	s.sfu.RemoveSource(roomID, sess.pid)
 	_ = sess.player.Close()
 	s.log.Info("ivr stopped", "room", roomID)
+	// Flow ended with no agent → end the caller's call (else they're stranded in
+	// an empty room). No-op if an agent is present or the room is already empty.
+	s.endIfAlone(roomID)
 }
 
 // filePrompts plays Ogg/Opus prompt files (from AudioDir) through the IVR's

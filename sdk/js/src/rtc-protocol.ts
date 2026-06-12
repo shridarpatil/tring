@@ -36,6 +36,7 @@ export const ServerMsgType = {
   PeerLeft: "peer-left",
   Incoming: "incoming",
   Ready: "ready",
+  Ended: "ended",
   Error: "error",
 } as const;
 
