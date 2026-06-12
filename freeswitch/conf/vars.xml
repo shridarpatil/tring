@@ -76,6 +76,9 @@
        + TRING_GATEWAY_SIP_PORT), so FS and the gateway stay in sync from one
        source of truth. Defaults to loopback:5090 (gateway co-located with FS). -->
   <X-PRE-PROCESS cmd="exec-set" data="tring_gateway_sip=sh -c 'echo ${TRING_GATEWAY_ADVERT_IP:-127.0.0.1}:${TRING_GATEWAY_SIP_PORT:-5090}'"/>
+  <!-- Phase 4 plug: route inbound DIDs to the media plane (pion) instead of the
+       orchestrator's ESL IVR. Set TRING_PSTN_VIA_GATEWAY=true to enable. -->
+  <X-PRE-PROCESS cmd="exec-set" data="tring_pstn_via_gateway=sh -c 'echo ${TRING_PSTN_VIA_GATEWAY:-false}'"/>
   <!-- Tring orchestrator IVR socket (cmd/orchestrator's outbound-ESL listener).
        The dialplan hands inbound calls here (see dialplan/default.xml). Defaults
        to loopback because the orchestrator is co-located with FreeSWITCH (one per

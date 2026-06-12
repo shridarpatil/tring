@@ -48,8 +48,12 @@ media plane is a thin **public edge**; the orchestrator stays **private**.
   gateway's `ivrdrive`, `flowstore`, `agents.go` ring, dev flow.
 - **Phase 3 — WhatsApp adapter.** Business Calling API webhook → inject the customer's
   Opus leg as a `ParticipantSource`; orchestrator runs the call. Reference: `../whatomate`.
-- **Phase 4 — FreeSWITCH as `PstnGateway`.** SIP/G.711 → Opus → `ParticipantSource`.
-  Phone runs on the pion anchor; retire FS-side IVR / `eslDriver`. Biggest/riskiest, last.
+- **Phase 4 — FreeSWITCH as `PstnGateway`.** *Inbound built:* the plug interface
+  (`room.PstnGateway` + `PstnLeg`), the SFU bidirectional port (`AttachPort`), the FS
+  adapter (`internal/gateway/pstn.go` — X-Tring-DID INVITEs, Opus RTP, RFC2833 DTMF),
+  and the room wiring (`signaling/pstn.go`). Enable with `TRING_PSTN_VIA_GATEWAY=true`
+  (dialplan `tring_pstn_plug`). Outbound origination + retiring `eslDriver` remain.
+  Swapping FS for sipgo/another stack = implementing `room.PstnGateway` in a sibling package.
 - **Phase 5 (opt) — Service consolidation.** Merge `api`+`orchestrator` into one **core**
   binary; the **edge** stays separate (security). Net: 2 Go services + FS + PG + Redis.
 
