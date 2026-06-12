@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/google/uuid"
 )
 
 // Server is the BRAIN side of the control channel: it accepts authenticated edge
@@ -25,6 +27,9 @@ type Server struct {
 
 	mu    sync.Mutex
 	edges map[*edgeConn]struct{}
+
+	preg    sync.Mutex
+	pending map[string]chan Message // command id → response waiter
 }
 
 type edgeConn struct {
@@ -57,7 +62,17 @@ func NewServer(secret string, onEvent func(Message), log *slog.Logger) *Server {
 		log:     log.With("component", "control-server"),
 		onEvent: onEvent,
 		edges:   make(map[*edgeConn]struct{}),
+		pending: make(map[string]chan Message),
 	}
+}
+
+// SetOnEvent swaps the event handler (lets the brain construct the server first,
+// then wire a handler that needs the server — e.g. WebIVR, which sends commands).
+func (s *Server) SetOnEvent(fn func(Message)) {
+	if fn == nil {
+		fn = func(Message) {}
+	}
+	s.onEvent = fn
 }
 
 // Handler upgrades an authenticated edge WebSocket and runs its read loop.
@@ -90,9 +105,54 @@ func (s *Server) Handler() http.HandlerFunc {
 				s.log.Warn("control: bad event json", "err", err)
 				continue
 			}
+			// A response to an in-flight Request (correlated by id) goes to its
+			// waiter; everything else is an unsolicited event for the app.
+			if m.ID != "" && s.deliver(m) {
+				continue
+			}
 			s.onEvent(m)
 		}
 	}
+}
+
+// Request sends a command and blocks until the edge responds (correlated by a
+// generated id) or ctx is done. Returns ErrNotConnected if no edge is attached.
+func (s *Server) Request(ctx context.Context, m Message) (Message, error) {
+	m.ID = uuid.NewString()
+	ch := make(chan Message, 1)
+	s.preg.Lock()
+	s.pending[m.ID] = ch
+	s.preg.Unlock()
+	defer func() {
+		s.preg.Lock()
+		delete(s.pending, m.ID)
+		s.preg.Unlock()
+	}()
+
+	if s.Send(m) == 0 {
+		return Message{}, ErrNotConnected
+	}
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-ctx.Done():
+		return Message{}, ctx.Err()
+	}
+}
+
+// deliver routes a correlated response to its waiter; false if none is waiting.
+func (s *Server) deliver(m Message) bool {
+	s.preg.Lock()
+	ch := s.pending[m.ID]
+	s.preg.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- m:
+	default:
+	}
+	return true
 }
 
 // Send delivers a command to every connected edge. Returns the number of edges

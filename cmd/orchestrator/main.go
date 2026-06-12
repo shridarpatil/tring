@@ -28,6 +28,7 @@ import (
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/flowstore"
 	"github.com/whatomate/tring/internal/logging"
 	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/orchestrator"
@@ -102,9 +103,12 @@ func main() {
 	// remotely. 2a only plumbs it — events are logged; 2b/2c add behavior. Disabled
 	// (no listener) when control_addr is empty.
 	if controlAddr := k.String("control_addr"); controlAddr != "" {
-		ctrl := control.NewServer(k.String("control_secret"), func(m control.Message) {
-			logger.Info("control event", "type", m.Type, "room", m.Room)
-		}, logger)
+		ctrl := control.NewServer(k.String("control_secret"), nil, logger)
+		// The brain runs web/WhatsApp-call IVR here (reusing ivrdrive over the
+		// channel); the edge only moves media. Flows load from the same DB the
+		// phone IVR uses.
+		web := orchestrator.NewWebIVR(ctrl, flowstore.New(dbase), logger)
+		ctrl.SetOnEvent(web.OnEvent)
 		mux := http.NewServeMux()
 		mux.HandleFunc("/control", ctrl.Handler())
 		srv := &http.Server{Addr: controlAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
