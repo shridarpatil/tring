@@ -88,6 +88,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private remoteDescSet = false;
   private pendingIce: RTCIceCandidateInit[] = [];
   private edgeIce: RtcIceServer[] = [];
+  private peers = new Set<string>(); // other participants currently in the room
   private attemptsLeft: number;
   private closedByUser = false;
 
@@ -153,10 +154,20 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         else this.pendingIce.push(m.candidate);
         break;
       case ServerMsgType.PeerJoined:
+        this.peers.add(m.participant_id ?? "");
         this.emit({ type: "peer-joined", participantId: m.participant_id ?? "", name: m.name });
         break;
       case ServerMsgType.PeerLeft:
+        this.peers.delete(m.participant_id ?? "");
         this.emit({ type: "peer-left", participantId: m.participant_id ?? "" });
+        // 1:1 call: when the other party leaves, the call is over. (The IVR is an
+        // injected source, not a peer, so it never triggers this — only a real
+        // participant leaving does.)
+        if (this.peers.size === 0) {
+          this.closedByUser = true; // a clean end, not a drop → no reconnect
+          this.teardown();
+          this.emit({ type: "ended", reason: "peer left" });
+        }
         break;
       case ServerMsgType.Error:
         this.emit({ type: "error", error: new Error(m.reason ?? "edge error") });
