@@ -200,6 +200,11 @@ services:
     env_file:
       - path: .env
         required: false
+    volumes:
+      # Tenant sound library — the api writes uploaded prompts here; the gateway
+      # reads + plays them on the web (pion) plane. Same shared dir as api +
+      # FreeSWITCH (audio_dir == /usr/share/freeswitch/sounds/tring), read-only.
+      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
     restart: unless-stopped
 
   # Local SIP trunk simulator — stands in for the Tata SBC during dev.
