@@ -49,8 +49,10 @@ func devTransferFlow() *ivr.Flow {
 // startIVR loads the pinned flow and runs it as a participant in the room. Once
 // per room — a second flow-pinned join is a no-op. The IVR's prompt player is
 // injected via the SFU so the caller hears it; the caller's DTMF (routeDTMF)
-// drives menus. When the flow ends (or the caller leaves) the IVR is torn down.
-func (s *Server) startIVR(roomID room.RoomID, flowID string) {
+// drives menus. callerRef is what a transfer ring shows the agent (a phone
+// caller's number / a trusted client_ref; "" → generic). When the flow ends (or
+// the caller leaves) the IVR is torn down.
+func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 	s.mu.Lock()
 	if s.ivr[roomID] != nil {
 		s.mu.Unlock()
@@ -65,9 +67,10 @@ func (s *Server) startIVR(roomID room.RoomID, flowID string) {
 			player:    player,
 			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
 		},
-		Agents: s, // Server implements ivrdrive.Agents (rings agents into the room)
-		Room:   string(roomID),
-		Logger: s.log,
+		Agents:    s, // Server implements ivrdrive.Agents (rings agents into the room)
+		Room:      string(roomID),
+		ClientRef: callerRef,
+		Logger:    s.log,
 	})
 	s.ivr[roomID] = &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel}
 	s.mu.Unlock()
@@ -132,8 +135,10 @@ func (s *Server) stopIVR(roomID room.RoomID) {
 	_ = sess.player.Close()
 	s.log.Info("ivr stopped", "room", roomID)
 	// Flow ended with no agent → end the caller's call (else they're stranded in
-	// an empty room). No-op if an agent is present or the room is already empty.
+	// an empty room). Web caller: terminal `ended` + remove. Phone caller: hang
+	// up the leg. Both no-ops if an agent is present / the room is already empty.
 	s.endIfAlone(roomID)
+	s.hangupPstnIfAbandoned(roomID)
 }
 
 // filePrompts plays Ogg/Opus prompt files (from AudioDir) through the IVR's

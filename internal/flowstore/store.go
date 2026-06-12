@@ -46,6 +46,21 @@ func (s *Store) Load(ctx context.Context, flowID string) (*ivr.Flow, error) {
 	return ivr.Parse([]byte(def))
 }
 
+// ResolveDID returns the owning tenant + attached flow id for an inbound DID
+// (empty flowID = the number exists but has no flow attached). Used by the media
+// plane to route an inbound phone call (the PSTN plug) to its IVR. Read-only.
+func (s *Store) ResolveDID(ctx context.Context, did string) (tenantID uuid.UUID, flowID string, err error) {
+	var fid *uuid.UUID
+	row := s.db.Pool.QueryRow(ctx, s.q.ResolveInboundNumber, did)
+	if err := row.Scan(&tenantID, &fid); err != nil {
+		return uuid.Nil, "", fmt.Errorf("resolve DID %s: %w", did, err)
+	}
+	if fid != nil {
+		flowID = fid.String()
+	}
+	return tenantID, flowID, nil
+}
+
 // TeamSIPs returns the SIP usernames of a team's members that are available for
 // calls, in membership position order. Used by the media gateway's transfer ring
 // to target the right agents (parity with the FreeSWITCH executor, which uses

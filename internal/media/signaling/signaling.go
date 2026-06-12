@@ -93,13 +93,20 @@ type Server struct {
 	// walking the flow locally. nil/disconnected → local IVR fallback.
 	control controlChannel
 
-	mu     sync.Mutex
-	conns  map[room.ParticipantID]*conn
-	ivr    map[room.RoomID]*ivrSession   // local IVR per room (fallback / control off)
-	edge   map[room.RoomID]*edgeVoice    // brain-driven IVR voice per room (control on)
-	holds  map[room.RoomID]*edgeVoice    // brain-driven hold music per room
-	agents map[string]map[string]*conn   // online agents: tenant → sip → presence socket
-	rings  map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
+	// pstnGW is the phone plug (room.PstnGateway — FS today, swappable); nil
+	// when no phone side is configured. pstnDID resolves a dialed DID to its
+	// tenant + flow. See pstn.go.
+	pstnGW  room.PstnGateway
+	pstnDID DIDResolver
+
+	mu        sync.Mutex
+	conns     map[room.ParticipantID]*conn
+	ivr       map[room.RoomID]*ivrSession   // local IVR per room (fallback / control off)
+	edge      map[room.RoomID]*edgeVoice    // brain-driven IVR voice per room (control on)
+	holds     map[room.RoomID]*edgeVoice    // brain-driven hold music per room
+	agents    map[string]map[string]*conn   // online agents: tenant → sip → presence socket
+	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
+	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -109,15 +116,16 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	s := &Server{
-		cfg:    cfg,
-		sfu:    cfg.SFU,
-		log:    cfg.Logger.With("component", "signaling"),
-		conns:  make(map[room.ParticipantID]*conn),
-		ivr:    make(map[room.RoomID]*ivrSession),
-		edge:   make(map[room.RoomID]*edgeVoice),
-		holds:  make(map[room.RoomID]*edgeVoice),
-		agents: make(map[string]map[string]*conn),
-		rings:  make(map[room.RoomID]chan struct{}),
+		cfg:       cfg,
+		sfu:       cfg.SFU,
+		log:       cfg.Logger.With("component", "signaling"),
+		conns:     make(map[room.ParticipantID]*conn),
+		ivr:       make(map[room.RoomID]*ivrSession),
+		edge:      make(map[room.RoomID]*edgeVoice),
+		holds:     make(map[room.RoomID]*edgeVoice),
+		agents:    make(map[string]map[string]*conn),
+		rings:     make(map[room.RoomID]chan struct{}),
+		pstnCalls: make(map[room.RoomID]room.CallID),
 	}
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
@@ -268,7 +276,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				Name:        first.Name,
 			})
 		} else if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
-			s.startIVR(roomID, flowID) // local fallback (control down)
+			s.startIVR(roomID, flowID, princ.clientRef) // local fallback (control down)
 		}
 	}
 	// If a transfer is ringing for this room, this join is the agent answering.
@@ -375,13 +383,15 @@ func (s *Server) routeEvent(e room.Event) {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
 		// If no human participants remain, end the call: tell the brain (it cancels
-		// its walk) and drop the edge voice; also stop any local IVR.
+		// its walk) and drop the edge voice; also stop any local IVR — and if a
+		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
 			if s.controlUp() {
 				_ = s.control.Send(control.Message{Type: control.EvCallEnded, Room: string(e.Room)})
 				s.edgeStopVoice(e.Room)
 			}
 			s.stopIVR(e.Room)
+			s.hangupPstnIfAbandoned(e.Room)
 		}
 	}
 
