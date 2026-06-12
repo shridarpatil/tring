@@ -10,6 +10,7 @@ import (
 	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/ivrdrive"
 	"github.com/whatomate/tring/internal/media/room"
+	"github.com/whatomate/tring/internal/presence"
 )
 
 // ringTimeout bounds how long a transfer rings before giving up (no_answer).
@@ -31,6 +32,28 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	// Tell the brain (it owns routing/presence in 2c).
 	if s.controlUp() {
 		_ = s.control.Send(control.Message{Type: control.EvAgentOnline, Tenant: tenant, Sip: sip})
+	}
+	// Publish to the shared Redis presence store the API + admin console read, and
+	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
+	if pres := s.cfg.Presence; pres != nil {
+		pres.MarkOnline(context.Background(), tenant, sip)
+		stopRefresh := make(chan struct{})
+		go func() {
+			t := time.NewTicker(presence.RefreshInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-stopRefresh:
+					return
+				case <-t.C:
+					pres.MarkOnline(context.Background(), tenant, sip)
+				}
+			}
+		}()
+		defer func() {
+			close(stopRefresh)
+			pres.Offline(context.Background(), tenant, sip)
+		}()
 	}
 
 	defer func() {
