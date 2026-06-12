@@ -238,9 +238,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.startIVR(roomID, first.FlowID) // local fallback (control down)
 		}
 	}
-	// If a transfer is ringing for this room, this join is the agent answering —
-	// complete the ring (the IVR's Transfer then returns "completed").
+	// If a transfer is ringing for this room, this join is the agent answering.
+	// Local fallback resolves it via signalRing; with control up, tell the brain
+	// (it owns the pending ring) via participant.joined.
 	s.signalRing(roomID)
+	if s.controlUp() {
+		_ = s.control.Send(control.Message{
+			Type: control.EvParticipantJoined, Room: string(roomID),
+			Participant: string(p.ID()), Name: first.Name,
+		})
+	}
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
 	s.readLoop(c, p)

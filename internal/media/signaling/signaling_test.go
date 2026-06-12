@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -363,33 +362,15 @@ func TestDevFlowRingsAgentWithoutDB(t *testing.T) {
 	}
 }
 
-// fakeControl is a controlChannel stand-in that records sent messages.
-type fakeControl struct {
-	mu   sync.Mutex
-	sent []control.Message
-}
+// fakeControl is a connected controlChannel stand-in (its Send is a no-op).
+type fakeControl struct{}
 
-func (f *fakeControl) Send(m control.Message) error {
-	f.mu.Lock()
-	f.sent = append(f.sent, m)
-	f.mu.Unlock()
-	return nil
-}
-func (f *fakeControl) Connected() bool { return true }
-func (f *fakeControl) has(id, outcome string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, m := range f.sent {
-		if m.ID == id && m.Outcome == outcome {
-			return true
-		}
-	}
-	return false
-}
+func (fakeControl) Send(control.Message) error { return nil }
+func (fakeControl) Connected() bool            { return true }
 
-// TestEdgeRingCommandRingsAgent checks Phase 2b's edge side: a `ring` command
-// from the brain makes the edge ring an online agent and, when the agent joins,
-// reply with the outcome (correlated by id) — reusing the existing agent ring.
+// TestEdgeRingCommandRingsAgent checks Phase 2c's edge side: the brain already
+// resolved WHICH agent, so a `ring` command with a specific sip just pushes the
+// `incoming` ring to that agent's socket — no routing on the edge.
 func TestEdgeRingCommandRingsAgent(t *testing.T) {
 	s, err := sfu.New(sfu.Config{})
 	if err != nil {
@@ -398,33 +379,20 @@ func TestEdgeRingCommandRingsAgent(t *testing.T) {
 	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
-	fc := &fakeControl{}
-	sig.SetControl(fc)
+	sig.SetControl(fakeControl{})
 
 	tenant := uuid.New()
 	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
 	agent.send(map[string]any{"type": "register"})
 	agent.readUntil("ready")
 
-	// Brain rings (Ring blocks until an agent joins, so run it in a goroutine).
-	go sig.HandleControlCommand(control.Message{
-		Type: control.CmdRing, ID: "r1", Room: tenant.String() + "/call", From: "Caller",
+	// Brain-resolved targeted ring → edge pushes incoming to alice (non-blocking).
+	sig.HandleControlCommand(control.Message{
+		Type: control.CmdRing, Room: tenant.String() + "/call", Sip: "alice", From: "Caller",
 	})
 
 	if inc := agent.readUntil("incoming"); inc["room"] != "call" {
 		t.Fatalf("incoming room = %v, want call", inc["room"])
-	}
-	// Agent answers by joining the room → the ring completes → command response.
-	ans := dial(t, ts.URL, mintToken(t, tenant, "alice"))
-	ans.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
-	ans.readUntil("joined")
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !fc.has("r1", "completed") {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !fc.has("r1", "completed") {
-		t.Fatal("no ring-command response with outcome=completed")
 	}
 }
 

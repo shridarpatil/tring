@@ -2,12 +2,12 @@ package signaling
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/whatomate/tring/internal/media/control"
-	"github.com/whatomate/tring/internal/media/ivrdrive"
 	"github.com/whatomate/tring/internal/media/prompt"
 	"github.com/whatomate/tring/internal/media/room"
 )
@@ -52,15 +52,10 @@ func (s *Server) HandleControlCommand(m control.Message) {
 	case control.CmdIVRStop:
 		s.edgeStopVoice(room.RoomID(m.Room))
 	case control.CmdRing:
-		// Reuse the edge's existing agent ring (2c moves resolution to the brain).
-		outcome, err := s.Ring(context.Background(), m.Room, ivrdrive.Target{
-			Team: m.Team, AgentSIP: m.Sip, Label: m.From,
-		})
-		resp := control.Message{ID: m.ID, Outcome: outcome}
-		if err != nil {
-			resp.Reason = err.Error()
-		}
-		_ = s.control.Send(resp)
+		// 2c: the brain already resolved WHICH agent — the edge just pushes the
+		// incoming ring to that agent's socket (no routing here). The brain learns
+		// the agent answered via the participant.joined event, so no response.
+		s.pushIncoming(m.Room, m.Sip, m.From)
 	default:
 		s.log.Warn("control: unknown command", "type", m.Type)
 	}
@@ -98,6 +93,22 @@ func (s *Server) edgePlay(roomID room.RoomID, file string) error {
 		return nil // a node with no audio still "plays" instantly
 	}
 	return ev.prompts.Play(ev.ctx, file)
+}
+
+// pushIncoming rings one agent: it sends the `incoming` ring to that agent's
+// presence socket. The room id is tenant-namespaced ("<tenant>/<name>"); the
+// agent joins the un-namespaced name (its own tenant re-namespaces it).
+func (s *Server) pushIncoming(roomID, sip, from string) {
+	tenant, name, ok := strings.Cut(roomID, "/")
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	c := s.agents[tenant][sip]
+	s.mu.Unlock()
+	if c != nil {
+		_ = c.send(msg{Type: msgIncoming, Room: name, From: from})
+	}
 }
 
 // edgeStopVoice removes a room's brain-driven IVR voice. Idempotent.

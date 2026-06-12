@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/orchestrator"
@@ -15,6 +17,12 @@ import (
 type fakeWebFlows struct{ flow *ivr.Flow }
 
 func (f fakeWebFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) { return f.flow, nil }
+
+type fakeWebTeams struct{ members map[string][]string }
+
+func (f fakeWebTeams) TeamSIPs(_ context.Context, _ uuid.UUID, team string) ([]string, error) {
+	return f.members[team], nil
+}
 
 func waitTrue(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
@@ -60,14 +68,15 @@ func TestWebIVRDrivesFlowOverControl(t *testing.T) {
 		},
 	}
 
-	// Brain: control server + WebIVR.
+	// Brain: control server + WebIVR (resolves team "sales" → alice).
 	srv := control.NewServer("", nil, nil)
-	web := orchestrator.NewWebIVR(srv, fakeWebFlows{flow}, nil)
+	web := orchestrator.NewWebIVR(srv, fakeWebFlows{flow}, fakeWebTeams{members: map[string][]string{"sales": {"alice"}}}, nil)
 	srv.SetOnEvent(web.OnEvent)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// Fake edge: responds to play (done) + ring (completed), records what it saw.
+	// Fake edge: replies to play (done); on ring, simulates the agent answering by
+	// reporting a participant joined (the brain owns the ring now).
 	plays := make(chan string, 8)
 	rings := make(chan control.Message, 2)
 	var edge *control.Client
@@ -78,7 +87,7 @@ func TestWebIVRDrivesFlowOverControl(t *testing.T) {
 			_ = edge.Send(control.Message{ID: m.ID, OK: true})
 		case control.CmdRing:
 			rings <- m
-			_ = edge.Send(control.Message{ID: m.ID, Outcome: "completed"})
+			_ = edge.Send(control.Message{Type: control.EvParticipantJoined, Room: m.Room})
 		}
 	}
 	edge = control.NewClient(strings.Replace(ts.URL, "http", "ws", 1), "", onCmd, nil)
@@ -86,8 +95,15 @@ func TestWebIVRDrivesFlowOverControl(t *testing.T) {
 	waitTrue(t, edge.Connected, "edge connect")
 	waitTrue(t, srv.Connected, "server sees edge")
 
+	tenant := uuid.New()
+	room := tenant.String() + "/call"
+
+	// Agent alice comes online (processed before call.started — same socket, in order).
+	if err := edge.Send(control.Message{Type: control.EvAgentOnline, Tenant: tenant.String(), Sip: "alice"}); err != nil {
+		t.Fatalf("send agent.online: %v", err)
+	}
 	// Edge announces a web call started → brain runs the IVR.
-	if err := edge.Send(control.Message{Type: control.EvCallStarted, Room: "tenant/call", FlowID: "f1"}); err != nil {
+	if err := edge.Send(control.Message{Type: control.EvCallStarted, Room: room, FlowID: "f1"}); err != nil {
 		t.Fatalf("send call.started: %v", err)
 	}
 
@@ -95,17 +111,18 @@ func TestWebIVRDrivesFlowOverControl(t *testing.T) {
 	expectPlay(t, plays, "menu.ogg")    // menu prompt
 
 	// Caller presses 1 — the edge forwards the DTMF up.
-	if err := edge.Send(control.Message{Type: control.EvDTMF, Room: "tenant/call", Digit: "1"}); err != nil {
+	if err := edge.Send(control.Message{Type: control.EvDTMF, Room: room, Digit: "1"}); err != nil {
 		t.Fatalf("send dtmf: %v", err)
 	}
 
-	// Transfer rings the team over the channel.
+	// Transfer: the BRAIN resolved team "sales" → online agent alice, and rings
+	// her specifically over the channel.
 	select {
 	case r := <-rings:
-		if r.Team != "sales" {
-			t.Fatalf("ring team = %q, want sales", r.Team)
+		if r.Sip != "alice" {
+			t.Fatalf("ring sip = %q, want alice (brain-resolved)", r.Sip)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("transfer did not ring the edge")
+		t.Fatal("transfer did not ring the resolved agent")
 	}
 }
