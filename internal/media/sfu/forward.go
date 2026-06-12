@@ -190,14 +190,22 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 		}
 	}
 	var others []*Peer
+	var ports []*roomPort
 	if fresh {
 		for opid, q := range r.peers {
 			if opid != p.pid {
 				others = append(others, q)
 			}
 		}
+		ports = s.portsForLocked(r, p.pid)
 	}
 	s.mu.Unlock()
+
+	// Ports (phone/WhatsApp legs) hear every publisher — attach them as sinks on
+	// a fresh publication so the external caller hears this participant.
+	for _, port := range ports {
+		pub.addSink(port)
+	}
 
 	p.log.Info("participant published", "codec", remote.Codec().MimeType, "kind", kind.String(), "fresh", fresh)
 
@@ -253,6 +261,7 @@ func (s *SFU) Unpublish(roomID room.RoomID, pid room.ParticipantID, kind webrtc.
 	if track == nil {
 		return
 	}
+	s.portsClearActive(roomID, pid) // a port locked onto this feed switches over
 
 	for _, q := range others {
 		q.mu.Lock()
@@ -290,7 +299,11 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 	}
 	delete(r.peers, pid)
 	delete(r.pubs, pid)
-	if len(r.peers) == 0 && len(r.pubs) == 0 {
+	if port := r.ports[pid]; port != nil { // a departing port leg
+		_ = port.Close()
+		delete(r.ports, pid)
+	}
+	if len(r.peers) == 0 && len(r.pubs) == 0 && len(r.ports) == 0 {
 		delete(s.rooms, roomID)
 	}
 	remaining := make([]*Peer, 0, len(r.peers))
@@ -298,6 +311,7 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 		remaining = append(remaining, q)
 	}
 	s.mu.Unlock()
+	s.portsClearActive(roomID, pid) // a port locked onto this feed switches over
 
 	// Remove all of this source's tracks from each remaining subscriber, resync.
 	for _, q := range remaining {

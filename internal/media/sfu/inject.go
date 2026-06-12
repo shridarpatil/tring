@@ -50,7 +50,14 @@ func (s *SFU) InjectSource(roomID room.RoomID, src room.ParticipantSource, cap w
 			others = append(others, q)
 		}
 	}
+	ports := s.portsForLocked(r, src.ID())
 	s.mu.Unlock()
+
+	// Ports (phone/WhatsApp legs) must hear injected sources too — the IVR voice
+	// playing to a phone caller rides exactly this path.
+	for _, port := range ports {
+		pub.addSink(port)
+	}
 
 	s.log.Info("source injected", "room", roomID, "participant", src.ID(), "codec", cap.MimeType)
 	for _, q := range others {
