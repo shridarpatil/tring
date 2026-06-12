@@ -26,6 +26,7 @@ import (
 	"github.com/whatomate/tring/internal/flowstore"
 	"github.com/whatomate/tring/internal/gateway"
 	"github.com/whatomate/tring/internal/logging"
+	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
 )
@@ -179,6 +180,17 @@ func main() {
 		AudioDir:   k.String("audio_dir"),
 		Logger:     logger,
 	})
+	// Edge side of the media control channel (Phase 2). When control_url is set,
+	// the gateway dials the orchestrator (BRAIN) so web-call IVR/routing can be
+	// driven remotely. 2a only plumbs it — commands are logged; 2b/2c add behavior.
+	// Disabled (no dial) when control_url is empty.
+	if controlURL := k.String("control_url"); controlURL != "" {
+		ctrl := control.NewClient(controlURL, k.String("control_secret"), func(m control.Message) {
+			logger.Info("control command", "type", m.Type, "room", m.Room)
+		}, logger)
+		go ctrl.Run(context.Background())
+	}
+
 	rtcAddr := k.String("rtc_addr")
 	rtcSrv := &http.Server{Addr: rtcAddr, Handler: sig.Handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
