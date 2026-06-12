@@ -20,6 +20,9 @@ const (
 	msgPublish   = "publish"   // {kind} — ask the server to invite an extra track (screen-share video)
 	msgUnpublish = "unpublish" // {kind} — stop publishing that track
 	msgDTMF      = "dtmf"      // {digit} — a caller keypress, routed to the room's IVR
+	msgHold      = "hold"      // agent: put the other party on hold (they hear MOH)
+	msgResume    = "resume"    // agent: take the other party off hold
+	msgTransfer  = "transfer"  // agent: re-route the call — {to_team | to_sip}
 	msgBye       = "bye"
 
 	// server → client
@@ -62,6 +65,10 @@ type msg struct {
 
 	// incoming (s→agent): who's calling (the IVR transfer label)
 	From string `json:"from,omitempty"`
+
+	// transfer (agent → server): the re-route target — a team or one agent
+	ToTeam string `json:"to_team,omitempty"`
+	ToSip  string `json:"to_sip,omitempty"`
 
 	// error / bye
 	Reason string `json:"reason,omitempty"`

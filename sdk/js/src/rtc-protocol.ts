@@ -21,6 +21,9 @@ export const ClientMsgType = {
   Publish: "publish",
   Unpublish: "unpublish",
   DTMF: "dtmf",
+  Hold: "hold",
+  Resume: "resume",
+  Transfer: "transfer",
   Bye: "bye",
 } as const;
 
@@ -75,6 +78,10 @@ export interface RtcMessage {
 
   // incoming (server → agent)
   from?: string;
+
+  // transfer (agent → server): re-route target
+  to_team?: string;
+  to_sip?: string;
 
   // error
   reason?: string;

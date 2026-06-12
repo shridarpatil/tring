@@ -93,7 +93,26 @@ func (w *WebIVR) OnEvent(m control.Message) {
 		w.agentPresence(m.Tenant, m.Sip, false)
 	case control.EvParticipantJoined:
 		w.signalRing(m.Room) // an agent answering a pending transfer
+	case control.EvHold:
+		w.ctrl.Send(control.Message{Type: control.CmdHold, Room: m.Room})
+	case control.EvResume:
+		w.ctrl.Send(control.Message{Type: control.CmdResume, Room: m.Room})
+	case control.EvTransfer:
+		go w.transferCall(m)
 	}
+}
+
+// transferCall handles an agent-initiated transfer: ring the new target into the
+// SAME room (reusing the brain's ring), and when one answers, drop the
+// requesting agent. The customer stays; the call is now with the new agent.
+func (w *WebIVR) transferCall(m control.Message) {
+	outcome, err := w.ring(context.Background(), m.Room, ivrdrive.Target{Team: m.Team, AgentSIP: m.Sip})
+	if err != nil || outcome != "completed" {
+		w.log.Info("transfer not completed", "room", m.Room, "outcome", outcome, "err", err)
+		return // nobody answered → the original agent stays on the call
+	}
+	// New agent joined → remove the transferring agent's leg.
+	w.ctrl.Send(control.Message{Type: control.CmdRemove, Room: m.Room, Participant: m.Participant})
 }
 
 func (w *WebIVR) agentPresence(tenant, sip string, online bool) {

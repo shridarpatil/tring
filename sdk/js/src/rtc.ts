@@ -197,6 +197,25 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.mic?.getAudioTracks().forEach((t) => (t.enabled = !muted));
   }
 
+  /** hold puts the other party on hold music (the brain injects MOH). The agent
+   *  is muted locally so the held party hears only the music. */
+  hold(): void {
+    this.setMuted(true);
+    this.send({ type: ClientMsgType.Hold });
+  }
+
+  /** resume takes the other party off hold and unmutes the agent. */
+  resume(): void {
+    this.send({ type: ClientMsgType.Resume });
+    this.setMuted(false);
+  }
+
+  /** transfer re-routes the call to another agent or team; when they answer, this
+   *  leg is dropped by the brain (the call socket closes → "ended"). */
+  transfer(target: { toSip?: string; toTeam?: string }): void {
+    this.send({ type: ClientMsgType.Transfer, to_sip: target.toSip, to_team: target.toTeam });
+  }
+
   /** shareScreen publishes a screen/window video track (the server renegotiates,
    *  staying the sole offerer). Pass {selfBrowserSurface:"exclude"} etc. via opts. */
   async shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> {

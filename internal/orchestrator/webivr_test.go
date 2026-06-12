@@ -126,3 +126,58 @@ func TestWebIVRDrivesFlowOverControl(t *testing.T) {
 		t.Fatal("transfer did not ring the resolved agent")
 	}
 }
+
+// TestWebIVRAgentTransfer checks an agent-initiated transfer: the brain rings the
+// new target into the room and, once they answer, drops the transferring agent.
+func TestWebIVRAgentTransfer(t *testing.T) {
+	srv := control.NewServer("", nil, nil)
+	web := orchestrator.NewWebIVR(srv, nil, fakeWebTeams{members: map[string][]string{"sales": {"bob"}}}, nil)
+	srv.SetOnEvent(web.OnEvent)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	rings := make(chan control.Message, 4)
+	removes := make(chan control.Message, 4)
+	var edge *control.Client
+	onCmd := func(m control.Message) {
+		switch m.Type {
+		case control.CmdRing:
+			rings <- m
+			_ = edge.Send(control.Message{Type: control.EvParticipantJoined, Room: m.Room})
+		case control.CmdRemove:
+			removes <- m
+		}
+	}
+	edge = control.NewClient(strings.Replace(ts.URL, "http", "ws", 1), "", onCmd, nil)
+	go edge.Run(t.Context())
+	waitTrue(t, edge.Connected, "edge connect")
+
+	tenant := uuid.New()
+	room := tenant.String() + "/call"
+	if err := edge.Send(control.Message{Type: control.EvAgentOnline, Tenant: tenant.String(), Sip: "bob"}); err != nil {
+		t.Fatalf("agent.online: %v", err)
+	}
+	// Agent "old-agent" transfers the call to team sales.
+	if err := edge.Send(control.Message{
+		Type: control.EvTransfer, Room: room, Participant: "old-agent", Team: "sales",
+	}); err != nil {
+		t.Fatalf("transfer: %v", err)
+	}
+
+	select {
+	case r := <-rings:
+		if r.Sip != "bob" {
+			t.Fatalf("transfer rang %q, want bob", r.Sip)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transfer did not ring the target")
+	}
+	select {
+	case rm := <-removes:
+		if rm.Participant != "old-agent" {
+			t.Fatalf("removed %q, want old-agent", rm.Participant)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("transferring agent was not dropped after answer")
+	}
+}

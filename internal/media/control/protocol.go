@@ -54,6 +54,10 @@ const (
 	EvParticipantLeft   = "participant.left"   // {room, participant_id}
 	EvAgentOnline       = "agent.online"       // {tenant, sip}
 	EvAgentOffline      = "agent.offline"      // {tenant, sip}
+	// agent call control — the agent acts on their own active call
+	EvHold     = "agent.hold"     // {room, participant_id}
+	EvResume   = "agent.resume"   // {room, participant_id}
+	EvTransfer = "agent.transfer" // {room, participant_id (requester), team | sip}
 )
 
 // Command types — BRAIN → EDGE.
@@ -63,5 +67,7 @@ const (
 	CmdRing        = "ring"               // {tenant, room, sip?, from} — push `incoming` to agent(s); empty sip = ring all online
 	CmdRecordStart = "record.start"       // {room} — begin recording the room's legs
 	CmdRecordStop  = "record.stop"        // {room}
-	CmdRemove      = "participant.remove" // {room, participant_id}
+	CmdRemove      = "participant.remove" // {room, participant_id} — drop a leg (e.g. transferred-out agent)
+	CmdHold        = "hold"               // {room} — inject hold music toward the other party
+	CmdResume      = "resume"             // {room} — stop hold music
 )

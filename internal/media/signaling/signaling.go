@@ -92,6 +92,7 @@ type Server struct {
 	conns  map[room.ParticipantID]*conn
 	ivr    map[room.RoomID]*ivrSession   // local IVR per room (fallback / control off)
 	edge   map[room.RoomID]*edgeVoice    // brain-driven IVR voice per room (control on)
+	holds  map[room.RoomID]*edgeVoice    // brain-driven hold music per room
 	agents map[string]map[string]*conn   // online agents: tenant → sip → presence socket
 	rings  map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 }
@@ -109,6 +110,7 @@ func New(cfg Config) *Server {
 		conns:  make(map[room.ParticipantID]*conn),
 		ivr:    make(map[room.RoomID]*ivrSession),
 		edge:   make(map[room.RoomID]*edgeVoice),
+		holds:  make(map[room.RoomID]*edgeVoice),
 		agents: make(map[string]map[string]*conn),
 		rings:  make(map[room.RoomID]chan struct{}),
 	}
@@ -334,6 +336,22 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 				})
 			} else {
 				s.routeDTMF(p.Room().ID(), m.Digit)
+			}
+		case msgHold, msgResume, msgTransfer:
+			// Agent call control — forward to the brain, which actuates on the room.
+			if s.controlUp() {
+				ev := control.Message{Room: string(p.Room().ID()), Participant: string(p.ID())}
+				switch m.Type {
+				case msgHold:
+					ev.Type = control.EvHold
+				case msgResume:
+					ev.Type = control.EvResume
+				case msgTransfer:
+					ev.Type, ev.Team, ev.Sip = control.EvTransfer, m.ToTeam, m.ToSip
+				}
+				_ = s.control.Send(ev)
+			} else {
+				s.log.Warn("call control needs the control channel", "type", m.Type)
 			}
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
