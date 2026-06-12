@@ -86,6 +86,12 @@ func (s *Server) HandleControlCommand(m control.Message) {
 		// incoming ring to that agent's socket (no routing here). The brain learns
 		// the agent answered via the participant.joined event, so no response.
 		s.pushIncoming(m.Room, m.Sip, m.From)
+	case control.CmdRemove:
+		s.removeParticipant(room.RoomID(m.Room), room.ParticipantID(m.Participant))
+	case control.CmdHold:
+		s.edgeHold(room.RoomID(m.Room))
+	case control.CmdResume:
+		s.edgeResume(room.RoomID(m.Room))
 	default:
 		s.log.Warn("control: unknown command", "type", m.Type)
 	}
@@ -139,6 +145,79 @@ func (s *Server) pushIncoming(roomID, sip, from string) {
 	if c != nil {
 		_ = c.send(msg{Type: msgIncoming, Room: name, From: from})
 	}
+}
+
+// holdMusicFile is the MOH prompt the edge loops on hold (from AudioDir). A
+// missing file → silent hold (the loop just exits). Tenant-specific hold music
+// is a later refinement (the brain would pass the file in CmdHold).
+const holdMusicFile = "hold.ogg"
+
+// removeParticipant drops a leg from the room (e.g. an agent who transferred the
+// call out): it leaves the room (peers get peer-left) and its socket is closed,
+// so the client sees the call end.
+func (s *Server) removeParticipant(roomID room.RoomID, pid room.ParticipantID) {
+	if r, ok := s.rooms.Get(roomID); ok {
+		for _, p := range r.Participants() {
+			if p.ID() == pid {
+				p.Leave()
+				break
+			}
+		}
+	}
+	s.mu.Lock()
+	c := s.conns[pid]
+	s.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
+// edgeHold injects looping hold music into the room (the other party hears MOH).
+// Idempotent. The transferring/holding agent's own audio is muted client-side.
+func (s *Server) edgeHold(roomID room.RoomID) {
+	s.mu.Lock()
+	if s.holds[roomID] != nil {
+		s.mu.Unlock()
+		return
+	}
+	pid := room.ParticipantID("moh-" + uuid.NewString())
+	ctx, cancel := context.WithCancel(context.Background())
+	hv := &edgeVoice{
+		pid:     pid,
+		prompts: &filePrompts{dir: s.cfg.AudioDir, player: prompt.NewPlayer(pid, 0)},
+		ctx:     ctx,
+		cancel:  cancel,
+	}
+	s.holds[roomID] = hv
+	s.mu.Unlock()
+
+	if err := s.sfu.InjectSource(roomID, hv.prompts.player, webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+	}); err != nil {
+		s.edgeResume(roomID)
+		return
+	}
+	go func() {
+		for ctx.Err() == nil {
+			if err := hv.prompts.Play(ctx, holdMusicFile); err != nil {
+				return // missing file / cancelled → silent hold
+			}
+		}
+	}()
+}
+
+// edgeResume stops a room's hold music. Idempotent.
+func (s *Server) edgeResume(roomID room.RoomID) {
+	s.mu.Lock()
+	hv := s.holds[roomID]
+	delete(s.holds, roomID)
+	s.mu.Unlock()
+	if hv == nil {
+		return
+	}
+	hv.cancel()
+	s.sfu.RemoveSource(roomID, hv.pid)
+	_ = hv.prompts.player.Close()
 }
 
 // edgeStopVoice removes a room's brain-driven IVR voice. Idempotent.
