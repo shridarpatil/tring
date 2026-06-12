@@ -313,14 +313,25 @@ export type RtcAgentEvent =
 export class RtcAgent extends Emitter<RtcAgentEvent> {
   private ws: WebSocket | null = null;
   private token = "";
+  private mic: MediaStream | null = null;
   private incoming: { room: string; from?: string } | null = null;
 
   constructor(private readonly opts: RtcAgentOpts) {
     super();
   }
 
-  /** goOnline registers the agent's presence socket and waits for `incoming`. */
+  /** goOnline registers the agent's presence socket and waits for `incoming`.
+   *  It also captures the mic now (in the go-online gesture) so accepting a call
+   *  later — including auto-answer — needs no fresh gesture. Best-effort: if the
+   *  mic is denied here, accept() captures it then. */
   async goOnline(): Promise<void> {
+    if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+      try {
+        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        /* will capture on accept instead */
+      }
+    }
     this.token = this.opts.getToken ? await this.opts.getToken() : this.opts.token ?? "";
     if (!this.token) throw new Error("agent token required (token or getToken)");
     const ws = new WebSocket(wsURL(this.opts.gatewayUrl, this.token));
@@ -351,6 +362,7 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
       token: this.token,
       name: this.opts.name,
       iceServers: this.opts.iceServers,
+      mic: this.mic ?? undefined, // reuse the go-online mic (gesture-safe)
     });
     await call.join();
     return call;
@@ -361,9 +373,16 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     this.incoming = null;
   }
 
+  /** hasIncoming reports whether a call is currently ringing (for auto-answer). */
+  hasIncoming(): boolean {
+    return this.incoming !== null;
+  }
+
   goOffline(): void {
     this.ws?.close();
     this.ws = null;
+    this.mic?.getTracks().forEach((t) => t.stop());
+    this.mic = null;
   }
 }
 

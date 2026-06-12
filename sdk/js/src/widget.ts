@@ -364,22 +364,17 @@ function createPanel(control?: CallControl): Panel {
     const open = root.classList.toggle("tring-keypad-open");
     keypadBtn.classList.toggle("is-active", open);
   });
-  holdBtn.addEventListener("click", async () => {
+  holdBtn.addEventListener("click", () => {
     if (!active) return;
-    if (!control) {
-      console.warn("[tring] Call control needs the Tring API base (auto-derived from agent.js src, or set data-api-base)");
-      return;
-    }
+    // Hold/resume act on the live call over /rtc (the brain injects MOH); the
+    // edit is optimistic — there's no round-trip ack.
     const want = !held;
-    holdBtn.disabled = true;
-    const ok = await control.hold(want ? "hold" : "resume");
-    holdBtn.disabled = false;
-    if (ok) {
-      held = want;
-      holdBtn.innerHTML = held ? ICON_RESUME : ICON_HOLD;
-      holdBtn.title = held ? "Resume" : "Hold";
-      holdBtn.classList.toggle("is-active", held);
-    }
+    if (want) active.hold();
+    else active.resume();
+    held = want;
+    holdBtn.innerHTML = held ? ICON_RESUME : ICON_HOLD;
+    holdBtn.title = held ? "Resume" : "Hold";
+    holdBtn.classList.toggle("is-active", held);
   });
   // Transfer: open a picker of online agents + teams (fetched live), pick one
   // to blind-transfer the caller. On success the original agent's leg ends.
@@ -411,21 +406,18 @@ function createPanel(control?: CallControl): Panel {
     html += `<button class="tring-picker-cancel">Cancel</button>`;
     pickerEl.innerHTML = html;
   });
-  pickerEl.addEventListener("click", async (ev) => {
+  pickerEl.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button");
-    if (!btn || !control) return;
+    if (!btn) return;
     if (btn.classList.contains("tring-picker-cancel")) {
       closePicker();
       return;
     }
-    if (!btn.classList.contains("tring-picker-item")) return;
+    if (!btn.classList.contains("tring-picker-item") || !active) return;
     closePicker();
-    const body = btn.dataset.sip ? { to_sip: btn.dataset.sip } : { to_team: btn.dataset.team };
-    const ok = await control.transfer(body);
-    if (!ok) {
-      // eslint-disable-next-line no-alert
-      alert("Transfer failed — the target may be offline.");
-    }
+    // Blind-transfer over /rtc; when the target answers, the brain drops this
+    // leg → "call:ended". The target list still comes from the API (targets()).
+    active.transfer(btn.dataset.sip ? { toSip: btn.dataset.sip } : { toTeam: btn.dataset.team });
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
