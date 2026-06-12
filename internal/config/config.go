@@ -80,6 +80,13 @@ var defaults = map[string]any{
 	// so the local test client (examples/rtc-test.html) works with `make gateway`
 	// alone. Dev only — never enable in production.
 	"rtc_dev_tokens": false,
+	// Brain↔edge control channel (Phase 2, docs/MEDIA_CONVERGENCE_PLAN.md). The
+	// orchestrator (BRAIN) serves control_addr; the gateway (EDGE) dials
+	// control_url; both gated by control_secret. All empty = disabled (the gateway
+	// keeps running its own IVR until 2b/2c) — existing deploys are unaffected.
+	"control_addr":   "", // orchestrator: control WS listen addr, e.g. ":8089"
+	"control_url":    "", // gateway: orchestrator control URL to dial, e.g. "ws://127.0.0.1:8089/control"
+	"control_secret": "", // shared secret for the control channel
 	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
 	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
 	"gateway_sip_port":  5090,
