@@ -2,6 +2,7 @@ package sfu_test
 
 import (
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/whatomate/tring/internal/media/record"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 )
@@ -92,5 +94,46 @@ func TestInjectSourceTeesToSink(t *testing.T) {
 	}
 	if pid, _ := sink.pid.Load().(room.ParticipantID); pid != "ivr" {
 		t.Fatalf("sink saw pid %q, want ivr", pid)
+	}
+}
+
+// TestRecorderCapturesInjectedSource proves the Phase-1 recorder works end-to-end
+// through the SFU: an injected Opus source is captured to a real Ogg file via
+// AddSink. A counting sink (teed in order) lets us wait deterministically until
+// the recorder has seen every packet.
+func TestRecorderCapturesInjectedSource(t *testing.T) {
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	const total = 30
+	src := &fakeSource{id: "agent-leg", total: total}
+	rec := record.New(t.TempDir(), "call-rec")
+	rec.Label("agent-leg", "agent")
+	counter := &countingSink{}
+
+	s.AddSink("call", "agent-leg", rec)     // teed first
+	s.AddSink("call", "agent-leg", counter) // teed second → when it hits total, rec has all
+	if err := s.InjectSource("call", src, webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+	}); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && counter.n.Load() < total {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := rec.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	tracks := rec.Tracks()
+	if len(tracks) != 1 || tracks[0].Role != "agent" {
+		t.Fatalf("tracks = %+v, want one agent leg", tracks)
+	}
+	b, err := os.ReadFile(tracks[0].Path)
+	if err != nil || len(b) < 64 || string(b[:4]) != "OggS" {
+		t.Fatalf("recorded file invalid: err=%v size=%d", err, len(b))
 	}
 }
