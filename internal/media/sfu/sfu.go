@@ -83,6 +83,9 @@ type SFU struct {
 type sfuRoom struct {
 	peers map[room.ParticipantID]*Peer
 	pubs  map[room.ParticipantID]*publication
+	// ports are bidirectional non-WebRTC legs (phone/WhatsApp adapters): they
+	// publish into the room AND hear it (see port.go). Lazily allocated.
+	ports map[room.ParticipantID]*roomPort
 }
 
 // publication is one participant's fan-out tracks, one per codec kind. The
