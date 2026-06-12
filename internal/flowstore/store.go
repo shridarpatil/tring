@@ -45,3 +45,25 @@ func (s *Store) Load(ctx context.Context, flowID string) (*ivr.Flow, error) {
 	}
 	return ivr.Parse([]byte(def))
 }
+
+// TeamSIPs returns the SIP usernames of a team's members that are available for
+// calls, in membership position order. Used by the media gateway's transfer ring
+// to target the right agents (parity with the FreeSWITCH executor, which uses
+// the same query). Read-only.
+func (s *Store) TeamSIPs(ctx context.Context, tenantID uuid.UUID, team string) ([]string, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamAgentSips, tenantID, team)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sips []string
+	for rows.Next() {
+		var sip string
+		var pos int
+		if err := rows.Scan(&sip, &pos); err != nil {
+			return nil, err
+		}
+		sips = append(sips, sip)
+	}
+	return sips, rows.Err()
+}

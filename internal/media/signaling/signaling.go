@@ -20,6 +20,7 @@ import (
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/whatomate/tring/internal/ivr"
@@ -49,6 +50,9 @@ type Config struct {
 	// carrying flow_id spawns the IVR as a participant in that room. nil → web
 	// calls are plain peer-to-peer (no IVR).
 	Flows FlowLoader
+	// Teams resolves a team's member SIPs so a transfer rings the team's agents
+	// (not all online agents). nil → a team target rings all online agents.
+	Teams TeamResolver
 	// AudioDir is where IVR prompt files (Ogg/Opus) are read from.
 	AudioDir string
 	Logger   *slog.Logger
@@ -57,6 +61,12 @@ type Config struct {
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
 type FlowLoader interface {
 	Load(ctx context.Context, flowID string) (*ivr.Flow, error)
+}
+
+// TeamResolver returns a team's member SIP usernames (internal/flowstore
+// implements it). Lets the transfer ring target a team's agents.
+type TeamResolver interface {
+	TeamSIPs(ctx context.Context, tenantID uuid.UUID, team string) ([]string, error)
 }
 
 // Server is the /rtc signaling surface.
