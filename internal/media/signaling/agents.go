@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/whatomate/tring/internal/media/ivrdrive"
 	"github.com/whatomate/tring/internal/media/room"
 )
@@ -55,18 +57,37 @@ func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (st
 		return "no_answer", nil
 	}
 
-	// Resolve the agents to ring. A specific agent_sip rings just that one;
-	// otherwise every online agent of the tenant (ring-all). Team-membership
-	// resolution (DB) is a follow-up; today a team rings all online agents.
+	// Resolve which SIPs to ring (DB lookup OUTSIDE the registry lock):
+	//   - a specific agent_sip → just that agent
+	//   - a team → its members (parity with the FreeSWITCH executor)
+	//   - neither → every online agent of the tenant (ring-all)
+	var sips []string
+	ringAll := true
+	if t.AgentSIP != "" {
+		sips, ringAll = []string{t.AgentSIP}, false
+	} else if t.Team != "" && s.cfg.Teams != nil {
+		ringAll = false
+		if tid, err := uuid.Parse(tenant); err == nil {
+			if m, err := s.cfg.Teams.TeamSIPs(ctx, tid, t.Team); err == nil {
+				sips = m
+			} else {
+				s.log.Warn("transfer: team resolve failed", "team", t.Team, "err", err)
+			}
+		}
+	}
+
+	// Pick the online sockets for those SIPs (or all online for ring-all).
 	s.mu.Lock()
 	var targets []*conn
-	if t.AgentSIP != "" {
-		if c := s.agents[tenant][t.AgentSIP]; c != nil {
+	if ringAll {
+		for _, c := range s.agents[tenant] {
 			targets = append(targets, c)
 		}
 	} else {
-		for _, c := range s.agents[tenant] {
-			targets = append(targets, c)
+		for _, sip := range sips {
+			if c := s.agents[tenant][sip]; c != nil {
+				targets = append(targets, c)
+			}
 		}
 	}
 	if len(targets) == 0 {

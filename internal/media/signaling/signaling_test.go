@@ -295,5 +295,51 @@ func TestTransferRingsAgentIntoRoom(t *testing.T) {
 	}
 }
 
+// fakeTeams resolves a fixed team membership (no DB).
+type fakeTeams struct{ members map[string][]string }
+
+func (f fakeTeams) TeamSIPs(_ context.Context, _ uuid.UUID, team string) ([]string, error) {
+	return f.members[team], nil
+}
+
+// TestTransferRingsOnlyTeamMembers checks team-resolution parity: a transfer to
+// team "sales" rings only the team's online members, not every online agent.
+func TestTransferRingsOnlyTeamMembers(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: transferFlows{},
+		Teams: fakeTeams{members: map[string][]string{"sales": {"alice"}}}, // bob is NOT in sales
+	})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+
+	bob := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	bob.send(map[string]any{"type": "register"})
+	bob.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	// alice (in sales) is rung.
+	if inc := alice.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("alice incoming room = %v, want call", inc["room"])
+	}
+	// bob (not in sales) must NOT be rung — assert by a short read that times out.
+	_ = bob.conn.SetReadDeadline(time.Now().Add(700 * time.Millisecond))
+	for {
+		data, err := wsutil.ReadServerText(bob.conn)
+		if err != nil {
+			break // timed out with no incoming — correct
+		}
+		var m map[string]any
+		if json.Unmarshal(data, &m) == nil && m["type"] == "incoming" {
+			t.Fatal("bob was rung but is not in team sales")
+		}
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()

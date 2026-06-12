@@ -157,10 +157,12 @@ func main() {
 	// Best-effort: if the DB is unreachable, web calls are plain peer-to-peer
 	// (no IVR) rather than failing the gateway.
 	var flows signaling.FlowLoader
+	var teams signaling.TeamResolver
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
-		flows = flowstore.New(database)
+		store := flowstore.New(database)
+		flows, teams = store, store
 	}
 
 	sig := signaling.New(signaling.Config{
@@ -173,6 +175,7 @@ func main() {
 		Grace:      time.Duration(k.Int("media_grace_seconds")) * time.Second,
 		DevTokens:  k.Bool("rtc_dev_tokens"),
 		Flows:      flows,
+		Teams:      teams,
 		AudioDir:   k.String("audio_dir"),
 		Logger:     logger,
 	})
