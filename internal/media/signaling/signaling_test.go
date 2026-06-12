@@ -534,5 +534,91 @@ func TestInboundPhoneCallWithoutFlowIsRejected(t *testing.T) {
 	}
 }
 
+// fakeCallLog records CDR lifecycle hooks.
+type fakeCallLog struct {
+	mu       sync.Mutex
+	started  []string // "room|from|to"
+	answered []string // "room|pid"
+	ended    []string // "room|cause"
+}
+
+func (f *fakeCallLog) Started(_ context.Context, _ uuid.UUID, roomID, from, to, _ string, _ room.ParticipantID) room.TrackSink {
+	f.mu.Lock()
+	f.started = append(f.started, roomID+"|"+from+"|"+to)
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID) room.TrackSink {
+	f.mu.Lock()
+	f.answered = append(f.answered, roomID+"|"+string(pid))
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeCallLog) Journey(string, []ivr.Step) {}
+func (f *fakeCallLog) Ended(roomID, cause string) {
+	f.mu.Lock()
+	f.ended = append(f.ended, roomID+"|"+cause)
+	f.mu.Unlock()
+}
+func (f *fakeCallLog) snapshot() (int, int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.started), len(f.answered), len(f.ended)
+}
+
+// TestPstnCallWritesCDRHooks: a phone call opens a CDR, an agent joining marks
+// it answered, and the carrier hangup ends it.
+func TestPstnCallWritesCDRHooks(t *testing.T) {
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	cl := &fakeCallLog{}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, Calls: cl})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+	fp := newFakePstn()
+	sig.AttachPstn(fp, fakeDIDs{tenant: tenant, flow: "f1"})
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+
+	fp.inbound(room.InboundCall{CallID: "c9", From: "+9199", To: "+1600"})
+	agent.readUntil("incoming")
+	if n, _, _ := cl.snapshot(); n != 1 {
+		t.Fatalf("started hooks = %d, want 1", n)
+	}
+
+	ans := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	ans.send(map[string]any{"type": "join", "room": "pstn-c9", "name": "Alice"})
+	ans.readUntil("joined")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, a, _ := cl.snapshot(); a >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, a, _ := cl.snapshot(); a < 1 {
+		t.Fatal("agent join did not mark the call answered")
+	}
+
+	fp.src.Close()
+	close(fp.done)
+	ans.readUntil("ended")
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, _, e := cl.snapshot(); e >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, _, e := cl.snapshot(); e < 1 {
+		t.Fatal("carrier hangup did not end the CDR")
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()

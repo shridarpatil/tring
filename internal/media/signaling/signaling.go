@@ -66,7 +66,10 @@ type Config struct {
 	// admin console read (the same store the legacy /agent/ws wrote). nil/disabled
 	// → the dashboard won't show /rtc agents as online. Best-effort.
 	Presence *presence.Store
-	Logger   *slog.Logger
+	// Calls records CDRs + recordings for media-plane calls (one path for web +
+	// phone). nil → no CDRs (dev / plain rooms).
+	Calls  CallLog
+	Logger *slog.Logger
 }
 
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
@@ -78,6 +81,17 @@ type FlowLoader interface {
 // implements it). Lets the transfer ring target a team's agents.
 type TeamResolver interface {
 	TeamSIPs(ctx context.Context, tenantID uuid.UUID, team string) ([]string, error)
+}
+
+// CallLog records CDRs + recordings for media-plane calls (internal/callcdr
+// implements it). Started/Answered return a TrackSink to attach to that leg's
+// publication when the tenant records calls (nil → no capture). All methods are
+// best-effort and idempotent; a nil CallLog disables CDRs entirely.
+type CallLog interface {
+	Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink
+	Answered(roomID string, agentPID room.ParticipantID) room.TrackSink
+	Journey(roomID string, steps []ivr.Step)
+	Ended(roomID, cause string)
 }
 
 // Server is the /rtc signaling surface.
@@ -203,8 +217,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var p *room.Participant
+	freshJoin := true
 	if first.Token != "" {
-		p, err = s.rooms.Reattach(roomID, first.Token)
+		if p, _ = s.rooms.Reattach(roomID, first.Token); p != nil {
+			freshJoin = false
+		}
 	}
 	if p == nil { // fresh join, or reattach failed (expired) → new slot
 		// Burn a visitor token's jti once, on the FIRST (non-reattach) join, so a
@@ -279,6 +296,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			s.startIVR(roomID, flowID, princ.clientRef) // local fallback (control down)
 		}
 	}
+	// A flow-pinned FRESH join is a web CALL — open its CDR (and attach the
+	// caller's recording leg when the tenant records). Reattaches (page refresh)
+	// keep the original CDR; plain rooms (no flow) get none.
+	if flowID != "" && freshJoin && s.cfg.Calls != nil {
+		from := princ.clientRef
+		if from == "" {
+			from = first.Name
+		}
+		if sink := s.cfg.Calls.Started(r.Context(), princ.tenant, string(roomID), from, "web", princ.clientRef, p.ID()); sink != nil {
+			s.sfu.AddSink(roomID, p.ID(), sink)
+		}
+	}
+
 	// If a transfer is ringing for this room, this join is the agent answering.
 	// Local fallback resolves it via signalRing; with control up, tell the brain
 	// (it owns the pending ring) via participant.joined.
@@ -379,6 +409,14 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 // OTHER participants' sockets, and finalizes a left participant by tearing down
 // its SFU peer.
 func (s *Server) routeEvent(e room.Event) {
+	if e.Type == room.EventParticipantJoined && s.cfg.Calls != nil {
+		// A later participant joining an open call = the agent answering. The
+		// CallLog ignores the caller's own join and unknown rooms; the returned
+		// sink (recording on) captures the agent's leg.
+		if sink := s.cfg.Calls.Answered(string(e.Room), e.Participant); sink != nil {
+			s.sfu.AddSink(e.Room, e.Participant, sink)
+		}
+	}
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
@@ -392,6 +430,9 @@ func (s *Server) routeEvent(e room.Event) {
 			}
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
+			if s.cfg.Calls != nil {
+				s.cfg.Calls.Ended(string(e.Room), "ended")
+			}
 		}
 	}
 
