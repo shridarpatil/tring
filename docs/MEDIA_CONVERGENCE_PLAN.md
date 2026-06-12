@@ -52,7 +52,8 @@ media plane is a thin **public edge**; the orchestrator stays **private**.
   (`room.PstnGateway` + `PstnLeg`), the SFU bidirectional port (`AttachPort`), the FS
   adapter (`internal/gateway/pstn.go` — X-Tring-DID INVITEs, Opus RTP, RFC2833 DTMF),
   and the room wiring (`signaling/pstn.go`). Enable with `TRING_PSTN_VIA_GATEWAY=true`
-  (dialplan `tring_pstn_plug`). Outbound origination + retiring `eslDriver` remain.
+  (dialplan `tring_pstn_plug`). VALIDATED 2026-06-12 with a softphone: greeting/menu heard, DTMF branched, transfer +
+  teardown clean. Outbound origination + recording/CDR for plug calls + retiring `eslDriver` remain.
   Swapping FS for sipgo/another stack = implementing `room.PstnGateway` in a sibling package.
 - **Phase 5 (opt) — Service consolidation.** Merge `api`+`orchestrator` into one **core**
   binary; the **edge** stays separate (security). Net: 2 Go services + FS + PG + Redis.
