@@ -68,6 +68,12 @@ export interface Call {
   setMuted(muted: boolean): void;
   /** Whether the agent's mic is currently muted. */
   readonly muted: boolean;
+  /** Put the other party on hold music (the brain injects MOH). */
+  hold(): void;
+  /** Take the other party off hold. */
+  resume(): void;
+  /** Blind-transfer the call to another agent or team; this leg then ends. */
+  transfer(target: { toSip?: string; toTeam?: string }): void;
 }
 
 export type CallStatus = "ringing" | "connected" | "ended";

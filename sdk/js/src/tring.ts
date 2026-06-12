@@ -15,18 +15,21 @@
 // for presence + call signaling, and peers over raw WebRTC (ADR-001). The agent
 // never speaks SIP and FreeSWITCH stays private.
 //
-// IMPORTANT: the SDK has NO Tring API access — it cannot originate calls. To
-// place an outbound call, the integrator's BACKEND calls `POST /v1/calls`
-// (tenant API key) with the agent + destination; FreeSWITCH then rings this
-// agent's leg, which arrives here as an (auto-answering) incoming call. The
-// agent's browser never sees the dialed number.
+// The agent holds a presence socket to the media plane (/rtc, internal/media);
+// an IVR transfer (or web/WhatsApp call) rings them, and on accept they join the
+// caller's room over WebRTC. Call control (hold/resume/transfer) is issued on the
+// call socket and actuated by the orchestrator — no Tring API call needed.
+//
+// NOTE: backend click-to-call to a PSTN number is NOT yet wired on this plane (it
+// needs the FreeSWITCH PstnGateway). Today this surfaces IVR-transfer / web /
+// WhatsApp calls — all pion. The SDK still cannot ORIGINATE calls.
 
-import { AgentGateway, type AgentCall } from "./agent-gateway";
 import { Emitter } from "./events";
+import { RtcAgent, type RtcCall } from "./rtc";
 import type { Call, CallStatus, InitOpts, TringEvent } from "./types";
 
 export class Tring extends Emitter<TringEvent> {
-  private readonly gw: AgentGateway;
+  private readonly agent: RtcAgent;
   private readonly autoAnswer: boolean;
 
   static async init(opts: InitOpts): Promise<Tring> {
@@ -41,85 +44,80 @@ export class Tring extends Emitter<TringEvent> {
       throw new Error("Tring.init: gatewayUrl is required");
     }
     this.autoAnswer = opts.autoAnswer ?? true;
-    // Prefer getToken (re-mints a fresh JWT on every reconnect, surviving the
-    // ~5-min token TTL); fall back to a static token wrapped as a provider.
     const getToken =
       opts.getToken ?? (opts.token ? () => Promise.resolve(opts.token as string) : undefined);
     if (!getToken) {
       throw new Error("Tring.init: provide `getToken` (preferred) or `token`");
     }
-    this.gw = new AgentGateway(
-      {
-        gatewayUrl: opts.gatewayUrl,
-        getToken,
-        iceServers: opts.iceServers,
-      },
-      {
-        onReady: () => this.emit({ type: "registered" }),
-        onIncoming: (c) => this.handleIncoming(c),
-        onClosed: (reason) => this.emit({ type: "unregistered", reason }),
-        onReconnecting: (attempt) => this.emit({ type: "reconnecting", attempt }),
-      },
-    );
+    this.agent = new RtcAgent({
+      // Display name for the room join; the real identity rides in the JWT.
+      gatewayUrl: opts.gatewayUrl,
+      name: "agent",
+      getToken,
+      iceServers: opts.iceServers,
+    });
+    this.agent.on("online", () => this.emit({ type: "registered" }));
+    this.agent.on("offline", () => this.emit({ type: "unregistered" }));
+    this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
+    this.agent.on("incoming", ({ from }) => this.handleIncoming(from));
   }
 
   private async connect(): Promise<void> {
-    await this.gw.connect();
+    await this.agent.goOnline();
   }
 
   async disconnect(): Promise<void> {
-    this.gw.disconnect();
+    this.agent.goOffline();
   }
 
-  // handleIncoming surfaces every call leg the gateway rings us with — both a
-  // true inbound (IVR transfer / inbound DID) and the agent's own leg of a
-  // backend-originated outbound. We can't see the dialed number; `ac.from` is a
-  // backend-supplied label (or empty → generic). `ac.auto` means the agent
-  // already initiated (click-to-call) → auto-answer.
-  private handleIncoming(ac: AgentCall): void {
-    const label = ac.from || "";
-    let accepted = ac.auto || this.autoAnswer;
+  // handleIncoming surfaces a ringing call. On accept the agent joins the room
+  // (RtcCall); call control delegates to that live call.
+  private handleIncoming(from?: string): void {
+    const label = from || "";
+    let rtc: RtcCall | null = null;
+    let muted = false;
 
     const call: Call = {
       to: label,
-      direction: ac.auto ? "outbound" : "inbound",
+      direction: "inbound",
       displayName: label || undefined,
       status: "ringing" as CallStatus,
       accept: async () => {
-        accepted = true;
-        await ac.accept();
+        if (rtc) return;
+        rtc = await this.agent.accept();
+        if (!rtc) return;
+        rtc.on("connected", () => {
+          call.status = "connected";
+          this.emit({ type: "call:answered", call });
+        });
+        rtc.on("ended", () => {
+          call.status = "ended";
+          this.emit({ type: "call:ended", call });
+        });
+        rtc.on("error", ({ error }) => this.emit({ type: "error", error }));
       },
       hangup: async () => {
-        // Accepted (auto, autoAnswer, or a manual accept) → end the live call;
-        // still ringing and never accepted → decline.
-        if (accepted) await ac.hangup();
-        else await ac.reject();
+        if (rtc) rtc.hangup();
+        else this.agent.decline();
       },
       sendDTMF: async (digit: string) => {
-        ac.sendDTMF(digit);
+        rtc?.sendDtmf(digit);
       },
-      setMuted: (m: boolean) => ac.setMuted(m),
+      setMuted: (m: boolean) => {
+        muted = m;
+        rtc?.setMuted(m);
+      },
       get muted() {
-        return ac.muted;
+        return muted;
       },
+      hold: () => rtc?.hold(),
+      resume: () => rtc?.resume(),
+      transfer: (target) => rtc?.transfer(target),
     };
 
-    ac.onState((s) => {
-      if (s === "connected") {
-        call.status = "connected";
-        this.emit({ type: "call:answered", call });
-      } else {
-        call.status = "ended";
-        this.emit({ type: "call:ended", call });
-      }
-    });
-
     this.emit({ type: "call:ringing", call });
-
-    if (accepted) {
-      ac.accept().catch((err) => {
-        this.emit({ type: "error", error: err as Error });
-      });
+    if (this.autoAnswer) {
+      void call.accept().catch((err) => this.emit({ type: "error", error: err as Error }));
     }
   }
 }
