@@ -20,7 +20,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/whatomate/tring/internal/blobstore"
 	"github.com/whatomate/tring/internal/cache"
+	"github.com/whatomate/tring/internal/callcdr"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/flowstore"
@@ -160,11 +162,27 @@ func main() {
 	// (no IVR) rather than failing the gateway.
 	var flows signaling.FlowLoader
 	var teams signaling.TeamResolver
+	var calls signaling.CallLog
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
 		store := flowstore.New(database)
 		flows, teams = store, store
+		// CDRs + recordings for media-plane calls (web + phone): same calls table,
+		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
+		blob, berr := blobstore.New(blobstore.Config{
+			Bucket:    k.String("s3_bucket"),
+			Region:    k.String("s3_region"),
+			Endpoint:  k.String("s3_endpoint"),
+			AccessKey: k.String("s3_access_key"),
+			SecretKey: k.String("s3_secret_key"),
+			Prefix:    k.String("s3_prefix"),
+			UseSSL:    k.Bool("s3_use_ssl"),
+		})
+		if berr != nil {
+			logger.Warn("S3 recording storage disabled (config error)", "err", berr)
+		}
+		calls = callcdr.New(database, blob, k.String("recordings_dir"), logger)
 	}
 
 	sig := signaling.New(signaling.Config{
@@ -181,6 +199,7 @@ func main() {
 		AudioDir:   k.String("audio_dir"),
 		Tokens:     redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
 		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard
+		Calls:      calls,                    // CDRs + recordings (one path for web + phone)
 		Logger:     logger,
 	})
 	// Edge side of the media control channel (Phase 2). When control_url is set,
@@ -191,6 +210,17 @@ func main() {
 		ctrl := control.NewClient(controlURL, k.String("control_secret"), sig.HandleControlCommand, logger)
 		sig.SetControl(ctrl)
 		go ctrl.Run(context.Background())
+	}
+
+	// Phone plug (Phase 4): inbound DID calls delivered by the PSTN adapter (FS
+	// today — swappable behind room.PstnGateway) become rooms running the same
+	// IVR as web calls. Needs the DB to resolve DID → tenant + flow.
+	if pstn := gw.Pstn(); pstn != nil {
+		if store, ok := flows.(*flowstore.Store); ok && store != nil {
+			sig.AttachPstn(pstn, store)
+		} else {
+			logger.Warn("pstn plug present but DB unavailable — phone calls disabled")
+		}
 	}
 
 	addr := k.String("gateway_addr")

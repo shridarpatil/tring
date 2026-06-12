@@ -106,6 +106,9 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 	go func() {
 		path, walkErr := ivr.Walk(ctx, flow, flow.EntryNode, driver)
 		s.log.Info("ivr flow ended", "room", roomID, "steps", len(path), "err", walkErr)
+		if s.cfg.Calls != nil {
+			s.cfg.Calls.Journey(string(roomID), path) // stamp the walk on the CDR
+		}
 		s.stopIVR(roomID) // teardown: remove the IVR participant + close the player
 	}()
 }

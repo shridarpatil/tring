@@ -64,6 +64,16 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 		return
 	}
 
+	// Open the CDR (and the caller's recording leg when the tenant records) —
+	// the same calls-table row a FreeSWITCH-path call gets.
+	if s.cfg.Calls != nil {
+		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if sink := s.cfg.Calls.Started(cctx, tenant, string(roomID), ic.From, ic.To, "", leg.Source.ID()); sink != nil {
+			s.sfu.AddSink(roomID, leg.Source.ID(), sink)
+		}
+		ccancel()
+	}
+
 	// Same IVR split as a web call: brain when the control channel is up, local
 	// fallback otherwise. The caller's number rides as the name/label the agent
 	// sees on a transfer ring.
@@ -107,6 +117,9 @@ func (s *Server) endPstnRoom(roomID room.RoomID) {
 		s.edgeStopVoice(roomID)
 	}
 	s.stopIVR(roomID)
+	if s.cfg.Calls != nil {
+		s.cfg.Calls.Ended(string(roomID), "caller_hangup")
+	}
 	if r, ok := s.rooms.Get(roomID); ok {
 		for _, p := range r.Participants() {
 			if c := s.connFor(p.ID()); c != nil {
