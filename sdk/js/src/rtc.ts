@@ -89,6 +89,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private pendingIce: RTCIceCandidateInit[] = [];
   private edgeIce: RtcIceServer[] = [];
   private peers = new Set<string>(); // other participants currently in the room
+  private audioEls: HTMLAudioElement[] = []; // auto-played remote audio elements
   private attemptsLeft: number;
   private closedByUser = false;
 
@@ -186,6 +187,21 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     };
     pc.ontrack = (e) => {
       const stream = e.streams[0] ?? new MediaStream([e.track]);
+      // Auto-play incoming AUDIO (the IVR voice, the other party) — a calling SDK
+      // must sound the call without the integrator wiring an element. Video (a
+      // screen share) is left to the consumer's `track` event to render.
+      if (e.track.kind === "audio") {
+        const el = document.createElement("audio");
+        el.autoplay = true;
+        (el as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
+        el.srcObject = stream;
+        document.body.appendChild(el);
+        void el.play().catch(() => {
+          /* autoplay may need a gesture; the call UI's tap usually satisfies it */
+        });
+        this.audioEls.push(el);
+        e.track.onended = () => el.remove();
+      }
       this.emit({ type: "track", kind: e.track.kind as "audio" | "video", stream, track: e.track });
     };
     pc.onconnectionstatechange = () => {
@@ -288,6 +304,11 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
     this.stopScreenSilently();
+    this.audioEls.forEach((el) => {
+      el.srcObject = null;
+      el.remove();
+    });
+    this.audioEls = [];
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) this.ws.close();
     this.ws = null;
   }
