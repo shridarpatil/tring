@@ -22,7 +22,9 @@
 <h1>Tring media plane — /rtc test client</h1>
 <p><small>Open this in two tabs (or two browsers), use the same <b>room</b> and
 different <b>names</b>, and Join in each. You should hear the other tab.
-Requires the gateway running with <code>TRING_RTC_DEV_TOKENS=true</code>.</small></p>
+Requires the gateway running with <code>TRING_RTC_DEV_TOKENS=true</code>.
+Screen share captures this call tab; remote video tiles are hidden while you
+share so it doesn't mirror back.</small></p>
 
 <label>Gateway base URL</label>
 <input id="base" value="http://localhost:8088" />
@@ -187,6 +189,7 @@ function teardown() {
   if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
   if (screenStream) { screenStream.getTracks().forEach((t) => t.stop()); screenStream = null; screenSender = null; }
   $("videos").innerHTML = "";
+  hideRemoteVideo(false);
   peers.clear(); renderRoster();
 }
 
@@ -204,21 +207,36 @@ $("share").onclick = async () => {
     if (screenSender) { try { pc.removeTrack(screenSender); } catch {} }
     send({ type: "unpublish", kind: "video" });
     screenStream = null; screenSender = null;
+    hideRemoteVideo(false); // show remote video tiles again
     $("share").textContent = "Share screen";
     return;
   }
   try {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    // We share the CALL tab itself (preferCurrentTab), so the agent sees this
+    // page. To avoid the mirror/feedback loop, we hide the remote video tiles
+    // while sharing (hideRemoteVideo) — a display:none element isn't rendered,
+    // so it isn't captured, so the shared frames contain no nested live video.
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      preferCurrentTab: true,
+    });
   } catch (e) { setStatus("screen share cancelled: " + e.message); return; }
   const track = screenStream.getVideoTracks()[0];
   track.contentHint = "detail"; // screen content: prioritize sharpness over framerate
   track.onended = () => $("share").click(); // browser "Stop sharing" bar
   screenSender = pc.addTrack(track, screenStream);
+  hideRemoteVideo(true); // break the mirror: don't render remote video in the shared tab
   // Ask the server to invite the video track (it renegotiates; the server stays
   // the sole offerer — we never offer, we answer its offer attaching this track).
   send({ type: "publish", kind: "video" });
   $("share").textContent = "Stop sharing";
 };
+
+// hideRemoteVideo collapses the incoming-video tiles so they aren't part of a
+// shared-tab capture (prevents the screen-share mirror loop). Audio keeps playing.
+function hideRemoteVideo(hidden) {
+  $("videos").style.display = hidden ? "none" : "flex";
+}
 
 $("leave").onclick = () => {
   userClosed = true;
