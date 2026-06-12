@@ -23,8 +23,8 @@
 <p><small>Open this in two tabs (or two browsers), use the same <b>room</b> and
 different <b>names</b>, and Join in each. You should hear the other tab.
 Requires the gateway running with <code>TRING_RTC_DEV_TOKENS=true</code>.
-Screen share captures this call tab; remote video tiles are hidden while you
-share so it doesn't mirror back.</small></p>
+For live debugging, share the <b>screen or app window with the problem</b> — the
+picker excludes this call tab so it can't mirror back into the call.</small></p>
 
 <label>Gateway base URL</label>
 <input id="base" value="http://localhost:8088" />
@@ -212,20 +212,25 @@ $("share").onclick = async () => {
     return;
   }
   try {
-    // We share the CALL tab itself (preferCurrentTab), so the agent sees this
-    // page. To avoid the mirror/feedback loop, we hide the remote video tiles
-    // while sharing (hideRemoteVideo) — a display:none element isn't rendered,
-    // so it isn't captured, so the shared frames contain no nested live video.
+    // Live debugging: the VISITOR shares the screen/app they're debugging — NOT
+    // the call tab. selfBrowserSurface:"exclude" removes THIS call tab from the
+    // picker so it can't be picked (which would mirror the call into itself).
+    // We also hide the remote video tile while sharing (hideRemoteVideo) so that
+    // if the call page happens to be visible on a shared monitor, the agent's
+    // own video isn't captured back to them.
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
-      preferCurrentTab: true,
+      selfBrowserSurface: "exclude",
     });
   } catch (e) { setStatus("screen share cancelled: " + e.message); return; }
   const track = screenStream.getVideoTracks()[0];
   track.contentHint = "detail"; // screen content: prioritize sharpness over framerate
   track.onended = () => $("share").click(); // browser "Stop sharing" bar
   screenSender = pc.addTrack(track, screenStream);
-  hideRemoteVideo(true); // break the mirror: don't render remote video in the shared tab
+  // Only hide the agent's video when sharing a whole MONITOR (the call page may
+  // be visible on it → would mirror back). Sharing a specific window/app can't
+  // capture the call page, so keep the agent visible.
+  if (track.getSettings().displaySurface === "monitor") hideRemoteVideo(true);
   // Ask the server to invite the video track (it renegotiates; the server stays
   // the sole offerer — we never offer, we answer its offer attaching this track).
   send({ type: "publish", kind: "video" });
