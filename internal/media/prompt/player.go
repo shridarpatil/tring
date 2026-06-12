@@ -6,13 +6,13 @@
 package prompt
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 
 	"github.com/whatomate/tring/internal/media/room"
 )
@@ -143,31 +143,55 @@ func (p *Player) Close() error {
 	return nil
 }
 
-// LoadOggOpus reads all Opus audio frames from an Ogg/Opus stream (the format
-// Tring records/stores prompts in). The OpusHead page is consumed by the reader
-// and the OpusTags comment page is skipped, so only audio frames are returned.
+// LoadOggOpus extracts every individual Opus audio packet from an Ogg/Opus
+// stream — one packet per 20ms frame, ready to send as one RTP packet each.
+//
+// It parses the Ogg container by hand (segment-table lacing) rather than reading
+// page-at-a-time, because an Ogg page can pack MANY Opus packets (ffmpeg/libopus
+// does this); treating a whole page as one frame would collapse a multi-second
+// prompt into a handful of packets that play in a blink. The OpusHead/OpusTags
+// header packets are skipped by their magic.
 func LoadOggOpus(r io.Reader) ([][]byte, error) {
-	og, _, err := oggreader.NewWith(r)
+	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
-	var frames [][]byte
-	skippedTags := false
-	for {
-		payload, _, err := og.ParseNextPage()
-		if errors.Is(err, io.EOF) {
+	var (
+		packets [][]byte
+		pkt     []byte // accumulates segments of the current packet (may span pages)
+	)
+	i := 0
+	for i+27 <= len(data) {
+		if string(data[i:i+4]) != "OggS" {
+			return nil, errors.New("prompt: not an Ogg stream")
+		}
+		nseg := int(data[i+26])
+		segStart := i + 27
+		if segStart+nseg > len(data) {
 			break
 		}
-		if err != nil {
-			return nil, err
+		segTable := data[segStart : segStart+nseg]
+		dataStart := segStart + nseg
+		total := 0
+		for _, s := range segTable {
+			total += int(s)
 		}
-		if !skippedTags {
-			skippedTags = true // first page after OpusHead is the OpusTags comment
-			continue
+		if dataStart+total > len(data) {
+			break
 		}
-		if len(payload) > 0 {
-			frames = append(frames, payload)
+		page := data[dataStart : dataStart+total]
+		off := 0
+		for _, s := range segTable {
+			pkt = append(pkt, page[off:off+int(s)]...)
+			off += int(s)
+			if s < 255 { // a lacing value <255 ends a packet
+				if len(pkt) > 0 && !bytes.HasPrefix(pkt, []byte("OpusHead")) && !bytes.HasPrefix(pkt, []byte("OpusTags")) {
+					packets = append(packets, append([]byte(nil), pkt...))
+				}
+				pkt = pkt[:0]
+			}
 		}
+		i = dataStart + total
 	}
-	return frames, nil
+	return packets, nil
 }
