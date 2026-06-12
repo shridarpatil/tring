@@ -3,10 +3,12 @@ package signaling_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,9 +16,11 @@ import (
 	"github.com/gobwas/ws/wsutil"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/pion/rtp"
 
 	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/media/control"
+	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
 )
@@ -393,6 +397,140 @@ func TestEdgeRingCommandRingsAgent(t *testing.T) {
 
 	if inc := agent.readUntil("incoming"); inc["room"] != "call" {
 		t.Fatalf("incoming room = %v, want call", inc["room"])
+	}
+}
+
+// ── Phase 4c: inbound phone call via the PSTN plug ──────────────────
+
+// blockingSource is a ParticipantSource that yields nothing until closed (a
+// silent phone caller — keeps the port attached without media in tests).
+type blockingSource struct {
+	id   room.ParticipantID
+	stop chan struct{}
+	once sync.Once
+}
+
+func (b *blockingSource) ID() room.ParticipantID { return b.id }
+func (b *blockingSource) ReadRTP() (*rtp.Packet, error) {
+	<-b.stop
+	return nil, errSourceClosed
+}
+func (b *blockingSource) Close() error {
+	b.once.Do(func() { close(b.stop) })
+	return nil
+}
+
+var errSourceClosed = errors.New("closed")
+
+// fakePstn is a scripted phone plug (the FS adapter stand-in).
+type fakePstn struct {
+	inbound  func(room.InboundCall)
+	src      *blockingSource
+	dtmf     chan string
+	done     chan struct{}
+	hangups  chan room.CallID
+	rejected chan room.CallID
+}
+
+func newFakePstn() *fakePstn {
+	return &fakePstn{
+		src:      &blockingSource{id: "pstn-leg", stop: make(chan struct{})},
+		dtmf:     make(chan string, 4),
+		done:     make(chan struct{}),
+		hangups:  make(chan room.CallID, 2),
+		rejected: make(chan room.CallID, 2),
+	}
+}
+
+func (f *fakePstn) OnInbound(fn func(room.InboundCall)) { f.inbound = fn }
+func (f *fakePstn) Answer(room.CallID) (*room.PstnLeg, error) {
+	return &room.PstnLeg{
+		Source: f.src,
+		Write:  func(*rtp.Packet) error { return nil },
+		DTMF:   f.dtmf,
+		Done:   f.done,
+	}, nil
+}
+func (f *fakePstn) Reject(id room.CallID) error { f.rejected <- id; return nil }
+func (f *fakePstn) Hangup(id room.CallID) error {
+	f.hangups <- id
+	f.src.Close()
+	close(f.done) // a real adapter fires Done after BYE
+	return nil
+}
+
+type fakeDIDs struct {
+	tenant uuid.UUID
+	flow   string
+}
+
+func (f fakeDIDs) ResolveDID(_ context.Context, _ string) (uuid.UUID, string, error) {
+	return f.tenant, f.flow, nil
+}
+
+// TestInboundPhoneCallRingsAgentAndEndsOnHangup is the 4c end-to-end (no SIP,
+// no media): a phone call arrives via the plug → the IVR transfers → an agent
+// is rung and joins → the carrier hangs up → the agent's call is ended.
+func TestInboundPhoneCallRingsAgentAndEndsOnHangup(t *testing.T) {
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+	fp := newFakePstn()
+	sig.AttachPstn(fp, fakeDIDs{tenant: tenant, flow: "f1"})
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+
+	// The carrier delivers a call (the adapter raises OnInbound).
+	fp.inbound(room.InboundCall{CallID: "c1", From: "+919900112233", To: "+916600112233"})
+
+	// IVR runs → transfer → alice is rung; the room is the pstn call's room.
+	inc := agent.readUntil("incoming")
+	if inc["room"] != "pstn-c1" {
+		t.Fatalf("incoming room = %v, want pstn-c1", inc["room"])
+	}
+	if inc["from"] != "+919900112233" {
+		t.Fatalf("incoming from = %v, want the caller id", inc["from"])
+	}
+
+	// Agent answers by joining the pstn room.
+	ans := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	ans.send(map[string]any{"type": "join", "room": "pstn-c1", "name": "Alice"})
+	ans.readUntil("joined")
+
+	// Carrier hangs up → the leg's Done fires → the agent gets a terminal ended.
+	fp.src.Close()
+	close(fp.done)
+	if end := ans.readUntil("ended"); end["reason"] != "caller hung up" {
+		t.Fatalf("ended reason = %v", end["reason"])
+	}
+}
+
+// TestInboundPhoneCallWithoutFlowIsRejected: a DID with no flow attached can't
+// be served — the plug must reject so the carrier hears busy, not dead air.
+func TestInboundPhoneCallWithoutFlowIsRejected(t *testing.T) {
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret})
+	fp := newFakePstn()
+	sig.AttachPstn(fp, fakeDIDs{tenant: uuid.New(), flow: ""})
+
+	fp.inbound(room.InboundCall{CallID: "c2", From: "+91", To: "+1600"})
+	select {
+	case id := <-fp.rejected:
+		if id != "c2" {
+			t.Fatalf("rejected %q, want c2", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("flowless DID was not rejected")
 	}
 }
 

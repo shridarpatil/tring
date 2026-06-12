@@ -171,6 +171,16 @@ func (s *SFU) portsForLocked(r *sfuRoom, publisher room.ParticipantID) []*roomPo
 	return out
 }
 
+// HasPort reports whether a room has an attached external leg (a phone/WhatsApp
+// caller). Such a room is "live" even with zero WebRTC participants — e.g. the
+// IVR must not wait for a browser to connect before its first prompt.
+func (s *SFU) HasPort(roomID room.RoomID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	return r != nil && len(r.ports) > 0
+}
+
 // portsClearActive releases `gone` as the active feed on every port in the room
 // (called on unpublish/leave so the next publisher takes over).
 func (s *SFU) portsClearActive(roomID room.RoomID, gone room.ParticipantID) {

@@ -84,10 +84,11 @@ func (s *Server) HandleControlCommand(m control.Message) {
 		_ = s.control.Send(resp)
 	case control.CmdIVRStop:
 		s.edgeStopVoice(room.RoomID(m.Room))
-		// The flow ended. If no agent answered (only the caller is left), end the
-		// call so the caller isn't stranded in an empty room. If an agent is here
-		// (transfer completed), leave it — they're talking.
+		// The flow ended. If no agent answered, end the call so the caller isn't
+		// stranded in an empty room (web: terminal `ended`; phone: hang up the
+		// leg). If an agent is here (transfer completed), leave it — they're talking.
 		s.endIfAlone(room.RoomID(m.Room))
+		s.hangupPstnIfAbandoned(room.RoomID(m.Room))
 	case control.CmdRing:
 		// 2c: the brain already resolved WHICH agent — the edge just pushes the
 		// incoming ring to that agent's socket (no routing here). The brain learns
@@ -163,6 +164,9 @@ func (s *Server) pushIncoming(roomID, sip, from string) {
 // missed (and the menu's input window doesn't start counting before the caller
 // can hear it). Best-effort: returns after the timeout regardless.
 func (s *Server) waitForConnected(roomID room.RoomID, d time.Duration) {
+	if s.sfu.HasPort(roomID) {
+		return // a phone/WhatsApp leg is media-ready the moment it's attached
+	}
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if r, ok := s.rooms.Get(roomID); ok {
@@ -256,6 +260,12 @@ func (s *Server) edgeResume(roomID room.RoomID) {
 // they aren't stranded in an empty room. It sends a terminal `ended` first so the
 // client doesn't try to reconnect, then removes the participant.
 func (s *Server) endIfAlone(roomID room.RoomID) {
+	if s.sfu.HasPort(roomID) {
+		// A phone/WhatsApp room: the "caller" is the port, so a single web
+		// participant here is the AGENT serving them — never end that. The port
+		// path has its own abandonment logic (hangupPstnIfAbandoned).
+		return
+	}
 	r, ok := s.rooms.Get(roomID)
 	if !ok {
 		return
