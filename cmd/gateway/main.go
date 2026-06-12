@@ -185,9 +185,8 @@ func main() {
 	// driven remotely. 2a only plumbs it — commands are logged; 2b/2c add behavior.
 	// Disabled (no dial) when control_url is empty.
 	if controlURL := k.String("control_url"); controlURL != "" {
-		ctrl := control.NewClient(controlURL, k.String("control_secret"), func(m control.Message) {
-			logger.Info("control command", "type", m.Type, "room", m.Room)
-		}, logger)
+		ctrl := control.NewClient(controlURL, k.String("control_secret"), sig.HandleControlCommand, logger)
+		sig.SetControl(ctrl)
 		go ctrl.Run(context.Background())
 	}
 
