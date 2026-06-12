@@ -110,10 +110,14 @@ func (s *Server) edgePlay(roomID room.RoomID, file string) error {
 		pid := room.ParticipantID("ivr-" + uuid.NewString())
 		ctx, cancel := context.WithCancel(context.Background())
 		ev = &edgeVoice{
-			pid:     pid,
-			prompts: &filePrompts{dir: s.cfg.AudioDir, player: prompt.NewPlayer(pid, 0)},
-			ctx:     ctx,
-			cancel:  cancel,
+			pid: pid,
+			prompts: &filePrompts{
+				dir:       s.cfg.AudioDir,
+				player:    prompt.NewPlayer(pid, 0),
+				waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
+			},
+			ctx:    ctx,
+			cancel: cancel,
 		}
 		s.edge[roomID] = ev
 	}
@@ -149,6 +153,27 @@ func (s *Server) pushIncoming(roomID, sip, from string) {
 		_ = c.send(msg{Type: msgIncoming, Room: name, From: from})
 	}
 }
+
+// waitForConnected blocks (up to d) until a participant in the room has connected
+// media, so the FIRST IVR prompt isn't played into a not-yet-connected path and
+// missed (and the menu's input window doesn't start counting before the caller
+// can hear it). Best-effort: returns after the timeout regardless.
+func (s *Server) waitForConnected(roomID room.RoomID, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if r, ok := s.rooms.Get(roomID); ok {
+			for _, p := range r.Participants() {
+				if p.State() == room.StateConnected {
+					return
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// ivrConnectWait bounds how long the first prompt waits for the caller's media.
+const ivrConnectWait = 6 * time.Second
 
 // holdMusicFile is the MOH prompt the edge loops on hold (from AudioDir). A
 // missing file → silent hold (the loop just exits). Tenant-specific hold music

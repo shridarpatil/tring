@@ -60,10 +60,14 @@ func (s *Server) startIVR(roomID room.RoomID, flowID string) {
 	player := prompt.NewPlayer(pid, 0)
 	ctx, cancel := context.WithCancel(context.Background())
 	driver := ivrdrive.New(ivrdrive.Config{
-		Prompts: &filePrompts{dir: s.cfg.AudioDir, player: player},
-		Agents:  s, // Server implements ivrdrive.Agents (rings agents into the room)
-		Room:    string(roomID),
-		Logger:  s.log,
+		Prompts: &filePrompts{
+			dir:       s.cfg.AudioDir,
+			player:    player,
+			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
+		},
+		Agents: s, // Server implements ivrdrive.Agents (rings agents into the room)
+		Room:   string(roomID),
+		Logger: s.log,
 	})
 	s.ivr[roomID] = &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel}
 	s.mu.Unlock()
@@ -134,6 +138,11 @@ func (s *Server) stopIVR(roomID room.RoomID) {
 type filePrompts struct {
 	dir    string
 	player *prompt.Player
+	// waitFirst runs once before the first prompt (used to wait for the caller's
+	// media to connect). nil → no wait. Gated here so prompt-less flows (a bare
+	// transfer) never block.
+	waitFirst func()
+	once      sync.Once
 
 	mu    sync.Mutex
 	cache map[string][][]byte
@@ -141,6 +150,9 @@ type filePrompts struct {
 
 // Play streams the named prompt file and blocks until it finishes (or ctx ends).
 func (p *filePrompts) Play(ctx context.Context, file string) error {
+	if p.waitFirst != nil {
+		p.once.Do(p.waitFirst)
+	}
 	frames, err := p.load(file)
 	if err != nil {
 		return err
