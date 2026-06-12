@@ -107,7 +107,8 @@ func main() {
 		// The brain runs web/WhatsApp-call IVR here (reusing ivrdrive over the
 		// channel); the edge only moves media. Flows load from the same DB the
 		// phone IVR uses.
-		web := orchestrator.NewWebIVR(ctrl, flowstore.New(dbase), logger)
+		store := flowstore.New(dbase)
+		web := orchestrator.NewWebIVR(ctrl, store, store, logger)
 		ctrl.SetOnEvent(web.OnEvent)
 		mux := http.NewServeMux()
 		mux.HandleFunc("/control", ctrl.Handler())

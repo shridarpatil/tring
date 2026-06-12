@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/ivrdrive"
 	"github.com/whatomate/tring/internal/media/room"
 )
@@ -27,6 +28,10 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	s.mu.Unlock()
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
+	// Tell the brain (it owns routing/presence in 2c).
+	if s.controlUp() {
+		_ = s.control.Send(control.Message{Type: control.EvAgentOnline, Tenant: tenant, Sip: sip})
+	}
 
 	defer func() {
 		s.mu.Lock()
@@ -36,6 +41,9 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		s.mu.Unlock()
 		_ = c.Close()
 		s.log.Info("agent offline", "tenant", tenant, "sip", sip)
+		if s.controlUp() {
+			_ = s.control.Send(control.Message{Type: control.EvAgentOffline, Tenant: tenant, Sip: sip})
+		}
 	}()
 
 	for {
