@@ -94,6 +94,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ---- runtime stage -------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
 
+# A statically-linked ffmpeg (runs in distroless — no shell/libc needed). Used to
+# transcode uploaded prompts to Opus-Ogg (api) and merge stereo recordings
+# (orchestrator/gateway). /usr/local/bin is on the distroless PATH.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+
 # Distroless ships /etc/passwd with `nonroot` mapped to UID 65532.
 USER nonroot:nonroot
 
