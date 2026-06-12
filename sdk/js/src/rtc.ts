@@ -170,6 +170,13 @@ export class RtcCall extends Emitter<RtcCallEvent> {
           this.emit({ type: "ended", reason: "peer left" });
         }
         break;
+      case ServerMsgType.Ended:
+        // Server says the call is over (IVR ended / nobody answered) — terminal,
+        // so tear down without reconnecting.
+        this.closedByUser = true;
+        this.teardown();
+        this.emit({ type: "ended", reason: m.reason ?? "ended" });
+        break;
       case ServerMsgType.Error:
         this.emit({ type: "error", error: new Error(m.reason ?? "edge error") });
         break;

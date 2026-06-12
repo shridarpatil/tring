@@ -33,6 +33,7 @@ const (
 	msgPeerLeft   = "peer-left"   // {participant_id}
 	msgIncoming   = "incoming"    // s→agent: a call is ringing — {room, from}
 	msgReady      = "ready"       // s→agent: presence registered
+	msgEnded      = "ended"       // s→client: the call is over (terminal — don't reconnect)
 	msgError      = "error"       // {reason}
 )
 

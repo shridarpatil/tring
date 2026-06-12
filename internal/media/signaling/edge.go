@@ -84,6 +84,10 @@ func (s *Server) HandleControlCommand(m control.Message) {
 		_ = s.control.Send(resp)
 	case control.CmdIVRStop:
 		s.edgeStopVoice(room.RoomID(m.Room))
+		// The flow ended. If no agent answered (only the caller is left), end the
+		// call so the caller isn't stranded in an empty room. If an agent is here
+		// (transfer completed), leave it — they're talking.
+		s.endIfAlone(room.RoomID(m.Room))
 	case control.CmdRing:
 		// 2c: the brain already resolved WHICH agent — the edge just pushes the
 		// incoming ring to that agent's socket (no routing here). The brain learns
@@ -246,6 +250,28 @@ func (s *Server) edgeResume(roomID room.RoomID) {
 	hv.cancel()
 	s.sfu.RemoveSource(roomID, hv.pid)
 	_ = hv.prompts.player.Close()
+}
+
+// endIfAlone ends the call when only the caller is left (no agent answered) so
+// they aren't stranded in an empty room. It sends a terminal `ended` first so the
+// client doesn't try to reconnect, then removes the participant.
+func (s *Server) endIfAlone(roomID room.RoomID) {
+	r, ok := s.rooms.Get(roomID)
+	if !ok {
+		return
+	}
+	ps := r.Participants()
+	if len(ps) != 1 { // 0 = already empty; ≥2 = an agent is present, keep the call
+		return
+	}
+	pid := ps[0].ID()
+	s.mu.Lock()
+	c := s.conns[pid]
+	s.mu.Unlock()
+	if c != nil {
+		_ = c.send(msg{Type: msgEnded, Reason: "flow ended"})
+	}
+	s.removeParticipant(roomID, pid)
 }
 
 // edgeStopVoice removes a room's brain-driven IVR voice. Idempotent.
