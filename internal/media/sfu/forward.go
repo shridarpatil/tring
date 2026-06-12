@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/whatomate/tring/internal/media/room"
@@ -102,6 +103,14 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 	return p, nil
 }
 
+// keyframeFor returns the keyframe-request func for a fan-out track (nil for
+// audio / unknown tracks).
+func (s *SFU) keyframeFor(track *webrtc.TrackLocalStaticRTP) func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keyframe[track]
+}
+
 // currentPeer returns the peer currently registered for (room, pid), or nil.
 func (s *SFU) currentPeer(roomID room.RoomID, pid room.ParticipantID) *Peer {
 	s.mu.Lock()
@@ -170,6 +179,15 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 			return
 		}
 		pub.tracks[kind] = track
+		// Video subscribers need a keyframe to start decoding. Record how to ask
+		// THIS publisher for one (PLI to its PC for this track's SSRC); the SFU
+		// calls it on subscribe and when a subscriber sends a PLI.
+		if kind == webrtc.RTPCodecTypeVideo {
+			pubPC, ssrc := p.pc, uint32(remote.SSRC())
+			s.keyframe[track] = func() {
+				_ = pubPC.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})
+			}
+		}
 	}
 	var others []*Peer
 	if fresh {
@@ -223,6 +241,7 @@ func (s *SFU) Unpublish(roomID room.RoomID, pid room.ParticipantID, kind webrtc.
 	if pub != nil {
 		track = pub.tracks[kind]
 		delete(pub.tracks, kind)
+		delete(s.keyframe, track)
 	}
 	var others []*Peer
 	for opid, q := range r.peers {
@@ -264,6 +283,11 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 		return
 	}
 	p := r.peers[pid]
+	if pub := r.pubs[pid]; pub != nil {
+		for _, t := range pub.tracks {
+			delete(s.keyframe, t)
+		}
+	}
 	delete(r.peers, pid)
 	delete(r.pubs, pid)
 	if len(r.peers) == 0 && len(r.pubs) == 0 {

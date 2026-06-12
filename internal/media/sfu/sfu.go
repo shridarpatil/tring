@@ -69,6 +69,11 @@ type SFU struct {
 
 	mu    sync.Mutex
 	rooms map[room.RoomID]*sfuRoom
+	// keyframe maps a video fan-out track → a func that asks its publisher for a
+	// keyframe (sends a PLI). A new video subscriber can't decode until it gets a
+	// keyframe; screen-share encoders emit them rarely, so the SFU requests one
+	// on subscribe and relays subscriber PLIs to the publisher.
+	keyframe map[*webrtc.TrackLocalStaticRTP]func()
 }
 
 // sfuRoom holds a room's live peers plus its publications. A publication (a
@@ -98,9 +103,10 @@ func New(cfg Config) (*SFU, error) {
 		cfg.Logger = slog.Default()
 	}
 	s := &SFU{
-		cfg:   cfg,
-		log:   cfg.Logger.With("component", "sfu"),
-		rooms: make(map[room.RoomID]*sfuRoom),
+		cfg:      cfg,
+		log:      cfg.Logger.With("component", "sfu"),
+		rooms:    make(map[room.RoomID]*sfuRoom),
+		keyframe: make(map[*webrtc.TrackLocalStaticRTP]func()),
 	}
 	if _, err := s.buildAPI(); err != nil {
 		return nil, err
