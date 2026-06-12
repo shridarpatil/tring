@@ -178,6 +178,7 @@ func main() {
 		Flows:      flows,
 		Teams:      teams,
 		AudioDir:   k.String("audio_dir"),
+		Tokens:     redisCache, // single-use burn for visitor /rtc tokens (anti-replay)
 		Logger:     logger,
 	})
 	// Edge side of the media control channel (Phase 2). When control_url is set,
