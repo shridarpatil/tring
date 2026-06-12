@@ -341,5 +341,25 @@ func TestTransferRingsOnlyTeamMembers(t *testing.T) {
 	}
 }
 
+// TestDevFlowRingsAgentWithoutDB checks the self-contained demo path: with dev
+// tokens on and NO FlowLoader, joining with flow_id "dev" runs the built-in
+// transfer flow and rings an online agent.
+func TestDevFlowRingsAgentWithoutDB(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{DevTokens: true}) // Flows nil
+	tenant := uuid.New()
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "dev", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	if inc := agent.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("agent incoming room = %v, want call", inc["room"])
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()

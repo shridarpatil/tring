@@ -211,8 +211,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Kick off the initial server offer.
 	peer.Negotiate()
 
-	// Flow-pinned room → run the IVR as a participant (once per room).
-	if first.FlowID != "" && s.cfg.Flows != nil {
+	// Flow-pinned room → run the IVR as a participant (once per room). The dev
+	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
+	if first.FlowID != "" && (s.cfg.Flows != nil || (s.cfg.DevTokens && first.FlowID == devFlowID)) {
 		s.startIVR(roomID, first.FlowID)
 	}
 	// If a transfer is ringing for this room, this join is the agent answering —
