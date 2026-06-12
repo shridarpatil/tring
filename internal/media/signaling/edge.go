@@ -76,6 +76,9 @@ func (s *Server) HandleControlCommand(m control.Message) {
 		err := s.edgePlay(room.RoomID(m.Room), m.File)
 		resp := control.Message{ID: m.ID, OK: err == nil}
 		if err != nil {
+			// Surface a bad/missing prompt loudly — the #1 cause of a "silent IVR"
+			// is a non-Opus file (the player decodes Ogg/Opus only, not WAV/MP3).
+			s.log.Warn("ivr prompt play failed (needs Ogg/Opus)", "room", m.Room, "file", m.File, "err", err)
 			resp.Reason = err.Error()
 		}
 		_ = s.control.Send(resp)
