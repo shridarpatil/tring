@@ -37,10 +37,12 @@ type Message struct {
 	File string `json:"file,omitempty"` // prompt audio to play / inject
 	Role string `json:"role,omitempty"` // recording leg role (agent/customer)
 	From string `json:"from,omitempty"` // ring label shown to the agent
+	Team string `json:"team,omitempty"` // ring target: a team (else Sip, else ring-all)
 
-	// ack (edge → brain, echoing ID)
-	OK     bool   `json:"ok,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	// response (edge → brain, echoing ID)
+	OK      bool   `json:"ok,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Outcome string `json:"outcome,omitempty"` // ring/node result, e.g. "completed" / "no_answer"
 }
 
 // Event types — EDGE → BRAIN.
