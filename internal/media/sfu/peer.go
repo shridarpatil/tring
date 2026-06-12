@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/whatomate/tring/internal/media/room"
@@ -181,7 +182,14 @@ func (p *Peer) Negotiate() {
 				continue
 			}
 			byTrack[track] = tr.Sender()
-			drainSender(tr.Sender())
+			// Relay this subscriber's keyframe requests (PLI/FIR) to the track's
+			// publisher, and ask for one now so a new video viewer can start
+			// decoding immediately (screen-share keyframes are otherwise rare).
+			kf := p.sfu.keyframeFor(track)
+			drainSender(tr.Sender(), kf)
+			if kf != nil {
+				kf()
+			}
 			added = true
 		}
 	}
@@ -216,14 +224,29 @@ func (p *Peer) Negotiate() {
 	}
 }
 
-// drainSender reads (and discards) a sender's RTCP so its receive buffer doesn't
-// fill — required for every subscription sender. Ends when the sender closes.
-func drainSender(s *webrtc.RTPSender) {
+// drainSender reads a subscription sender's RTCP (required so its receive buffer
+// doesn't fill) and, when onKeyframe is non-nil, calls it on a PLI/FIR — relaying
+// the subscriber's keyframe request to the publisher. Ends when the sender closes.
+func drainSender(s *webrtc.RTPSender, onKeyframe func()) {
 	go func() {
 		buf := make([]byte, 1500)
 		for {
-			if _, _, err := s.Read(buf); err != nil {
+			n, _, err := s.Read(buf)
+			if err != nil {
 				return
+			}
+			if onKeyframe == nil {
+				continue
+			}
+			pkts, err := rtcp.Unmarshal(buf[:n])
+			if err != nil {
+				continue
+			}
+			for _, pkt := range pkts {
+				switch pkt.(type) {
+				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+					onKeyframe()
+				}
 			}
 		}
 	}()
