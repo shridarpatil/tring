@@ -29,6 +29,7 @@ import (
 	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
+	"github.com/whatomate/tring/internal/presence"
 )
 
 func main() {
@@ -178,7 +179,8 @@ func main() {
 		Flows:      flows,
 		Teams:      teams,
 		AudioDir:   k.String("audio_dir"),
-		Tokens:     redisCache, // single-use burn for visitor /rtc tokens (anti-replay)
+		Tokens:     redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
+		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard
 		Logger:     logger,
 	})
 	// Edge side of the media control channel (Phase 2). When control_url is set,

@@ -28,6 +28,7 @@ import (
 	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/turn"
 )
 
@@ -61,7 +62,11 @@ type Config struct {
 	// mirroring the gateway. Required to accept visitor tokens — a visitor token
 	// with no store is rejected (fail-closed). nil → only agent tokens work.
 	Tokens *cache.Cache
-	Logger *slog.Logger
+	// Presence publishes agent online/offline to the shared Redis store the API +
+	// admin console read (the same store the legacy /agent/ws wrote). nil/disabled
+	// → the dashboard won't show /rtc agents as online. Best-effort.
+	Presence *presence.Store
+	Logger   *slog.Logger
 }
 
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
