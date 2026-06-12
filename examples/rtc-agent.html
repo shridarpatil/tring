@@ -94,6 +94,12 @@ async function accept() {
   if (!incoming) return;
   const room = incoming.room;
   incoming = null;
+  // The mic needs a secure context (HTTPS); on http:// mobile Safari has no
+  // navigator.mediaDevices, so say so plainly.
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    setStatus("Microphone needs HTTPS — open this page over https:// (mic won't work over http on mobile).");
+    return;
+  }
   setStatus("connecting…");
   try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch (e) { setStatus("mic blocked: " + e.message); return; }

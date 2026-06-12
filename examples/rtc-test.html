@@ -79,6 +79,13 @@ async function join() {
   const base = $("base").value, name = $("name").value;
   $("join").disabled = true;
   userClosed = false;
+  // The mic needs a secure context. On http:// (except localhost) iOS Safari
+  // makes navigator.mediaDevices undefined — surface the real cause, not a
+  // cryptic "mic blocked".
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    setStatus("Microphone needs HTTPS — open this page over https:// (mic won't work over http on mobile).");
+    $("join").disabled = false; return;
+  }
   setStatus("getting mic…");
   try {
     mic = await navigator.mediaDevices.getUserMedia({ audio: true });
