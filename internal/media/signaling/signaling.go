@@ -24,6 +24,7 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"github.com/whatomate/tring/internal/ivr"
+	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/turn"
@@ -76,9 +77,16 @@ type Server struct {
 	rooms *room.Manager
 	log   *slog.Logger
 
+	// control is the brain↔edge channel (Phase 2). When set + connected, the
+	// orchestrator runs the IVR remotely: this edge sends call.started/dtmf/
+	// call.ended UP and executes play/ring/ivr.stop commands DOWN instead of
+	// walking the flow locally. nil/disconnected → local IVR fallback.
+	control controlChannel
+
 	mu     sync.Mutex
 	conns  map[room.ParticipantID]*conn
-	ivr    map[room.RoomID]*ivrSession   // running IVR per room (when flow-pinned)
+	ivr    map[room.RoomID]*ivrSession   // local IVR per room (fallback / control off)
+	edge   map[room.RoomID]*edgeVoice    // brain-driven IVR voice per room (control on)
 	agents map[string]map[string]*conn   // online agents: tenant → sip → presence socket
 	rings  map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 }
@@ -95,6 +103,7 @@ func New(cfg Config) *Server {
 		log:    cfg.Logger.With("component", "signaling"),
 		conns:  make(map[room.ParticipantID]*conn),
 		ivr:    make(map[room.RoomID]*ivrSession),
+		edge:   make(map[room.RoomID]*edgeVoice),
 		agents: make(map[string]map[string]*conn),
 		rings:  make(map[room.RoomID]chan struct{}),
 	}
@@ -213,8 +222,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Flow-pinned room → run the IVR as a participant (once per room). The dev
 	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
-	if first.FlowID != "" && (s.cfg.Flows != nil || (s.cfg.DevTokens && first.FlowID == devFlowID)) {
-		s.startIVR(roomID, first.FlowID)
+	if first.FlowID != "" {
+		if s.controlUp() {
+			// Brain runs the IVR: announce the call; the orchestrator drives prompts
+			// and the ring back over the control channel (Phase 2b).
+			_ = s.control.Send(control.Message{
+				Type:        control.EvCallStarted,
+				Tenant:      tenant,
+				Room:        string(roomID),
+				Participant: string(p.ID()),
+				FlowID:      first.FlowID,
+				Name:        first.Name,
+			})
+		} else if s.cfg.Flows != nil || (s.cfg.DevTokens && first.FlowID == devFlowID) {
+			s.startIVR(roomID, first.FlowID) // local fallback (control down)
+		}
 	}
 	// If a transfer is ringing for this room, this join is the agent answering —
 	// complete the ring (the IVR's Transfer then returns "completed").
@@ -272,7 +294,14 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 		case msgUnpublish:
 			s.sfu.Unpublish(p.Room().ID(), p.ID(), codecKind(m.Kind))
 		case msgDTMF:
-			s.routeDTMF(p.Room().ID(), m.Digit)
+			if s.controlUp() {
+				_ = s.control.Send(control.Message{
+					Type: control.EvDTMF, Room: string(p.Room().ID()),
+					Participant: string(p.ID()), Digit: m.Digit,
+				})
+			} else {
+				s.routeDTMF(p.Room().ID(), m.Digit)
+			}
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
@@ -289,8 +318,13 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
-		// If no human participants remain, stop the room's IVR (if any).
+		// If no human participants remain, end the call: tell the brain (it cancels
+		// its walk) and drop the edge voice; also stop any local IVR.
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
+			if s.controlUp() {
+				_ = s.control.Send(control.Message{Type: control.EvCallEnded, Room: string(e.Room)})
+				s.edgeStopVoice(e.Room)
+			}
 			s.stopIVR(e.Room)
 		}
 	}
