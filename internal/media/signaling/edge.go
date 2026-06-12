@@ -2,7 +2,10 @@ package signaling
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
@@ -11,6 +14,33 @@ import (
 	"github.com/whatomate/tring/internal/media/prompt"
 	"github.com/whatomate/tring/internal/media/room"
 )
+
+// errTokenReused is returned when a visitor token's jti was already consumed.
+var errTokenReused = errors.New("visitor token already used")
+
+// consumeVisitorToken burns a visitor token's jti single-use via the token store
+// (Redis), mirroring the gateway. Fails CLOSED: no jti, expired, no store, or a
+// store error all reject — a captured token can't be amplified into many calls.
+func (s *Server) consumeVisitorToken(ctx context.Context, jti string, exp time.Time) error {
+	if jti == "" {
+		return errors.New("visitor token has no jti")
+	}
+	ttl := time.Until(exp)
+	if ttl <= 0 {
+		return errors.New("visitor token expired")
+	}
+	if s.cfg.Tokens == nil {
+		return errors.New("single-use store unavailable")
+	}
+	fresh, err := s.cfg.Tokens.SetNX(ctx, "rtctoken:"+jti, []byte("1"), ttl)
+	if err != nil {
+		return fmt.Errorf("single-use check failed: %w", err)
+	}
+	if !fresh {
+		return errTokenReused
+	}
+	return nil
+}
 
 // controlChannel is the edge side of the brain↔edge link (control.Client
 // satisfies it): the edge sends events/responses up and knows if it's connected.

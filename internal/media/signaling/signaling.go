@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
@@ -56,7 +57,11 @@ type Config struct {
 	Teams TeamResolver
 	// AudioDir is where IVR prompt files (Ogg/Opus) are read from.
 	AudioDir string
-	Logger   *slog.Logger
+	// Tokens burns visitor gateway-call-token jtis single-use (anti-replay),
+	// mirroring the gateway. Required to accept visitor tokens — a visitor token
+	// with no store is rejected (fail-closed). nil → only agent tokens work.
+	Tokens *cache.Cache
+	Logger *slog.Logger
 }
 
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
@@ -134,12 +139,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	if raw == "" {
 		raw = r.URL.Query().Get("token")
 	}
-	cl, err := validateToken(raw, s.cfg.JWTSecret)
+	princ, err := validatePrincipal(raw, s.cfg.JWTSecret)
 	if err != nil {
 		http.Error(w, `{"error":"invalid or missing token"}`, http.StatusUnauthorized)
 		return
 	}
-	tenant := cl.TenantID.String()
+	tenant := princ.tenant.String()
 
 	netConn, _, _, err := ws.UpgradeHTTP(r, w)
 	if err != nil {
@@ -156,7 +161,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if first.Type == msgRegister {
-		s.handleAgentPresence(c, tenant, cl.SipUsername)
+		if princ.isVisitor {
+			_ = c.send(msg{Type: msgError, Reason: "visitor token cannot register as agent"})
+			_ = netConn.Close()
+			return
+		}
+		s.handleAgentPresence(c, tenant, princ.sip)
 		return
 	}
 	if first.Type != msgJoin {
@@ -171,12 +181,27 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Namespace the room by tenant so two tenants can't share a room id.
 	roomID := room.RoomID(tenant + "/" + first.Room)
+	// A visitor's flow is pinned by the TOKEN (server-side), never the join.
+	flowID := first.FlowID
+	if princ.isVisitor {
+		flowID = princ.flowID
+	}
 
 	var p *room.Participant
 	if first.Token != "" {
 		p, err = s.rooms.Reattach(roomID, first.Token)
 	}
 	if p == nil { // fresh join, or reattach failed (expired) → new slot
+		// Burn a visitor token's jti once, on the FIRST (non-reattach) join, so a
+		// captured token can't be amplified into many calls. Fails closed.
+		if princ.isVisitor {
+			if err := s.consumeVisitorToken(r.Context(), princ.jti, princ.exp); err != nil {
+				s.log.Warn("visitor token rejected", "err", err)
+				_ = c.send(msg{Type: msgError, Reason: "token rejected"})
+				_ = netConn.Close()
+				return
+			}
+		}
 		p, err = s.rooms.Join(roomID, first.Name)
 	}
 	if err != nil || p == nil {
@@ -222,7 +247,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Flow-pinned room → run the IVR as a participant (once per room). The dev
 	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
-	if first.FlowID != "" {
+	if flowID != "" {
 		if s.controlUp() {
 			// Brain runs the IVR: announce the call; the orchestrator drives prompts
 			// and the ring back over the control channel (Phase 2b).
@@ -231,11 +256,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				Tenant:      tenant,
 				Room:        string(roomID),
 				Participant: string(p.ID()),
-				FlowID:      first.FlowID,
+				FlowID:      flowID,
+				ClientRef:   princ.clientRef,
 				Name:        first.Name,
 			})
-		} else if s.cfg.Flows != nil || (s.cfg.DevTokens && first.FlowID == devFlowID) {
-			s.startIVR(roomID, first.FlowID) // local fallback (control down)
+		} else if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
+			s.startIVR(roomID, flowID) // local fallback (control down)
 		}
 	}
 	// If a transfer is ringing for this room, this join is the agent answering.
