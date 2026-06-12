@@ -76,6 +76,7 @@ type Gateway struct {
 	cfg      Config
 	api      *webrtc.API
 	fs       *fsClient       // nil = standalone echo mode
+	pstn     *PstnAdapter    // the phone plug (room.PstnGateway, pstn.go); nil without FS
 	agents   *agentRegistry  // online agents' signaling WebSockets (M4b)
 	presence *presence.Store // publishes agent presence to Redis (M5)
 	tokens   jtiStore        // consumes one-time gateway-call-token jti (*cache.Cache in prod)
@@ -146,6 +147,7 @@ func New(cfg Config) (*Gateway, error) {
 			return nil, fmt.Errorf("fs client: %w", err)
 		}
 		g.fs = fc
+		g.pstn = newPstnAdapter(g) // the phone plug (inbound DID legs)
 		// Register the UAS handlers (FS-delivered agent legs) BEFORE serving.
 		g.registerFSUAS()
 		fc.serve(context.Background())

@@ -69,8 +69,13 @@ func (g *Gateway) registerFSUAS() {
 	})
 }
 
-// handleFSInvite bridges one FS-delivered agent leg to the agent's browser.
+// handleFSInvite dispatches an FS-delivered INVITE: an inbound PHONE call (the
+// dialplan stamps X-Tring-DID — Phase 4 plug, pstn.go) or a legacy agent leg.
 func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
+	if did := headerValue(req, didHeader); did != "" && g.pstn != nil {
+		g.pstn.handleInvite(req, tx, did)
+		return
+	}
 	// Prefer the out-of-band header (handles @-containing usernames the URI user
 	// can't carry); fall back to the request-URI user for older originators.
 	sipUser := headerValue(req, agentSipHeader)

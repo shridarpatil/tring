@@ -1,7 +1,6 @@
 package room_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -41,17 +40,14 @@ func (s *stubSupervisor) Subscribe(r room.RoomID) error { s.subscribed = r; retu
 
 type stubGateway struct {
 	inbound func(room.InboundCall)
-	dtmf    string
 }
 
 func (g *stubGateway) OnInbound(f func(room.InboundCall)) { g.inbound = f }
-func (g *stubGateway) Originate(context.Context, string) (room.ParticipantSource, error) {
-	return &stubSource{id: "pstn"}, nil
+func (g *stubGateway) Answer(room.CallID) (*room.PstnLeg, error) {
+	return &room.PstnLeg{Source: &stubSource{id: "pstn"}}, nil
 }
-func (g *stubGateway) Answer(room.CallID) error     { return nil }
-func (g *stubGateway) Reject(room.CallID) error     { return nil }
-func (g *stubGateway) Hangup(room.CallID) error     { return nil }
-func (g *stubGateway) DTMF(_ room.CallID, d string) { g.dtmf = d }
+func (g *stubGateway) Reject(room.CallID) error { return nil }
+func (g *stubGateway) Hangup(room.CallID) error { return nil }
 
 var (
 	_ room.TrackSink         = (*stubSink)(nil)
@@ -84,8 +80,8 @@ func TestExtensionInterfaceStubs(t *testing.T) {
 
 	var gw room.PstnGateway = &stubGateway{}
 	gw.OnInbound(func(room.InboundCall) {})
-	if _, err := gw.Originate(context.Background(), "+919900000000"); err != nil {
-		t.Fatalf("originate: %v", err)
+	leg, err := gw.Answer("c1")
+	if err != nil || leg == nil || leg.Source == nil {
+		t.Fatalf("answer: leg=%v err=%v", leg, err)
 	}
-	gw.DTMF("c1", "5")
 }
