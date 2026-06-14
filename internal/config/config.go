@@ -70,11 +70,9 @@ var defaults = map[string]any{
 	"gateway_addr":       ":8087",
 	"gateway_udp_min":    10000,
 	"gateway_udp_max":    10100,
-	// rtc_addr: the pion SFU media-plane signaling WebSocket (/rtc) — the new
-	// N-party web-calling path (internal/media). Served by cmd/gateway alongside
-	// the legacy WebRTC↔FS bridge. media_grace_seconds is the room reconnect
-	// window: how long a dropped participant's slot is held for a page-refresh.
-	"rtc_addr":            ":8088",
+	// media_grace_seconds is the room reconnect window: how long a dropped
+	// participant's slot is held for a page-refresh. The pion media-plane
+	// signaling WebSocket (/rtc) is served by cmd/gateway on gateway_addr.
 	"media_grace_seconds": 30,
 	// rtc_dev_tokens mounts an UNAUTHENTICATED agent-token mint at /rtc/dev-token
 	// so the local test client (examples/rtc-test.html) works with `make gateway`
