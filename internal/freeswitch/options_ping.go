@@ -10,7 +10,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -82,11 +81,4 @@ func randHex(nBytes int) string {
 	b := make([]byte, nBytes)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
-}
-
-// formatHostPort is a tiny helper for future use when extending probes
-// to support host:port maps. Kept here next to OptionsPing so the call
-// site is self-contained.
-func formatHostPort(host string, port int) string {
-	return fmt.Sprintf("%s:%d", host, port)
 }
