@@ -57,27 +57,28 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	l.Ended(roomID, "caller_hangup")
 	l.Ended(roomID, "again") // idempotent
 
-	// Row settled?
+	// Row settled? (recording_url is set asynchronously by finalize — checked
+	// after the file appears, below.)
 	var (
-		legID, status, cause, recURL string
-		duration                     int
-		answeredOK                   bool
-		journeyLen                   int
+		legID, status, cause string
+		duration             int
+		answeredOK           bool
+		journeyLen           int
 	)
 	err := fx.DB.Pool.QueryRow(ctx, `
-		SELECT fs_uuid, status::text, hangup_cause, COALESCE(recording_url,''),
+		SELECT fs_uuid, status::text, hangup_cause,
 		       COALESCE(duration_seconds, -1), answered_at IS NOT NULL,
 		       jsonb_array_length(ivr_path)
 		FROM calls WHERE tenant_id = $1`, fx.TenantID).
-		Scan(&legID, &status, &cause, &recURL, &duration, &answeredOK, &journeyLen)
+		Scan(&legID, &status, &cause, &duration, &answeredOK, &journeyLen)
 	if err != nil {
 		t.Fatalf("read call row: %v", err)
 	}
 	if status != "ended" || cause != "caller_hangup" || !answeredOK || duration < 0 {
 		t.Fatalf("row = status %s cause %s answered %v dur %d", status, cause, answeredOK, duration)
 	}
-	if recURL == "" || journeyLen != 1 {
-		t.Fatalf("recording_url %q journey %d", recURL, journeyLen)
+	if journeyLen != 1 {
+		t.Fatalf("journey %d", journeyLen)
 	}
 
 	// Recording finalized (async) → <dir>/<legID>.ogg with the OggS magic.
@@ -91,6 +92,58 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 			t.Fatalf("finalized recording %s never appeared", final)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+
+	// recording_url is published ONLY once the file exists (so a no-media call
+	// never advertises a dead recording). Poll briefly — set just after the file.
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		var recURL string
+		if err := fx.DB.Pool.QueryRow(ctx,
+			`SELECT COALESCE(recording_url,'') FROM calls WHERE fs_uuid = $1`, legID).Scan(&recURL); err != nil {
+			t.Fatalf("read recording_url: %v", err)
+		} else if recURL != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recording_url never set after the file was finalized")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestNoMediaLeavesNoRecordingURL is the regression for the "recording not
+// available yet" bug: a recorded call that captures NO audio (silent caller /
+// IVR-only / no-answer) must NOT advertise a recording_url, so the UI shows no
+// dead play button.
+func TestNoMediaLeavesNoRecordingURL(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = true WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("enable recording: %v", err)
+	}
+	dir := t.TempDir()
+	l := callcdr.New(fx.DB, nil, dir, nil)
+
+	roomID := fx.TenantID.String() + "/silent"
+	if sink := l.Started(ctx, fx.TenantID, roomID, "+9199", "16001122", "", "caller-pid"); sink == nil {
+		t.Fatal("expected a recording sink (tenant records)")
+	}
+	// No WriteRTP — the caller never spoke. End the call.
+	l.Ended(roomID, "no_answer")
+
+	// Give the async finalize time to run, then assert NO url and NO file.
+	time.Sleep(500 * time.Millisecond)
+	var recURL string
+	if err := fx.DB.Pool.QueryRow(ctx,
+		`SELECT COALESCE(recording_url,'') FROM calls WHERE tenant_id = $1`, fx.TenantID).Scan(&recURL); err != nil {
+		t.Fatalf("read row: %v", err)
+	}
+	if recURL != "" {
+		t.Fatalf("no media captured but recording_url = %q (dead play button)", recURL)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("no media but spool has files: %v", entries)
 	}
 }
 

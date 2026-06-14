@@ -59,6 +59,19 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger) *Log 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Probe the spool NOW and complain loudly: recorder write errors are dropped
+	// on the media hot path (sinks are best-effort), so an unwritable spool —
+	// classically a root-owned volume vs this non-root process — would otherwise
+	// surface only as silent "no media captured".
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Error("callcdr: recordings spool unusable — recordings will be SKIPPED", "dir", dir, "err", err)
+	} else if probe, err := os.CreateTemp(dir, ".probe-*"); err != nil {
+		logger.Error("callcdr: recordings spool not writable — recordings will be SKIPPED "+
+			"(volume owned by root? chmod 1777 it)", "dir", dir, "err", err)
+	} else {
+		probe.Close()
+		_ = os.Remove(probe.Name())
+	}
 	return &Log{
 		db:    d,
 		q:     queries.MustLoad(),
@@ -91,9 +104,10 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, c
 	if recordOn {
 		ac.rec = record.New(l.dir, legID)
 		ac.rec.Label(callerPID, "customer")
-		if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecording, legID); err != nil {
-			l.log.Warn("cdr: set recording url failed", "err", err)
-		}
+		// recording_url is set LATER (finalizeRecording), once a file actually
+		// exists — not here. Setting it optimistically would leave a dead play
+		// button ("recording not available") on calls that capture no media
+		// (IVR-only, silent caller, no-answer).
 	}
 
 	l.mu.Lock()
@@ -207,6 +221,12 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 			l.log.Error("cdr: recording finalize failed", "err", err)
 			return
 		}
+	}
+
+	// The file is on disk now → publish the serve URL. Doing it here (not at
+	// Started) means a call with no captured media never advertises a recording.
+	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecording, ac.legID); err != nil {
+		l.log.Warn("cdr: set recording url failed", "err", err)
 	}
 
 	if l.blob.Enabled() {
