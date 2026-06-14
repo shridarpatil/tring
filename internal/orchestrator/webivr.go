@@ -41,7 +41,7 @@ type WebTeamResolver interface {
 // driving media on the edge (gateway) over the control channel. It reuses the
 // SAME ivrdrive.Driver the gateway used — only the Prompts/Agents backends differ
 // (control-channel-backed here vs pion-local there). Phase 2b of
-// docs/MEDIA_CONVERGENCE_PLAN.md: the walker lives with the brain; the edge only
+// docs/ARCHITECTURE.md: the walker lives with the brain; the edge only
 // moves media.
 type WebIVR struct {
 	ctrl  *control.Server

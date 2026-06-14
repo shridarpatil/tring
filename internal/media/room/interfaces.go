@@ -7,7 +7,7 @@ import (
 // The four extension interfaces are the seams that keep browser and non-browser
 // participants indistinguishable to the room. They are DEFINED here in M1 and
 // exercised by stubs/tests; their real implementations land in later phases
-// (see docs/MEDIA_PLANE_PLAN.md). Keeping them in the core package — and free of
+// (see docs/ARCHITECTURE.md). Keeping them in the core package — and free of
 // any FreeSWITCH/SIP concept — is what lets the PSTN side be a swappable adapter.
 
 // ParticipantID identifies a participant within its room. Stable across a

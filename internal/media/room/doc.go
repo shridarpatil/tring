@@ -8,7 +8,7 @@
 // ordinary participant that publishes prompt audio and consumes the caller's
 // audio + DTMF; the phone leg (FreeSWITCH, behind PstnGateway) joins as an Opus
 // ParticipantSource; routing a call to a human is just a membership change.
-// See docs/MEDIA_PLANE_PLAN.md.
+// See docs/ARCHITECTURE.md.
 //
 // Milestone 1 (this package) builds the model only: the participant state
 // machine (joining → connected → reconnecting → left), the grace window that
