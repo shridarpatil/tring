@@ -224,28 +224,15 @@ func main() {
 	}
 
 	addr := k.String("gateway_addr")
-	rtcAddr := k.String("rtc_addr")
 	sigHandler := sig.Handler()
 
-	// Serve /rtc on the gateway port too, so a SINGLE gateway URL works for both
-	// the legacy bridge (/webrtc/offer, /agent/ws) and the pion plane (/rtc) —
-	// the SDK/widgets only need one base URL. /rtc still also listens on rtc_addr
-	// (back-compat) when that's a distinct port.
+	// One listener serves everything on the gateway port: the pion media plane
+	// (/rtc) plus the legacy bridge (/webrtc/offer, /agent/ws). The SDK/widgets
+	// need only this single public URL (TRING_GATEWAY_PUBLIC_URL).
 	root := http.NewServeMux()
 	root.Handle("/rtc", sigHandler)
 	root.Handle("/rtc/", sigHandler)
 	root.Handle("/", gw.Handler())
-
-	if rtcAddr != "" && rtcAddr != addr {
-		rtcSrv := &http.Server{Addr: rtcAddr, Handler: sigHandler, ReadHeaderTimeout: 5 * time.Second}
-		go func() {
-			logger.Info("rtc signaling listening", "addr", rtcAddr)
-			if err := rtcSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				logger.Error("rtc serve failed", "err", err)
-				os.Exit(1)
-			}
-		}()
-	}
 
 	srv := &http.Server{
 		Addr:              addr,
