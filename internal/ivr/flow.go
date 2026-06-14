@@ -3,7 +3,7 @@
 // effects live behind the CallDriver interface, implemented by the orchestrator
 // (FreeSWITCH) and the media gateway (pion). The flow data model, parsing, and
 // pure helpers are shared by the live executor, the pion driver, and the
-// deterministic simulator so the three can't diverge. See docs/MEDIA_PLANE_PLAN.md.
+// deterministic simulator so the three can't diverge. See docs/ARCHITECTURE.md.
 package ivr
 
 import (

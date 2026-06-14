@@ -1,5 +1,5 @@
 // Package control is the PRIVATE brain↔edge control channel for the media plane
-// (Phase 2 of docs/MEDIA_CONVERGENCE_PLAN.md).
+// (Phase 2 of docs/ARCHITECTURE.md).
 //
 // The orchestrator (BRAIN) runs the IVR + routing for web/WhatsApp calls; the
 // gateway (EDGE) only moves media. They talk over one authenticated WebSocket:

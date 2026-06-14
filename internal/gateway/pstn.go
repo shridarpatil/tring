@@ -1,7 +1,7 @@
 package gateway
 
 // pstn.go — the FreeSWITCH adapter behind room.PstnGateway (Phase 4: FS as a
-// PLUG, docs/MEDIA_CONVERGENCE_PLAN.md).
+// PLUG, docs/ARCHITECTURE.md).
 //
 // FreeSWITCH's only remaining job on this path is the carrier edge: terminate
 // the trunk (SIP/G.711 toward the telco), transcode to Opus, and hand the leg to

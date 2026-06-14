@@ -9,7 +9,7 @@ package orchestrator
 // transfer, hangup) are wired against eslgo. The remaining node types
 // (gather, http_callback, timing, goto_flow) carry TODO stubs that hang
 // up gracefully so the rest of the system is testable end-to-end against
-// a partial flow. See docs/PHASE_3_IVR_EXECUTION.md for the full plan.
+// a partial flow. See docs/ARCHITECTURE.md for the full plan.
 //
 // This file is not started by any main.go yet — wiring it as an outbound
 // socket listener (port 8086, registered alongside the existing :8084
@@ -175,7 +175,7 @@ func (e *Executor) WithAgentTransport(transport, gateway, jitter string) *Execut
 
 // HandleInboundCall is the outbound-socket callback FreeSWITCH calls
 // for each inbound channel routed to the IVR socket (default :8086 — see
-// the dialplan extension in docs/PHASE_3_IVR_EXECUTION.md).
+// the dialplan extension in docs/ARCHITECTURE.md).
 //
 // Channel headers tell us the destination number; we look up the
 // owning tenant + flow and walk the graph. Errors hang up with a

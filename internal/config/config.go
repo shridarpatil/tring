@@ -80,7 +80,7 @@ var defaults = map[string]any{
 	// so the local test client (examples/rtc-test.html) works with `make gateway`
 	// alone. Dev only — never enable in production.
 	"rtc_dev_tokens": false,
-	// Brain↔edge control channel (Phase 2, docs/MEDIA_CONVERGENCE_PLAN.md). The
+	// Brain↔edge control channel (Phase 2, docs/ARCHITECTURE.md). The
 	// orchestrator (BRAIN) serves control_addr; the gateway (EDGE) dials
 	// control_url; both gated by control_secret. All empty = disabled (the gateway
 	// keeps running its own IVR until 2b/2c) — existing deploys are unaffected.

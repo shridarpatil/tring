@@ -1,7 +1,7 @@
 // Package callcdr records media-plane calls (web /rtc + the PSTN plug) into the
 // SAME `calls` table, recording pipeline, and serve endpoint the FreeSWITCH path
 // uses — one CDR + one recording story for every call source, per the
-// convergence plan (docs/MEDIA_CONVERGENCE_PLAN.md).
+// convergence plan (docs/ARCHITECTURE.md).
 //
 // The existing machinery keys everything on `calls.fs_uuid` as an opaque per-call
 // leg id and serves local recordings from <recordingsDir>/<fs_uuid>.<format>.
