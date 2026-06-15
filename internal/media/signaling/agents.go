@@ -20,6 +20,42 @@ const ringTimeout = 30 * time.Second
 // available, then blocks reading (keepalive / close) while it can receive
 // `incoming` pushes from a transfer ring. The agent answers by opening a normal
 // `join` on another socket. Deregisters on disconnect.
+// setAgentOnCall tracks an agent's active call legs and reflects busy/available
+// in the shared presence store the dashboard reads. The count handles an agent
+// briefly on two legs (e.g. a transfer overlap) without flapping to available.
+func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
+	if sip == "" {
+		return
+	}
+	k := tenant + "|" + sip
+	s.mu.Lock()
+	if on {
+		s.onCall[k]++
+	} else if s.onCall[k] > 0 {
+		s.onCall[k]--
+	}
+	n := s.onCall[k]
+	if n == 0 {
+		delete(s.onCall, k)
+	}
+	s.mu.Unlock()
+	if pres := s.cfg.Presence; pres != nil {
+		if n > 0 {
+			pres.MarkOnCall(context.Background(), tenant, sip)
+		} else {
+			pres.MarkOnline(context.Background(), tenant, sip)
+		}
+	}
+}
+
+// agentOnCall reports whether the agent has any active call leg (used by the
+// presence refresh so a 10s TTL re-assert doesn't clobber on_call → online).
+func (s *Server) agentOnCall(tenant, sip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.onCall[tenant+"|"+sip] > 0
+}
+
 func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	s.mu.Lock()
 	if s.agents[tenant] == nil {
@@ -46,7 +82,13 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 				case <-stopRefresh:
 					return
 				case <-t.C:
-					pres.MarkOnline(context.Background(), tenant, sip)
+					// Preserve on_call across TTL re-asserts — don't flip a busy
+					// agent back to available every 10s.
+					if s.agentOnCall(tenant, sip) {
+						pres.MarkOnCall(context.Background(), tenant, sip)
+					} else {
+						pres.MarkOnline(context.Background(), tenant, sip)
+					}
 				}
 			}
 		}()
