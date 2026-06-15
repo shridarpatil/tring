@@ -38,16 +38,21 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
   });
   guest.on("ended", () => {
     ringer.stop();
+    ui.setRemoteVideo(null);
     ui.end("Call ended");
   });
   guest.on("error", ({ error }) => {
     ringer.stop();
+    ui.setRemoteVideo(null);
     ui.end(error.message || "Call failed");
   });
+  // The agent's screen arrives as a video track — show/hide it.
+  guest.on("remote-video", ({ stream }) => ui.setRemoteVideo(stream));
 
   // Wire UI controls back to the guest session.
   ui.onHangup(() => guest.hangup());
   ui.onMute(() => guest.toggleMute());
+  ui.onShare(() => guest.toggleScreen());
 
   ui.onDigit((digit) => guest.sendDTMF(digit));
 
@@ -115,6 +120,8 @@ interface GuestUI {
   end(message: string): void;
   onHangup(fn: () => void): void;
   onMute(fn: () => boolean | void): void;
+  onShare(fn: () => Promise<boolean> | boolean | void): void;
+  setRemoteVideo(stream: MediaStream | null): void;
   onDigit(fn: (digit: string) => void): void;
 }
 
@@ -136,6 +143,7 @@ function createGuestUI(title: string): GuestUI {
   // Inline SVGs so the controls look native with no asset dependency.
   const micIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
   const phoneIcon = `<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
+  const screenIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v2H8v2h8v-2h-2v-2h6a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 12H4V6h16v10z"/></svg>`;
 
   root.innerHTML = `
     <div class="tring-guest-card">
@@ -145,12 +153,16 @@ function createGuestUI(title: string): GuestUI {
         <div class="tring-guest-sub">Connecting…</div>
       </div>
       <div class="tring-guest-mid">
+        <video class="tring-guest-remote" autoplay playsinline></video>
         <div class="tring-guest-dialed"></div>
         <div class="tring-guest-keypad">${keypadHTML}</div>
       </div>
       <div class="tring-guest-actions">
         <button type="button" class="tring-guest-btn tring-guest-mute" aria-pressed="false">
           <span class="tring-guest-ic">${micIcon}</span><span class="tring-guest-lbl">Mute</span>
+        </button>
+        <button type="button" class="tring-guest-btn tring-guest-share" aria-pressed="false">
+          <span class="tring-guest-ic">${screenIcon}</span><span class="tring-guest-lbl">Share</span>
         </button>
         <button type="button" class="tring-guest-btn tring-guest-end">
           <span class="tring-guest-ic">${phoneIcon}</span><span class="tring-guest-lbl">End</span>
@@ -164,6 +176,9 @@ function createGuestUI(title: string): GuestUI {
   const keypadEl = $(".tring-guest-keypad");
   const muteBtn = $<HTMLButtonElement>(".tring-guest-mute");
   const muteLbl = muteBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
+  const shareBtn = $<HTMLButtonElement>(".tring-guest-share");
+  const shareLbl = shareBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
+  const remoteVid = $<HTMLVideoElement>(".tring-guest-remote");
   const endBtn = $<HTMLButtonElement>(".tring-guest-end");
 
   let tick: number | undefined;
@@ -182,6 +197,12 @@ function createGuestUI(title: string): GuestUI {
       muteBtn.setAttribute("aria-pressed", "false");
       muteBtn.classList.remove("is-active");
       muteLbl.textContent = "Mute";
+      shareBtn.setAttribute("aria-pressed", "false");
+      shareBtn.classList.remove("is-active");
+      shareBtn.disabled = false;
+      shareLbl.textContent = "Share";
+      remoteVid.srcObject = null;
+      root.classList.remove("tring-guest-has-video");
       dialed = "";
       dialedEl.textContent = "";
       subEl.textContent = "Connecting…";
@@ -221,6 +242,30 @@ function createGuestUI(title: string): GuestUI {
         muteBtn.classList.toggle("is-active", on);
         muteLbl.textContent = on ? "Unmute" : "Mute";
       });
+    },
+    onShare(fn) {
+      shareBtn.addEventListener("click", async () => {
+        shareBtn.disabled = true;
+        try {
+          const on = (await fn()) === true;
+          shareBtn.setAttribute("aria-pressed", String(on));
+          shareBtn.classList.toggle("is-active", on);
+          shareLbl.textContent = on ? "Stop" : "Share";
+        } catch {
+          /* user cancelled the screen-picker */
+        } finally {
+          shareBtn.disabled = false;
+        }
+      });
+    },
+    setRemoteVideo(stream) {
+      if (stream) {
+        remoteVid.srcObject = stream;
+        root.classList.add("tring-guest-has-video");
+      } else {
+        remoteVid.srcObject = null;
+        root.classList.remove("tring-guest-has-video");
+      }
     },
     onDigit(fn) {
       // One delegated listener covers all 12 keys.
@@ -346,6 +391,17 @@ function injectStyles(): void {
       min-height: 1.4em; margin-bottom: 1rem; font-size: 26px;
       letter-spacing: .15em; font-variant-numeric: tabular-nums;
     }
+    /* Remote screen-share — hidden until the other party shares. */
+    #${UI_ID} .tring-guest-remote {
+      display: none; width: 100%; max-height: 46vh; border-radius: 12px;
+      background: #000; object-fit: contain; margin-bottom: 1rem;
+    }
+    #${UI_ID}.tring-guest-has-video .tring-guest-remote { display: block; }
+    /* When the agent is sharing, hide the keypad so the screen has room. */
+    #${UI_ID}.tring-guest-has-video[data-state="connected"] .tring-guest-keypad { display: none; }
+    #${UI_ID} .tring-guest-share.is-active .tring-guest-ic { background: #fff; color: #111827; }
+    #${UI_ID} .tring-guest-share .tring-guest-ic { background: rgba(255,255,255,.15); }
+    #${UI_ID} .tring-guest-btn:disabled { opacity: .5; cursor: default; }
     /* Dialpad is visible by default once connected — no extra tap. */
     #${UI_ID} .tring-guest-keypad {
       display: none; grid-template-columns: repeat(3, 1fr);
@@ -368,7 +424,7 @@ function injectStyles(): void {
 
     /* Bottom — circular call controls, like a native dialer. */
     #${UI_ID} .tring-guest-actions {
-      display: none; width: 100%; justify-content: center; gap: 3.5rem;
+      display: none; width: 100%; justify-content: center; gap: 2.25rem;
       padding-top: 1.5rem;
     }
     #${UI_ID}[data-state="connected"] .tring-guest-actions { display: flex; }

@@ -250,6 +250,11 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.send({ type: ClientMsgType.Transfer, to_sip: target.toSip, to_team: target.toTeam });
   }
 
+  /** Whether this leg is currently publishing a screen-share track. */
+  get sharingScreen(): boolean {
+    return this.screen !== null;
+  }
+
   /** shareScreen publishes a screen/window video track (the server renegotiates,
    *  staying the sole offerer). Pass {selfBrowserSurface:"exclude"} etc. via opts. */
   async shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> {

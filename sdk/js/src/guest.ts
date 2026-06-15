@@ -35,6 +35,10 @@ export class TringGuest extends Emitter<GuestEvent> {
     return this.rtc !== null;
   }
 
+  get isSharingScreen(): boolean {
+    return this.rtc?.sharingScreen ?? false;
+  }
+
   /**
    * Acquire the mic, connect to the media plane over /rtc, and place the call
    * into the IVR. Emits connecting → ringing → connected → ended. Throws
@@ -116,6 +120,13 @@ export class TringGuest extends Emitter<GuestEvent> {
       void this.cleanup();
     });
     call.on("error", (e) => this.emit({ type: "error", error: e.error }));
+    // The agent's screen-share arrives as a video track; surface it to the UI,
+    // and clear it when that track ends (the agent stopped sharing).
+    call.on("track", (e) => {
+      if (e.kind !== "video") return;
+      this.emit({ type: "remote-video", stream: e.stream });
+      e.track.onended = () => this.emit({ type: "remote-video", stream: null });
+    });
 
     try {
       await call.join();
@@ -138,6 +149,28 @@ export class TringGuest extends Emitter<GuestEvent> {
   /** Send a DTMF digit (0-9, *, #) to the IVR mid-call. */
   async sendDTMF(digit: string): Promise<void> {
     this.rtc?.sendDtmf(digit);
+  }
+
+  /** Start sharing the visitor's screen with the agent. Prompts the OS
+   *  screen-picker — call from a user gesture (e.g. a button click). */
+  async shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> {
+    if (!this.rtc) throw new Error("not in a call");
+    await this.rtc.shareScreen(constraints);
+  }
+
+  /** Stop sharing the visitor's screen. */
+  stopScreen(): void {
+    this.rtc?.stopScreen();
+  }
+
+  /** Flip screen-share on/off; returns the resulting state. */
+  async toggleScreen(): Promise<boolean> {
+    if (this.isSharingScreen) {
+      this.stopScreen();
+      return false;
+    }
+    await this.shareScreen();
+    return true;
   }
 
   /** Mute/unmute the visitor's microphone. */
