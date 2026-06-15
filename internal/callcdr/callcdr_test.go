@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pion/rtp"
 
 	"github.com/whatomate/tring/internal/callcdr"
@@ -30,6 +31,12 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = true WHERE id = $1`, fx.TenantID); err != nil {
 		t.Fatalf("enable recording: %v", err)
 	}
+	var agentID uuid.UUID
+	if err := fx.DB.Pool.QueryRow(ctx,
+		`INSERT INTO agents (tenant_id, sip_username, sip_password) VALUES ($1, 'alice', 'x') RETURNING id`,
+		fx.TenantID).Scan(&agentID); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
 	dir := t.TempDir()
 	l := callcdr.New(fx.DB, nil, dir, nil)
 
@@ -42,11 +49,11 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 		_ = sink.WriteRTP("caller-pid", opusPkt(uint32(i*960)))
 	}
 
-	agentSink := l.Answered(roomID, "agent-pid")
+	agentSink := l.Answered(roomID, "agent-pid", "alice")
 	if agentSink == nil {
 		t.Fatal("expected the agent recording sink")
 	}
-	if l.Answered(roomID, "caller-pid") != nil {
+	if l.Answered(roomID, "caller-pid", "alice") != nil {
 		t.Fatal("the caller's own join must not mark answered")
 	}
 	for i := range 20 {
@@ -64,13 +71,14 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 		duration             int
 		answeredOK           bool
 		journeyLen           int
+		gotAgent             *uuid.UUID
 	)
 	err := fx.DB.Pool.QueryRow(ctx, `
 		SELECT fs_uuid, status::text, hangup_cause,
 		       COALESCE(duration_seconds, -1), answered_at IS NOT NULL,
-		       jsonb_array_length(ivr_path)
+		       jsonb_array_length(ivr_path), agent_id
 		FROM calls WHERE tenant_id = $1`, fx.TenantID).
-		Scan(&legID, &status, &cause, &duration, &answeredOK, &journeyLen)
+		Scan(&legID, &status, &cause, &duration, &answeredOK, &journeyLen, &gotAgent)
 	if err != nil {
 		t.Fatalf("read call row: %v", err)
 	}
@@ -79,6 +87,9 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	}
 	if journeyLen != 1 {
 		t.Fatalf("journey %d", journeyLen)
+	}
+	if gotAgent == nil || *gotAgent != agentID {
+		t.Fatalf("agent_id = %v, want %v (answering agent not attributed)", gotAgent, agentID)
 	}
 
 	// Recording finalized (async) → <dir>/<legID>.ogg with the OggS magic.

@@ -89,7 +89,7 @@ type TeamResolver interface {
 // best-effort and idempotent; a nil CallLog disables CDRs entirely.
 type CallLog interface {
 	Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink
-	Answered(roomID string, agentPID room.ParticipantID) room.TrackSink
+	Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)
 }
@@ -304,7 +304,20 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if from == "" {
 			from = first.Name
 		}
+		if from == "" {
+			from = "Web visitor" // anonymous caller has no identity — don't log blank
+		}
 		if sink := s.cfg.Calls.Started(r.Context(), princ.tenant, string(roomID), from, "web", princ.clientRef, p.ID()); sink != nil {
+			s.sfu.AddSink(roomID, p.ID(), sink)
+		}
+	}
+	// A non-visitor (agent) joining an existing call room is answering it: mark the
+	// CDR answered + attribute the agent (by their JWT SIP), and attach their
+	// recording leg. princ.sip is available here (unlike in routeEvent, which fires
+	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
+	// caller's own join.
+	if flowID == "" && !princ.isVisitor && s.cfg.Calls != nil {
+		if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
 		}
 	}
@@ -409,14 +422,9 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 // OTHER participants' sockets, and finalizes a left participant by tearing down
 // its SFU peer.
 func (s *Server) routeEvent(e room.Event) {
-	if e.Type == room.EventParticipantJoined && s.cfg.Calls != nil {
-		// A later participant joining an open call = the agent answering. The
-		// CallLog ignores the caller's own join and unknown rooms; the returned
-		// sink (recording on) captures the agent's leg.
-		if sink := s.cfg.Calls.Answered(string(e.Room), e.Participant); sink != nil {
-			s.sfu.AddSink(e.Room, e.Participant, sink)
-		}
-	}
+	// NOTE: the "agent answered" CDR + recording-sink wiring lives in handleWS
+	// (where the agent's JWT SIP is known), not here — this emitter fires DURING
+	// rooms.Join, before s.conns/identity is set.
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)

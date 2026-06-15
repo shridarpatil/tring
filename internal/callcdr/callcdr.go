@@ -88,6 +88,9 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger) *Log 
 // Best-effort: a DB failure logs and returns nil — the call proceeds unrecorded
 // rather than failing.
 func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink {
+	if from == "" {
+		from = "Unknown" // never log a blank caller (e.g. a phone leg with no caller-ID)
+	}
 	legID := uuid.NewString()
 	var callID uuid.UUID
 	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef).Scan(&callID)
@@ -120,10 +123,12 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, c
 	return ac.rec
 }
 
-// Answered marks the call answered (an agent joined) and returns the recorder
+// Answered marks the call answered (an agent joined), attributes the answering
+// agent on the CDR (resolved from their SIP username), and returns the recorder
 // sink to attach to the AGENT's publication (nil if not recording). The caller's
-// own join is ignored (pid == callerPID), as are unknown rooms.
-func (l *Log) Answered(roomID string, agentPID room.ParticipantID) room.TrackSink {
+// own join is ignored (pid == callerPID), as are unknown rooms. agentSip may be
+// empty (then only status/answered_at are stamped, no agent attribution).
+func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink {
 	l.mu.Lock()
 	ac := l.calls[roomID]
 	l.mu.Unlock()
@@ -134,6 +139,17 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID) room.TrackSin
 	defer cancel()
 	if _, err := l.db.Pool.Exec(ctx, l.q.MarkCallAnswered, ac.legID); err != nil {
 		l.log.Warn("cdr: mark answered failed", "err", err)
+	}
+	// Attribute the answering agent: resolve their DB id from the SIP username the
+	// JWT carried, then stamp it on the call log (so "who handled it" isn't blank).
+	if agentSip != "" {
+		var agentID uuid.UUID
+		var label string
+		if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, agentSip).Scan(&agentID, &label); err != nil {
+			l.log.Warn("cdr: agent lookup failed", "sip", agentSip, "err", err)
+		} else if _, err := l.db.Pool.Exec(ctx, l.q.SetCallAgentID, ac.legID, agentID); err != nil {
+			l.log.Warn("cdr: stamp agent failed", "err", err)
+		}
 	}
 	if ac.rec == nil {
 		return nil
