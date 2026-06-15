@@ -95,6 +95,13 @@ export class Tring extends Emitter<TringEvent> {
           this.emit({ type: "call:ended", call });
         });
         rtc.on("error", ({ error }) => this.emit({ type: "error", error }));
+        // The remote party's screen-share arrives as a video track; surface it,
+        // and clear it when that track ends (they stopped sharing).
+        rtc.on("track", ({ kind, stream, track }) => {
+          if (kind !== "video") return;
+          this.emit({ type: "call:remote-video", call, stream });
+          track.onended = () => this.emit({ type: "call:remote-video", call, stream: null });
+        });
       },
       hangup: async () => {
         if (rtc) {
@@ -120,6 +127,12 @@ export class Tring extends Emitter<TringEvent> {
       hold: () => rtc?.hold(),
       resume: () => rtc?.resume(),
       transfer: (target) => rtc?.transfer(target),
+      shareScreen: (constraints) =>
+        rtc ? rtc.shareScreen(constraints) : Promise.reject(new Error("call not active")),
+      stopScreen: () => rtc?.stopScreen(),
+      get sharingScreen() {
+        return rtc?.sharingScreen ?? false;
+      },
     };
 
     this.emit({ type: "call:ringing", call });

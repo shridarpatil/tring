@@ -74,6 +74,13 @@ export interface Call {
   resume(): void;
   /** Blind-transfer the call to another agent or team; this leg then ends. */
   transfer(target: { toSip?: string; toTeam?: string }): void;
+  /** Start publishing the agent's screen to the other party. Prompts the OS
+   *  screen-picker (must be called from a user gesture). */
+  shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void>;
+  /** Stop the agent's screen share. */
+  stopScreen(): void;
+  /** Whether the agent is currently sharing their screen. */
+  readonly sharingScreen: boolean;
 }
 
 export type CallStatus = "ringing" | "connected" | "ended";
@@ -86,6 +93,8 @@ export type TringEvent =
   | { type: "call:ringing"; call: Call }
   | { type: "call:answered"; call: Call }
   | { type: "call:ended"; call: Call; cause?: string }
+  // The remote party's screen-share track arrived (stream) or ended (null).
+  | { type: "call:remote-video"; call: Call; stream: MediaStream | null }
   | { type: "error"; error: Error };
 
 // ---- Guest (web-to-web customer) calling --------------------------------
@@ -152,4 +161,6 @@ export type GuestEvent =
   | { type: "ringing" } // offer sent to the gateway, awaiting answer
   | { type: "connected" } // IVR answered, media flowing
   | { type: "ended"; reason?: string }
+  // The remote party's (agent's) screen-share track arrived (stream) or ended (null).
+  | { type: "remote-video"; stream: MediaStream | null }
   | { type: "error"; error: Error };
