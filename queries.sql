@@ -250,6 +250,11 @@ UPDATE calls SET ivr_path = $1::jsonb WHERE fs_uuid = $2;
 -- call control (hold/transfer). Matched by the caller leg's channel UUID.
 UPDATE calls SET agent_id = $1, agent_fs_uuid = $3 WHERE fs_uuid = $2;
 
+-- name: set-call-agent-id
+-- Stamp just the answering agent on a media-plane call (callcdr) — no FS leg, the
+-- agent is on the pion plane. Matched by the call's leg id (fs_uuid).
+UPDATE calls SET agent_id = $2 WHERE fs_uuid = $1;
+
 -- name: get-call-control-leg
 -- The CUSTOMER leg (the party that should hear hold music), the call's status,
 -- and the tenant's hold music — scoped to the tenant. Hold injects MOH into this

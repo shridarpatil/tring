@@ -548,9 +548,9 @@ func (f *fakeCallLog) Started(_ context.Context, _ uuid.UUID, roomID, from, to, 
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID) room.TrackSink {
+func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID, agentSip string) room.TrackSink {
 	f.mu.Lock()
-	f.answered = append(f.answered, roomID+"|"+string(pid))
+	f.answered = append(f.answered, roomID+"|"+string(pid)+"|"+agentSip)
 	f.mu.Unlock()
 	return nil
 }
