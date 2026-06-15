@@ -350,15 +350,25 @@ export interface RtcAgentOpts {
 
 export type RtcAgentEvent =
   | { type: "online" }
+  | { type: "reconnecting" }
   | { type: "offline" }
   | { type: "incoming"; room: string; from?: string }
   | { type: "error"; error: Error };
+
+// The gateway closes an idle presence socket after ~90s with no inbound frame,
+// so the client must send a keepalive well within that window. Any frame resets
+// the server's read deadline; we re-send `register` (a no-op once registered).
+const AGENT_KEEPALIVE_MS = 25_000;
 
 export class RtcAgent extends Emitter<RtcAgentEvent> {
   private ws: WebSocket | null = null;
   private token = "";
   private mic: MediaStream | null = null;
   private incoming: { room: string; from?: string } | null = null;
+  private closedByUser = false;
+  private keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+  private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private backoffMs = 1000;
 
   constructor(private readonly opts: RtcAgentOpts) {
     super();
@@ -367,7 +377,8 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
   /** goOnline registers the agent's presence socket and waits for `incoming`.
    *  It also captures the mic now (in the go-online gesture) so accepting a call
    *  later — including auto-answer — needs no fresh gesture. Best-effort: if the
-   *  mic is denied here, accept() captures it then. */
+   *  mic is denied here, accept() captures it then. The socket auto-reconnects
+   *  (re-minting the token) until goOffline(), surviving drops + token expiry. */
   async goOnline(): Promise<void> {
     if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
       try {
@@ -376,21 +387,70 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
         /* will capture on accept instead */
       }
     }
+    this.closedByUser = false;
+    await this.openSocket();
+  }
+
+  /** openSocket mints a fresh token and connects the presence WS. Reused on every
+   *  (re)connect, so a dropped socket comes back without the agent reloading. */
+  private async openSocket(): Promise<void> {
     this.token = this.opts.getToken ? await this.opts.getToken() : this.opts.token ?? "";
     if (!this.token) throw new Error("agent token required (token or getToken)");
     const ws = new WebSocket(wsURL(this.opts.gatewayUrl, this.token));
     this.ws = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ type: ClientMsgType.Register }));
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: ClientMsgType.Register }));
+      this.startKeepalive();
+    };
     ws.onmessage = (ev) => {
       const m = JSON.parse(ev.data) as RtcMessage;
-      if (m.type === ServerMsgType.Ready) this.emit({ type: "online" });
-      else if (m.type === ServerMsgType.Incoming) {
+      if (m.type === ServerMsgType.Ready) {
+        this.backoffMs = 1000; // healthy → reset reconnect backoff
+        this.emit({ type: "online" });
+      } else if (m.type === ServerMsgType.Incoming) {
         this.incoming = { room: m.room ?? "", from: m.from };
         this.emit({ type: "incoming", room: this.incoming.room, from: m.from });
       }
     };
-    ws.onclose = () => this.emit({ type: "offline" });
+    ws.onclose = () => {
+      this.stopKeepalive();
+      if (this.closedByUser) {
+        this.emit({ type: "offline" });
+        return;
+      }
+      // Unexpected drop (idle timeout, network blip, gateway redeploy, token
+      // expiry): keep the agent online by reconnecting with a fresh token.
+      this.emit({ type: "reconnecting" });
+      this.scheduleReconnect();
+    };
     ws.onerror = () => this.emit({ type: "error", error: new Error("presence socket error") });
+  }
+
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: ClientMsgType.Register }));
+      }
+    }, AGENT_KEEPALIVE_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = undefined;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer) return;
+    const delay = this.backoffMs;
+    this.backoffMs = Math.min(this.backoffMs * 2, 10_000); // cap at 10s
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = undefined;
+      if (this.closedByUser) return;
+      void this.openSocket().catch(() => this.scheduleReconnect());
+    }, delay);
   }
 
   /** accept answers the current incoming call: it opens a new RtcCall joining the
@@ -423,6 +483,12 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
   }
 
   goOffline(): void {
+    this.closedByUser = true;
+    this.stopKeepalive();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     this.ws?.close();
     this.ws = null;
     this.mic?.getTracks().forEach((t) => t.stop());
