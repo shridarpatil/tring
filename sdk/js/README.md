@@ -61,6 +61,42 @@ await fetch("https://your-tring-host/v1/calls", {
 a generic "Incoming call"). Inbound calls / IVR transfers ring the same panel with
 Accept/Decline. See `examples/demo-portal/` for a runnable backend (`/agent/originate`).
 
+### Connection lifecycle & page navigation ⚠️
+
+The agent's gateway connection (presence WebSocket + any active call's
+`RTCPeerConnection`) lives in the **page's JavaScript context**. That has a hard
+consequence integrators must design around:
+
+| Navigation | Connection | Active call |
+|---|---|---|
+| **SPA / client-side routing** (Vue Router, React Router, …) | **persists** ✅ | **persists** ✅ |
+| **Full page load / hard reload / link to a new URL** | **drops, then re-registers** | **lost** ❌ |
+
+A full page navigation destroys the JS realm, so the browser tears down every
+WebSocket, the PeerConnection, and the mic stream — there is no way to keep them.
+On the new page the widget re-initializes and the agent **re-registers presence
+automatically** (a brief offline blip; presence TTL is 30s), but **any call in
+progress drops**. A page *refresh* mid-call drops the call for the same reason.
+
+> The SDK auto-reconnects the presence socket across *transient* network drops
+> (Wi-Fi blips, gateway redeploys, token expiry) **within a live page** — keepalive
+> + backoff, re-minting the token each attempt. That does **not** cover page
+> navigation, which is a different JS context entirely.
+
+**To keep the agent online (and calls alive) across navigation, mount the widget
+in a context that doesn't reload:**
+
+1. **Best — an SPA shell.** Load `agent.js` once in your app shell; route changes
+   are client-side, so the connection and any call survive.
+2. **Multi-page / server-rendered CRM** (full reload per click): host the widget in
+   a **persistent iframe or a popout window** that isn't reloaded as the main
+   content navigates — the classic dialer-toolbar pattern.
+3. Otherwise the agent disconnects/reconnects on every navigation: presence
+   recovers, but they cannot hold a call across page changes.
+
+(Persisting the session to survive reload isn't a fix: WebRTC **media** can't
+cross a page load, so even reattaching signaling wouldn't restore audio.)
+
 ## Website visitor calling (`voice.js`)
 
 Put voice on a public page so visitors call **into your IVR** — no phone number. Both anonymous guests and logged-in callers use the **same tag**, pointing at a backend endpoint that mints a gateway call token:
