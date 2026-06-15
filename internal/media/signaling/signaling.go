@@ -121,6 +121,7 @@ type Server struct {
 	agents    map[string]map[string]*conn   // online agents: tenant → sip → presence socket
 	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
+	onCall    map[string]int                // "tenant|sip" → active call legs (drives on_call presence)
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -140,6 +141,7 @@ func New(cfg Config) *Server {
 		agents:    make(map[string]map[string]*conn),
 		rings:     make(map[room.RoomID]chan struct{}),
 		pstnCalls: make(map[room.RoomID]room.CallID),
+		onCall:    make(map[string]int),
 	}
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
@@ -316,10 +318,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// recording leg. princ.sip is available here (unlike in routeEvent, which fires
 	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
 	// caller's own join.
-	if flowID == "" && !princ.isVisitor && s.cfg.Calls != nil {
+	agentCallLeg := flowID == "" && !princ.isVisitor
+	if agentCallLeg && s.cfg.Calls != nil {
 		if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
 		}
+	}
+	// Reflect agent busy/available in presence so the dashboard shows "on call".
+	// Cleared when this call leg's socket closes (handleWS returns after readLoop).
+	if agentCallLeg {
+		s.setAgentOnCall(tenant, princ.sip, true)
+		defer s.setAgentOnCall(tenant, princ.sip, false)
 	}
 
 	// If a transfer is ringing for this room, this join is the agent answering.
