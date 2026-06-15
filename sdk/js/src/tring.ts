@@ -57,6 +57,7 @@ export class Tring extends Emitter<TringEvent> {
       iceServers: opts.iceServers,
     });
     this.agent.on("online", () => this.emit({ type: "registered" }));
+    this.agent.on("reconnecting", () => this.emit({ type: "reconnecting", attempt: 0 }));
     this.agent.on("offline", () => this.emit({ type: "unregistered" }));
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
     this.agent.on("incoming", ({ from }) => this.handleIncoming(from));
