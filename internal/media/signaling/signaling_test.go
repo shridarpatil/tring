@@ -620,5 +620,36 @@ func TestPstnCallWritesCDRHooks(t *testing.T) {
 	}
 }
 
+// TestPeerLeaveEndsLoneRemaining: in a 1:1 room, when one party leaves (Bye),
+// the other leg is ended PROMPTLY rather than lingering in the 30s grace window.
+// The lingering case was the stale dashboard "on call" count — the room stayed
+// non-empty (so the CDR never settled) until grace expired. readUntil's 5s
+// deadline is well under the 30s grace, so this fails if the leg isn't ended now.
+func TestPeerLeaveEndsLoneRemaining(t *testing.T) {
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+
+	a := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	a.send(map[string]any{"type": "join", "room": "r1", "name": "A"})
+	a.readUntil("joined")
+
+	b := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	b.send(map[string]any{"type": "join", "room": "r1", "name": "B"})
+	b.readUntil("joined")
+
+	// A hangs up cleanly (Bye → immediate Leave). B is now the lone remaining leg
+	// and must be ended now (server-side endIfAlone), not after the grace window.
+	a.send(map[string]any{"type": "bye"})
+	if end := b.readUntil("ended"); end["type"] != "ended" {
+		t.Fatalf("remaining leg not ended after peer left: %v", end)
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()

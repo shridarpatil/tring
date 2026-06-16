@@ -166,6 +166,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         // participant leaving does.)
         if (this.peers.size === 0) {
           this.closedByUser = true; // a clean end, not a drop → no reconnect
+          this.send({ type: ClientMsgType.Bye }); // settle server-side now (don't sit in grace)
           this.teardown();
           this.emit({ type: "ended", reason: "peer left" });
         }

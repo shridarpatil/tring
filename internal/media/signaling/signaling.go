@@ -450,6 +450,15 @@ func (s *Server) routeEvent(e room.Event) {
 			if s.cfg.Calls != nil {
 				s.cfg.Calls.Ended(string(e.Room), "ended")
 			}
+		} else {
+			// A 1:1 call whose OTHER party just left: end the lone remaining leg now
+			// rather than wait for it to notice and tear down. That teardown closes
+			// its socket WITHOUT a Bye, so it would otherwise sit in the 30s grace
+			// window before the room empties + the CDR settles (stale "on call").
+			// endIfAlone no-ops on a phone room (the remaining leg is the agent
+			// serving the port caller) or when ≥2 participants remain. It removes the
+			// leg via Leave(), which re-enters here with the room now empty → Ended.
+			s.endIfAlone(e.Room)
 		}
 	}
 
