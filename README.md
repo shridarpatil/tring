@@ -5,7 +5,7 @@
 
 **Open-source, API-first voice calling for any CRM.** Drop a `<script>` tag and a `<button>` into your app — your agents make and take real phone calls in minutes, not weeks. Multi-tenant. India-primary. Self-host or hosted, same binaries.
 
-> v0.1 (working call button demo) is the current milestone. See [docs/PHASE_1_PLAN.md](docs/PHASE_1_PLAN.md) for the 10-day plan that got us here. Phase 2 work tracked in CLAUDE.md.
+> v0.1 (working call button demo) is the current milestone. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the 10-day plan that got us here. Phase 2 work tracked in CLAUDE.md.
 
 ## Why Tring
 
@@ -105,7 +105,7 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
      http://localhost:8085/v1/numbers
 ```
 
-The next outbound call routes through the new trunk and stamps the new DID as caller-ID. See [`docs/PHASE_1_DAY_9_EXOTEL.md`](docs/PHASE_1_DAY_9_EXOTEL.md) for procurement and `<PROV>_REGISTER=true` activation.
+The next outbound call routes through the new trunk and stamps the new DID as caller-ID. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for procurement and `<PROV>_REGISTER=true` activation.
 
 ## Architecture
 
@@ -119,7 +119,7 @@ Browser (CRM)  ──raw WebRTC──►  Gateway (:8087)  ──SIP/RTP──�
         webhook fan-out)                                     CDR updates, webhook fan-out)
 ```
 
-Three Go services share one Postgres. The API is stateless and horizontally scalable. The gateway bridges browser WebRTC into the **private** FreeSWITCH (browsers never touch SIP). The orchestrator holds a persistent ESL connection and processes FreeSWITCH events into CDR rows + webhook deliveries. See [`docs/ADR-001-webrtc-gateway.md`](docs/ADR-001-webrtc-gateway.md).
+Three Go services share one Postgres. The API is stateless and horizontally scalable. The gateway bridges browser WebRTC into the **private** FreeSWITCH (browsers never touch SIP). The orchestrator holds a persistent ESL connection and processes FreeSWITCH events into CDR rows + webhook deliveries. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 | Path | What it is |
 |------|-----------|

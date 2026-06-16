@@ -20,10 +20,18 @@ import (
 	"os"
 	"time"
 
+	"github.com/whatomate/tring/internal/blobstore"
 	"github.com/whatomate/tring/internal/cache"
+	"github.com/whatomate/tring/internal/callcdr"
 	"github.com/whatomate/tring/internal/config"
+	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/flowstore"
 	"github.com/whatomate/tring/internal/gateway"
 	"github.com/whatomate/tring/internal/logging"
+	"github.com/whatomate/tring/internal/media/control"
+	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/whatomate/tring/internal/media/signaling"
+	"github.com/whatomate/tring/internal/presence"
 )
 
 func main() {
@@ -120,13 +128,118 @@ func main() {
 		return
 	}
 
+	// Pion SFU media plane (internal/media) — the N-party web-calling path, served
+	// on its own /rtc signaling port alongside the legacy WebRTC↔FS bridge. Same
+	// ICE/TURN/public-IP config as the bridge; shares the media UDP range.
+	var sfuICE []sfu.ICEServer
+	if stun := k.String("stun_url"); stun != "" {
+		sfuICE = append(sfuICE, sfu.ICEServer{URLs: []string{stun}})
+	}
+	if turnURL != "" && turnSecret == "" {
+		sfuICE = append(sfuICE, sfu.ICEServer{
+			URLs:       []string{turnURL},
+			Username:   k.String("turn_username"),
+			Credential: k.String("turn_password"),
+		})
+	}
+	mediaSFU, err := sfu.New(sfu.Config{
+		ICEServers: sfuICE,
+		UDPPortMin: uint16(k.Int("gateway_udp_min")),
+		UDPPortMax: uint16(k.Int("gateway_udp_max")),
+		PublicIP:   k.String("public_ip"),
+		RelayOnly:  k.Bool("turn_relay_only"),
+		TURNURL:    turnURL,
+		TURNSecret: turnSecret,
+		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Logger:     logger,
+	})
+	if err != nil {
+		logger.Error("sfu init failed", "err", err)
+		os.Exit(1)
+	}
+	// Read-only DB for loading IVR flows (web-to-web IVR runs on the media plane).
+	// Best-effort: if the DB is unreachable, web calls are plain peer-to-peer
+	// (no IVR) rather than failing the gateway.
+	var flows signaling.FlowLoader
+	var teams signaling.TeamResolver
+	var calls signaling.CallLog
+	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
+		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
+	} else {
+		store := flowstore.New(database)
+		flows, teams = store, store
+		// CDRs + recordings for media-plane calls (web + phone): same calls table,
+		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
+		blob, berr := blobstore.New(blobstore.Config{
+			Bucket:    k.String("s3_bucket"),
+			Region:    k.String("s3_region"),
+			Endpoint:  k.String("s3_endpoint"),
+			AccessKey: k.String("s3_access_key"),
+			SecretKey: k.String("s3_secret_key"),
+			Prefix:    k.String("s3_prefix"),
+			UseSSL:    k.Bool("s3_use_ssl"),
+		})
+		if berr != nil {
+			logger.Warn("S3 recording storage disabled (config error)", "err", berr)
+		}
+		calls = callcdr.New(database, blob, k.String("recordings_dir"), logger)
+	}
+
+	sig := signaling.New(signaling.Config{
+		SFU:        mediaSFU,
+		JWTSecret:  []byte(k.String("jwt_secret")),
+		STUNURL:    k.String("stun_url"),
+		TURNURL:    turnURL,
+		TURNSecret: turnSecret,
+		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Grace:      time.Duration(k.Int("media_grace_seconds")) * time.Second,
+		DevTokens:  k.Bool("rtc_dev_tokens"),
+		Flows:      flows,
+		Teams:      teams,
+		AudioDir:   k.String("audio_dir"),
+		Tokens:     redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
+		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard
+		Calls:      calls,                    // CDRs + recordings (one path for web + phone)
+		Logger:     logger,
+	})
+	// Edge side of the media control channel (Phase 2). When control_url is set,
+	// the gateway dials the orchestrator (BRAIN) so web-call IVR/routing can be
+	// driven remotely. 2a only plumbs it — commands are logged; 2b/2c add behavior.
+	// Disabled (no dial) when control_url is empty.
+	if controlURL := k.String("control_url"); controlURL != "" {
+		ctrl := control.NewClient(controlURL, k.String("control_secret"), sig.HandleControlCommand, logger)
+		sig.SetControl(ctrl)
+		go ctrl.Run(context.Background())
+	}
+
+	// Phone plug (Phase 4): inbound DID calls delivered by the PSTN adapter (FS
+	// today — swappable behind room.PstnGateway) become rooms running the same
+	// IVR as web calls. Needs the DB to resolve DID → tenant + flow.
+	if pstn := gw.Pstn(); pstn != nil {
+		if store, ok := flows.(*flowstore.Store); ok && store != nil {
+			sig.AttachPstn(pstn, store)
+		} else {
+			logger.Warn("pstn plug present but DB unavailable — phone calls disabled")
+		}
+	}
+
 	addr := k.String("gateway_addr")
+	sigHandler := sig.Handler()
+
+	// One listener serves everything on the gateway port: the pion media plane
+	// (/rtc) plus the legacy bridge (/webrtc/offer, /agent/ws). The SDK/widgets
+	// need only this single public URL (TRING_GATEWAY_PUBLIC_URL).
+	root := http.NewServeMux()
+	root.Handle("/rtc", sigHandler)
+	root.Handle("/rtc/", sigHandler)
+	root.Handle("/", gw.Handler())
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           gw.Handler(),
+		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	logger.Info("gateway listening", "addr", addr)
+	logger.Info("gateway listening", "addr", addr, "rtc", "also on this port at /rtc")
 	if err := srv.ListenAndServe(); err != nil {
 		logger.Error("gateway serve failed", "err", err)
 		os.Exit(1)

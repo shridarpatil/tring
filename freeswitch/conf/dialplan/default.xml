@@ -57,6 +57,21 @@
       </condition>
     </extension>
 
+    <!-- PSTN plug (Phase 4, docs/MEDIA_CONVERGENCE_PLAN.md): with
+         tring_pstn_via_gateway=true (vars.xml), inbound DIDs go to the MEDIA
+         PLANE instead of the orchestrator's ESL IVR — FS's only job is the
+         carrier edge (terminate the trunk, transcode G.711↔Opus) and the call
+         runs on pion: same IVR as web, transfer rings web agents, the dialed
+         DID rides X-Tring-DID. Sits ABOVE tring_ivr so it wins when enabled;
+         the gateway leg negotiates Opus, so keep opus in the profile codec
+         prefs. Default false = the legacy ESL path below. -->
+    <extension name="tring_pstn_plug">
+      <condition field="${tring_pstn_via_gateway}" expression="^true$"/>
+      <condition field="destination_number" expression="^\d+$">
+        <action application="bridge" data="{sip_h_X-Tring-DID=${destination_number},absolute_codec_string=OPUS}sofia/gateway/tring-gw/pstn"/>
+      </condition>
+    </extension>
+
     <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
          listener BEFORE answering, so the executor decides whether to
          answer/playback/bridge/etc. based on the flow attached to this

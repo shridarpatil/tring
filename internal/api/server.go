@@ -57,6 +57,9 @@ type Config struct {
 	// latter. Defaults supplied by internal/config.
 	AgentTransport string
 	AgentGateway   string
+	// AgentJitter sets jitterbuffer_msec on the gateway agent leg ("min:max"
+	// adaptive ms; "" disables). Smooths the agent's internet/TURN uplink.
+	AgentJitter string
 
 	// GatewayPublicURL is the browser-reachable base URL of the media gateway,
 	// returned to visitors in a guest mint response (ADR-001 M5).
@@ -101,6 +104,7 @@ type Server struct {
 	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
 	agentTransport string
 	agentGateway   string
+	agentJitter    string
 	// gatewayPublicURL: browser-reachable gateway base URL, returned to
 	// visitors in a guest mint response.
 	gatewayPublicURL string
@@ -167,6 +171,7 @@ func NewServer(cfg Config) *Server {
 		presence:         presence.New(cfg.Cache),
 		agentTransport:   cfg.AgentTransport,
 		agentGateway:     cfg.AgentGateway,
+		agentJitter:      cfg.AgentJitter,
 		gatewayPublicURL: cfg.GatewayPublicURL,
 		audioDir:         cfg.AudioDir,
 		audioFSDir:       cfg.AudioFSDir,

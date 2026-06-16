@@ -5,7 +5,7 @@ services:
     # production. Trade-off: editing freeswitch/conf now needs a rebuild
     # (`make images` or `docker compose build freeswitch`) + recreate, not just
     # a restart. Only the dynamic trunk dir + sounds/recordings stay as volumes.
-    image: ghcr.io/shridarpatil/tring-freeswitch:${TRING_TAG:-develop}
+    image: shridh0r/tring-freeswitch:${TRING_TAG:-develop}
     build:
       context: ./freeswitch
       dockerfile: Dockerfile
@@ -116,7 +116,7 @@ services:
     # main push and a versioned tag (:v0.1.0) on each release. Pin via
     # `TRING_TAG=v0.1.0` in .env. Local source-tree dev: bypass with
     # `docker compose up -d --build api`.
-    image: ghcr.io/shridarpatil/tring-api:${TRING_TAG:-develop}
+    image: shridh0r/tring-api:${TRING_TAG:-develop}
     build:
       context: .
       args:
@@ -157,7 +157,7 @@ services:
     # NOTE: also mounts the recordings volume (rw) below — the orchestrator
     # uploads finished recordings to S3 on RECORD_STOP and deletes the local
     # spool, so it needs read+write access to the same files FreeSWITCH wrote.
-    image: ghcr.io/shridarpatil/tring-orchestrator:${TRING_TAG:-develop}
+    image: shridh0r/tring-orchestrator:${TRING_TAG:-develop}
     build:
       context: .
       args:
@@ -185,7 +185,7 @@ services:
   # range + SIP UAS exchange media with FS and browsers without NAT hairpinning
   # (same reason FS uses it).
   gateway:
-    image: ghcr.io/shridarpatil/tring-gateway:${TRING_TAG:-develop}
+    image: shridh0r/tring-gateway:${TRING_TAG:-develop}
     build:
       context: .
       args:
@@ -200,6 +200,14 @@ services:
     env_file:
       - path: .env
         required: false
+    volumes:
+      # Tenant sound library — the api writes uploaded prompts here; the gateway
+      # reads + plays them on the web (pion) plane. Same shared dir as api +
+      # FreeSWITCH (audio_dir == /usr/share/freeswitch/sounds/tring), read-only.
+      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
+      # Call recordings — rw: the gateway records media-plane calls (web + phone
+      # plug) into the same spool the api serves (and uploads to S3 when set).
+      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
     restart: unless-stopped
 
   # Local SIP trunk simulator — stands in for the Tata SBC during dev.

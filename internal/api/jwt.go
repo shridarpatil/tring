@@ -93,26 +93,6 @@ func (s *Server) IssueAgentToken(agentID, tenantID uuid.UUID, sipUser, sipDomain
 	return signed, exp, nil
 }
 
-// ParseGatewayCallToken verifies a gateway call token against the shared
-// secret (the gateway does the same independently). Used in tests.
-func (s *Server) ParseGatewayCallToken(raw string) (*GatewayCallClaims, error) {
-	var c GatewayCallClaims
-	_, err := jwt.ParseWithClaims(raw, &c, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
-		return s.jwtSecret, nil
-	},
-		jwt.WithIssuer(jwtIssuer),
-		jwt.WithAudience(gatewayAudience),
-		jwt.WithValidMethods([]string{"HS256"}),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
 func (s *Server) ParseAgentToken(raw string) (*AgentClaims, error) {
 	var c AgentClaims
 	_, err := jwt.ParseWithClaims(raw, &c, func(t *jwt.Token) (interface{}, error) {

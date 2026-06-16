@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,9 +29,27 @@ import (
 // maxAudioBytes caps an upload so a huge file can't exhaust disk/memory.
 const maxAudioBytes = 10 << 20 // 10 MiB
 
-// audioFormats maps an accepted extension to the stored format tag. WAV plays
-// natively; MP3 needs mod_shout (enabled in modules.conf.xml).
-var audioFormats = map[string]string{".wav": "wav", ".mp3": "mp3"}
+// audioInputExts are the upload formats we accept. We transcode to Opus-Ogg on
+// upload (transcodeToOpusOgg) because the pion media plane plays Opus-in-Ogg
+// only — so an uploaded prompt works on BOTH the web plane and FreeSWITCH.
+var audioInputExts = map[string]bool{".wav": true, ".mp3": true, ".ogg": true, ".m4a": true}
+
+// transcodeToOpusOgg converts any accepted upload to 48 kHz mono Opus-in-Ogg via
+// ffmpeg — the format the pion prompt player decodes. Returns ErrNoFFmpeg if
+// ffmpeg isn't installed, so the caller can fall back to storing the original.
+func transcodeToOpusOgg(ctx context.Context, src, dst string) error {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return errNoFFmpeg
+	}
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", src,
+		"-ac", "1", "-ar", "48000", "-c:a", "libopus", dst)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("ffmpeg transcode: %w: %s", err, b)
+	}
+	return nil
+}
+
+var errNoFFmpeg = errors.New("ffmpeg not found")
 
 type Audio struct {
 	ID        uuid.UUID `json:"id"`
@@ -69,9 +90,8 @@ func (s *Server) handleUploadAudio(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	ext := strings.ToLower(filepath.Ext(hdr.Filename))
-	format, ok := audioFormats[ext]
-	if !ok {
-		writeError(w, http.StatusBadRequest, "only .wav and .mp3 files are supported")
+	if !audioInputExts[ext] {
+		writeError(w, http.StatusBadRequest, "only .wav, .mp3, .ogg, .m4a files are supported")
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -103,7 +123,28 @@ func (s *Server) handleUploadAudio(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "upload failed or exceeds 10MB")
 		return
 	}
-	fsPath := s.audioFSDir + "/" + t.ID.String() + "/" + fileID.String() + ext
+
+	// Transcode to Opus-Ogg so the prompt plays on the pion web plane (it decodes
+	// Opus only). Replaces the original on success; if ffmpeg is absent we keep
+	// the original (works for FreeSWITCH, just not the web plane).
+	storedExt, format := ext, strings.TrimPrefix(ext, ".")
+	if ext != ".ogg" {
+		oggPath := filepath.Join(tenantDir, fileID.String()+".ogg")
+		if terr := transcodeToOpusOgg(r.Context(), diskPath, oggPath); terr == nil {
+			_ = os.Remove(diskPath)
+			diskPath, storedExt, format = oggPath, ".ogg", "ogg"
+			if fi, statErr := os.Stat(oggPath); statErr == nil {
+				written = fi.Size()
+			}
+		} else if errors.Is(terr, errNoFFmpeg) {
+			s.log.Warn("audio: ffmpeg not found — stored as-is; won't play on the web plane", "file", hdr.Filename)
+		} else {
+			s.log.Warn("audio: transcode failed — stored original", "err", terr)
+		}
+	} else {
+		format = "ogg"
+	}
+	fsPath := s.audioFSDir + "/" + t.ID.String() + "/" + fileID.String() + storedExt
 
 	var a Audio
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAudio,

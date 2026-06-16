@@ -70,6 +70,21 @@ var defaults = map[string]any{
 	"gateway_addr":       ":8087",
 	"gateway_udp_min":    10000,
 	"gateway_udp_max":    10100,
+	// media_grace_seconds is the room reconnect window: how long a dropped
+	// participant's slot is held for a page-refresh. The pion media-plane
+	// signaling WebSocket (/rtc) is served by cmd/gateway on gateway_addr.
+	"media_grace_seconds": 30,
+	// rtc_dev_tokens mounts an UNAUTHENTICATED agent-token mint at /rtc/dev-token
+	// so the local test client (examples/rtc-test.html) works with `make gateway`
+	// alone. Dev only — never enable in production.
+	"rtc_dev_tokens": false,
+	// Brain↔edge control channel (Phase 2, docs/ARCHITECTURE.md). The
+	// orchestrator (BRAIN) serves control_addr; the gateway (EDGE) dials
+	// control_url; both gated by control_secret. All empty = disabled (the gateway
+	// keeps running its own IVR until 2b/2c) — existing deploys are unaffected.
+	"control_addr":   "", // orchestrator: control WS listen addr, e.g. ":8089"
+	"control_url":    "", // gateway: orchestrator control URL to dial, e.g. "ws://127.0.0.1:8089/control"
+	"control_secret": "", // shared secret for the control channel
 	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
 	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
 	"gateway_sip_port":  5090,
@@ -96,6 +111,13 @@ var defaults = map[string]any{
 	// pointing at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
 	"agent_transport": "gateway",
 	"agent_gateway":   "tring-gw",
+	// agent_jitter_msec installs a FreeSWITCH jitter buffer (jitterbuffer_msec)
+	// on the gateway agent leg so the agent's internet/TURN uplink — which
+	// arrives jittered/reordered/lossy — is smoothed (and Opus inband-FEC made
+	// usable) before it's bridged to the far party. Without it, packet jitter is
+	// heard as breaks in the agent's voice at the other end. "min:max" adaptive
+	// ms; "" disables (fine for agents on the same LAN as the gateway).
+	"agent_jitter_msec": "60:200",
 	// How long (seconds) an inbound agent leg rings at the gateway before it
 	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
 	"gateway_agent_ring_timeout": 45,
