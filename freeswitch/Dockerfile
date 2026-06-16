@@ -32,3 +32,10 @@ COPY conf/sip_profiles/external/tring-gw.xml     /usr/share/freeswitch/conf/vani
 # Dynamic trunk dir stays a runtime volume — just ensure the (empty) path exists.
 RUN mkdir -p /usr/share/freeswitch/conf/vanilla/sip_profiles/external/dynamic \
  && mkdir -p /etc/freeswitch/sip_profiles/external/dynamic
+
+# Recordings spool: seed the volume world-writable (sticky) so the NON-ROOT
+# distroless services (gateway: media-plane recordings; orchestrator: S3 upload
+# + cleanup) can write alongside root-owned FreeSWITCH recordings. A named
+# volume inherits this dir's mode on first creation.
+RUN mkdir -p /usr/share/freeswitch/recordings/tring \
+    && chmod 1777 /usr/share/freeswitch/recordings/tring
