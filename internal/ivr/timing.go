@@ -1,4 +1,4 @@
-package orchestrator
+package ivr
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// evalTimingOutcome decides a Timing node's branch — "in_hours" or
+// EvalTimingOutcome decides a Timing node's branch — "in_hours" or
 // "out_of_hours" — for time t, reading the node's `schedule` config. The UI
 // saves a per-weekday list: [{day, enabled, start_time "HH:MM", end_time "HH:MM"}].
 // A day with enabled=false (e.g. Saturday/Sunday marked off) is always closed;
@@ -16,7 +16,7 @@ import (
 //
 // t is evaluated in its own location (server-local for a live call). Per-tenant
 // timezone is a follow-up; today the deployment TZ (e.g. Asia/Kolkata) governs.
-func evalTimingOutcome(config map[string]interface{}, t time.Time) string {
+func EvalTimingOutcome(config map[string]interface{}, t time.Time) string {
 	sched, ok := config["schedule"].([]interface{})
 	if !ok || len(sched) == 0 {
 		return "in_hours" // no schedule configured → open

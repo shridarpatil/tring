@@ -11,35 +11,8 @@ import (
 	"github.com/whatomate/tring/internal/dbtest"
 )
 
-// recordStep is pure (no DB / no ESL), so this asserts the journey shape that
-// feeds calls.ivr_path and the console — including the "transfer A no-answer,
-// then transfer B answered" sequence the call log needs to show.
-func TestRecordStepBuildsJourney(t *testing.T) {
-	st := &callState{}
-
-	st.stepAction, st.stepDTMF = "prompt_dtmf", "1"
-	st.recordStep(&ivrNode{ID: "m1", Type: "menu"}, "digit:1")
-
-	st.stepAction, st.stepDetail, st.stepDTMF = "transfer", "alice", ""
-	st.recordStep(&ivrNode{ID: "t1", Type: "transfer"}, "no_answer")
-
-	st.stepAction, st.stepDetail = "transfer", "bob"
-	st.recordStep(&ivrNode{ID: "t2", Type: "transfer"}, "completed")
-
-	if len(st.steps) != 3 {
-		t.Fatalf("steps = %d, want 3", len(st.steps))
-	}
-	want := []SimStep{
-		{NodeID: "m1", NodeType: "menu", Action: "prompt_dtmf", DTMFInput: "1", Outcome: "digit:1"},
-		{NodeID: "t1", NodeType: "transfer", Action: "transfer", Detail: "alice", Outcome: "no_answer"},
-		{NodeID: "t2", NodeType: "transfer", Action: "transfer", Detail: "bob", Outcome: "completed"},
-	}
-	for i, w := range want {
-		if st.steps[i] != w {
-			t.Errorf("step %d = %+v, want %+v", i, st.steps[i], w)
-		}
-	}
-}
+// (The journey-shape assertion moved to internal/ivr: TestWalkRecordsRichSteps,
+// since step recording is now owned by the shared ivr.Walk.)
 
 // recordInboundCall must insert a logged calls row (direction=inbound,
 // status=ringing) so inbound/guest web calls show up in the call log —
@@ -118,9 +91,9 @@ func TestAgentLegTagsSIP(t *testing.T) {
 // With the "gateway" transport the leg routes to the media gateway as a SIP
 // endpoint and carries the tenant id as a SIP header (ADR-001 M4b).
 func TestAgentLegGatewayTransport(t *testing.T) {
-	e := (&Executor{}).WithAgentTransport("gateway", "tring-gw")
+	e := (&Executor{}).WithAgentTransport("gateway", "tring-gw", "60:200")
 	got := e.agentLeg("alice", "d.tring.local", "t1", "")
-	want := "[tring_agent=alice,sip_h_X-Tring-Tenant=t1]sofia/gateway/tring-gw/alice"
+	want := "[jitterbuffer_msec=60:200,tring_agent=alice,sip_h_X-Tring-Tenant=t1,sip_h_X-Tring-Agent-Sip=alice]sofia/gateway/tring-gw/alice"
 	if got != want {
 		t.Errorf("agentLeg = %q, want %q", got, want)
 	}

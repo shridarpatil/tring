@@ -42,6 +42,7 @@ const ICON_PHONE = `<svg viewBox="0 0 24 24" width="22" height="22" fill="curren
 const ICON_USER = `<svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4 0-9 2-9 6v1h18v-1c0-4-5-6-9-6z"/></svg>`;
 const ICON_KEYPAD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="5" r="1.7"/><circle cx="12" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="12" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg>`;
 const ICON_TRANSFER = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 7l-1.4 1.4L17.2 11H8v2h9.2l-2.6 2.6L16 17l5-5-5-5zM4 5h7V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7v-2H4V5z"/></svg>`;
+const ICON_SCREEN = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v2H8v2h8v-2h-2v-2h6a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 12H4V6h16v10z"/></svg>`;
 
 // Transfer targets the agent can pick from (online agents by name + teams).
 interface TransferTargets {
@@ -188,6 +189,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
     else panel.show(call, "calling");
   });
   tring.on("call:answered", ({ call }) => panel.setActive(call, "connected"));
+  tring.on("call:remote-video", ({ stream }) => panel.setRemoteVideo(stream));
   tring.on("call:ended", () => panel.hide());
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
 
@@ -249,6 +251,7 @@ interface Panel {
   showIncoming(call: Call): void;
   setActive(call: Call, status: string): void;
   setStatus(state: string, text: string): void;
+  setRemoteVideo(stream: MediaStream | null): void;
   hide(): void;
 }
 
@@ -274,6 +277,7 @@ function createPanel(control?: CallControl): Panel {
       <div class="tring-panel-to"></div>
       <div class="tring-panel-sub"></div>
     </div>
+    <div class="tring-panel-row tring-panel-video"><video class="tring-remote-video" autoplay playsinline></video></div>
     <div class="tring-panel-row tring-panel-dialed"></div>
     <div class="tring-panel-row tring-panel-picker"></div>
     <div class="tring-panel-row tring-panel-dialpad">${dtmfButtonsHTML}</div>
@@ -284,6 +288,7 @@ function createPanel(control?: CallControl): Panel {
     <div class="tring-panel-row tring-panel-actions">
       <button type="button" class="tring-ctl tring-mute" title="Mute" aria-label="Mute">${ICON_MIC}</button>
       <button type="button" class="tring-ctl tring-keypad" title="Keypad" aria-label="Keypad">${ICON_KEYPAD}</button>
+      <button type="button" class="tring-ctl tring-share" title="Share screen" aria-label="Share screen">${ICON_SCREEN}</button>
       <button type="button" class="tring-ctl tring-hold" title="Hold" aria-label="Hold">${ICON_HOLD}</button>
       <button type="button" class="tring-ctl tring-transfer" title="Transfer" aria-label="Transfer">${ICON_TRANSFER}</button>
       <button type="button" class="tring-ctl tring-hangup" title="Hang up" aria-label="Hang up">${ICON_PHONE}</button>
@@ -298,6 +303,8 @@ function createPanel(control?: CallControl): Panel {
   const holdBtn = root.querySelector<HTMLButtonElement>(".tring-hold")!;
   const transferBtn = root.querySelector<HTMLButtonElement>(".tring-transfer")!;
   const keypadBtn = root.querySelector<HTMLButtonElement>(".tring-keypad")!;
+  const shareBtn = root.querySelector<HTMLButtonElement>(".tring-share")!;
+  const remoteVideo = root.querySelector<HTMLVideoElement>(".tring-remote-video")!;
   const pickerEl = root.querySelector<HTMLElement>(".tring-panel-picker")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
   const acceptBtn = root.querySelector<HTMLButtonElement>(".tring-accept")!;
@@ -339,6 +346,12 @@ function createPanel(control?: CallControl): Panel {
     holdBtn.disabled = false;
     transferBtn.disabled = false;
     keypadBtn.classList.remove("is-active");
+    shareBtn.innerHTML = ICON_SCREEN;
+    shareBtn.title = "Share screen";
+    shareBtn.classList.remove("is-active");
+    shareBtn.disabled = false;
+    remoteVideo.srcObject = null;
+    root.classList.remove("tring-has-video");
     root.classList.remove("tring-keypad-open");
     root.classList.remove("tring-picker-open");
     dialedEl.textContent = "";
@@ -364,22 +377,39 @@ function createPanel(control?: CallControl): Panel {
     const open = root.classList.toggle("tring-keypad-open");
     keypadBtn.classList.toggle("is-active", open);
   });
-  holdBtn.addEventListener("click", async () => {
+  // Screen share: toggle the agent's own screen to the caller. getDisplayMedia
+  // must run in this click gesture; on cancel we just restore the button.
+  shareBtn.addEventListener("click", async () => {
     if (!active) return;
-    if (!control) {
-      console.warn("[tring] Call control needs the Tring API base (auto-derived from agent.js src, or set data-api-base)");
+    if (active.sharingScreen) {
+      active.stopScreen();
+      shareBtn.innerHTML = ICON_SCREEN;
+      shareBtn.title = "Share screen";
+      shareBtn.classList.remove("is-active");
       return;
     }
-    const want = !held;
-    holdBtn.disabled = true;
-    const ok = await control.hold(want ? "hold" : "resume");
-    holdBtn.disabled = false;
-    if (ok) {
-      held = want;
-      holdBtn.innerHTML = held ? ICON_RESUME : ICON_HOLD;
-      holdBtn.title = held ? "Resume" : "Hold";
-      holdBtn.classList.toggle("is-active", held);
+    shareBtn.disabled = true;
+    try {
+      await active.shareScreen();
+      shareBtn.title = "Stop sharing";
+      shareBtn.classList.add("is-active");
+    } catch {
+      /* user cancelled the screen-picker */
+    } finally {
+      shareBtn.disabled = false;
     }
+  });
+  holdBtn.addEventListener("click", () => {
+    if (!active) return;
+    // Hold/resume act on the live call over /rtc (the brain injects MOH); the
+    // edit is optimistic — there's no round-trip ack.
+    const want = !held;
+    if (want) active.hold();
+    else active.resume();
+    held = want;
+    holdBtn.innerHTML = held ? ICON_RESUME : ICON_HOLD;
+    holdBtn.title = held ? "Resume" : "Hold";
+    holdBtn.classList.toggle("is-active", held);
   });
   // Transfer: open a picker of online agents + teams (fetched live), pick one
   // to blind-transfer the caller. On success the original agent's leg ends.
@@ -411,21 +441,18 @@ function createPanel(control?: CallControl): Panel {
     html += `<button class="tring-picker-cancel">Cancel</button>`;
     pickerEl.innerHTML = html;
   });
-  pickerEl.addEventListener("click", async (ev) => {
+  pickerEl.addEventListener("click", (ev) => {
     const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>("button");
-    if (!btn || !control) return;
+    if (!btn) return;
     if (btn.classList.contains("tring-picker-cancel")) {
       closePicker();
       return;
     }
-    if (!btn.classList.contains("tring-picker-item")) return;
+    if (!btn.classList.contains("tring-picker-item") || !active) return;
     closePicker();
-    const body = btn.dataset.sip ? { to_sip: btn.dataset.sip } : { to_team: btn.dataset.team };
-    const ok = await control.transfer(body);
-    if (!ok) {
-      // eslint-disable-next-line no-alert
-      alert("Transfer failed — the target may be offline.");
-    }
+    // Blind-transfer over /rtc; when the target answers, the brain drops this
+    // leg → "call:ended". The target list still comes from the API (targets()).
+    active.transfer(btn.dataset.sip ? { toSip: btn.dataset.sip } : { toTeam: btn.dataset.team });
   });
   acceptBtn.addEventListener("click", async () => {
     ringer.stop();
@@ -496,6 +523,10 @@ function createPanel(control?: CallControl): Panel {
       subEl.textContent = text;
       root.setAttribute("data-state", state);
     },
+    setRemoteVideo(stream) {
+      remoteVideo.srcObject = stream;
+      root.classList.toggle("tring-has-video", stream !== null);
+    },
     hide() {
       ringer.stop();
       stopTimer();
@@ -565,6 +596,13 @@ function injectStyles(): void {
     }
     #${PANEL_ID} .tring-panel-row { margin-bottom: .5rem; }
     #${PANEL_ID} .tring-panel-row:last-child { margin-bottom: 0; }
+    /* Remote screen-share — hidden until the other party shares a video track. */
+    #${PANEL_ID} .tring-panel-video { display: none; }
+    #${PANEL_ID}.tring-has-video .tring-panel-video { display: block; }
+    #${PANEL_ID} .tring-remote-video {
+      width: 100%; border-radius: 8px; background: #000;
+      max-height: 200px; object-fit: contain;
+    }
     /* Mobile-phone-style header: avatar, big caller, status/timer sub-line. */
     #${PANEL_ID} .tring-panel-header {
       display: flex; flex-direction: column; align-items: center;

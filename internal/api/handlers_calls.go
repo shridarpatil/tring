@@ -95,6 +95,7 @@ func (s *Server) agentALeg(sipUsername, sipDomain, tenantID, label string) strin
 		TenantID:   tenantID,
 		Label:      label,
 		AutoAnswer: true,
+		JitterMsec: s.agentJitter,
 	})
 }
 

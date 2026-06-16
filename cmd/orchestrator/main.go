@@ -16,9 +16,11 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/percipia/eslgo"
 
@@ -26,7 +28,9 @@ import (
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
+	"github.com/whatomate/tring/internal/flowstore"
 	"github.com/whatomate/tring/internal/logging"
+	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/orchestrator"
 )
 
@@ -84,7 +88,7 @@ func main() {
 
 	ivrAddr := k.String("ivr_addr")
 	exec := orchestrator.NewExecutor(dbase).WithCache(flowCache).
-		WithAgentTransport(k.String("agent_transport"), k.String("agent_gateway")).
+		WithAgentTransport(k.String("agent_transport"), k.String("agent_gateway"), k.String("agent_jitter_msec")).
 		WithESL(k.String("esl_addr"), k.String("esl_password")).
 		WithLogger(logger)
 	go func() {
@@ -93,6 +97,29 @@ func main() {
 			logger.Error("ivr listener exited", "err", err)
 		}
 	}()
+
+	// Brain side of the media control channel (Phase 2). When control_addr is set,
+	// the orchestrator serves the edge (gateway) so it can run web-call IVR/routing
+	// remotely. 2a only plumbs it — events are logged; 2b/2c add behavior. Disabled
+	// (no listener) when control_addr is empty.
+	if controlAddr := k.String("control_addr"); controlAddr != "" {
+		ctrl := control.NewServer(k.String("control_secret"), nil, logger)
+		// The brain runs web/WhatsApp-call IVR here (reusing ivrdrive over the
+		// channel); the edge only moves media. Flows load from the same DB the
+		// phone IVR uses.
+		store := flowstore.New(dbase)
+		web := orchestrator.NewWebIVR(ctrl, store, store, logger)
+		ctrl.SetOnEvent(web.OnEvent)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/control", ctrl.Handler())
+		srv := &http.Server{Addr: controlAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		go func() {
+			logger.Info("control channel listening", "addr", controlAddr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("control listener exited", "err", err)
+			}
+		}()
+	}
 
 	logger.Info("orchestrator starting")
 	if err := r.Run(ctx); err != nil {

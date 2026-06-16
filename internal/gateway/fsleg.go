@@ -185,6 +185,13 @@ func (f *fsClient) dial(ctx context.Context, flowID, clientRef string) (*fsLeg, 
 	if err != nil {
 		return nil, fmt.Errorf("rtp socket: %w", err)
 	}
+	// Enlarge the kernel UDP buffers (default can be ~200KB). The relay drains
+	// this socket one packet at a time from a single goroutine; a GC pause or
+	// scheduling hiccup briefly stalls it, and on a small buffer the kernel
+	// drops inbound RTP — heard as occasional audio breaks. 1MB absorbs the
+	// bursts. Best-effort: a failure to raise the limit isn't fatal.
+	_ = rtp.SetReadBuffer(1 << 20)
+	_ = rtp.SetWriteBuffer(1 << 20)
 	localPort := rtp.LocalAddr().(*net.UDPAddr).Port
 	f.log.Debug("rtp socket bound (advertised to fs)", "advert_ip", f.cfg.AdvertIP, "port", localPort)
 

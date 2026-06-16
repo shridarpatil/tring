@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Tring media plane — /rtc agent client</title>
+<style>
+  body { font: 14px system-ui, sans-serif; max-width: 560px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; }
+  label { display: block; margin: .5rem 0 .15rem; font-weight: 600; }
+  input { width: 100%; padding: .4rem; box-sizing: border-box; }
+  .row { display: flex; gap: .5rem; margin-top: 1rem; }
+  button { padding: .5rem 1rem; cursor: pointer; }
+  #status { margin-top: 1rem; padding: .5rem .75rem; border-radius: 6px; background: #eee; }
+  #ring { margin-top: 1rem; padding: 1rem; border: 2px solid #2a7; border-radius: 8px; display: none; }
+  #ring.show { display: block; }
+  small { color: #666; }
+</style>
+</head>
+<body>
+<h1>Tring media plane — /rtc agent</h1>
+<p><small>Go online here, then place a call from <code>rtc-test.html</code> into a
+flow whose Transfer node targets this agent (by <b>agent_sip</b> = your name, or a
+team you're in). You'll be rung; Accept to join the caller. Requires the gateway
+with <code>TRING_RTC_DEV_TOKENS=true</code>.</small></p>
+
+<label>Gateway base URL</label>
+<input id="base" value="http://localhost:8088" />
+<label>Your agent name (sip)</label>
+<input id="name" value="agent" />
+
+<div class="row">
+  <button id="online">Go online</button>
+  <button id="offline" disabled>Go offline</button>
+  <button id="hangup" disabled>Hang up</button>
+</div>
+
+<div id="status">offline</div>
+<div id="videos" style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:1rem"></div>
+
+<div id="ring">
+  <b>Incoming call</b> — <span id="from"></span>
+  <div class="row">
+    <button id="accept">Accept</button>
+    <button id="decline">Decline</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const setStatus = (s) => { $("status").textContent = s; };
+
+let token, presenceWS, callWS, pc, mic;
+let incoming = null; // { room }
+let remoteDescSet = false;
+const pendingIce = [];
+
+async function devToken(base, name) {
+  const r = await fetch(`${base.replace(/\/$/, "")}/rtc/dev-token?name=${encodeURIComponent(name)}`);
+  if (!r.ok) throw new Error(`dev-token failed (${r.status}) — TRING_RTC_DEV_TOKENS=true?`);
+  return (await r.json()).token;
+}
+const wsBase = () => $("base").value.replace(/\/$/, "").replace(/^http/, "ws");
+
+async function goOnline() {
+  $("online").disabled = true;
+  try { token = await devToken($("base").value, $("name").value); }
+  catch (e) { setStatus(e.message); $("online").disabled = false; return; }
+
+  presenceWS = new WebSocket(`${wsBase()}/rtc?token=${encodeURIComponent(token)}`);
+  presenceWS.onopen = () => presenceWS.send(JSON.stringify({ type: "register" }));
+  presenceWS.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "ready") { setStatus("online — waiting for calls"); $("offline").disabled = false; }
+    else if (m.type === "incoming") {
+      incoming = { room: m.room };
+      $("from").textContent = m.from || "(caller)";
+      $("ring").classList.add("show");
+      setStatus("ringing…");
+    }
+  };
+  presenceWS.onclose = () => { setStatus("offline"); $("online").disabled = false; $("offline").disabled = true; };
+  presenceWS.onerror = () => setStatus("presence socket error");
+}
+
+function goOffline() {
+  callTeardown();
+  if (presenceWS) presenceWS.close();
+  presenceWS = null;
+}
+
+async function accept() {
+  $("ring").classList.remove("show");
+  if (!incoming) return;
+  const room = incoming.room;
+  incoming = null;
+  // The mic needs a secure context (HTTPS); on http:// mobile Safari has no
+  // navigator.mediaDevices, so say so plainly.
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    setStatus("Microphone needs HTTPS — open this page over https:// (mic won't work over http on mobile).");
+    return;
+  }
+  setStatus("connecting…");
+  try { mic = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { setStatus("mic blocked: " + e.message); return; }
+
+  // A separate /rtc socket joins the call room (presence stays open for the next).
+  callWS = new WebSocket(`${wsBase()}/rtc?token=${encodeURIComponent(token)}`);
+  callWS.onopen = () => callWS.send(JSON.stringify({ type: "join", room, name: $("name").value }));
+  callWS.onmessage = (ev) => onCallMessage(JSON.parse(ev.data));
+  callWS.onclose = () => { setStatus("call ended"); callTeardown(); };
+  $("hangup").disabled = false;
+}
+
+function ensurePC(iceServers) {
+  if (pc) return pc;
+  pc = new RTCPeerConnection({ iceServers: iceServers || [] });
+  for (const track of mic.getTracks()) pc.addTrack(track, mic);
+  pc.onicecandidate = (e) => { if (e.candidate) callSend({ type: "ice", candidate: e.candidate.toJSON() }); };
+  pc.ontrack = (e) => {
+    const stream = e.streams[0] || new MediaStream([e.track]);
+    if (e.track.kind === "video") {
+      // The caller's screen share — render it so the agent can actually see it.
+      const v = document.createElement("video");
+      v.autoplay = true; v.playsInline = true; v.muted = true;
+      v.style.maxWidth = "100%"; v.srcObject = stream;
+      $("videos").appendChild(v);
+      e.track.onended = () => v.remove();
+    } else {
+      const a = document.createElement("audio");
+      a.autoplay = true; a.srcObject = stream;
+      document.body.appendChild(a);
+    }
+  };
+  pc.onconnectionstatechange = () => setStatus("call: " + pc.connectionState);
+  return pc;
+}
+
+function callSend(m) { if (callWS && callWS.readyState === 1) callWS.send(JSON.stringify(m)); }
+
+async function onCallMessage(m) {
+  switch (m.type) {
+    case "joined":
+      setStatus("joined call");
+      ensurePC(m.ice_servers);
+      break;
+    case "offer": {
+      const p = ensurePC();
+      await p.setRemoteDescription({ type: "offer", sdp: m.sdp });
+      remoteDescSet = true;
+      for (const c of pendingIce.splice(0)) await p.addIceCandidate(c);
+      const answer = await p.createAnswer();
+      await p.setLocalDescription(answer);
+      callSend({ type: "answer", sdp: answer.sdp });
+      break;
+    }
+    case "ice":
+      if (!m.candidate) break;
+      if (remoteDescSet) await pc.addIceCandidate(m.candidate);
+      else pendingIce.push(m.candidate);
+      break;
+    case "peer-left":
+      setStatus("caller left");
+      break;
+  }
+}
+
+function callTeardown() {
+  $("hangup").disabled = true;
+  remoteDescSet = false; pendingIce.length = 0;
+  if (pc) { try { pc.close(); } catch {} pc = null; }
+  if (mic) { mic.getTracks().forEach((t) => t.stop()); mic = null; }
+  if (callWS) { try { callWS.close(); } catch {} callWS = null; }
+  document.querySelectorAll("audio").forEach((a) => a.remove());
+  $("videos").innerHTML = "";
+}
+
+$("online").onclick = goOnline;
+$("offline").onclick = goOffline;
+$("accept").onclick = accept;
+$("decline").onclick = () => { $("ring").classList.remove("show"); incoming = null; setStatus("online — waiting for calls"); };
+$("hangup").onclick = () => { callSend({ type: "bye" }); callTeardown(); setStatus("online — waiting for calls"); };
+</script>
+</body>
+</html>
