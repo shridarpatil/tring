@@ -31,16 +31,19 @@ func TestRecordInboundCallInsertsRow(t *testing.T) {
 	}
 	exec.recordInboundCall(ctx, st)
 
-	var direction, status, from, to string
+	var direction, status, from, to, source string
 	err := f.DB.Pool.QueryRow(ctx, `
-		SELECT direction::text, status::text, from_number, to_number
-		FROM calls WHERE fs_uuid = $1
-	`, st.uuid).Scan(&direction, &status, &from, &to)
+		SELECT direction::text, status::text, from_number, to_number, source::text
+		FROM calls WHERE leg_id = $1
+	`, st.uuid).Scan(&direction, &status, &from, &to, &source)
 	if err != nil {
 		t.Fatalf("expected a calls row for the inbound call: %v", err)
 	}
 	if direction != "inbound" || status != "ringing" {
 		t.Errorf("direction/status = %s/%s, want inbound/ringing", direction, status)
+	}
+	if source != "phone" {
+		t.Errorf("source = %s, want phone", source)
 	}
 	if from != st.caller || to != st.called {
 		t.Errorf("from/to = %s/%s, want %s/%s", from, to, st.caller, st.called)
@@ -66,7 +69,7 @@ func TestSaveIVRPathPersists(t *testing.T) {
 
 	var raw []byte
 	if err := f.DB.Pool.QueryRow(ctx,
-		`SELECT ivr_path FROM calls WHERE fs_uuid = $1`, st.uuid,
+		`SELECT ivr_path FROM calls WHERE leg_id = $1`, st.uuid,
 	).Scan(&raw); err != nil {
 		t.Fatalf("read ivr_path: %v", err)
 	}

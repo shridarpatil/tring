@@ -13,7 +13,7 @@ const saved = ref(false);
 
 const strategy = ref("failover");
 const strategies = ["failover", "round_robin", "manual", "load_based"];
-// System hold music (an uploaded sound's fs_path; "" = built-in default).
+// System hold music (an uploaded sound's file_path; "" = built-in default).
 const holdMusic = ref("");
 // Record a call once the agent and client connect.
 const recordCalls = ref(true);

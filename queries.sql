@@ -163,22 +163,22 @@ SELECT record_calls FROM tenants WHERE id = $1;
 -- Mark a call as recording: point recording_url at the authenticated serve
 -- endpoint (keyed by the call's own id). Idempotent — only sets it once.
 UPDATE calls SET recording_url = '/v1/calls/' || id::text || '/recording'
-WHERE fs_uuid = $1 AND recording_url IS NULL;
+WHERE leg_id = $1 AND recording_url IS NULL;
 
 -- name: get-call-recording
 -- Resolve a call's recording location for the serve endpoint, scoped to the
 -- tenant so one tenant can't fetch another's. recording_s3_key NULL → serve the
--- local spool by fs_uuid; non-NULL → stream from S3.
-SELECT fs_uuid, recording_s3_key FROM calls WHERE id = $1 AND tenant_id = $2;
+-- local spool by leg_id; non-NULL → stream from S3.
+SELECT leg_id, recording_s3_key FROM calls WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-call-for-recording
--- Tenant + start time for an in-flight recording, by FreeSWITCH UUID — used by
+-- Tenant + start time for an in-flight recording, by call leg id — used by
 -- the orchestrator on RECORD_STOP to build the date-wise S3 key.
-SELECT tenant_id, started_at FROM calls WHERE fs_uuid = $1;
+SELECT tenant_id, started_at FROM calls WHERE leg_id = $1;
 
 -- name: set-call-recording-s3
 -- Mark a recording as stored in S3 (after a successful upload).
-UPDATE calls SET recording_s3_key = $2 WHERE fs_uuid = $1;
+UPDATE calls SET recording_s3_key = $2 WHERE leg_id = $1;
 
 -- name: get-tenant-hold-music
 SELECT hold_music FROM tenants WHERE id = $1;
@@ -188,16 +188,16 @@ SELECT hold_music FROM tenants WHERE id = $1;
 -- ===========================================================================
 
 -- name: create-audio
-INSERT INTO audio_assets (tenant_id, name, fs_path, format, size_bytes)
+INSERT INTO audio_assets (tenant_id, name, file_path, format, size_bytes)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, name, fs_path, format, size_bytes, created_at;
+RETURNING id, tenant_id, name, file_path, format, size_bytes, created_at;
 
 -- name: list-audio
-SELECT id, tenant_id, name, fs_path, format, size_bytes, created_at
+SELECT id, tenant_id, name, file_path, format, size_bytes, created_at
 FROM audio_assets WHERE tenant_id = $1 ORDER BY created_at DESC;
 
 -- name: get-audio
-SELECT id, tenant_id, name, fs_path, format, size_bytes, created_at
+SELECT id, tenant_id, name, file_path, format, size_bytes, created_at
 FROM audio_assets WHERE id = $1 AND tenant_id = $2;
 
 -- name: delete-audio
@@ -220,48 +220,49 @@ SELECT sip_username FROM agents WHERE id = $1 AND tenant_id = $2;
 SELECT sip_domain FROM tenants WHERE id = $1;
 
 -- name: create-call-outbound
-INSERT INTO calls (tenant_id, direction, status, from_number, to_number, agent_id, fs_uuid, fs_job_uuid)
-VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, $5, NULLIF($6,''))
-RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, fs_uuid, started_at;
+INSERT INTO calls (tenant_id, direction, status, from_number, to_number, agent_id, leg_id, job_uuid, source)
+VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, $5, NULLIF($6,''), 'phone'::call_source)
+RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, leg_id, started_at, source::text;
 
 -- name: create-call-bridge
 -- Two-PSTN-number bridge (click-to-call): no agent_id, both legs over the trunk.
-INSERT INTO calls (tenant_id, direction, status, from_number, to_number, fs_uuid, fs_job_uuid)
-VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5,''))
-RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, fs_uuid, started_at;
+INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, job_uuid, source)
+VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5,''), 'phone'::call_source)
+RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, leg_id, started_at, source::text;
 
 -- name: create-call-inbound
--- Inbound/IVR call (incl. guest web calls). The orchestrator inserts this
--- when a call lands on the IVR socket; the global event loop then settles it
--- (answered/ended/duration/webhooks) by fs_uuid, same as outbound.
-INSERT INTO calls (tenant_id, direction, status, from_number, to_number, fs_uuid, client_ref)
-VALUES ($1, 'inbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5, ''))
+-- Inbound/IVR call (incl. guest web calls). The orchestrator (phone) and the
+-- media plane (web) both insert this; the global event loop then settles it
+-- (answered/ended/duration/webhooks) by leg_id, same as outbound. $6 is the
+-- channel source ('web' | 'phone'), so callers must pass it.
+INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, client_ref, source)
+VALUES ($1, 'inbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5, ''), $6::call_source)
 RETURNING id;
 
 -- name: set-call-ivr-path
 -- Persist the IVR journey (node path + DTMF + transfer outcomes) for a call,
--- matched by the FreeSWITCH channel UUID. Best-effort; the column defaults to
+-- matched by the call leg id. Best-effort; the column defaults to
 -- '[]' so a missed write just shows an empty path.
-UPDATE calls SET ivr_path = $1::jsonb WHERE fs_uuid = $2;
+UPDATE calls SET ivr_path = $1::jsonb WHERE leg_id = $2;
 
 -- name: set-call-agent
 -- Stamp the agent who answered an inbound/IVR call (on transfer connect), so
 -- the call log shows who handled it, plus the agent's FreeSWITCH leg ($3) for
--- call control (hold/transfer). Matched by the caller leg's channel UUID.
-UPDATE calls SET agent_id = $1, agent_fs_uuid = $3 WHERE fs_uuid = $2;
+-- call control (hold/transfer). Matched by the caller leg id.
+UPDATE calls SET agent_id = $1, agent_leg_id = $3 WHERE leg_id = $2;
 
 -- name: set-call-agent-id
 -- Stamp just the answering agent on a media-plane call (callcdr) — no FS leg, the
--- agent is on the pion plane. Matched by the call's leg id (fs_uuid).
-UPDATE calls SET agent_id = $2 WHERE fs_uuid = $1;
+-- agent is on the pion plane. Matched by the call's leg id.
+UPDATE calls SET agent_id = $2 WHERE leg_id = $1;
 
 -- name: get-call-control-leg
 -- The CUSTOMER leg (the party that should hear hold music), the call's status,
 -- and the tenant's hold music — scoped to the tenant. Hold injects MOH into this
 -- leg with uuid_displace (NOT uuid_hold, which would re-INVITE a media-gateway
--- leg and drop the call). COALESCE: inbound leaves customer_fs_uuid NULL because
--- fs_uuid already is the visitor leg; outbound stores the trunk B-leg.
-SELECT COALESCE(c.customer_fs_uuid, c.fs_uuid), c.status, t.hold_music
+-- leg and drop the call). COALESCE: inbound leaves customer_leg_id NULL because
+-- leg_id already is the visitor leg; outbound stores the trunk B-leg.
+SELECT COALESCE(c.customer_leg_id, c.leg_id), c.status, t.hold_music
 FROM calls c JOIN tenants t ON t.id = c.tenant_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
@@ -270,15 +271,15 @@ WHERE c.id = $1 AND c.tenant_id = $2;
 -- from the agent JWT (tenant + agent id), so the agent can only control their
 -- OWN call. Returns the CUSTOMER leg (hold-music target) + the tenant's hold
 -- music; newest answered call wins if somehow more than one.
-SELECT COALESCE(c.customer_fs_uuid, c.fs_uuid), t.hold_music
+SELECT COALESCE(c.customer_leg_id, c.leg_id), t.hold_music
 FROM calls c JOIN tenants t ON t.id = c.tenant_id
 WHERE c.tenant_id = $1 AND c.agent_id = $2 AND c.status = 'answered'
 ORDER BY c.answered_at DESC NULLS LAST LIMIT 1;
 
 -- name: set-call-customer-leg
 -- Record the customer/visitor leg (the outbound bridged B-leg) so hold plays MOH
--- to the right party. Matched by the tracked leg's fs_uuid.
-UPDATE calls SET customer_fs_uuid = $1 WHERE fs_uuid = $2;
+-- to the right party. Matched by the tracked leg id.
+UPDATE calls SET customer_leg_id = $1 WHERE leg_id = $2;
 
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute
@@ -287,9 +288,9 @@ SELECT id, COALESCE(NULLIF(display_name, ''), sip_username)
 FROM agents WHERE tenant_id = $1 AND sip_username = $2;
 
 -- name: get-call-tenant
--- Owning tenant of a call by FreeSWITCH channel UUID. Used by the bridge-event
+-- Owning tenant of a call by leg id. Used by the bridge-event
 -- handler to scope the agent lookup; ErrNoRows means "not a Tring call".
-SELECT tenant_id FROM calls WHERE fs_uuid = $1;
+SELECT tenant_id FROM calls WHERE leg_id = $1;
 
 -- name: get-call-agent-label
 -- Display label of the agent attributed to a call (NULL/no row if none yet).
@@ -297,30 +298,30 @@ SELECT tenant_id FROM calls WHERE fs_uuid = $1;
 -- for "who answered", since the CHANNEL_BRIDGE event stamps agent_id reliably.
 SELECT COALESCE(NULLIF(a.display_name, ''), a.sip_username)
 FROM calls c JOIN agents a ON a.id = c.agent_id
-WHERE c.fs_uuid = $1;
+WHERE c.leg_id = $1;
 
 -- name: get-call
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
-       c.agent_id, c.fs_uuid, c.started_at, c.answered_at, c.ended_at,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
 -- name: list-calls
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
-       c.agent_id, c.fs_uuid, c.started_at, c.answered_at, c.ended_at,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1
 ORDER BY c.started_at DESC LIMIT $2;
 
 -- name: list-calls-by-status
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
-       c.agent_id, c.fs_uuid, c.started_at, c.answered_at, c.ended_at,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1 AND c.status = $3::call_status
 ORDER BY c.started_at DESC LIMIT $2;
@@ -534,30 +535,30 @@ ORDER BY n.priority ASC, n.created_at ASC;
 UPDATE calls
 SET status='failed'::call_status, ended_at=now(),
     duration_seconds=0, hangup_cause=$1
-WHERE fs_job_uuid=$2 AND status='ringing'::call_status
-RETURNING fs_uuid;
+WHERE job_uuid=$2 AND status='ringing'::call_status
+RETURNING leg_id;
 
 -- name: mark-call-answered
 UPDATE calls
 SET status = 'answered'::call_status, answered_at = now()
-WHERE fs_uuid = $1 AND status = 'ringing'::call_status;
+WHERE leg_id = $1 AND status = 'ringing'::call_status;
 
 -- name: get-call-settlement
-SELECT started_at, answered_at, status::text FROM calls WHERE fs_uuid = $1;
+SELECT started_at, answered_at, status::text FROM calls WHERE leg_id = $1;
 
 -- name: settle-call
 UPDATE calls
 SET status = $1::call_status, ended_at = now(),
     duration_seconds = $2, hangup_cause = $3
-WHERE fs_uuid = $4 AND status NOT IN ('ended','failed');
+WHERE leg_id = $4 AND status NOT IN ('ended','failed');
 
 -- name: get-call-payload
 SELECT id, tenant_id, direction::text, status::text,
        from_number, to_number, agent_id,
-       fs_uuid, COALESCE(fs_job_uuid,''),
+       leg_id, COALESCE(job_uuid,''),
        started_at, answered_at, ended_at,
-       duration_seconds, hangup_cause, recording_url
-FROM calls WHERE fs_uuid = $1;
+       duration_seconds, hangup_cause, recording_url, source::text
+FROM calls WHERE leg_id = $1;
 
 -- ===========================================================================
 -- orchestrator: IVR executor (ivr_executor.go)

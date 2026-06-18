@@ -264,6 +264,8 @@ func (transferFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
 	}, nil
 }
 
+func (transferFlows) FlowName(_ context.Context, _ string) (string, error) { return "Sales", nil }
+
 // TestTransferRingsAgentIntoRoom is the M9 membership-change end-to-end (minus
 // real media): a visitor enters a flow-pinned room whose IVR immediately
 // transfers; an online agent is rung, joins the room, and the visitor sees the
@@ -542,9 +544,9 @@ type fakeCallLog struct {
 	ended    []string // "room|cause"
 }
 
-func (f *fakeCallLog) Started(_ context.Context, _ uuid.UUID, roomID, from, to, _ string, _ room.ParticipantID) room.TrackSink {
+func (f *fakeCallLog) Started(_ context.Context, _ uuid.UUID, roomID, from, to, source, _ string, _ room.ParticipantID) room.TrackSink {
 	f.mu.Lock()
-	f.started = append(f.started, roomID+"|"+from+"|"+to)
+	f.started = append(f.started, roomID+"|"+from+"|"+to+"|"+source)
 	f.mu.Unlock()
 	return nil
 }

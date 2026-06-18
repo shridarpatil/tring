@@ -21,8 +21,8 @@ import (
 //
 // A tenant uploads WAV/MP3 once and reuses a file anywhere a sound plays —
 // IVR greeting/menu/gather/hangup prompts and queue hold music. The API writes
-// the bytes into a shared dir FreeSWITCH bind-mounts (s.audioDir); fs_path is
-// the FS-visible path stored on the asset and used as the value in a flow
+// the bytes into a shared dir FreeSWITCH bind-mounts (s.audioDir); file_path is
+// the playback path stored on the asset and used as the value in a flow
 // node's audio_file / tenants.hold_music. Mirrors the dynamic-gateway pattern
 // (internal/freeswitch/dynamic_gateway.go).
 
@@ -55,17 +55,17 @@ type Audio struct {
 	ID        uuid.UUID `json:"id"`
 	TenantID  uuid.UUID `json:"tenant_id"`
 	Name      string    `json:"name"`
-	FSPath    string    `json:"fs_path"`
+	FilePath  string    `json:"file_path"`
 	Format    string    `json:"format"`
 	SizeBytes int64     `json:"size_bytes"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// diskPathFor maps an asset's FS-visible fs_path back to where the API can read
+// diskPathFor maps an asset's playback file_path back to where the API can read
 // it on its own filesystem. They're equal in the standard docker deploy; for
 // host-run dev (audio_dir != audio_fs_dir) it swaps the prefix.
-func (s *Server) diskPathFor(fsPath string) string {
-	rel := strings.TrimPrefix(fsPath, s.audioFSDir)
+func (s *Server) diskPathFor(filePath string) string {
+	rel := strings.TrimPrefix(filePath, s.audioFSDir)
 	return filepath.Join(s.audioDir, rel)
 }
 
@@ -102,7 +102,7 @@ func (s *Server) handleUploadAudio(w http.ResponseWriter, r *http.Request) {
 		name = "audio"
 	}
 
-	// uuid filename → no path traversal, no collisions. fs_path uses the
+	// uuid filename → no path traversal, no collisions. file_path uses the
 	// FS-visible prefix; the bytes go to the matching spot under audioDir.
 	fileID := uuid.New()
 	tenantDir := filepath.Join(s.audioDir, t.ID.String())
@@ -144,12 +144,12 @@ func (s *Server) handleUploadAudio(w http.ResponseWriter, r *http.Request) {
 	} else {
 		format = "ogg"
 	}
-	fsPath := s.audioFSDir + "/" + t.ID.String() + "/" + fileID.String() + storedExt
+	filePath := s.audioFSDir + "/" + t.ID.String() + "/" + fileID.String() + storedExt
 
 	var a Audio
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAudio,
-		t.ID, name, fsPath, format, written).Scan(
-		&a.ID, &a.TenantID, &a.Name, &a.FSPath, &a.Format, &a.SizeBytes, &a.CreatedAt)
+		t.ID, name, filePath, format, written).Scan(
+		&a.ID, &a.TenantID, &a.Name, &a.FilePath, &a.Format, &a.SizeBytes, &a.CreatedAt)
 	if isUniqueViolation(err) {
 		_ = os.Remove(diskPath)
 		writeError(w, http.StatusConflict, "a sound with this name already exists")
@@ -174,7 +174,7 @@ func (s *Server) handleListAudio(w http.ResponseWriter, r *http.Request) {
 	out := []Audio{}
 	for rows.Next() {
 		var a Audio
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.FSPath, &a.Format, &a.SizeBytes, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.Name, &a.FilePath, &a.Format, &a.SizeBytes, &a.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
@@ -190,7 +190,7 @@ func (s *Server) handleGetAudioFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	http.ServeFile(w, r, s.diskPathFor(a.FSPath))
+	http.ServeFile(w, r, s.diskPathFor(a.FilePath))
 }
 
 func (s *Server) handleDeleteAudio(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +202,7 @@ func (s *Server) handleDeleteAudio(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
-	_ = os.Remove(s.diskPathFor(a.FSPath)) // best-effort; the row is the source of truth
+	_ = os.Remove(s.diskPathFor(a.FilePath)) // best-effort; the row is the source of truth
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -217,7 +217,7 @@ func (s *Server) loadAudio(w http.ResponseWriter, r *http.Request) (Audio, bool)
 	}
 	var a Audio
 	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAudio, id, t.ID).Scan(
-		&a.ID, &a.TenantID, &a.Name, &a.FSPath, &a.Format, &a.SizeBytes, &a.CreatedAt)
+		&a.ID, &a.TenantID, &a.Name, &a.FilePath, &a.Format, &a.SizeBytes, &a.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "sound not found")
 		return Audio{}, false

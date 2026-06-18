@@ -6,7 +6,7 @@ export interface Tenant {
   sip_domain: string;
   outbound_strategy: string;
   failover_causes: string[];
-  // System hold music: an audio asset's fs_path, or "" for the built-in default.
+  // System hold music: an audio asset's file_path, or "" for the built-in default.
   hold_music?: string;
   // Record a call once the agent and client connect.
   record_calls?: boolean;
@@ -19,7 +19,7 @@ export interface Audio {
   id: string;
   tenant_id: string;
   name: string;
-  fs_path: string; // what FreeSWITCH plays; stored in node config / hold_music
+  file_path: string; // playback path; stored as the value in node config / hold_music
   format: "wav" | "mp3";
   size_bytes: number;
   created_at: string;
@@ -109,7 +109,8 @@ export interface Call {
   agent_id?: string;
   agent_name?: string;
   client_ref?: string;
-  fs_uuid: string;
+  source?: 'web' | 'phone' | 'whatsapp';
+  leg_id: string;
   started_at: string;
   answered_at?: string;
   ended_at?: string;

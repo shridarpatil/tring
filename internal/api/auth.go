@@ -22,7 +22,7 @@ type Tenant struct {
 	SipDomain        string    `json:"sip_domain"`
 	OutboundStrategy string    `json:"outbound_strategy"`
 	FailoverCauses   []string  `json:"failover_causes"`
-	// HoldMusic is the tenant's system hold music (an audio asset's fs_path, or
+	// HoldMusic is the tenant's system hold music (an audio asset's file_path, or
 	// "" for the built-in default). Not populated during auth resolution — only
 	// by the tenant settings handlers (handleGetMyTenant / handlePatchMyTenant).
 	HoldMusic string `json:"hold_music"`
