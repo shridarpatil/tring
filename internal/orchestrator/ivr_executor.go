@@ -245,7 +245,7 @@ func (e *Executor) HandleInboundCall(ctx context.Context, conn *eslgo.Conn, ev *
 	// Log the inbound/IVR call (incl. guest web calls) so it shows in the
 	// call log — previously only the outbound path wrote a calls row. The
 	// global event loop (runner.go) then settles it (answered/ended/
-	// duration/webhooks) by fs_uuid, same as outbound. Insert while still
+	// duration/webhooks) by leg_id, same as outbound. Insert while still
 	// ringing, before answering, so the CHANNEL_ANSWER from AnswerCall finds
 	// the row to flip. Best-effort: never block the call on a logging error.
 	e.recordInboundCall(ctx, state)
@@ -324,12 +324,13 @@ func (e *Executor) resolveFlow(ctx context.Context, called string) (*ResolvedFlo
 
 // recordInboundCall inserts a calls row for an inbound/IVR call so it appears
 // in the call log. The orchestrator's global event loop settles it
-// (answered/ended/duration/webhooks) by fs_uuid afterwards. Best-effort: a
-// failure is logged and the call proceeds — logging must never break a call.
+// (answered/ended/duration/webhooks) by leg_id afterwards. The FS-path inbound
+// IVR is always a phone call. Best-effort: a failure is logged and the call
+// proceeds — logging must never break a call.
 func (e *Executor) recordInboundCall(ctx context.Context, st *callState) {
 	var id uuid.UUID
 	err := e.DB.Pool.QueryRow(ctx, e.Q.CreateCallInbound,
-		st.tenantID, st.caller, st.called, st.uuid, st.clientRef,
+		st.tenantID, st.caller, st.called, st.uuid, st.clientRef, "phone",
 	).Scan(&id)
 	if err != nil {
 		st.log.Error("ivr failed to record inbound call", "err", err)

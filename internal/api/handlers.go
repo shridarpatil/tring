@@ -400,7 +400,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 type patchTenantRequest struct {
 	OutboundStrategy *string  `json:"outbound_strategy,omitempty"`
 	FailoverCauses   []string `json:"failover_causes,omitempty"`
-	// HoldMusic: an audio asset's fs_path to use as system hold music, or "" to
+	// HoldMusic: an audio asset's file_path to use as system hold music, or "" to
 	// clear (revert to the built-in default). nil = leave unchanged.
 	HoldMusic *string `json:"hold_music,omitempty"`
 	// RecordCalls toggles call recording. nil = leave unchanged.

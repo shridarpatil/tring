@@ -188,7 +188,7 @@ func (p *filePrompts) load(file string) ([][]byte, error) {
 	}
 	p.mu.Unlock()
 
-	// audio_file may be an absolute fs_path from the sound library
+	// audio_file may be an absolute file_path from the sound library
 	// (<AudioDir>/<tenant>/<uuid>.ogg) or a relative path (the custom-path
 	// escape hatch). Strip the AudioDir prefix so both resolve, and Clean("/"+…)
 	// confines the open to AudioDir (no traversal out).

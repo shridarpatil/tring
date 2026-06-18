@@ -68,7 +68,7 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 	// the same calls-table row a FreeSWITCH-path call gets.
 	if s.cfg.Calls != nil {
 		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if sink := s.cfg.Calls.Started(cctx, tenant, string(roomID), ic.From, ic.To, "", leg.Source.ID()); sink != nil {
+		if sink := s.cfg.Calls.Started(cctx, tenant, string(roomID), ic.From, ic.To, "phone", "", leg.Source.ID()); sink != nil {
 			s.sfu.AddSink(roomID, leg.Source.ID(), sink)
 		}
 		ccancel()

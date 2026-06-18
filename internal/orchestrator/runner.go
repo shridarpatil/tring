@@ -207,7 +207,7 @@ func (r *Runner) onBridge(ctx context.Context, conn *eslgo.Conn, e *eslgo.Event)
 		// No agent tag on the B-leg → this is the customer leg of an outbound
 		// click-to-call (the agent is the A-leg). Record it so hold plays MOH to
 		// the customer. Inbound is unaffected: there the customer is the A-leg
-		// (= fs_uuid), which control resolves via COALESCE.
+		// (= leg_id), which control resolves via COALESCE.
 		if _, err := r.db.Pool.Exec(ctx, r.q.SetCallCustomerLeg, bLeg, aLeg); err != nil {
 			r.log.Error("stamp customer leg failed", "call_id", aLeg, "err", err)
 		}
@@ -425,22 +425,22 @@ func (r *Runner) onHangup(ctx context.Context, e *eslgo.Event) {
 // loadCallPayload fetches the post-update call row as a webhook-friendly
 // map (matching the REST GET shape) and returns the tenant_id so the
 // notifier can scope its lookup.
-func (r *Runner) loadCallPayload(ctx context.Context, fsUUID string) (uuid.UUID, map[string]interface{}, bool) {
+func (r *Runner) loadCallPayload(ctx context.Context, legID string) (uuid.UUID, map[string]interface{}, bool) {
 	var (
-		id, tenantID                                           uuid.UUID
-		direction, status, fromNumber, toNumber, jobUUID, fsID string
-		hangupCause                                            *string
-		recordingURL                                           *string
-		agentID                                                *uuid.UUID
-		startedAt                                              time.Time
-		answeredAt, endedAt                                    *time.Time
-		duration                                               *int
+		id, tenantID                                                      uuid.UUID
+		direction, status, fromNumber, toNumber, jobUUID, legUUID, source string
+		hangupCause                                                       *string
+		recordingURL                                                      *string
+		agentID                                                           *uuid.UUID
+		startedAt                                                         time.Time
+		answeredAt, endedAt                                               *time.Time
+		duration                                                          *int
 	)
-	err := r.db.Pool.QueryRow(ctx, r.q.GetCallPayload, fsUUID).Scan(&id, &tenantID, &direction, &status,
+	err := r.db.Pool.QueryRow(ctx, r.q.GetCallPayload, legID).Scan(&id, &tenantID, &direction, &status,
 		&fromNumber, &toNumber, &agentID,
-		&fsID, &jobUUID,
+		&legUUID, &jobUUID,
 		&startedAt, &answeredAt, &endedAt,
-		&duration, &hangupCause, &recordingURL)
+		&duration, &hangupCause, &recordingURL, &source)
 	if err != nil {
 		return uuid.Nil, nil, false
 	}
@@ -450,10 +450,11 @@ func (r *Runner) loadCallPayload(ctx context.Context, fsUUID string) (uuid.UUID,
 			"tenant_id":        tenantID,
 			"direction":        direction,
 			"status":           status,
+			"source":           source,
 			"from_number":      fromNumber,
 			"to_number":        toNumber,
 			"agent_id":         agentID,
-			"fs_uuid":          fsID,
+			"leg_id":           legUUID,
 			"started_at":       startedAt,
 			"answered_at":      answeredAt,
 			"ended_at":         endedAt,

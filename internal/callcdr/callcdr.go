@@ -3,8 +3,8 @@
 // uses — one CDR + one recording story for every call source, per the
 // convergence plan (docs/ARCHITECTURE.md).
 //
-// The existing machinery keys everything on `calls.fs_uuid` as an opaque per-call
-// leg id and serves local recordings from <recordingsDir>/<fs_uuid>.<format>.
+// The existing machinery keys everything on `calls.leg_id` as an opaque per-call
+// leg id and serves local recordings from <recordingsDir>/<leg_id>.<format>.
 // Media calls reuse all of it with a generated leg id: the call row is created on
 // call start (ringing), marked answered when an agent joins, settled on end, and
 // — when the tenant has record_calls on — both legs are captured losslessly via
@@ -47,7 +47,7 @@ type Log struct {
 
 type activeCall struct {
 	id        uuid.UUID // calls.id
-	legID     string    // stored in calls.fs_uuid; names the recording file
+	legID     string    // stored in calls.leg_id; names the recording file
 	tenant    uuid.UUID
 	startedAt time.Time
 	callerPID room.ParticipantID
@@ -84,16 +84,17 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger) *Log 
 
 // Started opens the CDR for a call (status ringing) and, when the tenant records
 // calls, returns the recorder as a TrackSink to attach to the CALLER's
-// publication (nil → not recording). callerPID is labeled "customer".
+// publication (nil → not recording). callerPID is labeled "customer". source is
+// the call's channel ('web' | 'phone'), recorded for direct channel reporting.
 // Best-effort: a DB failure logs and returns nil — the call proceeds unrecorded
 // rather than failing.
-func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink {
+func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, source, clientRef string, callerPID room.ParticipantID) room.TrackSink {
 	if from == "" {
 		from = "Unknown" // never log a blank caller (e.g. a phone leg with no caller-ID)
 	}
 	legID := uuid.NewString()
 	var callID uuid.UUID
-	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef).Scan(&callID)
+	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef, source).Scan(&callID)
 	if err != nil {
 		l.log.Error("cdr: create call failed", "room", roomID, "err", err)
 		return nil

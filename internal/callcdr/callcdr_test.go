@@ -41,7 +41,7 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	l := callcdr.New(fx.DB, nil, dir, nil)
 
 	roomID := fx.TenantID.String() + "/pstn-test"
-	sink := l.Started(ctx, fx.TenantID, roomID, "+919900112233", "16001122", "", "caller-pid")
+	sink := l.Started(ctx, fx.TenantID, roomID, "+919900112233", "16001122", "phone", "", "caller-pid")
 	if sink == nil {
 		t.Fatal("expected a recording sink (tenant records)")
 	}
@@ -67,23 +67,26 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	// Row settled? (recording_url is set asynchronously by finalize — checked
 	// after the file appears, below.)
 	var (
-		legID, status, cause string
-		duration             int
-		answeredOK           bool
-		journeyLen           int
-		gotAgent             *uuid.UUID
+		legID, status, cause, source string
+		duration                     int
+		answeredOK                   bool
+		journeyLen                   int
+		gotAgent                     *uuid.UUID
 	)
 	err := fx.DB.Pool.QueryRow(ctx, `
-		SELECT fs_uuid, status::text, hangup_cause,
+		SELECT leg_id, status::text, hangup_cause,
 		       COALESCE(duration_seconds, -1), answered_at IS NOT NULL,
-		       jsonb_array_length(ivr_path), agent_id
+		       jsonb_array_length(ivr_path), agent_id, source::text
 		FROM calls WHERE tenant_id = $1`, fx.TenantID).
-		Scan(&legID, &status, &cause, &duration, &answeredOK, &journeyLen, &gotAgent)
+		Scan(&legID, &status, &cause, &duration, &answeredOK, &journeyLen, &gotAgent, &source)
 	if err != nil {
 		t.Fatalf("read call row: %v", err)
 	}
 	if status != "ended" || cause != "caller_hangup" || !answeredOK || duration < 0 {
 		t.Fatalf("row = status %s cause %s answered %v dur %d", status, cause, answeredOK, duration)
+	}
+	if source != "phone" {
+		t.Fatalf("source = %s, want phone", source)
 	}
 	if journeyLen != 1 {
 		t.Fatalf("journey %d", journeyLen)
@@ -111,7 +114,7 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	for {
 		var recURL string
 		if err := fx.DB.Pool.QueryRow(ctx,
-			`SELECT COALESCE(recording_url,'') FROM calls WHERE fs_uuid = $1`, legID).Scan(&recURL); err != nil {
+			`SELECT COALESCE(recording_url,'') FROM calls WHERE leg_id = $1`, legID).Scan(&recURL); err != nil {
 			t.Fatalf("read recording_url: %v", err)
 		} else if recURL != "" {
 			break
@@ -137,7 +140,7 @@ func TestNoMediaLeavesNoRecordingURL(t *testing.T) {
 	l := callcdr.New(fx.DB, nil, dir, nil)
 
 	roomID := fx.TenantID.String() + "/silent"
-	if sink := l.Started(ctx, fx.TenantID, roomID, "+9199", "16001122", "", "caller-pid"); sink == nil {
+	if sink := l.Started(ctx, fx.TenantID, roomID, "+9199", "16001122", "phone", "", "caller-pid"); sink == nil {
 		t.Fatal("expected a recording sink (tenant records)")
 	}
 	// No WriteRTP — the caller never spoke. End the call.
@@ -170,7 +173,7 @@ func TestNoRecordingWhenTenantOff(t *testing.T) {
 	l := callcdr.New(fx.DB, nil, dir, nil)
 
 	roomID := fx.TenantID.String() + "/web-x"
-	if sink := l.Started(ctx, fx.TenantID, roomID, "visitor", "web", "cust_42", "p1"); sink != nil {
+	if sink := l.Started(ctx, fx.TenantID, roomID, "visitor", "Support", "web", "cust_42", "p1"); sink != nil {
 		t.Fatal("tenant has record_calls off — no sink expected")
 	}
 	l.Ended(roomID, "ended")
