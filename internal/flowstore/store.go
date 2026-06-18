@@ -46,6 +46,25 @@ func (s *Store) Load(ctx context.Context, flowID string) (*ivr.Flow, error) {
 	return ivr.Parse([]byte(def))
 }
 
+// FlowName resolves just the active flow's display name, reusing the same row
+// Load reads. Used by the media plane to log the dialed flow as a web call's
+// to_number without loading/parsing the whole graph.
+func (s *Store) FlowName(ctx context.Context, flowID string) (string, error) {
+	fid, err := uuid.Parse(flowID)
+	if err != nil {
+		return "", fmt.Errorf("bad flow id %q: %w", flowID, err)
+	}
+	var (
+		tenantID uuid.UUID
+		name     string
+		def      string
+	)
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetActiveFlowByID, fid).Scan(&tenantID, &name, &def); err != nil {
+		return "", fmt.Errorf("flow name %s: %w", flowID, err)
+	}
+	return name, nil
+}
+
 // ResolveDID returns the owning tenant + attached flow id for an inbound DID
 // (empty flowID = the number exists but has no flow attached). Used by the media
 // plane to route an inbound phone call (the PSTN plug) to its IVR. Read-only.

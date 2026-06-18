@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from "vue";
 import { api } from "../api/client";
 import type { Audio } from "../api/types";
 
-// Reusable sound selector: v-models a path string (an asset's fs_path, "" for
+// Reusable sound selector: v-models a path string (an asset's file_path, "" for
 // default, or a raw path via the advanced escape hatch). Pick an existing sound,
 // OR upload a new one inline (uploads transcode to Opus-Ogg server-side so they
 // play on both the web and phone planes).
@@ -26,7 +26,7 @@ onMounted(async () => {
   } catch {
     /* leave empty — the custom-path escape hatch still works */
   }
-  if (props.modelValue && !sounds.value.some((s) => s.fs_path === props.modelValue)) {
+  if (props.modelValue && !sounds.value.some((s) => s.file_path === props.modelValue)) {
     custom.value = true;
   }
 });
@@ -47,7 +47,7 @@ async function onFile(ev: Event) {
       name: file.name.replace(/\.[^.]+$/, ""),
     });
     sounds.value.push(a);
-    val.value = a.fs_path; // select the freshly uploaded sound
+    val.value = a.file_path; // select the freshly uploaded sound
   } catch (e) {
     error.value = (e as Error)?.message || "upload failed";
   } finally {
@@ -64,7 +64,7 @@ async function onFile(ev: Event) {
       <div class="mt-1 flex gap-2">
         <select v-model="val" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
           <option value="">{{ defaultLabel || "Default" }}</option>
-          <option v-for="s in sounds" :key="s.id" :value="s.fs_path">{{ s.name }} ({{ s.format }})</option>
+          <option v-for="s in sounds" :key="s.id" :value="s.file_path">{{ s.name }} ({{ s.format }})</option>
         </select>
         <button
           type="button"

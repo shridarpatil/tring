@@ -73,8 +73,12 @@ type Config struct {
 }
 
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
+// FlowName resolves just the flow's display name (cheap, reuses the same row) so
+// the web CDR can log the dialed flow as the call's to_number — it works whether
+// or not the flow graph itself is loaded in this process (brain-up vs fallback).
 type FlowLoader interface {
 	Load(ctx context.Context, flowID string) (*ivr.Flow, error)
+	FlowName(ctx context.Context, flowID string) (string, error)
 }
 
 // TeamResolver returns a team's member SIP usernames (internal/flowstore
@@ -88,7 +92,7 @@ type TeamResolver interface {
 // publication when the tenant records calls (nil → no capture). All methods are
 // best-effort and idempotent; a nil CallLog disables CDRs entirely.
 type CallLog interface {
-	Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink
+	Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, source, clientRef string, callerPID room.ParticipantID) room.TrackSink
 	Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)
@@ -309,7 +313,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if from == "" {
 			from = "Web visitor" // anonymous caller has no identity — don't log blank
 		}
-		if sink := s.cfg.Calls.Started(r.Context(), princ.tenant, string(roomID), from, "web", princ.clientRef, p.ID()); sink != nil {
+		// to_number is the dialed destination: the IVR flow's name (best-effort —
+		// falls back to a literal if the flow can't be resolved). source='web'
+		// distinguishes the channel without overloading to_number.
+		flowName := "Web call"
+		if s.cfg.Flows != nil {
+			if n, err := s.cfg.Flows.FlowName(r.Context(), flowID); err == nil && n != "" {
+				flowName = n
+			}
+		}
+		if sink := s.cfg.Calls.Started(r.Context(), princ.tenant, string(roomID), from, flowName, "web", princ.clientRef, p.ID()); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
 		}
 	}
