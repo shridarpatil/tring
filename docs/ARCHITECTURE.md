@@ -187,8 +187,9 @@ later hardening). Tables:
 
 `tenants` · `api_keys` · `agents` · `teams` · `team_agents` · `numbers`
 (`type` ∈ inbound/outbound/masking; `flow_id`, `provider`, `priority`, `trunk_id`)
-· `trunks` · `flows` (JSONB graph) · `calls` (CDR; `fs_uuid` = opaque leg id,
-stereo `recording_url`/`recording_s3_key`, `ivr_path`) · `masking_sessions` ·
+· `trunks` · `flows` (JSONB graph) · `calls` (CDR; `leg_id` = opaque leg id,
+`source` ∈ web/phone/whatsapp, stereo `recording_url`/`recording_s3_key`,
+`ivr_path`) · `masking_sessions` ·
 `guest_sessions` · `webhooks` · `webhook_deliveries` · `users` (console operators)
 · `audio_assets` (tenant sound library).
 
@@ -251,6 +252,12 @@ token (minted by your backend over server→server), and the gateway (public).
 ~150–300 concurrent web calls on a 4-core/8GB box with Opus passthrough (CPU-bound
 on the gateway's SRTP relay). Transcoding (recording) or co-located TURN cuts that.
 Scale by adding **gateway** instances (horizontal); FS scales vertically.
+
+> Call/media state is **in-process and not migratable** — scaling and restart
+> behaviour follow from that. The state classification, cell-based scaling model,
+> graceful-drain and orphan-reconciliation posture are in
+> [`STATE_AND_HA.md`](STATE_AND_HA.md). Read it before adding a second cell or
+> assuming calls survive a restart.
 
 ## 13. Testing
 

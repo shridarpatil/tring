@@ -33,7 +33,8 @@ type Call struct {
 	AgentID      *uuid.UUID `json:"agent_id,omitempty"`
 	AgentName    *string    `json:"agent_name,omitempty"` // display_name|sip of the handling agent
 	ClientRef    *string    `json:"client_ref,omitempty"` // embedder-supplied caller identity (vs guest_*)
-	FSUUID       string     `json:"fs_uuid"`
+	Source       string     `json:"source"`               // call channel: web | phone | whatsapp
+	LegID        string     `json:"leg_id"`               // opaque per-call leg id (FS channel UUID or pion leg)
 	StartedAt    time.Time  `json:"started_at"`
 	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
 	EndedAt      *time.Time `json:"ended_at,omitempty"`
@@ -195,7 +196,7 @@ func (s *Server) originateForAgent(
 	var c Call
 	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallOutbound,
 		t.ID, outboundE164, to, agentID, or.ChannelUUID, or.JobUUID).
-		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.FSUUID, &c.StartedAt)
+		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
 	}
@@ -283,7 +284,7 @@ func (s *Server) originateBridge(
 	var c Call
 	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallBridge,
 		t.ID, agentNorm, clientNorm, or.ChannelUUID, or.JobUUID).
-		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.FSUUID, &c.StartedAt)
+		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
 	}
@@ -332,8 +333,8 @@ func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	var ivrPath []byte
 	err := scanner.Scan(
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
-		&c.AgentID, &c.FSUUID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
-		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef,
+		&c.AgentID, &c.LegID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
+		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef, &c.Source,
 	)
 	if len(ivrPath) > 0 {
 		c.IVRPath = ivrPath
@@ -376,9 +377,9 @@ func recordingMIME(ext string) string {
 }
 
 // handleGetCallRecording streams a call's recording. Tenant-scoped: the
-// fs_uuid lookup is filtered by tenant so one tenant can't fetch another's
+// leg_id lookup is filtered by tenant so one tenant can't fetch another's
 // recording. The file is written by FreeSWITCH to the shared recordings mount,
-// named by fs_uuid. 404 if the call isn't ours or the file isn't there yet
+// named by leg_id. 404 if the call isn't ours or the file isn't there yet
 // (recording still in progress / never recorded).
 func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
