@@ -13,6 +13,7 @@ import (
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/queries"
+	"github.com/whatomate/tring/internal/routing"
 )
 
 // Store loads active flows by id. Read-only: it never mutates the DB.
@@ -82,22 +83,15 @@ func (s *Store) ResolveDID(ctx context.Context, did string) (tenantID uuid.UUID,
 
 // TeamSIPs returns the SIP usernames of a team's members that are available for
 // calls, in membership position order. Used by the media gateway's transfer ring
-// to target the right agents (parity with the FreeSWITCH executor, which uses
-// the same query). Read-only.
+// to target the right agents. Delegates to routing.TeamMembers so the FreeSWITCH
+// and pion planes share one definition of the lookup (no drift). Read-only.
 func (s *Store) TeamSIPs(ctx context.Context, tenantID uuid.UUID, team string) ([]string, error) {
-	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamAgentSips, tenantID, team)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var sips []string
-	for rows.Next() {
-		var sip string
-		var pos int
-		if err := rows.Scan(&sip, &pos); err != nil {
-			return nil, err
-		}
-		sips = append(sips, sip)
-	}
-	return sips, rows.Err()
+	return routing.TeamMembers(ctx, s.db, s.q, tenantID, team)
+}
+
+// TeamConfig loads a team's queue settings (strategy / ring_seconds / max_wait /
+// resolved hold music) for the media gateway's transfer ring — the same shared
+// loader the FreeSWITCH executor uses. Read-only.
+func (s *Store) TeamConfig(ctx context.Context, tenantID uuid.UUID, team string) (routing.TeamConfig, bool, error) {
+	return routing.LoadTeamConfig(ctx, s.db, s.q, tenantID, team)
 }

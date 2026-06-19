@@ -29,6 +29,7 @@ import (
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/presence"
+	"github.com/whatomate/tring/internal/routing"
 	"github.com/whatomate/tring/internal/turn"
 )
 
@@ -85,10 +86,12 @@ type FlowLoader interface {
 	FlowName(ctx context.Context, flowID string) (string, error)
 }
 
-// TeamResolver returns a team's member SIP usernames (internal/flowstore
-// implements it). Lets the transfer ring target a team's agents.
+// TeamResolver returns a team's member SIP usernames and its queue config
+// (internal/flowstore implements both via internal/routing). Lets the transfer
+// ring target a team's agents and honor its strategy / ring_seconds / max_wait.
 type TeamResolver interface {
 	TeamSIPs(ctx context.Context, tenantID uuid.UUID, team string) ([]string, error)
+	TeamConfig(ctx context.Context, tenantID uuid.UUID, team string) (routing.TeamConfig, bool, error)
 }
 
 // CallLog records CDRs + recordings for media-plane calls (internal/callcdr
@@ -131,8 +134,11 @@ type Server struct {
 	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
 	onCall    map[string]int                // "tenant|sip" → active call legs (drives on_call presence)
 
-	qmu        sync.Mutex       // guards queueDepth
-	queueDepth map[depthKey]int // live count of web callers queued per (tenant, team)
+	// router runs the shared queue/ring discipline (internal/routing) — the same
+	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
+	// max_wait, reservations and queue depth identically. The pion plane supplies
+	// the transport via a pionRing Effects adapter (see agents.go).
+	router *routing.Router
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -142,19 +148,29 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	s := &Server{
-		cfg:        cfg,
-		sfu:        cfg.SFU,
-		log:        cfg.Logger.With("component", "signaling"),
-		conns:      make(map[room.ParticipantID]*conn),
-		ivr:        make(map[room.RoomID]*ivrSession),
-		edge:       make(map[room.RoomID]*edgeVoice),
-		holds:      make(map[room.RoomID]*edgeVoice),
-		agents:     make(map[string]map[string]*conn),
-		rings:      make(map[room.RoomID]chan struct{}),
-		pstnCalls:  make(map[room.RoomID]room.CallID),
-		onCall:     make(map[string]int),
-		queueDepth: make(map[depthKey]int),
+		cfg:       cfg,
+		sfu:       cfg.SFU,
+		log:       cfg.Logger.With("component", "signaling"),
+		conns:     make(map[room.ParticipantID]*conn),
+		ivr:       make(map[room.RoomID]*ivrSession),
+		edge:      make(map[room.RoomID]*edgeVoice),
+		holds:     make(map[room.RoomID]*edgeVoice),
+		agents:    make(map[string]map[string]*conn),
+		rings:     make(map[room.RoomID]chan struct{}),
+		pstnCalls: make(map[room.RoomID]room.CallID),
+		onCall:    make(map[string]int),
 	}
+	// Build the shared routing engine from Redis-backed backends when a cache is
+	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
+	// the same Redis), else in-memory. presence.New(nil) is a disabled no-op.
+	var queue routing.Queue
+	var reserve routing.Reservations
+	if cfg.Cache != nil {
+		queue, reserve = routing.NewRedisQueue(cfg.Cache), routing.NewRedisReservations(cfg.Cache)
+	} else {
+		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
+	}
+	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, s.log)
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
 }

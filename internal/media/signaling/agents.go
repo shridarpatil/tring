@@ -2,7 +2,6 @@ package signaling
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,16 +12,7 @@ import (
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queuekeys"
-)
-
-const (
-	// ringPoll is how often Ring re-checks agent availability while a caller
-	// waits in queue (so a freed-up agent is picked up promptly).
-	ringPoll = 2 * time.Second
-	// ringMaxWait bounds how long a caller waits (queue + ring) before the
-	// transfer gives up with no_answer. Mirrors the FreeSWITCH path's default
-	// team max_wait so the web and phone paths behave alike.
-	ringMaxWait = 2 * time.Minute
+	"github.com/whatomate/tring/internal/routing"
 )
 
 // handleAgentPresence runs an agent's presence socket: it registers the agent as
@@ -129,27 +119,22 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	}
 }
 
-// Ring implements ivrdrive.Agents: it rings matching agents into `room` and
-// blocks until one joins (a call `join` to that room closes the pending-ring
-// channel → "completed") or ringMaxWait elapses ("no_answer"). `room` is the
-// tenant-namespaced id ("<tenant>/<name>").
-//
-// Two behaviours matter here (both were bugs before):
-//   - A busy agent (already on_call) is NOT rung — otherwise a second call pops
-//     an incoming-call UI on someone mid-call.
-//   - When every matching agent is busy, the caller WAITS in queue (re-checking
-//     each tick) instead of immediately failing to no_answer — they connect as
-//     soon as an agent frees up, like the FreeSWITCH team-queue path.
+// Ring implements ivrdrive.Agents by running the SHARED routing.Router
+// queue/ring loop with a pion Effects adapter (pionRing). Agents are rung by
+// pushing msgIncoming over their presence sockets; an agent joining the room
+// closes the pending-ring channel (signalRing) → answered. For a team it honors
+// the team's strategy / ring_seconds / max_wait identically to the FreeSWITCH
+// plane; ring-all and direct-agent transfers use the routing defaults. `room` is
+// the tenant-namespaced id ("<tenant>/<name>").
 func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
 	tenant, name, ok := strings.Cut(roomID, "/")
 	if !ok {
 		return "no_answer", nil
 	}
 
-	// Resolve which SIPs to ring (DB lookup OUTSIDE the registry lock):
-	//   - a specific agent_sip → just that agent
-	//   - a team → its members (parity with the FreeSWITCH executor)
-	//   - neither → every online agent of the tenant (ring-all)
+	// Resolve the target → candidate SIPs (DB lookup outside the registry lock):
+	// a specific agent_sip → just that agent; a team → its members; neither →
+	// every online agent of the tenant (ring-all).
 	var sips []string
 	ringAll := true
 	if t.AgentSIP != "" {
@@ -164,15 +149,35 @@ func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (st
 			}
 		}
 	}
-	// A targeted transfer (specific agent or a team) with no resolvable members
-	// can never ring anyone — don't park the caller in a pointless queue.
+	// A targeted transfer with no resolvable members can never ring anyone.
 	if !ringAll && len(sips) == 0 {
 		return "no_answer", nil
 	}
 
-	// Register the pending ring up front (once) so an agent's join — which closes
-	// this channel via signalRing — completes the transfer no matter which queue
-	// iteration we're on, and can't race ahead of the waiter.
+	// candidates: current online agents not on a LOCAL web call (the registry's
+	// instant busy view). routing.FilterAvailable then drops agents the shared
+	// presence marks on_call and any the phone side has reserved.
+	candidates := func(context.Context) []string {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		var out []string
+		if ringAll {
+			for sip := range s.agents[tenant] {
+				if s.onCall[tenant+"|"+sip] == 0 {
+					out = append(out, sip)
+				}
+			}
+		} else {
+			for _, sip := range sips {
+				if c := s.agents[tenant][sip]; c != nil && s.onCall[tenant+"|"+sip] == 0 {
+					out = append(out, sip)
+				}
+			}
+		}
+		return out
+	}
+
+	// Pending-ring channel: signalRing closes it when an agent joins the room.
 	rid := room.RoomID(roomID)
 	ring := make(chan struct{})
 	s.mu.Lock()
@@ -186,102 +191,105 @@ func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (st
 		s.mu.Unlock()
 	}()
 
-	// Dashboard queue depth: count this caller as waiting while no agent is free,
-	// but only for a team transfer (the dashboard is per-team; ring-all and direct
-	// agent_sip transfers have no team to attribute the wait to). Published to the
-	// shared Redis the API sums with the phone side.
-	trackDepth := t.Team != "" && s.cfg.Cache != nil
-	dk := depthKey{tenant: tenant, team: t.Team}
-	inQueue := false
-	defer func() {
-		if trackDepth && inQueue {
-			s.addQueueDepth(dk, -1)
-			s.publishQueueDepth(context.Background(), dk)
+	// Per-team queue config (strategy / ring_seconds / max_wait) + depth source —
+	// only for a genuinely resolved team (!ringAll implies a non-nil Teams
+	// resolver and resolved members); ring-all / direct-agent use the defaults.
+	rc := routing.RouteConfig{TenantID: tenant}
+	if !ringAll && t.Team != "" {
+		rc.Team, rc.Source = t.Team, queuekeys.SourceWeb
+		if tid, err := uuid.Parse(tenant); err == nil {
+			if tc, ok, _ := s.cfg.Teams.TeamConfig(ctx, tid, t.Team); ok {
+				rc.Strategy = tc.Strategy
+				rc.RingSeconds = time.Duration(tc.RingSeconds) * time.Second
+				rc.MaxWait = time.Duration(tc.MaxWait) * time.Second
+			}
 		}
-	}()
+	}
 
-	deadline := time.Now().Add(ringMaxWait)
-	rung := map[string]bool{} // sips already shown an incoming-call popup this transfer
-	queued := false
+	eff := &pionRing{s: s, tenant: tenant, roomName: name, label: t.Label, ring: ring, rung: map[string]bool{}}
+	if outcome, _, _ := s.router.Run(ctx, rc, candidates, eff); outcome == routing.OutcomeCompleted {
+		return "completed", nil
+	}
+	return "no_answer", nil
+}
 
+// pionRing is the pion-plane routing.Effects adapter: it rings agents by pushing
+// msgIncoming over their presence sockets and learns of an answer when an agent
+// joins the room (signalRing closes `ring`).
+type pionRing struct {
+	s        *Server
+	tenant   string
+	roomName string          // un-namespaced name agents join
+	label    string          // caller label shown to the agent
+	ring     <-chan struct{} // closed on a room join
+	rung     map[string]bool // sips already popped this transfer
+}
+
+// Answered backstops the async case: an agent joined mid-hold (outside a Ring).
+func (p *pionRing) Answered() (bool, string) {
+	select {
+	case <-p.ring:
+		return true, ""
+	default:
+		return false, ""
+	}
+}
+
+// CallerAlive: the pion plane relies on the IVR driver's ctx, cancelled when the
+// call ends; the caller is a room participant, not polled here.
+func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == nil }
+
+// Ring pops the incoming-call UI on the ordered agents (deduped within a
+// transfer) and waits up to perAttempt for one to join the room.
+func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.Duration) (routing.RingOutcome, error) {
+	p.s.mu.Lock()
+	inSet := make(map[string]bool, len(ordered))
+	for _, sip := range ordered {
+		inSet[sip] = true
+	}
+	for sip := range p.rung { // forget agents no longer available so they re-pop if freed
+		if !inSet[sip] {
+			delete(p.rung, sip)
+		}
+	}
+	for _, sip := range ordered {
+		if !p.rung[sip] {
+			if c := p.s.agents[p.tenant][sip]; c != nil {
+				_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
+				p.rung[sip] = true
+			}
+		}
+	}
+	p.s.mu.Unlock()
+
+	select {
+	case <-p.ring:
+		return routing.RingOutcome{Answered: true}, nil
+	case <-time.After(perAttempt):
+		return routing.RingOutcome{}, nil
+	case <-ctx.Done():
+		return routing.RingOutcome{}, ctx.Err()
+	}
+}
+
+// Hold waits up to maxDur, returning early when ready() goes true or an agent
+// joins. No hold audio on the web plane yet — the caller stays connected.
+func (p *pionRing) Hold(ctx context.Context, maxDur time.Duration, ready func() bool) {
+	tk := time.NewTicker(250 * time.Millisecond)
+	defer tk.Stop()
+	timeout := time.After(maxDur)
 	for {
-		// Candidates: online sockets not on a LOCAL web call (fast in-memory
-		// filter under the registry lock — keep Redis I/O out of the lock).
-		s.mu.Lock()
-		cand := make(map[string]*conn)
-		if ringAll {
-			for sip, c := range s.agents[tenant] {
-				if s.onCall[tenant+"|"+sip] == 0 {
-					cand[sip] = c
-				}
-			}
-		} else {
-			for _, sip := range sips {
-				if c := s.agents[tenant][sip]; c != nil && s.onCall[tenant+"|"+sip] == 0 {
-					cand[sip] = c
-				}
-			}
-		}
-		s.mu.Unlock()
-
-		// Cross-plane busy filter: also exclude any agent the SHARED presence store
-		// marks on_call — a phone call on the FreeSWITCH plane (or another gateway
-		// instance) that this process's in-memory onCall can't see. This is what
-		// stops a web and a phone call both landing on the same agent.
-		avail := cand
-		if pres := s.cfg.Presence; pres != nil && pres.Enabled() {
-			avail = make(map[string]*conn, len(cand))
-			for sip, c := range cand {
-				if pres.Available(ctx, tenant, sip) {
-					avail[sip] = c
-				}
-			}
-		}
-
-		// Ring any available agent we haven't already popped this transfer (so a
-		// still-ringing agent isn't re-popped every tick).
-		for sip, c := range avail {
-			if !rung[sip] {
-				_ = c.send(msg{Type: msgIncoming, Room: name, From: t.Label})
-				rung[sip] = true
-			}
-		}
-		if len(avail) == 0 && !queued {
-			queued = true
-			s.log.Info("transfer: all matching agents busy — caller queued",
-				"tenant", tenant, "team", t.Team, "agent", t.AgentSIP)
-		}
-		// Maintain the team's web queue depth: enter on no-availability, leave the
-		// moment an agent frees up (gets rung). Re-publish each tick to refresh the
-		// TTL and reflect the live count.
-		if trackDepth {
-			switch {
-			case len(avail) == 0 && !inQueue:
-				inQueue = true
-				s.addQueueDepth(dk, +1)
-			case len(avail) > 0 && inQueue:
-				inQueue = false
-				s.addQueueDepth(dk, -1)
-			}
-			s.publishQueueDepth(ctx, dk)
-		}
-
 		select {
-		case <-ring:
-			return "completed", nil
-		case <-time.After(ringPoll):
-			if time.Now().After(deadline) {
-				return "no_answer", nil
-			}
-			// Forget agents that are no longer available (went busy/offline) so
-			// they get a fresh popup if they free up again before the deadline.
-			for sip := range rung {
-				if _, ok := avail[sip]; !ok {
-					delete(rung, sip)
-				}
-			}
+		case <-p.ring:
+			return
 		case <-ctx.Done():
-			return "no_answer", ctx.Err()
+			return
+		case <-timeout:
+			return
+		case <-tk.C:
+			if ready() {
+				return
+			}
 		}
 	}
 }
@@ -297,34 +305,6 @@ func (s *Server) signalRing(roomID room.RoomID) {
 	if ring != nil {
 		close(ring)
 	}
-}
-
-// depthKey identifies a team's web-side queue (per tenant) for depth tracking.
-type depthKey struct{ tenant, team string }
-
-// addQueueDepth adjusts the live count of web callers queued for a team. The map
-// entry is dropped at zero so a stale team never lingers.
-func (s *Server) addQueueDepth(dk depthKey, d int) {
-	s.qmu.Lock()
-	s.queueDepth[dk] += d
-	if s.queueDepth[dk] <= 0 {
-		delete(s.queueDepth, dk)
-	}
-	s.qmu.Unlock()
-}
-
-// publishQueueDepth writes the team's current web queue depth to Redis under the
-// "web" source key so the API sums it with the orchestrator's phone depth.
-// Best-effort; no-op without a cache.
-func (s *Server) publishQueueDepth(ctx context.Context, dk depthKey) {
-	if s.cfg.Cache == nil {
-		return
-	}
-	s.qmu.Lock()
-	n := s.queueDepth[dk]
-	s.qmu.Unlock()
-	s.cfg.Cache.Set(ctx, queuekeys.DepthKey(dk.tenant, dk.team, queuekeys.SourceWeb),
-		[]byte(strconv.Itoa(n)), queuekeys.DepthTTL)
 }
 
 // ensure the server satisfies the IVR's agent-ring seam.
