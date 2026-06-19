@@ -4,6 +4,8 @@ import { errMessage } from "../lib/errors";
 import { usePoll } from "../composables/usePoll";
 import { api } from "../api/client";
 import type { Tenant, Call, Agent, PhoneNumber, Queues } from "../api/types";
+import { Card, Panel, DataTable, type Column, SignalDot, LevelMeter, Badge } from "../components/ui";
+import { callStatusTone } from "../lib/status";
 
 const tenant = ref<Tenant | null>(null);
 const calls = ref<Call[]>([]);
@@ -46,88 +48,84 @@ onMounted(async () => {
 // Live queue depth + on-call: re-poll every 5s (loads immediately on mount).
 usePoll(loadQueues, 5000);
 
-const activeOutbound = () =>
-  numbers.value.filter((n) => n.type === "outbound" && n.active).length;
+const activeOutbound = computed(
+  () => numbers.value.filter((n) => n.type === "outbound" && n.active).length,
+);
+
+const cols: Column[] = [
+  { key: "from_number", label: "From", mono: true },
+  { key: "to_number", label: "To" },
+  { key: "status", label: "Status" },
+  { key: "started_at", label: "Started", align: "right" },
+];
 </script>
 
 <template>
   <div class="space-y-6">
-    <h1 class="text-2xl font-semibold">Dashboard</h1>
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-    <div v-if="loading" class="text-gray-400 text-sm">Loading…</div>
+    <h1 class="text-xl font-semibold tracking-tight">Dashboard</h1>
+    <p v-if="error" class="text-sm text-danger">{{ error }}</p>
+    <div v-if="loading" class="text-ink-faint text-sm">Loading…</div>
 
     <template v-else>
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <div
-          class="rounded-xl border p-5"
-          :class="queues.on_call > 0 ? 'bg-green-50 border-green-200' : 'bg-white'"
-        >
-          <div class="text-3xl font-bold" :class="queues.on_call > 0 ? 'text-green-700' : ''">
-            {{ queues.on_call }}
+        <!-- On-call: the signature live card -->
+        <Card>
+          <div class="flex items-center justify-between">
+            <div class="text-3xl font-semibold tabular-nums" :class="queues.on_call > 0 ? 'text-live' : ''">
+              {{ queues.on_call }}
+            </div>
+            <SignalDot :state="queues.on_call > 0 ? 'on_call' : 'offline'" hide-label />
+            <LevelMeter v-if="queues.on_call > 0" active />
           </div>
-          <div class="text-sm text-gray-500">On call</div>
-        </div>
-        <div
-          class="rounded-xl border p-5"
-          :class="queues.total > 0 ? 'bg-amber-50 border-amber-200' : 'bg-white'"
-        >
-          <div class="text-3xl font-bold" :class="queues.total > 0 ? 'text-amber-700' : ''">
+          <div class="text-sm text-ink-muted mt-1">On call</div>
+        </Card>
+
+        <Card>
+          <div class="text-3xl font-semibold tabular-nums" :class="queues.total > 0 ? 'text-warning' : ''">
             {{ queues.total }}
           </div>
-          <div class="text-sm text-gray-500">Calls in queue</div>
+          <div class="text-sm text-ink-muted mt-1">Calls in queue</div>
           <div v-if="waitingTeams.length" class="mt-2 space-y-0.5">
-            <div v-for="q in waitingTeams" :key="q.team" class="text-xs text-amber-700 flex justify-between">
+            <div
+              v-for="q in waitingTeams"
+              :key="q.team"
+              class="text-xs text-warning flex justify-between gap-2"
+            >
               <span class="truncate">{{ q.team }}</span>
-              <span class="font-medium">{{ q.waiting }}</span>
+              <span class="font-mono">{{ q.waiting }}</span>
             </div>
           </div>
-        </div>
-        <div class="bg-white rounded-xl border p-5">
-          <div class="text-3xl font-bold">{{ agents.length }}</div>
-          <div class="text-sm text-gray-500">Agents</div>
-        </div>
-        <div class="bg-white rounded-xl border p-5">
-          <div class="text-3xl font-bold">{{ numbers.length }}</div>
-          <div class="text-sm text-gray-500">Numbers</div>
-        </div>
-        <div class="bg-white rounded-xl border p-5">
-          <div class="text-3xl font-bold">{{ activeOutbound() }}</div>
-          <div class="text-sm text-gray-500">Active outbound trunks</div>
-        </div>
-        <div class="bg-white rounded-xl border p-5">
-          <div class="text-3xl font-bold capitalize">
-            {{ tenant?.outbound_strategy || "—" }}
-          </div>
-          <div class="text-sm text-gray-500">Trunk strategy</div>
-        </div>
+        </Card>
+
+        <Card>
+          <div class="text-3xl font-semibold tabular-nums">{{ agents.length }}</div>
+          <div class="text-sm text-ink-muted mt-1">Agents</div>
+        </Card>
+        <Card>
+          <div class="text-3xl font-semibold tabular-nums">{{ numbers.length }}</div>
+          <div class="text-sm text-ink-muted mt-1">Numbers</div>
+        </Card>
+        <Card>
+          <div class="text-3xl font-semibold tabular-nums">{{ activeOutbound }}</div>
+          <div class="text-sm text-ink-muted mt-1">Active outbound trunks</div>
+        </Card>
+        <Card>
+          <div class="text-2xl font-semibold capitalize">{{ tenant?.outbound_strategy || "—" }}</div>
+          <div class="text-sm text-ink-muted mt-1">Trunk strategy</div>
+        </Card>
       </div>
 
-      <div class="bg-white rounded-xl border">
-        <div class="px-5 py-3 border-b font-medium">Recent calls</div>
-        <table class="w-full text-sm">
-          <thead class="text-left text-gray-500">
-            <tr>
-              <th class="px-5 py-2 font-medium">From</th>
-              <th class="px-5 py-2 font-medium">To</th>
-              <th class="px-5 py-2 font-medium">Status</th>
-              <th class="px-5 py-2 font-medium">Started</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="c in calls" :key="c.id" class="border-t">
-              <td class="px-5 py-2">{{ c.from_number }}</td>
-              <td class="px-5 py-2">{{ c.to_number }}</td>
-              <td class="px-5 py-2">{{ c.status }}</td>
-              <td class="px-5 py-2 text-gray-500">
-                {{ new Date(c.started_at).toLocaleString() }}
-              </td>
-            </tr>
-            <tr v-if="calls.length === 0">
-              <td colspan="4" class="px-5 py-6 text-center text-gray-400">No calls yet</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <Panel>
+        <template #title>Recent calls</template>
+        <DataTable :columns="cols" :rows="calls" empty-text="No calls yet">
+          <template #cell-status="{ value }">
+            <Badge :tone="callStatusTone(String(value))">{{ value }}</Badge>
+          </template>
+          <template #cell-started_at="{ value }">
+            <span class="text-ink-muted">{{ new Date(String(value)).toLocaleString() }}</span>
+          </template>
+        </DataTable>
+      </Panel>
     </template>
   </div>
 </template>

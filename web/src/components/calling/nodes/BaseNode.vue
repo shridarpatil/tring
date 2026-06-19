@@ -32,14 +32,14 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
 
 <template>
   <div
-    class="base-node relative bg-white border border-gray-200 rounded-lg shadow-md hover:shadow-lg min-w-48 w-max max-w-sm overflow-visible transition-shadow duration-200"
+    class="base-node relative bg-surface border border-border rounded-lg shadow-lg hover:border-border-strong min-w-48 w-max max-w-sm overflow-visible transition-colors duration-200"
   >
     <Handle
       v-if="hasInput !== false"
       id="input"
       type="target"
       :position="Position.Top"
-      class="!w-3.5 !h-3.5 !rounded-full !bg-slate-400 !border-2 !border-white hover:!bg-slate-300 !transition-colors"
+      class="!w-3.5 !h-3.5 !rounded-full !bg-ink-faint !border-2 !border-surface hover:!bg-ink-muted !transition-colors"
       style="z-index: 10"
     />
 
@@ -53,7 +53,7 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
       <span class="truncate">{{ label }}</span>
     </div>
 
-    <div class="px-3 py-2.5 text-xs text-gray-500">
+    <div class="px-3 py-2.5 text-xs text-ink-muted">
       <slot />
     </div>
 
@@ -72,12 +72,12 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
               : `${((idx + 1) / (outputHandles.length + 1)) * 100}%`,
           zIndex: 10,
         }"
-        class="!w-3.5 !h-3.5 !rounded-full !bg-gray-900 !border-2 !border-white hover:!bg-gray-700 !transition-colors"
+        class="!w-3.5 !h-3.5 !rounded-full !bg-accent !border-2 !border-surface hover:!bg-accent-hover !transition-colors"
       />
       <span
         v-for="(handle, idx) in outputHandles"
         :key="'num-' + handle.id"
-        class="absolute text-[9px] font-bold text-gray-500 pointer-events-none whitespace-nowrap"
+        class="absolute text-[9px] font-bold text-ink-faint pointer-events-none whitespace-nowrap"
         :style="{
           left:
             outputHandles.length === 1
@@ -95,7 +95,7 @@ const headerGradient = computed(() => gradientMap[props.headerClass] || props.he
         id="default"
         type="source"
         :position="Position.Bottom"
-        class="!w-3.5 !h-3.5 !rounded-full !bg-gray-900 !border-2 !border-white hover:!bg-gray-700 !transition-colors"
+        class="!w-3.5 !h-3.5 !rounded-full !bg-accent !border-2 !border-surface hover:!bg-accent-hover !transition-colors"
         style="z-index: 10"
       />
     </template>

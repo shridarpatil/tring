@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
+import { Button, TextField } from "../components/ui";
 
 interface LoginResponse {
   token: string;
@@ -35,44 +36,37 @@ async function submit() {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+  <div class="min-h-screen flex items-center justify-center bg-base px-4">
     <form
-      class="w-full max-w-sm bg-white rounded-xl shadow-sm border p-8 space-y-5"
+      class="w-full max-w-sm bg-surface rounded-xl border border-border p-8 space-y-5 shadow-2xl"
       @submit.prevent="submit"
     >
-      <div class="text-center">
-        <div class="text-2xl font-bold">Tring</div>
-        <div class="text-sm text-gray-500">Console sign-in</div>
+      <div class="text-center space-y-1">
+        <div class="flex items-center justify-center gap-2">
+          <span class="h-2 w-2 rounded-full bg-accent"></span>
+          <span class="text-2xl font-semibold tracking-tight">Tring</span>
+        </div>
+        <div class="text-sm text-ink-muted">Console sign-in</div>
       </div>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Email</span>
-        <input
-          v-model="email"
-          type="email"
-          required
-          autocomplete="username"
-          class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-          placeholder="admin@tring.local"
-        />
-      </label>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Password</span>
-        <input
-          v-model="password"
-          type="password"
-          required
-          autocomplete="current-password"
-          class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
-        />
-      </label>
-      <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-      <button
-        type="submit"
-        :disabled="loading"
-        class="w-full bg-gray-900 text-white rounded-md py-2 text-sm font-medium hover:bg-gray-800 disabled:opacity-50"
-      >
+      <TextField
+        v-model="email"
+        type="email"
+        label="Email"
+        required
+        autocomplete="username"
+        placeholder="admin@tring.local"
+      />
+      <TextField
+        v-model="password"
+        type="password"
+        label="Password"
+        required
+        autocomplete="current-password"
+      />
+      <p v-if="error" class="text-sm text-danger">{{ error }}</p>
+      <Button type="submit" :loading="loading" block>
         {{ loading ? "Signing in…" : "Sign in" }}
-      </button>
+      </Button>
     </form>
   </div>
 </template>

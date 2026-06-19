@@ -4,29 +4,39 @@ import { errMessage } from "../lib/errors";
 import { useList } from "../composables/useList";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
+import { toast } from "../lib/toast";
 import type { Audio } from "../api/types";
+import { Button, IconButton, Panel, DataTable, type Column } from "../components/ui";
+import { Trash2 } from "lucide-vue-next";
 
-const { items: sounds, loading, error, load } = useList<Audio>("/v1/audio");
+const { items: sounds, loading, load } = useList<Audio>("/v1/audio");
 const uploading = ref(false);
 const name = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 const previewUrl = ref<Record<string, string>>({});
 
+const cols: Column[] = [
+  { key: "name", label: "Name" },
+  { key: "format", label: "Format" },
+  { key: "size_bytes", label: "Size" },
+  { key: "preview", label: "Preview" },
+];
+
 async function upload() {
   const f = fileInput.value?.files?.[0];
   if (!f) {
-    error.value = "choose a .wav or .mp3 file";
+    toast.error("choose a .wav or .mp3 file");
     return;
   }
   uploading.value = true;
-  error.value = "";
   try {
     await api.upload<Audio>("/v1/audio", f, name.value ? { name: name.value } : undefined);
     name.value = "";
     if (fileInput.value) fileInput.value.value = "";
     await load();
+    toast.success("Sound uploaded");
   } catch (e) {
-    error.value = errMessage(e, "upload failed");
+    toast.error(errMessage(e, "upload failed"));
   } finally {
     uploading.value = false;
   }
@@ -34,12 +44,12 @@ async function upload() {
 
 async function destroy(s: Audio) {
   if (!confirm(`Delete "${s.name}"? Flows or hold music using it will fall back to the default.`)) return;
-  error.value = "";
   try {
     await api.del<void>(`/v1/audio/${s.id}`);
     await load();
+    toast.success("Sound deleted");
   } catch (e) {
-    error.value = errMessage(e, "delete failed");
+    toast.error(errMessage(e, "delete failed"));
   }
 }
 
@@ -54,7 +64,7 @@ async function preview(s: Audio) {
   if (res.ok) {
     previewUrl.value = { ...previewUrl.value, [s.id]: URL.createObjectURL(await res.blob()) };
   } else {
-    error.value = "preview failed";
+    toast.error("preview failed");
   }
 }
 
@@ -65,70 +75,55 @@ function fmtSize(n: number) {
 
 <template>
   <div class="space-y-5">
-    <h1 class="text-2xl font-semibold">Sounds</h1>
-    <p class="text-sm text-gray-500">
+    <h1 class="text-xl font-semibold tracking-tight">Sounds</h1>
+    <p class="text-sm text-ink-muted">
       Upload audio (.wav or .mp3) once, then reuse it for IVR greetings and menu prompts, or as your
       queue hold music. Pick an uploaded sound on the <strong>Flows</strong> editor and in
       <strong>Settings</strong>.
     </p>
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
 
-    <form class="bg-white rounded-xl border p-5 grid sm:grid-cols-3 gap-4 items-end" @submit.prevent="upload">
+    <form
+      class="bg-surface rounded-xl border border-border p-5 grid sm:grid-cols-3 gap-4 items-end"
+      @submit.prevent="upload"
+    >
       <label class="block">
-        <span class="text-sm font-medium text-gray-700">Name (optional)</span>
+        <span class="text-xs font-medium text-ink-muted">Name (optional)</span>
         <input
           v-model="name"
-          class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+          class="mt-1 w-full rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink placeholder:text-ink-faint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
           placeholder="Welcome greeting"
         />
       </label>
       <label class="block">
-        <span class="text-sm font-medium text-gray-700">File (.wav / .mp3)</span>
+        <span class="text-xs font-medium text-ink-muted">File (.wav / .mp3)</span>
         <input
           ref="fileInput"
           type="file"
           accept=".wav,.mp3,audio/wav,audio/mpeg"
-          class="mt-1 w-full text-sm"
+          class="mt-1 w-full text-sm text-ink-muted file:mr-3 file:rounded-md file:border file:border-border file:bg-surface-2 file:px-3 file:py-1.5 file:text-sm file:text-ink"
         />
       </label>
-      <button
-        type="submit"
-        :disabled="uploading"
-        class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50"
-      >
-        {{ uploading ? "Uploading…" : "Upload" }}
-      </button>
+      <Button type="submit" :loading="uploading">Upload</Button>
     </form>
 
-    <div class="bg-white rounded-xl border">
-      <table class="w-full text-sm">
-        <thead class="text-left text-gray-500">
-          <tr>
-            <th class="px-5 py-2 font-medium">Name</th>
-            <th class="px-5 py-2 font-medium">Format</th>
-            <th class="px-5 py-2 font-medium">Size</th>
-            <th class="px-5 py-2 font-medium">Preview</th>
-            <th class="px-5 py-2 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in sounds" :key="s.id" class="border-t">
-            <td class="px-5 py-2 font-medium">{{ s.name }}</td>
-            <td class="px-5 py-2 uppercase text-gray-500">{{ s.format }}</td>
-            <td class="px-5 py-2 text-gray-500">{{ fmtSize(s.size_bytes) }}</td>
-            <td class="px-5 py-2">
-              <audio v-if="previewUrl[s.id]" :src="previewUrl[s.id]" controls class="h-8"></audio>
-              <button v-else class="text-gray-600 hover:text-gray-900" @click="preview(s)">▶ Play</button>
-            </td>
-            <td class="px-5 py-2 text-right">
-              <button class="text-red-600 hover:text-red-800" @click="destroy(s)">Delete</button>
-            </td>
-          </tr>
-          <tr v-if="!loading && sounds.length === 0">
-            <td colspan="5" class="px-5 py-6 text-center text-gray-400">No sounds yet</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <Panel>
+      <DataTable :columns="cols" :rows="sounds" :loading="loading" empty-text="No sounds yet">
+        <template #cell-format="{ value }">
+          <span class="uppercase text-ink-muted">{{ value }}</span>
+        </template>
+        <template #cell-size_bytes="{ value }">
+          <span class="text-ink-muted">{{ fmtSize(Number(value)) }}</span>
+        </template>
+        <template #cell-preview="{ row }">
+          <audio v-if="previewUrl[row.id]" :src="previewUrl[row.id]" controls class="h-8"></audio>
+          <Button v-else variant="ghost" size="sm" @click="preview(row)">▶ Play</Button>
+        </template>
+        <template #row-actions="{ row }">
+          <IconButton title="Delete" variant="danger" @click="destroy(row)">
+            <Trash2 />
+          </IconButton>
+        </template>
+      </DataTable>
+    </Panel>
   </div>
 </template>

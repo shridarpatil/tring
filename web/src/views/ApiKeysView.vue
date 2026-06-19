@@ -3,18 +3,36 @@ import { ref } from "vue";
 import { errMessage } from "../lib/errors";
 import { useList } from "../composables/useList";
 import { api } from "../api/client";
+import { toast } from "../lib/toast";
 import type { ApiKey } from "../api/types";
+import {
+  Button,
+  Panel,
+  DataTable,
+  type Column,
+  Badge,
+  Modal,
+  TextField,
+  CopyButton,
+} from "../components/ui";
 
-const { items: keys, loading, error, load } = useList<ApiKey>("/v1/api-keys");
+const { items: keys, loading, load } = useList<ApiKey>("/v1/api-keys");
 
 const showForm = ref(false);
 const creating = ref(false);
 const newName = ref("");
 const newKey = ref(""); // plaintext, shown once after create
 
+const cols: Column[] = [
+  { key: "name", label: "Name" },
+  { key: "key_prefix", label: "Key", mono: true },
+  { key: "created_at", label: "Created" },
+  { key: "last_used_at", label: "Last used" },
+  { key: "status", label: "Status" },
+];
+
 async function create() {
   creating.value = true;
-  error.value = "";
   newKey.value = "";
   try {
     const k = await api.post<ApiKey>("/v1/api-keys", { name: newName.value });
@@ -22,8 +40,9 @@ async function create() {
     newName.value = "";
     showForm.value = false;
     await load();
+    toast.success("API key generated");
   } catch (e) {
-    error.value = errMessage(e, "create failed");
+    toast.error(errMessage(e, "create failed"));
   } finally {
     creating.value = false;
   }
@@ -31,17 +50,13 @@ async function create() {
 
 async function revoke(k: ApiKey) {
   if (!confirm(`Revoke "${k.name}" (${k.key_prefix}…)? Anything using it will stop working.`)) return;
-  error.value = "";
   try {
     await api.del(`/v1/api-keys/${k.id}`);
     await load();
+    toast.success("API key revoked");
   } catch (e) {
-    error.value = errMessage(e, "revoke failed");
+    toast.error(errMessage(e, "revoke failed"));
   }
-}
-
-function copy(text: string) {
-  navigator.clipboard?.writeText(text);
 }
 
 function fmt(d?: string) {
@@ -52,74 +67,64 @@ function fmt(d?: string) {
 <template>
   <div class="space-y-5">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold">API keys</h1>
-      <button
-        class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800"
-        @click="showForm = !showForm"
-      >
-        {{ showForm ? "Cancel" : "Generate key" }}
-      </button>
+      <h1 class="text-xl font-semibold tracking-tight">API keys</h1>
+      <Button @click="showForm = true">Generate key</Button>
     </div>
 
-    <p class="text-sm text-gray-500">
-      Server-to-server credentials (<code>tk_live_…</code>) for your backend —
-      e.g. minting calling credentials. Send as
-      <code>Authorization: Bearer &lt;key&gt;</code>. Never expose a key in a browser.
+    <p class="text-sm text-ink-muted">
+      Server-to-server credentials (<code class="font-mono text-ink">tk_live_…</code>) for your
+      backend — e.g. minting calling credentials. Send as
+      <code class="font-mono text-ink">Authorization: Bearer &lt;key&gt;</code>. Never expose a key
+      in a browser.
     </p>
 
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-
     <!-- Plaintext shown exactly once -->
-    <div v-if="newKey" class="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
-      <div class="font-medium">New API key — copy it now, it won't be shown again</div>
-      <div class="mt-2 flex items-center gap-2">
-        <code class="flex-1 break-all text-xs bg-white border rounded-md px-3 py-2">{{ newKey }}</code>
-        <button class="text-xs border rounded-md px-2 py-2 hover:bg-gray-50" @click="copy(newKey)">Copy</button>
+    <div v-if="newKey" class="rounded-xl border border-live/30 bg-live-soft p-4">
+      <div class="flex items-center justify-between gap-3">
+        <div class="text-sm">New API key — copy it now, it won't be shown again</div>
+        <CopyButton :value="newKey" label="Copy key" />
       </div>
+      <code class="block mt-2 break-all text-xs font-mono text-ink-muted">{{ newKey }}</code>
     </div>
 
-    <form v-if="showForm" class="bg-white rounded-xl border p-5 flex items-end gap-3" @submit.prevent="create">
-      <label class="flex-1">
-        <span class="text-sm font-medium text-gray-700">Name</span>
-        <input v-model="newName" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="e.g. support-portal backend" />
-        <span class="text-xs text-gray-400">A label to recognise where this key is used.</span>
-      </label>
-      <button type="submit" :disabled="creating" class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50">
-        {{ creating ? "Generating…" : "Generate" }}
-      </button>
-    </form>
+    <Panel>
+      <DataTable :columns="cols" :rows="keys" :loading="loading" empty-text="No API keys yet">
+        <template #cell-name="{ row }">
+          <span :class="row.revoked ? 'text-ink-faint' : ''">{{ row.name }}</span>
+        </template>
+        <template #cell-key_prefix="{ value }">
+          <span class="text-ink-muted">{{ value }}…</span>
+        </template>
+        <template #cell-created_at="{ value }">
+          <span class="text-ink-muted">{{ fmt(value as string | undefined) }}</span>
+        </template>
+        <template #cell-last_used_at="{ value }">
+          <span class="text-ink-muted">{{ fmt(value as string | undefined) }}</span>
+        </template>
+        <template #cell-status="{ row }">
+          <Badge :tone="row.revoked ? 'neutral' : 'success'">
+            {{ row.revoked ? "revoked" : "active" }}
+          </Badge>
+        </template>
+        <template #row-actions="{ row }">
+          <Button v-if="!row.revoked" variant="danger" size="sm" @click="revoke(row)">Revoke</Button>
+        </template>
+      </DataTable>
+    </Panel>
 
-    <div class="bg-white rounded-xl border overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead class="text-left text-gray-500">
-          <tr>
-            <th class="px-5 py-2 font-medium">Name</th>
-            <th class="px-5 py-2 font-medium">Key</th>
-            <th class="px-5 py-2 font-medium">Created</th>
-            <th class="px-5 py-2 font-medium">Last used</th>
-            <th class="px-5 py-2 font-medium">Status</th>
-            <th class="px-5 py-2 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="k in keys" :key="k.id" class="border-t" :class="k.revoked ? 'opacity-50' : ''">
-            <td class="px-5 py-2">{{ k.name }}</td>
-            <td class="px-5 py-2 font-mono text-xs">{{ k.key_prefix }}…</td>
-            <td class="px-5 py-2 text-gray-500">{{ fmt(k.created_at) }}</td>
-            <td class="px-5 py-2 text-gray-500">{{ fmt(k.last_used_at) }}</td>
-            <td class="px-5 py-2">
-              <span v-if="k.revoked" class="text-gray-400">revoked</span>
-              <span v-else class="text-green-700">active</span>
-            </td>
-            <td class="px-5 py-2 text-right">
-              <button v-if="!k.revoked" class="text-red-600 hover:text-red-800" @click="revoke(k)">Revoke</button>
-            </td>
-          </tr>
-          <tr v-if="!loading && keys.length === 0">
-            <td colspan="6" class="px-5 py-6 text-center text-gray-400">No API keys yet</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <Modal v-model:open="showForm" title="Generate API key">
+      <form id="apikey-form" class="space-y-2" @submit.prevent="create">
+        <TextField
+          v-model="newName"
+          label="Name"
+          placeholder="e.g. support-portal backend"
+          hint="A label to recognise where this key is used."
+        />
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="showForm = false">Cancel</Button>
+        <Button type="submit" form="apikey-form" :loading="creating">Generate</Button>
+      </template>
+    </Modal>
   </div>
 </template>

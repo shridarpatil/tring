@@ -31,6 +31,11 @@ import {
   PhoneOff,
   PlayCircle,
 } from "lucide-vue-next";
+import { Button, IconButton, Toggle } from "../../components/ui";
+import { theme } from "../../lib/theme";
+
+// Canvas dot-grid tracks the theme (a dark hex would be harsh on a light pane).
+const bgPattern = computed(() => (theme.state.theme === "dark" ? "#2a323d" : "#d8dce1"));
 
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
@@ -457,61 +462,39 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-gray-50">
+  <div class="h-screen flex flex-col bg-base text-ink">
     <!-- Toolbar -->
-    <div class="flex items-center gap-3 px-4 py-2 border-b border-gray-200 bg-white shrink-0">
-      <button
-        class="h-8 w-8 rounded-md hover:bg-gray-100 flex items-center justify-center"
-        title="Back to flows"
-        @click="router.push({ name: 'flows' })"
-      >
+    <div class="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface shrink-0">
+      <IconButton title="Back to flows" @click="router.push({ name: 'flows' })">
         <ArrowLeft class="h-4 w-4" />
-      </button>
+      </IconButton>
       <input
         v-model="flowName"
-        placeholder="Flow Name"
-        class="h-8 text-sm rounded-md border border-gray-300 px-3 max-w-[280px] flex-1 sm:flex-none"
+        placeholder="Flow name"
+        class="h-9 text-sm rounded-md bg-surface-2 border border-border px-3 max-w-[280px] flex-1 sm:flex-none text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
       />
-      <label class="flex items-center gap-2 ml-2">
-        <input v-model="isActive" type="checkbox" class="rounded" />
-        <span class="text-xs whitespace-nowrap">Active</span>
-      </label>
-      <label class="flex items-center gap-2 ml-1">
-        <input
-          v-model="isOutgoingEnd"
-          type="checkbox"
-          :disabled="!isActive"
-          class="rounded"
-        />
-        <span class="text-xs whitespace-nowrap">Outgoing Post-Call</span>
-      </label>
+      <Toggle v-model="isActive" label="Active" class="ml-2" />
+      <Toggle v-model="isOutgoingEnd" label="Outgoing Post-Call" :disabled="!isActive" class="ml-1" />
       <div class="flex-1" />
-      <span v-if="savedMsg" class="text-xs text-green-600">{{ savedMsg }}</span>
-      <button
-        class="text-sm rounded-md border border-gray-300 bg-white px-3 py-1.5 hover:bg-gray-50 flex items-center gap-1"
-        @click="showSimPanel = !showSimPanel"
-      >
+      <span v-if="savedMsg" class="text-xs text-success">{{ savedMsg }}</span>
+      <Button variant="secondary" size="sm" @click="showSimPanel = !showSimPanel">
         <PlayCircle class="h-4 w-4" />
         Test
-      </button>
-      <button
-        :disabled="saving"
-        class="bg-gray-900 text-white text-sm rounded-md px-3 py-1.5 hover:bg-gray-800 disabled:opacity-50 flex items-center gap-1"
-        @click="saveFlow"
-      >
+      </Button>
+      <Button size="sm" :loading="saving" @click="saveFlow">
         <Save class="h-4 w-4" />
         {{ saving ? "Saving…" : "Save" }}
-      </button>
+      </Button>
     </div>
 
     <!-- Palette -->
     <div
-      class="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-gray-50 overflow-x-auto shrink-0"
+      class="flex items-center gap-2 px-4 py-2 border-b border-border bg-surface/60 overflow-x-auto shrink-0"
     >
       <button
         v-for="p in palette"
         :key="p.type"
-        class="h-7 text-xs rounded-md border border-gray-300 bg-white px-2 hover:bg-gray-50 flex items-center gap-1.5 shrink-0"
+        class="h-7 text-xs rounded-md border border-border bg-surface-2 px-2 text-ink-muted hover:text-ink hover:border-border-strong flex items-center gap-1.5 shrink-0 transition-colors"
         @click="addNodeFromPalette(p.type)"
       >
         <span :class="['w-2 h-2 rounded-full', p.color]" />
@@ -522,7 +505,7 @@ onMounted(async () => {
 
     <!-- Main: canvas + right panel -->
     <div class="flex-1 flex overflow-hidden">
-      <div class="flex-1 relative bg-white">
+      <div class="flex-1 relative bg-base">
         <VueFlow
           :nodes="nodes"
           :edges="edges"
@@ -537,7 +520,7 @@ onMounted(async () => {
           @node-click="onNodeClick"
           @pane-click="onPaneClick"
         >
-          <Background pattern-color="#e5e7eb" :gap="20" />
+          <Background :pattern-color="bgPattern" :gap="20" />
           <Controls />
           <MiniMap />
         </VueFlow>
@@ -545,7 +528,7 @@ onMounted(async () => {
 
       <aside
         v-if="!showSimPanel"
-        class="w-[420px] min-w-0 border-l border-gray-200 bg-white shrink-0 flex flex-col overflow-hidden"
+        class="w-[420px] min-w-0 border-l border-border bg-surface shrink-0 flex flex-col overflow-hidden"
       >
         <IVRNodeProperties
           v-if="selectedNode"
@@ -557,7 +540,7 @@ onMounted(async () => {
           @update:node="onUpdateNode"
           @delete="requestDeleteSelectedNode"
         />
-        <div v-else class="p-6 text-sm text-gray-400 text-center">
+        <div v-else class="p-6 text-sm text-ink-faint text-center">
           Click a node to edit, or pick one from the palette above to add it.
         </div>
       </aside>
@@ -568,40 +551,34 @@ onMounted(async () => {
            audio "plays" and HTTP "calls" are recorded as intent only. -->
       <aside
         v-else
-        class="w-[480px] min-w-0 border-l border-gray-200 bg-white shrink-0 flex flex-col overflow-hidden"
+        class="w-[480px] min-w-0 border-l border-border bg-surface shrink-0 flex flex-col overflow-hidden"
       >
-        <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+        <div class="px-4 py-3 border-b border-border flex items-center justify-between">
           <div class="flex items-center gap-2">
-            <PlayCircle class="h-4 w-4" />
+            <PlayCircle class="h-4 w-4 text-accent" />
             <span class="font-medium text-sm">Simulator</span>
           </div>
-          <button class="text-gray-500 hover:text-gray-900 text-sm" @click="showSimPanel = false">
+          <button class="text-ink-muted hover:text-ink text-sm" @click="showSimPanel = false">
             Close
           </button>
         </div>
-        <div class="p-4 space-y-3 border-b border-gray-100">
+        <div class="p-4 space-y-3 border-b border-border">
           <label class="block text-xs">
-            <span class="font-medium text-gray-700">Caller</span>
+            <span class="font-medium text-ink-muted">Caller</span>
             <input
               v-model="simCaller"
               :disabled="simSession?.status === 'awaiting_dtmf'"
-              class="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm disabled:bg-gray-50 disabled:text-gray-500"
+              class="mt-1 w-full rounded-md bg-surface-2 border border-border px-2 py-1.5 text-sm font-mono text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent disabled:opacity-50"
             />
           </label>
-          <button
-            :disabled="simBusy"
-            class="w-full bg-gray-900 text-white text-sm rounded-md py-1.5 hover:bg-gray-800 disabled:opacity-50"
-            @click="startSimulation"
-          >
-            {{
-              simSession ? (simBusy ? "Running…" : "Restart simulation") : (simBusy ? "Starting…" : "Start simulation")
-            }}
-          </button>
-          <p v-if="simError" class="text-xs text-red-600">{{ simError }}</p>
+          <Button block :loading="simBusy" @click="startSimulation">
+            {{ simSession ? "Restart simulation" : "Start simulation" }}
+          </Button>
+          <p v-if="simError" class="text-xs text-danger">{{ simError }}</p>
         </div>
 
         <div class="flex-1 overflow-auto p-4 text-xs">
-          <div v-if="!simSession" class="text-gray-400 text-center py-8">
+          <div v-if="!simSession" class="text-ink-faint text-center py-8">
             Start a simulation. The walker pauses on every Menu / Gather and
             asks for the next digit, just like a real call.
           </div>
@@ -610,21 +587,21 @@ onMounted(async () => {
               <li
                 v-for="(step, idx) in simSession.steps"
                 :key="idx"
-                class="border border-gray-200 rounded-md p-2"
+                class="border border-border rounded-md p-2 bg-surface-2/40"
               >
                 <div class="flex items-center gap-1.5">
-                  <span class="font-mono text-[10px] text-gray-400">{{ idx + 1 }}</span>
-                  <span class="font-medium text-gray-800">{{ step.node_type }}</span>
-                  <span class="text-gray-400">·</span>
-                  <span class="text-gray-600">{{ step.action }}</span>
+                  <span class="font-mono text-[10px] text-ink-faint">{{ idx + 1 }}</span>
+                  <span class="font-medium text-ink">{{ step.node_type }}</span>
+                  <span class="text-ink-faint">·</span>
+                  <span class="text-ink-muted">{{ step.action }}</span>
                 </div>
-                <div v-if="step.detail" class="mt-1 text-gray-600 break-all">
+                <div v-if="step.detail" class="mt-1 text-ink-muted break-all">
                   {{ step.detail }}
                 </div>
-                <div v-if="step.dtmf_input" class="mt-1 font-mono text-gray-500">
+                <div v-if="step.dtmf_input" class="mt-1 font-mono text-ink-muted">
                   input: {{ step.dtmf_input }}
                 </div>
-                <div v-if="step.outcome" class="mt-1 text-[10px] text-gray-400">
+                <div v-if="step.outcome" class="mt-1 text-[10px] text-ink-faint">
                   → {{ step.outcome }}
                 </div>
               </li>
@@ -633,12 +610,12 @@ onMounted(async () => {
             <!-- Live prompt for the paused node — Menu/Gather only. -->
             <div
               v-if="simSession.status === 'awaiting_dtmf' && simSession.awaiting_node"
-              class="mt-4 border-2 border-gray-900 rounded-md p-3 bg-gray-50"
+              class="mt-4 border border-accent/50 rounded-md p-3 bg-accent-soft/40"
             >
-              <div class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+              <div class="text-[11px] uppercase tracking-wide text-ink-muted mb-1">
                 Waiting at {{ simSession.awaiting_node.node_type }}
               </div>
-              <div v-if="simSession.awaiting_node.prompt" class="text-gray-800 mb-2">
+              <div v-if="simSession.awaiting_node.prompt" class="text-ink mb-2">
                 {{ simSession.awaiting_node.prompt }}
               </div>
               <form class="flex gap-2" @submit.prevent="sendSimInput">
@@ -646,17 +623,11 @@ onMounted(async () => {
                   v-model="simInput"
                   autofocus
                   placeholder="press a digit"
-                  class="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm font-mono"
+                  class="flex-1 rounded-md bg-surface-2 border border-border px-2 py-1.5 text-sm font-mono text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
                 />
-                <button
-                  type="submit"
-                  :disabled="simBusy || !simInput"
-                  class="bg-gray-900 text-white text-sm rounded-md px-3 py-1.5 hover:bg-gray-800 disabled:opacity-50"
-                >
-                  Send
-                </button>
+                <Button type="submit" size="sm" :disabled="simBusy || !simInput">Send</Button>
               </form>
-              <div class="mt-1 text-[10px] text-gray-400">
+              <div class="mt-1 text-[10px] text-ink-faint">
                 For Menu: a single digit (1-9, *, #). For Gather: the full sequence.
               </div>
             </div>
@@ -664,16 +635,16 @@ onMounted(async () => {
             <!-- Ended state — flow finished or errored. -->
             <div
               v-else-if="simSession.status === 'ended' || simSession.status === 'error'"
-              class="mt-3 p-2 rounded-md bg-gray-50 text-gray-700"
+              class="mt-3 p-2 rounded-md bg-surface-2/40 border border-border text-ink-muted"
             >
-              <div><span class="font-medium">Ended at:</span> {{ simSession.ended_at }}</div>
+              <div><span class="font-medium text-ink">Ended at:</span> {{ simSession.ended_at }}</div>
               <div>
-                <span class="font-medium">Hangup cause:</span> {{ simSession.hangup_cause }}
+                <span class="font-medium text-ink">Hangup cause:</span> {{ simSession.hangup_cause }}
               </div>
               <div v-if="Object.keys(simSession.vars).length">
-                <span class="font-medium">Vars:</span> {{ JSON.stringify(simSession.vars) }}
+                <span class="font-medium text-ink">Vars:</span> {{ JSON.stringify(simSession.vars) }}
               </div>
-              <div v-if="simSession.error" class="text-red-600">
+              <div v-if="simSession.error" class="text-danger">
                 <span class="font-medium">Error:</span> {{ simSession.error }}
               </div>
             </div>
@@ -687,5 +658,38 @@ onMounted(async () => {
 <style>
 .vue-flow__node {
   font-family: inherit;
+}
+
+/* Dark-theme the vue-flow chrome — its bundled theme-default.css assumes a
+   light canvas, so controls/minimap render as white boxes otherwise. */
+.vue-flow__controls {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+}
+.vue-flow__controls-button {
+  background: var(--color-surface-2);
+  border-bottom: 1px solid var(--color-border);
+  fill: var(--color-ink-muted);
+}
+.vue-flow__controls-button:hover {
+  background: var(--color-surface);
+  fill: var(--color-ink);
+}
+.vue-flow__minimap {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.vue-flow__minimap-mask {
+  fill: color-mix(in srgb, var(--color-overlay) 60%, transparent);
+}
+.vue-flow__edge-path {
+  stroke: var(--color-border-strong);
+}
+.vue-flow__edge.animated .vue-flow__edge-path,
+.vue-flow__edge.selected .vue-flow__edge-path {
+  stroke: var(--color-accent);
+}
+.vue-flow__attribution {
+  display: none;
 }
 </style>
