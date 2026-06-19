@@ -23,6 +23,7 @@ import (
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
+	"github.com/whatomate/tring/internal/routing"
 )
 
 // This exercises the signaling protocol wiring — auth, join, room creation, the
@@ -307,6 +308,14 @@ type fakeTeams struct{ members map[string][]string }
 
 func (f fakeTeams) TeamSIPs(_ context.Context, _ uuid.UUID, team string) ([]string, error) {
 	return f.members[team], nil
+}
+
+// TeamConfig: a team exists (with default queue settings) iff it has members.
+func (f fakeTeams) TeamConfig(_ context.Context, _ uuid.UUID, team string) (routing.TeamConfig, bool, error) {
+	if _, ok := f.members[team]; !ok {
+		return routing.TeamConfig{}, false, nil
+	}
+	return routing.TeamConfig{Name: team}, true, nil
 }
 
 // TestTransferRingsOnlyTeamMembers checks team-resolution parity: a transfer to

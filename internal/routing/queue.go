@@ -1,4 +1,13 @@
-package orchestrator
+// Package routing is the transport-agnostic agent-routing brain shared by both
+// media planes: the FreeSWITCH/orchestrator path and the pion/gateway path. It
+// owns the queue discipline — who waits for a team (Queue), which agents are
+// mid-ring (Reservations), which agents are available (FilterAvailable), the
+// ring order per team strategy (OrderByStrategy), team config, and queue-depth
+// publishing — so that decision logic lives in ONE place instead of drifting
+// between two copies. How a call is actually rung and an answer detected is
+// transport-specific and stays behind the Effects seam (effects.go); the planes
+// differ only there.
+package routing
 
 import (
 	"context"
@@ -10,49 +19,47 @@ import (
 	"github.com/whatomate/tring/internal/cache"
 )
 
-// This file backs the Transfer-node queue: which callers are waiting for a team
-// (Queue) and which agents are mid-ring (Reservations). Both have a Redis
-// backend — the production path, shared across orchestrators that serve the same
-// agents and durable across an orchestrator restart — and an in-memory backend
-// used only when Redis isn't configured (host dev / unit tests).
-//
-// Why shared state matters: agents are a global resource. With >1 orchestrator
-// (1:1 with FreeSWITCH), a call on unit A and a call on unit B can both want the
-// same agent; only a shared reservation prevents a cross-unit double-ring, and a
-// shared queue gives one global priority-then-FIFO line per team.
+// QueueKey scopes a team's waiting line to a tenant; ResKey scopes an agent's
+// ring reservation to a tenant. Both planes build keys the same way so a shared
+// Redis backend lines up across the FreeSWITCH and pion processes.
+func QueueKey(tenantID, team string) string { return tenantID + "/" + team }
+func ResKey(tenantID, sip string) string    { return tenantID + "/" + sip }
 
 // ─── Reservations ───────────────────────────────────────────────────
 
 // Reservations marks an agent as "being rung right now". Presence only flips to
 // on_call when the agent ANSWERS, so without this two callers dequeuing at once
-// both see the same idle agent as free and double-ring it.
+// both see the same idle agent as free and double-ring it. The Redis backend is
+// shared across processes (FreeSWITCH + pion) serving the same agents; the
+// in-memory backend is the no-Redis fallback (host dev / unit tests).
 type Reservations interface {
-	reserve(ctx context.Context, key string, ttl time.Duration)
-	release(ctx context.Context, key string)
-	reserved(ctx context.Context, key string) bool
+	Reserve(ctx context.Context, key string, ttl time.Duration)
+	Release(ctx context.Context, key string)
+	Reserved(ctx context.Context, key string) bool
 }
 
-// memReservations is the in-memory fallback (one orchestrator, no Redis).
+// memReservations is the in-memory fallback (single process, no Redis).
 type memReservations struct {
 	mu sync.Mutex
 	m  map[string]time.Time // key -> expiry
 }
 
-func newMemReservations() *memReservations { return &memReservations{m: map[string]time.Time{}} }
+// NewMemReservations returns the in-memory Reservations backend.
+func NewMemReservations() Reservations { return &memReservations{m: map[string]time.Time{}} }
 
-func (r *memReservations) reserve(_ context.Context, key string, ttl time.Duration) {
+func (r *memReservations) Reserve(_ context.Context, key string, ttl time.Duration) {
 	r.mu.Lock()
 	r.m[key] = time.Now().Add(ttl)
 	r.mu.Unlock()
 }
 
-func (r *memReservations) release(_ context.Context, key string) {
+func (r *memReservations) Release(_ context.Context, key string) {
 	r.mu.Lock()
 	delete(r.m, key)
 	r.mu.Unlock()
 }
 
-func (r *memReservations) reserved(_ context.Context, key string) bool {
+func (r *memReservations) Reserved(_ context.Context, key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	exp, ok := r.m[key]
@@ -67,20 +74,21 @@ func (r *memReservations) reserved(_ context.Context, key string) bool {
 }
 
 // redisReservations is the production backend: a TTL'd Redis key per agent,
-// visible to every orchestrator sharing the cache. Redis handles expiry.
+// visible to every process sharing the cache. Redis handles expiry.
 type redisReservations struct{ c *cache.Cache }
 
-func newRedisReservations(c *cache.Cache) *redisReservations { return &redisReservations{c: c} }
+// NewRedisReservations returns the Redis-backed Reservations (shared, durable).
+func NewRedisReservations(c *cache.Cache) Reservations { return &redisReservations{c: c} }
 
 func resvRedisKey(key string) string { return "tring:resv:" + key }
 
-func (r *redisReservations) reserve(ctx context.Context, key string, ttl time.Duration) {
+func (r *redisReservations) Reserve(ctx context.Context, key string, ttl time.Duration) {
 	r.c.Set(ctx, resvRedisKey(key), []byte("1"), ttl)
 }
-func (r *redisReservations) release(ctx context.Context, key string) {
+func (r *redisReservations) Release(ctx context.Context, key string) {
 	_ = r.c.Delete(ctx, resvRedisKey(key))
 }
-func (r *redisReservations) reserved(ctx context.Context, key string) bool {
+func (r *redisReservations) Reserved(ctx context.Context, key string) bool {
 	_, ok := r.c.Get(ctx, resvRedisKey(key))
 	return ok
 }
@@ -93,10 +101,10 @@ func (r *redisReservations) reserved(ctx context.Context, key string) bool {
 // otherwise the front of the normal tier — the only waiter allowed to claim a
 // freed agent, keeping dispatch strictly priority-then-FIFO.
 type Queue interface {
-	enqueue(ctx context.Context, key string, priority bool) string
-	isHead(ctx context.Context, key, ticket string) bool
-	remove(ctx context.Context, key, ticket string)
-	depth(ctx context.Context, key string) int
+	Enqueue(ctx context.Context, key string, priority bool) string
+	IsHead(ctx context.Context, key, ticket string) bool
+	Remove(ctx context.Context, key, ticket string)
+	Depth(ctx context.Context, key string) int
 }
 
 // memQueue is the in-memory fallback.
@@ -106,11 +114,12 @@ type memQueue struct {
 	normal   map[string][]string
 }
 
-func newMemQueue() *memQueue {
+// NewMemQueue returns the in-memory Queue backend.
+func NewMemQueue() Queue {
 	return &memQueue{priority: map[string][]string{}, normal: map[string][]string{}}
 }
 
-func (q *memQueue) enqueue(_ context.Context, key string, priority bool) string {
+func (q *memQueue) Enqueue(_ context.Context, key string, priority bool) string {
 	t := uuid.NewString()
 	q.mu.Lock()
 	if priority {
@@ -122,7 +131,7 @@ func (q *memQueue) enqueue(_ context.Context, key string, priority bool) string 
 	return t
 }
 
-func (q *memQueue) isHead(_ context.Context, key, ticket string) bool {
+func (q *memQueue) IsHead(_ context.Context, key, ticket string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if p := q.priority[key]; len(p) > 0 {
@@ -134,7 +143,7 @@ func (q *memQueue) isHead(_ context.Context, key, ticket string) bool {
 	return false
 }
 
-func (q *memQueue) remove(_ context.Context, key, ticket string) {
+func (q *memQueue) Remove(_ context.Context, key, ticket string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.priority[key] = removeTicket(q.priority[key], ticket); len(q.priority[key]) == 0 {
@@ -145,7 +154,7 @@ func (q *memQueue) remove(_ context.Context, key, ticket string) {
 	}
 }
 
-func (q *memQueue) depth(_ context.Context, key string) int {
+func (q *memQueue) Depth(_ context.Context, key string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return len(q.priority[key]) + len(q.normal[key])
@@ -163,10 +172,11 @@ func removeTicket(q []string, t string) []string {
 // redisQueue is the production backend: two Redis lists per team (priority,
 // normal). RPUSH appends to the tail; the head (LINDEX 0) is the oldest waiter,
 // so the lists are the FIFO and the ticket just identifies a waiter for
-// isHead/remove. One global queue per team across all orchestrators.
+// IsHead/Remove. One global queue per team across all processes.
 type redisQueue struct{ c *cache.Cache }
 
-func newRedisQueue(c *cache.Cache) *redisQueue { return &redisQueue{c: c} }
+// NewRedisQueue returns the Redis-backed Queue (shared, durable).
+func NewRedisQueue(c *cache.Cache) Queue { return &redisQueue{c: c} }
 
 // queueTTL is a safety net so a fully-abandoned queue key self-expires; it's
 // refreshed on every enqueue. Far longer than any real wait.
@@ -175,7 +185,7 @@ const queueTTL = time.Hour
 func queuePKey(key string) string { return "tring:queue:p:" + key }
 func queueNKey(key string) string { return "tring:queue:n:" + key }
 
-func (q *redisQueue) enqueue(ctx context.Context, key string, priority bool) string {
+func (q *redisQueue) Enqueue(ctx context.Context, key string, priority bool) string {
 	t := uuid.NewString()
 	if priority {
 		q.c.RPush(ctx, queuePKey(key), t, queueTTL)
@@ -185,7 +195,7 @@ func (q *redisQueue) enqueue(ctx context.Context, key string, priority bool) str
 	return t
 }
 
-func (q *redisQueue) isHead(ctx context.Context, key, ticket string) bool {
+func (q *redisQueue) IsHead(ctx context.Context, key, ticket string) bool {
 	if h, ok := q.c.LHead(ctx, queuePKey(key)); ok {
 		return h == ticket // priority tier drains first
 	}
@@ -195,11 +205,11 @@ func (q *redisQueue) isHead(ctx context.Context, key, ticket string) bool {
 	return false
 }
 
-func (q *redisQueue) remove(ctx context.Context, key, ticket string) {
+func (q *redisQueue) Remove(ctx context.Context, key, ticket string) {
 	q.c.LRem(ctx, queuePKey(key), ticket)
 	q.c.LRem(ctx, queueNKey(key), ticket)
 }
 
-func (q *redisQueue) depth(ctx context.Context, key string) int {
+func (q *redisQueue) Depth(ctx context.Context, key string) int {
 	return q.c.LLen(ctx, queuePKey(key)) + q.c.LLen(ctx, queueNKey(key))
 }
