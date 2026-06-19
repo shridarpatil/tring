@@ -153,6 +153,17 @@ var defaults = map[string]any{
 	// fallback. True Opus needs mod_opusfile baked into the image (not present).
 	"record_format": "ogg",
 
+	// Text-to-speech (local Piper). On flow save, the API synthesizes IVR node
+	// prompt text (with no uploaded audio) to 48 kHz mono Opus-Ogg (piper + the
+	// bundled ffmpeg) into the sound library, and stamps the node's audio_file —
+	// so both planes play it via the normal audio path with no call-time TTS. No
+	// on/off flag: TTS auto-enables when the piper binary + model resolve (bundled
+	// in the API image) and no-ops gracefully otherwise. The synthesized files
+	// live under <audio_dir>/tts (derived), so a stock deploy needs zero TTS config.
+	"tts_piper_bin":   "/opt/piper/piper",
+	"tts_piper_model": "/usr/local/share/piper/voice.onnx",
+	"tts_voice":       "", // speaker id for multi-speaker models ("" → default 0)
+
 	// S3 (or S3-compatible: MinIO, R2, …) for call recordings. When s3_bucket is
 	// set, a finished recording is uploaded to S3 (date-wise key) and the local
 	// spool deleted; the API serves it back from S3. Empty bucket = local only.
