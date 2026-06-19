@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -77,6 +79,87 @@ func scanFlow(scanner interface{ Scan(...interface{}) error }) (Flow, error) {
 	return f, err
 }
 
+// ttsSubdir is the audio-library subdir holding prompt audio synthesized from
+// node text. A node audio_file under this subdir is TTS-managed (replaced when
+// the text changes); an uploaded file is not, so it always wins.
+const ttsSubdir = "tts"
+
+// prerenderFlowAudio synthesizes spoken audio for IVR nodes that have prompt
+// text (greeting_text) but no uploaded audio, then stamps the node's audio_file
+// with the generated file — so both media planes play it through the normal
+// audio_file path with no call-time TTS. It mutates a generic-map round-trip of
+// the definition (preserving every field) and returns the updated JSON; on any
+// problem it returns the definition unchanged (best-effort, never blocks a
+// save). Text with unresolved {{vars}} is skipped — those can only be rendered
+// at call time, which we don't do.
+func (s *Server) prerenderFlowAudio(ctx context.Context, def json.RawMessage) json.RawMessage {
+	if s.tts == nil || !s.tts.Enabled() || len(def) == 0 {
+		return def
+	}
+	var root map[string]any
+	if err := json.Unmarshal(def, &root); err != nil {
+		return def // not our job to validate here; store as-is
+	}
+	nodes, ok := root["nodes"].([]any)
+	if !ok {
+		return def
+	}
+	changed := false
+	for _, nraw := range nodes {
+		node, ok := nraw.(map[string]any)
+		if !ok {
+			continue
+		}
+		cfg, ok := node["config"].(map[string]any)
+		if !ok {
+			continue
+		}
+		text := strings.TrimSpace(stringOf(cfg["greeting_text"]))
+		af := stringOf(cfg["audio_file"])
+		managed := strings.Contains(af, "/"+ttsSubdir+"/")
+		switch {
+		case text != "" && !strings.Contains(text, "{{") && (af == "" || managed):
+			fp, err := s.synthFlowText(ctx, text)
+			if err != nil {
+				s.log.Warn("tts: flow prompt synth failed; node stays silent", "err", err)
+				continue
+			}
+			if af != fp {
+				cfg["audio_file"] = fp
+				changed = true
+			}
+		case text == "" && managed:
+			// Text cleared on a node we'd synthesized for — drop the stale audio.
+			delete(cfg, "audio_file")
+			changed = true
+		}
+	}
+	if !changed {
+		return def
+	}
+	if out, err := json.Marshal(root); err == nil {
+		return out
+	}
+	return def
+}
+
+// synthFlowText renders text to a cached audio file and returns its FS-visible
+// playback path (the value stored in a node's audio_file).
+func (s *Server) synthFlowText(ctx context.Context, text string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	diskPath, err := s.tts.Synthesize(cctx, text, "")
+	if err != nil {
+		return "", err
+	}
+	return s.audioFSDir + "/" + ttsSubdir + "/" + filepath.Base(diskPath), nil
+}
+
+func stringOf(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
 func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var req createFlowRequest
@@ -91,10 +174,11 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 
 	// Definition defaults to an empty v2 graph if not provided. JSONB
 	// column default handles this but we pass NULL through so callers
-	// can omit it without sending an empty object.
+	// can omit it without sending an empty object. Node prompt text is
+	// pre-rendered to audio here so both planes play it as a normal file.
 	var def interface{}
 	if len(req.Definition) > 0 {
-		def = req.Definition
+		def = s.prerenderFlowAudio(r.Context(), req.Definition)
 	}
 
 	row := s.db.Pool.QueryRow(r.Context(), s.q.CreateFlow,
@@ -186,7 +270,7 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 	}
 	var def interface{}
 	if len(req.Definition) > 0 {
-		def = req.Definition
+		def = s.prerenderFlowAudio(r.Context(), req.Definition)
 	}
 	row := s.db.Pool.QueryRow(r.Context(), s.q.UpdateFlow,
 		req.Name, req.Description, req.IsActive, req.IsOutgoingEnd,

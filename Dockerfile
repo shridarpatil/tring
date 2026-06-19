@@ -5,9 +5,9 @@
 #   docker build --build-arg CMD=api          -t tring-api          .
 #   docker build --build-arg CMD=orchestrator -t tring-orchestrator .
 #
-# Final images are distroless/static (~15 MB) running as non-root. CGO is
-# off so the binary is statically linked — no glibc deps, no shell, no
-# package manager in the runtime image.
+# Final images are distroless/cc running as non-root. CGO is off so the Go
+# binary is statically linked; the runtime carries glibc only for the bundled
+# Piper TTS (+ its onnxruntime). No shell, no package manager in the image.
 
 ARG GO_VERSION=1.25
 ARG NODE_VERSION=22
@@ -91,13 +91,49 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/tring ./cmd/${CMD}
 
+# ---- piper TTS stage -----------------------------------------------------
+# Fetches the Piper release (self-contained: binary + libonnxruntime +
+# libpiper_phonemize + espeak-ng-data) and one default voice model. Embedded in
+# the runtime so the API can synthesize IVR prompt text to audio on flow save.
+# Piper is glibc-built, hence the distroless/cc runtime below. Layers are
+# content-addressed, so the registry stores piper once even though all three
+# images share this runtime. (Only the API uses it; the others just carry it.)
+FROM --platform=$BUILDPLATFORM alpine:3.20 AS piper
+ARG TARGETARCH
+ARG PIPER_VERSION=2023.11.14-2
+# Voice: rhasspy/piper-voices. Stored as voice.onnx(+.json) to match the config
+# default tts_piper_model=/usr/local/share/piper/voice.onnx.
+ARG PIPER_VOICE_URL=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium
+RUN apk add --no-cache curl tar
+RUN set -eux; \
+    case "$TARGETARCH" in \
+      amd64) parch=x86_64 ;; \
+      arm64) parch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_${parch}.tar.gz" \
+      | tar -xz -C /opt; \
+    mkdir -p /usr/local/share/piper; \
+    curl -fsSL "${PIPER_VOICE_URL}.onnx"      -o /usr/local/share/piper/voice.onnx; \
+    curl -fsSL "${PIPER_VOICE_URL}.onnx.json" -o /usr/local/share/piper/voice.onnx.json; \
+    /opt/piper/piper --help >/dev/null 2>&1 || true   # smoke (may fail on musl; real check is in cc runtime)
+
 # ---- runtime stage -------------------------------------------------------
-FROM gcr.io/distroless/static-debian12:nonroot
+# distroless/cc (glibc + libstdc++) rather than /static, because Piper and its
+# onnxruntime are dynamically linked. The static ffmpeg still runs fine here.
+FROM gcr.io/distroless/cc-debian12:nonroot
 
 # A statically-linked ffmpeg (runs in distroless — no shell/libc needed). Used to
-# transcode uploaded prompts to Opus-Ogg (api) and merge stereo recordings
-# (orchestrator/gateway). /usr/local/bin is on the distroless PATH.
+# transcode uploaded prompts + synthesized TTS to Opus-Ogg (api) and merge stereo
+# recordings (orchestrator/gateway). /usr/local/bin is on the distroless PATH.
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+
+# Piper binary (+ its bundled .so's and espeak-ng-data) and the default voice.
+# LD_LIBRARY_PATH lets the binary resolve its sibling shared libs; espeak-ng-data
+# is found relative to the binary.
+COPY --from=piper /opt/piper /opt/piper
+COPY --from=piper /usr/local/share/piper /usr/local/share/piper
+ENV LD_LIBRARY_PATH=/opt/piper
 
 # Distroless ships /etc/passwd with `nonroot` mapped to UID 65532.
 USER nonroot:nonroot
