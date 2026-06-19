@@ -11,19 +11,43 @@ import { errMessage } from "../lib/errors";
 import { useList } from "../composables/useList";
 import { usePoll } from "../composables/usePoll";
 import { api } from "../api/client";
+import { toast } from "../lib/toast";
+import { trunkStatusTone } from "../lib/status";
 import type { Trunk } from "../api/types";
+import {
+  Button,
+  IconButton,
+  Panel,
+  DataTable,
+  type Column,
+  Badge,
+  Modal,
+  TextField,
+  Select,
+  Toggle,
+} from "../components/ui";
+import { Pencil, Trash2 } from "lucide-vue-next";
 
-const statusStyle: Record<string, { dot: string; label: string; text: string }> = {
-  online:      { dot: "bg-green-500",  text: "text-green-700",  label: "online" },
-  offline:     { dot: "bg-red-500",    text: "text-red-700",    label: "offline" },
-  connecting:  { dot: "bg-amber-500",  text: "text-amber-700",  label: "connecting" },
-  not_loaded:  { dot: "bg-gray-300",   text: "text-gray-500",   label: "not loaded" },
-  unknown:     { dot: "bg-gray-300",   text: "text-gray-500",   label: "unknown" },
+// status string → human label for the status badge.
+const statusLabels: Record<string, string> = {
+  online: "online",
+  offline: "offline",
+  connecting: "connecting",
+  not_loaded: "not loaded",
+  unknown: "unknown",
 };
 
-const { items: trunks, loading, error, load } = useList<Trunk>("/v1/trunks");
+const { items: trunks, loading, load } = useList<Trunk>("/v1/trunks");
 const reloadingFS = ref(false);
-const reloadMsg = ref("");
+
+const cols: Column[] = [
+  { key: "name", label: "Name" },
+  { key: "provider_type", label: "Provider", mono: true },
+  { key: "status", label: "Status" },
+  { key: "auth", label: "Auth" },
+  { key: "endpoint", label: "Endpoint", mono: true },
+  { key: "active", label: "Active" },
+];
 
 const showForm = ref(false);
 const editing = ref<Trunk | null>(null);
@@ -42,6 +66,7 @@ const form = ref({
 });
 
 const providerTypes = ["generic", "exotel", "airtel", "jio", "tata"];
+const providerOptions = providerTypes.map((p) => ({ value: p, label: p }));
 
 const formTitle = computed(() => (editing.value ? "Edit trunk" : "New trunk"));
 
@@ -82,7 +107,6 @@ async function startEdit(t: Trunk) {
 
 async function save() {
   saving.value = true;
-  error.value = "";
   try {
     const body = { ...form.value };
     if (editing.value) {
@@ -93,8 +117,9 @@ async function save() {
     showForm.value = false;
     editing.value = null;
     await load();
+    toast.success("Trunk saved");
   } catch (e) {
-    error.value = errMessage(e, "save failed");
+    toast.error(errMessage(e, "save failed"));
   } finally {
     saving.value = false;
   }
@@ -102,26 +127,24 @@ async function save() {
 
 async function removeTrunk(t: Trunk) {
   if (!confirm(`Delete trunk "${t.name}"?`)) return;
-  error.value = "";
   try {
     await api.del(`/v1/trunks/${t.id}`);
     await load();
+    toast.success("Trunk deleted");
   } catch (e) {
-    error.value = errMessage(e, "delete failed");
+    toast.error(errMessage(e, "delete failed"));
   }
 }
 
 async function reloadFS() {
   reloadingFS.value = true;
-  reloadMsg.value = "";
   try {
     await api.post("/v1/trunks/reload");
-    reloadMsg.value = "FS gateway dir + sofia rescan triggered.";
+    toast.success("FS gateway dir + sofia rescan triggered.");
   } catch (e) {
-    reloadMsg.value = errMessage(e, "reload failed");
+    toast.error(errMessage(e, "reload failed"));
   } finally {
     reloadingFS.value = false;
-    setTimeout(() => (reloadMsg.value = ""), 4000);
   }
 }
 
@@ -132,224 +155,121 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
 <template>
   <div class="space-y-5">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold">Trunks</h1>
+      <h1 class="text-xl font-semibold tracking-tight">Trunks</h1>
       <div class="flex items-center gap-2">
-        <button
-          class="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50"
-          :disabled="reloadingFS"
-          @click="reloadFS"
+        <Button
+          variant="ghost"
+          :loading="reloadingFS"
           title="Re-render gateway XML and rescan sofia"
+          @click="reloadFS"
         >
-          {{ reloadingFS ? "Reloading…" : "Reload FS" }}
-        </button>
-        <button
-          class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800"
-          @click="showForm ? (showForm = false) : newTrunk()"
-        >
-          {{ showForm ? "Cancel" : "New trunk" }}
-        </button>
+          Reload FS
+        </Button>
+        <Button @click="newTrunk">New trunk</Button>
       </div>
     </div>
 
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-    <p v-if="reloadMsg" class="text-sm text-blue-600">{{ reloadMsg }}</p>
+    <Panel>
+      <DataTable :columns="cols" :rows="trunks" :loading="loading">
+        <template #cell-status="{ row }">
+          <span :title="row.state_raw || '(no FS state)'">
+            <Badge :tone="trunkStatusTone(row.status)">
+              {{ statusLabels[row.status || "unknown"] || row.status }}
+            </Badge>
+          </span>
+        </template>
+        <template #cell-auth="{ row }">
+          <Badge :tone="row.register ? 'accent' : 'warning'">
+            {{ row.register ? "REGISTER" : "IP-auth" }}
+          </Badge>
+        </template>
+        <template #cell-endpoint="{ row }">
+          {{ row.register ? `${row.sip_username}@${row.sip_realm}` : row.proxy_ip || "—" }}
+        </template>
+        <template #cell-active="{ row }">
+          <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
+        </template>
+        <template #row-actions="{ row }">
+          <IconButton title="Edit" variant="ghost" size="sm" @click="startEdit(row)">
+            <Pencil class="h-4 w-4" />
+          </IconButton>
+          <IconButton title="Delete" variant="danger" size="sm" @click="removeTrunk(row)">
+            <Trash2 class="h-4 w-4" />
+          </IconButton>
+        </template>
+        <template #empty>
+          No trunks yet — click <span class="text-ink">New trunk</span> to add one.
+        </template>
+      </DataTable>
+    </Panel>
 
-    <!-- Form -->
-    <form
-      v-if="showForm"
-      class="bg-white rounded-xl border border-gray-200 p-5 space-y-4"
-      @submit.prevent="save"
-    >
-      <div class="font-medium">{{ formTitle }}</div>
-
-      <div class="grid sm:grid-cols-2 gap-4">
-        <label class="block">
-          <span class="text-sm font-medium text-gray-700">Name</span>
-          <input
-            v-model="form.name"
-            required
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-            placeholder="Tata production"
-          />
-        </label>
-        <label class="block">
-          <span class="text-sm font-medium text-gray-700">Provider type</span>
-          <select
-            v-model="form.provider_type"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-          >
-            <option v-for="p in providerTypes" :key="p" :value="p">{{ p }}</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="flex items-center gap-6 pt-2 border-t border-gray-100">
-        <label class="flex items-center gap-2">
-          <input v-model="form.register" type="checkbox" class="rounded" />
-          <span class="text-sm font-medium"
-            >REGISTER auth (aggregator-style)</span
-          >
-        </label>
-        <label class="flex items-center gap-2">
-          <input v-model="form.active" type="checkbox" class="rounded" />
-          <span class="text-sm">Active</span>
-        </label>
-      </div>
-
-      <!-- REGISTER auth fields -->
-      <template v-if="form.register">
-        <div class="grid sm:grid-cols-2 gap-4">
-          <label class="block">
-            <span class="text-sm font-medium text-gray-700">SIP username</span>
-            <input
-              v-model="form.sip_username"
-              required
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-            />
-          </label>
-          <label class="block">
-            <span class="text-sm font-medium text-gray-700">SIP password</span>
-            <input
-              v-model="form.sip_password"
-              type="password"
-              required
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-            />
-          </label>
-        </div>
-        <label class="block">
-          <span class="text-sm font-medium text-gray-700">SIP realm</span>
-          <input
-            v-model="form.sip_realm"
-            required
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-            placeholder="account.pstn.exotel.com"
-          />
-        </label>
-      </template>
-
-      <!-- IP-auth fields -->
-      <template v-else>
-        <div class="grid sm:grid-cols-2 gap-4">
-          <label class="block">
-            <span class="text-sm font-medium text-gray-700">SBC proxy IP</span>
-            <input
-              v-model="form.proxy_ip"
-              required
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-              placeholder="10.0.0.42"
-            />
-            <span class="text-xs text-gray-400"
-              >Tata's SBC IP — sent to and trusted from.</span
-            >
-          </label>
-          <label class="block">
-            <span class="text-sm font-medium text-gray-700">SBC ACL CIDR</span>
-            <input
-              v-model="form.auth_acl_cidr"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-              placeholder="10.0.0.40/29"
-            />
-            <span class="text-xs text-gray-400">For the inbound ACL.</span>
-          </label>
-        </div>
-        <label class="block">
-          <span class="text-sm font-medium text-gray-700"
-            >SIP realm (optional — defaults to proxy IP)</span
-          >
-          <input
-            v-model="form.sip_realm"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
-          />
-        </label>
-      </template>
-
-      <div class="flex items-center gap-3 pt-2">
-        <button
-          type="submit"
-          :disabled="saving"
-          class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50"
-        >
-          {{ saving ? "Saving…" : editing ? "Save changes" : "Create" }}
-        </button>
-        <button
-          type="button"
-          class="text-sm text-gray-600 hover:text-gray-900"
-          @click="showForm = false; editing = null"
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-
-    <!-- List -->
-    <div class="bg-white rounded-xl border border-gray-200">
-      <table class="w-full text-sm">
-        <thead class="text-left text-gray-500">
-          <tr>
-            <th class="px-5 py-2 font-medium">Name</th>
-            <th class="px-5 py-2 font-medium">Provider</th>
-            <th class="px-5 py-2 font-medium">Status</th>
-            <th class="px-5 py-2 font-medium">Auth</th>
-            <th class="px-5 py-2 font-medium">Endpoint</th>
-            <th class="px-5 py-2 font-medium">Active</th>
-            <th class="px-5 py-2 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="t in trunks" :key="t.id" class="border-t border-gray-200">
-            <td class="px-5 py-2 font-medium">{{ t.name }}</td>
-            <td class="px-5 py-2 font-mono text-xs">{{ t.provider_type }}</td>
-            <td class="px-5 py-2">
-              <span class="inline-flex items-center gap-1.5">
-                <span
-                  :class="['h-2 w-2 rounded-full', statusStyle[t.status || 'unknown'].dot]"
-                  :title="t.state_raw || '(no FS state)'"
-                />
-                <span :class="['text-xs', statusStyle[t.status || 'unknown'].text]">
-                  {{ statusStyle[t.status || 'unknown'].label }}
-                </span>
-              </span>
-            </td>
-            <td class="px-5 py-2 text-xs">
-              <span v-if="t.register" class="text-purple-700">REGISTER</span>
-              <span v-else class="text-amber-700">IP-auth</span>
-            </td>
-            <td class="px-5 py-2 font-mono text-xs">
-              {{ t.register ? `${t.sip_username}@${t.sip_realm}` : t.proxy_ip || "—" }}
-            </td>
-            <td class="px-5 py-2">
-              <span :class="t.active ? 'text-green-600' : 'text-gray-400'">
-                {{ t.active ? "yes" : "no" }}
-              </span>
-            </td>
-            <td class="px-5 py-2 text-right whitespace-nowrap">
-              <button
-                class="text-gray-600 hover:text-gray-900 mr-3"
-                @click="startEdit(t)"
-              >
-                Edit
-              </button>
-              <button class="text-red-600 hover:text-red-800" @click="removeTrunk(t)">
-                Delete
-              </button>
-            </td>
-          </tr>
-          <tr v-if="!loading && trunks.length === 0">
-            <td colspan="7" class="px-5 py-8 text-center text-gray-400">
-              No trunks yet — click <span class="font-medium">New trunk</span> to add one.
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p class="text-xs text-gray-400">
+    <p class="text-xs text-ink-faint">
       Saving a trunk renders gateway XML to
       <code class="font-mono">freeswitch/conf/sip_profiles/external/dynamic/</code>
       and runs
       <code class="font-mono">sofia profile external rescan</code>. Zero downtime;
       live calls stay up.
     </p>
+
+    <Modal v-model:open="showForm" :title="formTitle" size="lg">
+      <form id="trunk-form" class="space-y-4" @submit.prevent="save">
+        <div class="grid sm:grid-cols-2 gap-4">
+          <TextField v-model="form.name" label="Name" required placeholder="Tata production" />
+          <Select v-model="form.provider_type" label="Provider type" :options="providerOptions" />
+        </div>
+
+        <div class="flex items-center gap-6 pt-2 border-t border-border">
+          <Toggle v-model="form.register" label="REGISTER auth (aggregator-style)" />
+          <Toggle v-model="form.active" label="Active" />
+        </div>
+
+        <!-- REGISTER auth fields -->
+        <template v-if="form.register">
+          <div class="grid sm:grid-cols-2 gap-4">
+            <TextField v-model="form.sip_username" label="SIP username" mono required />
+            <TextField v-model="form.sip_password" label="SIP password" type="password" mono required />
+          </div>
+          <TextField
+            v-model="form.sip_realm"
+            label="SIP realm"
+            mono
+            required
+            placeholder="account.pstn.exotel.com"
+          />
+        </template>
+
+        <!-- IP-auth fields -->
+        <template v-else>
+          <div class="grid sm:grid-cols-2 gap-4">
+            <TextField
+              v-model="form.proxy_ip"
+              label="SBC proxy IP"
+              mono
+              required
+              placeholder="10.0.0.42"
+              hint="Tata's SBC IP — sent to and trusted from."
+            />
+            <TextField
+              v-model="form.auth_acl_cidr"
+              label="SBC ACL CIDR"
+              mono
+              placeholder="10.0.0.40/29"
+              hint="For the inbound ACL."
+            />
+          </div>
+          <TextField
+            v-model="form.sip_realm"
+            label="SIP realm (optional — defaults to proxy IP)"
+            mono
+          />
+        </template>
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="showForm = false; editing = null">Cancel</Button>
+        <Button type="submit" form="trunk-form" :loading="saving">
+          {{ editing ? "Save changes" : "Create" }}
+        </Button>
+      </template>
+    </Modal>
   </div>
 </template>

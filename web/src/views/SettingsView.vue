@@ -2,17 +2,18 @@
 import { ref, computed, onMounted } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
+import { toast } from "../lib/toast";
 import AudioPicker from "../components/AudioPicker.vue";
+import { Card, Button, Select, Toggle, Badge } from "../components/ui";
 import type { Tenant, GuestConfig, Flow } from "../api/types";
 
 const tenant = ref<Tenant | null>(null);
 const loading = ref(true);
 const saving = ref(false);
-const error = ref("");
-const saved = ref(false);
 
 const strategy = ref("failover");
 const strategies = ["failover", "round_robin", "manual", "load_based"];
+const strategyOptions = strategies.map((s) => ({ value: s, label: s }));
 // System hold music (an uploaded sound's file_path; "" = built-in default).
 const holdMusic = ref("");
 // Record a call once the agent and client connect.
@@ -25,10 +26,12 @@ const guest = ref<GuestConfig | null>(null);
 const flows = ref<Flow[]>([]);
 const defaultFlowId = ref("");
 const guestSaving = ref(false);
-const guestSaved = ref(false);
-const guestError = ref("");
 
 const activeFlows = computed(() => flows.value.filter((f) => f.is_active));
+const flowOptions = computed(() => [
+  { value: "", label: "— none (backend must pass flow_id) —" },
+  ...activeFlows.value.map((f) => ({ value: f.id, label: f.name })),
+]);
 
 async function load() {
   loading.value = true;
@@ -39,7 +42,7 @@ async function load() {
     recordCalls.value = tenant.value.record_calls ?? true;
     maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
   } catch (e) {
-    error.value = errMessage(e, "failed to load");
+    toast.error(errMessage(e, "failed to load"));
   } finally {
     loading.value = false;
   }
@@ -52,14 +55,12 @@ async function load() {
     flows.value = fl;
     defaultFlowId.value = g.default_flow_id || "";
   } catch (e) {
-    guestError.value = errMessage(e, "failed to load guest config");
+    toast.error(errMessage(e, "failed to load guest config"));
   }
 }
 
 async function save() {
   saving.value = true;
-  error.value = "";
-  saved.value = false;
   try {
     tenant.value = await api.patch<Tenant>("/v1/tenants/me", {
       outbound_strategy: strategy.value,
@@ -70,9 +71,9 @@ async function save() {
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
     maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
-    saved.value = true;
+    toast.success("Saved");
   } catch (e) {
-    error.value = errMessage(e, "save failed");
+    toast.error(errMessage(e, "save failed"));
   } finally {
     saving.value = false;
   }
@@ -80,16 +81,14 @@ async function save() {
 
 async function saveGuest() {
   guestSaving.value = true;
-  guestError.value = "";
-  guestSaved.value = false;
   try {
     guest.value = await api.patch<GuestConfig>("/v1/guest-config", {
       default_flow_id: defaultFlowId.value,
     });
     defaultFlowId.value = guest.value.default_flow_id || "";
-    guestSaved.value = true;
+    toast.success("Saved");
   } catch (e) {
-    guestError.value = errMessage(e, "save failed");
+    toast.error(errMessage(e, "save failed"));
   } finally {
     guestSaving.value = false;
   }
@@ -100,86 +99,80 @@ onMounted(load);
 
 <template>
   <div class="space-y-5 max-w-2xl">
-    <h1 class="text-2xl font-semibold">Settings</h1>
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+    <h1 class="text-xl font-semibold tracking-tight">Settings</h1>
 
-    <div v-if="tenant" class="bg-white rounded-xl border p-6 space-y-5">
+    <Card v-if="tenant" class="space-y-5">
       <div class="grid grid-cols-2 gap-4 text-sm">
         <div>
-          <div class="text-gray-500">Tenant</div>
-          <div class="font-medium">{{ tenant.name }}</div>
+          <div class="text-ink-muted">Tenant</div>
+          <div class="font-medium text-ink">{{ tenant.name }}</div>
         </div>
         <div>
-          <div class="text-gray-500">SIP domain</div>
-          <div class="font-mono">{{ tenant.sip_domain }}</div>
+          <div class="text-ink-muted">SIP domain</div>
+          <div class="font-mono text-ink">{{ tenant.sip_domain }}</div>
         </div>
       </div>
 
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Outbound trunk strategy</span>
-        <select v-model="strategy" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-          <option v-for="s in strategies" :key="s" :value="s">{{ s }}</option>
-        </select>
-        <span class="text-xs text-gray-400">
+      <div>
+        <Select
+          v-model="strategy"
+          label="Outbound trunk strategy"
+          :options="strategyOptions"
+        />
+        <p class="text-xs text-ink-faint mt-1">
           failover = try all in priority order · round_robin = rotate · manual = lowest priority only · load_based = reserved
-        </span>
-      </label>
+        </p>
+      </div>
 
       <div v-if="tenant.failover_causes?.length" class="text-sm">
-        <div class="text-gray-500">Failover causes</div>
+        <div class="text-ink-muted">Failover causes</div>
         <div class="mt-1 flex flex-wrap gap-1">
-          <span v-for="c in tenant.failover_causes" :key="c" class="bg-gray-100 rounded px-2 py-0.5 text-xs font-mono">{{ c }}</span>
+          <Badge v-for="c in tenant.failover_causes" :key="c" tone="neutral">{{ c }}</Badge>
         </div>
       </div>
 
-      <div class="block">
-        <span class="text-sm font-medium text-gray-700">Hold music</span>
-        <p class="text-xs text-gray-400 mb-1">
+      <div>
+        <span class="text-xs font-medium text-ink-muted">Hold music</span>
+        <p class="text-xs text-ink-faint mb-1">
           Played to callers waiting in a team's queue. Upload audio under <strong>Sounds</strong>.
           Default is FreeSWITCH's built-in music.
         </p>
         <AudioPicker v-model="holdMusic" default-label="Default (built-in music)" />
       </div>
 
-      <div class="block">
-        <label class="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" v-model="recordCalls" class="h-4 w-4 rounded border-gray-300" />
-          <span class="text-sm font-medium text-gray-700">Record calls</span>
-        </label>
-        <p class="text-xs text-gray-400 mt-1">
+      <div>
+        <Toggle v-model="recordCalls" label="Record calls" />
+        <p class="text-xs text-ink-faint mt-1">
           Record each call once the agent and caller connect. Recordings appear in the
           <strong>Calls</strong> log. Make sure recording is permitted and disclosed where you operate.
         </p>
       </div>
 
-      <div class="block">
-        <span class="text-sm font-medium text-gray-700">Max call duration (minutes)</span>
+      <div>
+        <span class="text-xs font-medium text-ink-muted">Max call duration (minutes)</span>
         <input
           v-model.number="maxCallMinutes"
           type="number"
           min="1"
           max="1440"
-          class="mt-1 w-40 rounded-md border border-gray-300 px-3 py-2 text-sm"
+          class="mt-1 block w-40 rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
         />
-        <p class="text-xs text-gray-400 mt-1">
+        <p class="text-xs text-ink-faint mt-1">
           Longest a call may last. Also sets the TURN relay credential lifetime, so it must
           cover your longest call. 1–1440 min.
         </p>
       </div>
 
-      <div class="flex items-center gap-3">
-        <button :disabled="saving" class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50" @click="save">
-          {{ saving ? "Saving…" : "Save" }}
-        </button>
-        <span v-if="saved" class="text-sm text-green-600">Saved</span>
+      <div>
+        <Button :loading="saving" @click="save">Save changes</Button>
       </div>
-    </div>
+    </Card>
 
     <!-- ─── Guest web calling ─────────────────────────────────────── -->
-    <div v-if="guest" class="bg-white rounded-xl border p-6 space-y-5">
+    <Card v-if="guest" class="space-y-5">
       <div>
-        <h2 class="text-lg font-semibold">Guest web calling</h2>
-        <p class="text-sm text-gray-500">
+        <h2 class="text-base font-semibold text-ink">Guest web calling</h2>
+        <p class="text-sm text-ink-muted">
           The default IVR flow a guest call lands in when your backend doesn't pass
           an explicit <code>flow_id</code>. Visitor tokens are minted server-side via
           <code>POST /v1/guest-credentials</code> (your API key) — gate that with a
@@ -187,24 +180,16 @@ onMounted(load);
         </p>
       </div>
 
-      <p v-if="guestError" class="text-sm text-red-600">{{ guestError }}</p>
-
-      <!-- Default flow -->
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Default flow</span>
-        <select v-model="defaultFlowId" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-          <option value="">— none (backend must pass flow_id) —</option>
-          <option v-for="f in activeFlows" :key="f.id" :value="f.id">{{ f.name }}</option>
-        </select>
-        <span class="text-xs text-gray-400">The fallback flow for guest calls with no explicit flow_id. Only active flows are listed.</span>
-      </label>
-
-      <div class="flex items-center gap-3">
-        <button :disabled="guestSaving" class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50" @click="saveGuest">
-          {{ guestSaving ? "Saving…" : "Save guest config" }}
-        </button>
-        <span v-if="guestSaved" class="text-sm text-green-600">Saved</span>
+      <div>
+        <Select v-model="defaultFlowId" label="Default flow" :options="flowOptions" />
+        <p class="text-xs text-ink-faint mt-1">
+          The fallback flow for guest calls with no explicit flow_id. Only active flows are listed.
+        </p>
       </div>
-    </div>
+
+      <div>
+        <Button :loading="guestSaving" @click="saveGuest">Save guest config</Button>
+      </div>
+    </Card>
   </div>
 </template>
