@@ -111,6 +111,15 @@ func (g *Gateway) handleFSInvite(req *sip.Request, tx sip.ServerTransaction) {
 	// Ring ALL of the agent's tabs/devices and wait for the FIRST to accept; the
 	// rest get "answered elsewhere". Declined / no live session / timeout fail
 	// the leg so FS rolls on.
+	// Don't pop a second incoming-call UI on an agent who's already mid-call —
+	// reply 486 so FreeSWITCH rolls on to the next candidate. (Closes the race
+	// window between enterCall and the orchestrator's next ring-all decision.)
+	if g.agents.onCall(key) {
+		g.log.Info("agent already on a call, replying 486", "tenant", tenant, "sip", sipUser)
+		_ = dlg.Respond(sip.StatusBusyHere, "On Another Call", nil)
+		return
+	}
+
 	_ = dlg.Respond(sip.StatusRinging, "Ringing", nil)
 	ic := g.ringAgent(key, from, auto)
 	if ic == nil {
