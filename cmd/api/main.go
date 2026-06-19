@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/whatomate/tring/internal/logging"
 	tringmigrate "github.com/whatomate/tring/internal/migrate"
 	"github.com/whatomate/tring/internal/queries"
+	"github.com/whatomate/tring/internal/tts"
 )
 
 // migrateRun is a tiny shim so the call site reads `migrateRun(...)`
@@ -100,10 +102,22 @@ func main() {
 		logger.Warn("S3 recording storage disabled (config error)", "err", err)
 	}
 
+	// Local Piper TTS: synthesizes IVR node prompt text to an audio file on flow
+	// save, into <audio_dir>/tts (alongside uploaded sounds, so both planes read
+	// it). Auto-enables only when piper + model resolve; otherwise a no-op.
+	ttsEngine := tts.New(tts.Config{
+		PiperBin: k.String("tts_piper_bin"),
+		Model:    k.String("tts_piper_model"),
+		Voice:    k.String("tts_voice"),
+		CacheDir: filepath.Join(k.String("audio_dir"), "tts"),
+		Logger:   logger,
+	})
+
 	srv := &http.Server{
 		Addr: *addr,
 		Handler: api.NewServer(api.Config{
 			DB:               database,
+			TTS:              ttsEngine,
 			JWTSecret:        k.String("jwt_secret"),
 			FSBasicAuth:      k.String("fs_basic_auth"),
 			ESLAddr:          k.String("esl_addr"),
