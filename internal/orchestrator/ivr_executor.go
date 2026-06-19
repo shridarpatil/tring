@@ -42,6 +42,7 @@ import (
 	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queries"
+	"github.com/whatomate/tring/internal/queuekeys"
 )
 
 // flowCacheTTL is how long a resolved flow definition stays cached. Flows
@@ -628,33 +629,22 @@ func (e *Executor) runTransfer(ctx context.Context, conn *eslgo.Conn, node *ivrN
 	return "no_answer", nil
 }
 
-// queueDepthTTL bounds how long a published queue-depth value lives without a
-// refresh. The orchestrator re-publishes on every poll tick while callers wait,
-// so a team's count goes stale (then expires to "absent" = 0) within this window
-// of the last caller leaving — and survives an orchestrator crash without leaving
-// a phantom count forever.
-const queueDepthTTL = 10 * time.Second
-
-// QueueDepthKey is the Redis key holding the number of callers waiting in a
-// team's queue. The orchestrator writes it (publishDepth); the API reads it for
-// the dashboard. Exported so both sides agree on the key (like FlowCacheKey).
-func QueueDepthKey(tenantID uuid.UUID, team string) string {
-	return "tring:queue:depth:" + tenantID.String() + ":" + team
-}
-
 // queueKey / resKey build the per-tenant in-process keys for the call queue (by
 // team) and agent reservations (by sip).
 func queueKey(tenantID uuid.UUID, team string) string { return tenantID.String() + "/" + team }
 func resKey(tenantID uuid.UUID, sip string) string    { return tenantID.String() + "/" + sip }
 
-// publishDepth writes a team's current queue depth to Redis so the API/dashboard
-// can show it. No-op without a cache.
+// publishDepth writes this orchestrator's phone-queue depth for a team to Redis
+// so the API/dashboard can show it. Published under the "phone" source key; the
+// pion edge publishes its web waiters separately and the API sums the two. No-op
+// without a cache.
 func (e *Executor) publishDepth(ctx context.Context, tenantID uuid.UUID, team string) {
 	if e.Cache == nil {
 		return
 	}
 	n := e.queue.depth(ctx, queueKey(tenantID, team))
-	e.Cache.Set(ctx, QueueDepthKey(tenantID, team), []byte(strconv.Itoa(n)), queueDepthTTL)
+	e.Cache.Set(ctx, queuekeys.DepthKey(tenantID.String(), team, queuekeys.SourcePhone),
+		[]byte(strconv.Itoa(n)), queuekeys.DepthTTL)
 }
 
 // queuePollInterval is how often a queued caller's watcher re-checks for a free

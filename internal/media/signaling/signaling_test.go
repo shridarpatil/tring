@@ -348,6 +348,52 @@ func TestTransferRingsOnlyTeamMembers(t *testing.T) {
 	}
 }
 
+// TestTransferSkipsBusyAgentAndQueues verifies the two routing fixes together:
+// a transfer must NOT ring an agent who is already on a call (no second
+// incoming-call popup), and the caller waits in queue until that agent frees up
+// — then gets rung — instead of immediately failing over to no_answer.
+func TestTransferSkipsBusyAgentAndQueues(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: transferFlows{},
+		Teams: fakeTeams{members: map[string][]string{"sales": {"alice"}}},
+	})
+	tenant := uuid.New()
+
+	// alice holds a presence socket AND is already on a call (a second socket
+	// joined another room → she's on_call).
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+
+	busy := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	busy.send(map[string]any{"type": "join", "room": "busyroom", "name": "Alice"})
+	busy.readUntil("joined") // alice is now on_call
+
+	// A visitor enters the flow → transfer to team sales (only member: alice).
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	// alice must NOT be rung while busy — the caller is queued instead.
+	_ = alice.conn.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
+	for {
+		data, err := wsutil.ReadServerText(alice.conn)
+		if err != nil {
+			break // timed out with no incoming — correct (busy agent skipped, caller queued)
+		}
+		var m map[string]any
+		if json.Unmarshal(data, &m) == nil && m["type"] == "incoming" {
+			t.Fatal("busy agent was rung; should have been skipped and the caller queued")
+		}
+	}
+
+	// When alice frees up (leaves the other call), the queued caller rings her.
+	_ = busy.conn.Close()
+	if inc := alice.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("freed agent not rung for the queued caller; incoming = %v", inc)
+	}
+}
+
 // TestDevFlowRingsAgentWithoutDB checks the self-contained demo path: with dev
 // tokens on and NO FlowLoader, joining with flow_id "dev" runs the built-in
 // transfer flow and rings an online agent.

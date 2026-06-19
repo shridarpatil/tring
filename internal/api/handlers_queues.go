@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/whatomate/tring/internal/orchestrator"
+	"github.com/whatomate/tring/internal/queuekeys"
 )
 
 // ---- Queues -------------------------------------------------------------
@@ -49,9 +49,15 @@ func (s *Server) handleListQueues(w http.ResponseWriter, r *http.Request) {
 
 	out := queuesResponse{OnCall: onCall, Queues: []queueDepth{}}
 	for _, name := range names {
+		// Sum every producer's published depth for this team (phone + web) so a
+		// caller waiting on either media plane is counted once. Each source key
+		// self-heals via TTL, so a stopped producer drops out within DepthTTL.
 		n := 0
-		if v, ok := s.cache.Get(r.Context(), orchestrator.QueueDepthKey(t.ID, name)); ok {
-			n, _ = strconv.Atoi(string(v))
+		for _, src := range queuekeys.Sources {
+			if v, ok := s.cache.Get(r.Context(), queuekeys.DepthKey(t.ID.String(), name, src)); ok {
+				x, _ := strconv.Atoi(string(v))
+				n += x
+			}
 		}
 		out.Total += n
 		out.Queues = append(out.Queues, queueDepth{Team: name, Waiting: n})
