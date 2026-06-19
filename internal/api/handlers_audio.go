@@ -193,6 +193,37 @@ func (s *Server) handleGetAudioFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, s.diskPathFor(a.FilePath))
 }
 
+// handlePreviewAudio streams a sound by its stored file_path (the value held in a
+// flow node's audio_file / a tenant's hold_music) so the console can play it —
+// including TTS-rendered prompts that aren't sound-library assets. The path is
+// confined to the audio dir (no traversal); stream URLs (local_stream://…) and
+// anything outside the dir are rejected.
+func (s *Server) handlePreviewAudio(w http.ResponseWriter, r *http.Request) {
+	disk, ok := s.previewDiskPath(r.URL.Query().Get("path"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "not a previewable sound path")
+		return
+	}
+	if fi, err := os.Stat(disk); err != nil || fi.IsDir() {
+		writeError(w, http.StatusNotFound, "sound not found")
+		return
+	}
+	http.ServeFile(w, r, disk)
+}
+
+// previewDiskPath maps an untrusted file_path query param to a local disk path,
+// CONFINED to audioDir. Clean("/"+rel) anchors at root so any "../" is dropped
+// before the join, so the result can't escape audioDir (same guard as the pion
+// filePrompts loader). Returns ok=false for empty / stream-URL paths.
+func (s *Server) previewDiskPath(filePath string) (string, bool) {
+	if filePath == "" || s.audioDir == "" || strings.Contains(filePath, "://") {
+		return "", false
+	}
+	rel := strings.TrimPrefix(filePath, s.audioFSDir)
+	disk := filepath.Join(s.audioDir, filepath.Clean("/"+rel))
+	return disk, true
+}
+
 func (s *Server) handleDeleteAudio(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.loadAudio(w, r)
 	if !ok {

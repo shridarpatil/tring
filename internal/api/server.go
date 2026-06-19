@@ -323,6 +323,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/audio", s.handleListAudio)
 			r.Post("/audio", s.handleUploadAudio)
 			r.Get("/audio/{id}/file", s.handleGetAudioFile)
+			r.Get("/audio/preview", s.handlePreviewAudio) // play by file_path (assets + TTS prompts)
 			r.Delete("/audio/{id}", s.handleDeleteAudio)
 			r.Post("/numbers", s.handleCreateNumber)
 			r.Get("/numbers", s.handleListNumbers)
