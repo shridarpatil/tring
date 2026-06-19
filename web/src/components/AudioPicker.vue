@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { api } from "../api/client";
 import type { Audio } from "../api/types";
 
@@ -59,16 +59,19 @@ async function onFile(ev: Event) {
 
 <template>
   <div>
-    <span v-if="label" class="text-xs font-medium text-gray-700">{{ label }}</span>
+    <span v-if="label" class="text-xs font-medium text-ink-muted">{{ label }}</span>
     <template v-if="!custom">
       <div class="mt-1 flex gap-2">
-        <select v-model="val" class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
+        <select
+          v-model="val"
+          class="w-full rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+        >
           <option value="">{{ defaultLabel || "Default" }}</option>
           <option v-for="s in sounds" :key="s.id" :value="s.file_path">{{ s.name }} ({{ s.format }})</option>
         </select>
         <button
           type="button"
-          class="shrink-0 rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50"
+          class="shrink-0 rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink transition-colors hover:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50"
           :disabled="uploading"
           @click="fileInput?.click()"
         >
@@ -82,22 +85,22 @@ async function onFile(ev: Event) {
           @change="onFile"
         />
       </div>
-      <button type="button" class="mt-1 text-[11px] text-gray-400 hover:text-gray-600" @click="custom = true">
+      <button type="button" class="mt-1 text-[11px] text-ink-faint hover:text-ink-muted" @click="custom = true">
         Use a custom path
       </button>
     </template>
     <template v-else>
       <input
         v-model="val"
-        class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
+        class="mt-1 w-full rounded-md bg-surface-2 border border-border px-3 h-9 text-sm font-mono text-ink placeholder:text-ink-faint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
         placeholder="local_stream://moh or /usr/share/freeswitch/sounds/..."
       />
-      <button type="button" class="mt-1 text-[11px] text-gray-400 hover:text-gray-600" @click="custom = false">
+      <button type="button" class="mt-1 text-[11px] text-ink-faint hover:text-ink-muted" @click="custom = false">
         Pick from the sound library
       </button>
     </template>
-    <p v-if="error" class="text-[11px] text-red-600 mt-1">{{ error }}</p>
-    <p v-else-if="!sounds.length && !custom" class="text-[11px] text-gray-400 mt-1">
+    <p v-if="error" class="text-[11px] text-danger mt-1">{{ error }}</p>
+    <p v-else-if="!sounds.length && !custom" class="text-[11px] text-ink-faint mt-1">
       No sounds yet — click <strong>Upload</strong> to add one.
     </p>
   </div>

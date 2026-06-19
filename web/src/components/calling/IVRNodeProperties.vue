@@ -154,17 +154,17 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 <template>
   <div class="h-full flex flex-col">
     <!-- Header -->
-    <div class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
+    <div class="px-4 py-3 border-b border-border flex items-center gap-3">
       <div
         :class="[
           'h-8 w-8 rounded-md flex items-center justify-center text-white shrink-0',
-          colorFor[node.type] || 'bg-gray-600',
+          colorFor[node.type] || 'bg-surface-2',
         ]"
       >
         <component :is="iconFor[node.type] || PhoneOff" class="h-4 w-4" />
       </div>
       <div class="flex-1 min-w-0">
-        <div class="text-[10px] uppercase tracking-wide text-gray-400 font-medium">
+        <div class="text-[10px] uppercase tracking-wide text-ink-faint font-medium">
           {{ node.type.replace("_", " ") }}
         </div>
         <input
@@ -174,7 +174,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
         />
       </div>
       <button
-        class="h-7 w-7 rounded-md text-red-600 hover:bg-red-50 flex items-center justify-center"
+        class="h-7 w-7 rounded-md text-danger hover:bg-danger-soft flex items-center justify-center"
         title="Delete node"
         @click="$emit('delete')"
       >
@@ -186,16 +186,16 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── GREETING ──────────────────────────────────────────── -->
       <template v-if="node.type === 'greeting' || node.type === 'hangup'">
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Greeting text</span>
+          <span class="text-xs font-medium text-ink-muted">Greeting text</span>
           <textarea
             v-model="config.greeting_text"
             rows="3"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             placeholder="Say this with TTS, or leave blank and use an audio file"
           />
         </label>
         <div class="block">
-          <span class="text-xs font-medium text-gray-700">Audio file (from your sound library)</span>
+          <span class="text-xs font-medium text-ink-muted">Audio file (from your sound library)</span>
           <AudioPicker v-model="config.audio_file" default-label="None (use text-to-speech above)" />
         </div>
         <label v-if="node.type === 'greeting'" class="flex items-center gap-2">
@@ -207,42 +207,42 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── MENU ──────────────────────────────────────────────── -->
       <template v-if="node.type === 'menu'">
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Prompt text</span>
+          <span class="text-xs font-medium text-ink-muted">Prompt text</span>
           <textarea
             v-model="config.greeting_text"
             rows="2"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             placeholder="Press 1 for sales, 2 for support…"
           />
         </label>
         <div class="block">
-          <span class="text-xs font-medium text-gray-700">Audio file (from your sound library)</span>
+          <span class="text-xs font-medium text-ink-muted">Audio file (from your sound library)</span>
           <AudioPicker v-model="config.audio_file" default-label="None (use prompt text above)" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <label class="block">
-            <span class="text-xs font-medium text-gray-700">Timeout (s)</span>
+            <span class="text-xs font-medium text-ink-muted">Timeout (s)</span>
             <input
               v-model.number="config.timeout_seconds"
               type="number"
               min="1"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             />
           </label>
           <label class="block">
-            <span class="text-xs font-medium text-gray-700">Max retries</span>
+            <span class="text-xs font-medium text-ink-muted">Max retries</span>
             <input
               v-model.number="config.max_retries"
               type="number"
               min="0"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             />
           </label>
         </div>
 
         <div>
-          <div class="text-xs font-medium text-gray-700 mb-2">Options</div>
-          <div v-if="menuOptions.length === 0" class="text-xs text-gray-400 italic">
+          <div class="text-xs font-medium text-ink-muted mb-2">Options</div>
+          <div v-if="menuOptions.length === 0" class="text-xs text-ink-faint italic">
             No options yet — add a digit and label below.
           </div>
           <div
@@ -251,7 +251,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             class="flex items-center gap-2 mb-2"
           >
             <span
-              class="h-7 w-7 rounded border border-gray-300 bg-gray-100 flex items-center justify-center font-mono font-bold text-sm shrink-0"
+              class="h-7 w-7 rounded border border-border bg-surface-2 text-ink flex items-center justify-center font-mono font-bold text-sm shrink-0"
               >{{ digit }}</span
             >
             <input
@@ -263,30 +263,30 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
                   config = { ...config, options: opts };
                 }
               "
-              class="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-sm"
               placeholder="Option label"
             />
             <button
-              class="h-7 w-7 rounded text-red-600 hover:bg-red-50 flex items-center justify-center"
+              class="h-7 w-7 rounded text-danger hover:bg-danger-soft flex items-center justify-center"
               @click="removeMenuOption(digit)"
             >
               <X class="h-3.5 w-3.5" />
             </button>
           </div>
-          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-border">
             <input
               v-model="newDigit"
               maxlength="1"
               placeholder="0-9"
-              class="h-7 w-12 rounded-md border border-gray-300 px-2 py-1 text-sm text-center font-mono"
+              class="h-7 w-12 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-sm text-center font-mono"
             />
             <input
               v-model="newOptionLabel"
               placeholder="Label"
-              class="flex-1 rounded-md border border-gray-300 px-2 py-1 text-sm"
+              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-sm"
             />
             <button
-              class="h-7 w-7 rounded bg-gray-900 text-white hover:bg-gray-800 flex items-center justify-center"
+              class="h-7 w-7 rounded bg-accent text-accent-ink hover:bg-accent-hover flex items-center justify-center"
               @click="addMenuOption"
             >
               <Plus class="h-3.5 w-3.5" />
@@ -298,62 +298,62 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── GATHER ────────────────────────────────────────────── -->
       <template v-if="node.type === 'gather'">
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Prompt text</span>
+          <span class="text-xs font-medium text-ink-muted">Prompt text</span>
           <textarea
             v-model="config.greeting_text"
             rows="2"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             placeholder="Please enter your account number followed by #"
           />
         </label>
         <div class="block">
-          <span class="text-xs font-medium text-gray-700">Audio file (from your sound library)</span>
+          <span class="text-xs font-medium text-ink-muted">Audio file (from your sound library)</span>
           <AudioPicker v-model="config.audio_file" default-label="None (use prompt text above)" />
         </div>
         <div class="grid grid-cols-2 gap-3">
           <label class="block">
-            <span class="text-xs font-medium text-gray-700">Max digits</span>
+            <span class="text-xs font-medium text-ink-muted">Max digits</span>
             <input
               v-model.number="config.max_digits"
               type="number"
               min="1"
               max="50"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             />
           </label>
           <label class="block">
-            <span class="text-xs font-medium text-gray-700">Terminator</span>
+            <span class="text-xs font-medium text-ink-muted">Terminator</span>
             <input
               v-model="config.terminator"
               maxlength="1"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-center font-mono"
+              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm text-center font-mono"
               placeholder="#"
             />
           </label>
           <label class="block">
-            <span class="text-xs font-medium text-gray-700">Timeout (s)</span>
+            <span class="text-xs font-medium text-ink-muted">Timeout (s)</span>
             <input
               v-model.number="config.timeout_seconds"
               type="number"
               min="1"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             />
           </label>
           <label class="block">
-            <span class="text-xs font-medium text-gray-700">Max retries</span>
+            <span class="text-xs font-medium text-ink-muted">Max retries</span>
             <input
               v-model.number="config.max_retries"
               type="number"
               min="0"
-              class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             />
           </label>
         </div>
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Store as (variable name)</span>
+          <span class="text-xs font-medium text-ink-muted">Store as (variable name)</span>
           <input
             v-model="config.store_as"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm font-mono"
             placeholder="account_number"
           />
         </label>
@@ -364,7 +364,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
         <div class="grid grid-cols-[80px_1fr] gap-2">
           <select
             v-model="config.method"
-            class="rounded-md border border-gray-300 px-2 py-2 text-sm font-mono"
+            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-2 text-sm font-mono"
           >
             <option>GET</option>
             <option>POST</option>
@@ -375,44 +375,44 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           <input
             v-model="config.url"
             type="url"
-            class="rounded-md border border-gray-300 px-3 py-2 text-sm font-mono"
+            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm font-mono"
             placeholder="https://your-crm/webhook"
           />
         </div>
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Body template</span>
+          <span class="text-xs font-medium text-ink-muted">Body template</span>
           <textarea
             v-model="config.body_template"
             rows="4"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-xs font-mono"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-xs font-mono"
             placeholder='{"caller":"{{caller_id}}","digits":"{{account_number}}"}'
           />
         </label>
         <div>
-          <div class="text-xs font-medium text-gray-700 mb-2">Headers</div>
+          <div class="text-xs font-medium text-ink-muted mb-2">Headers</div>
           <div v-for="[k, v] in httpHeaders" :key="k" class="flex items-center gap-2 mb-2">
             <span class="font-mono text-xs flex-1 truncate">{{ k }}</span>
-            <span class="font-mono text-xs flex-1 truncate text-gray-500">{{ v }}</span>
+            <span class="font-mono text-xs flex-1 truncate text-ink-muted">{{ v }}</span>
             <button
-              class="h-6 w-6 rounded text-red-600 hover:bg-red-50 flex items-center justify-center"
+              class="h-6 w-6 rounded text-danger hover:bg-danger-soft flex items-center justify-center"
               @click="removeHeader(k)"
             >
               <X class="h-3 w-3" />
             </button>
           </div>
-          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100">
+          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-border">
             <input
               v-model="newHeaderKey"
               placeholder="Header"
-              class="flex-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-mono"
+              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs font-mono"
             />
             <input
               v-model="newHeaderVal"
               placeholder="Value"
-              class="flex-1 rounded-md border border-gray-300 px-2 py-1 text-xs font-mono"
+              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs font-mono"
             />
             <button
-              class="h-7 w-7 rounded bg-gray-900 text-white hover:bg-gray-800 flex items-center justify-center"
+              class="h-7 w-7 rounded bg-accent text-accent-ink hover:bg-accent-hover flex items-center justify-center"
               @click="addHeader"
             >
               <Plus class="h-3.5 w-3.5" />
@@ -420,12 +420,12 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           </div>
         </div>
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Timeout (s)</span>
+          <span class="text-xs font-medium text-ink-muted">Timeout (s)</span>
           <input
             v-model.number="config.timeout_seconds"
             type="number"
             min="1"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
           />
         </label>
       </template>
@@ -433,10 +433,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── TRANSFER ──────────────────────────────────────────── -->
       <template v-if="node.type === 'transfer'">
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Transfer to</span>
+          <span class="text-xs font-medium text-ink-muted">Transfer to</span>
           <select
             v-model="transferTarget"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
           >
             <option value="">All available agents (ring everyone)</option>
             <optgroup v-if="availableTeams && availableTeams.length" label="Teams">
@@ -454,7 +454,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 
         <!-- Queue explainer + Priority checkbox — only meaningful for a team. -->
         <template v-if="transferTarget.startsWith('team:')">
-          <div class="rounded-md bg-blue-50 border border-blue-100 p-3 text-[11px] text-blue-800 leading-relaxed">
+          <div class="rounded-md bg-accent-soft/40 border border-accent/30 p-3 text-[11px] text-ink-muted leading-relaxed">
             <span class="font-medium">If everyone on the team is busy,</span> callers hear hold
             music and wait in line, then connect to the next agent who frees up. The team's
             strategy, wait time and hold music are set on the <strong>Teams</strong> page.
@@ -462,9 +462,9 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 
           <label class="flex items-start gap-2">
             <input type="checkbox" v-model="config.priority" class="mt-0.5" />
-            <span class="text-xs text-gray-700">
+            <span class="text-xs text-ink-muted">
               <span class="font-medium">Priority caller — let them skip the line</span>
-              <span class="block text-[11px] text-gray-400 mt-0.5">
+              <span class="block text-[11px] text-ink-faint mt-0.5">
                 Callers reaching this step wait in a separate front-of-line queue. To route by
                 who's calling, put an <strong>HTTP callback</strong> step before this and wire its
                 <strong>2xx</strong> branch here (priority on) and its <strong>error</strong>
@@ -474,7 +474,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           </label>
         </template>
 
-        <p v-if="!availableTeams || !availableTeams.length" class="text-[11px] text-amber-600">
+        <p v-if="!availableTeams || !availableTeams.length" class="text-[11px] text-warning">
           No teams yet — create one under <strong>Teams</strong> to ring a group with a strategy.
         </p>
       </template>
@@ -482,10 +482,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── GOTO FLOW ─────────────────────────────────────────── -->
       <template v-if="node.type === 'goto_flow'">
         <label class="block">
-          <span class="text-xs font-medium text-gray-700">Target flow</span>
+          <span class="text-xs font-medium text-ink-muted">Target flow</span>
           <select
             v-model="config.flow_id"
-            class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
           >
             <option value="">— Select a flow —</option>
             <option
@@ -501,7 +501,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 
       <!-- ── TIMING ────────────────────────────────────────────── -->
       <template v-if="node.type === 'timing'">
-        <div class="text-xs font-medium text-gray-700 mb-1">Business hours</div>
+        <div class="text-xs font-medium text-ink-muted mb-1">Business hours</div>
         <div
           v-for="(s, idx) in (config.schedule || []) as Array<{day:string,enabled:boolean,start_time:string,end_time:string}>"
           :key="s.day"
@@ -512,13 +512,13 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             v-model="s.start_time"
             type="time"
             :disabled="!s.enabled"
-            class="rounded-md border border-gray-300 px-2 py-1 text-xs"
+            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs"
           />
           <input
             v-model="s.end_time"
             type="time"
             :disabled="!s.enabled"
-            class="rounded-md border border-gray-300 px-2 py-1 text-xs"
+            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs"
           />
           <input
             v-model="s.enabled"

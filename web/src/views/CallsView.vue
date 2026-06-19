@@ -3,11 +3,14 @@ import { ref, onMounted } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
+import { toast } from "../lib/toast";
+import { callStatusTone } from "../lib/status";
 import type { Call, IvrStep } from "../api/types";
+import { Button, Select, Badge, Modal, TextField } from "../components/ui";
+import { ChevronRight, ChevronDown } from "lucide-vue-next";
 
 const calls = ref<Call[]>([]);
 const loading = ref(true);
-const error = ref("");
 const statusFilter = ref("");
 
 // Recordings are served behind auth, so a plain <a href>/<audio src> can't send
@@ -21,7 +24,7 @@ async function playRecording(c: Call) {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) {
-    error.value = "recording not available yet";
+    toast.error("recording not available yet");
     return;
   }
   recUrl.value = { ...recUrl.value, [c.id]: URL.createObjectURL(await res.blob()) };
@@ -64,18 +67,21 @@ function stepText(s: IvrStep): string {
 const showConnect = ref(false);
 const placing = ref(false);
 const connectForm = ref({ agent_number: "", client_number: "" });
-const connectMsg = ref("");
 
-const statuses = ["", "ringing", "answered", "ended"];
+const statusOptions = [
+  { value: "", label: "All" },
+  { value: "ringing", label: "Ringing" },
+  { value: "answered", label: "Answered" },
+  { value: "ended", label: "Ended" },
+];
 
 async function load() {
   loading.value = true;
-  error.value = "";
   try {
     const q = statusFilter.value ? `?status=${statusFilter.value}&limit=100` : "?limit=100";
     calls.value = await api.get<Call[]>(`/v1/calls${q}`);
   } catch (e) {
-    error.value = errMessage(e, "failed to load");
+    toast.error(errMessage(e, "failed to load"));
   } finally {
     loading.value = false;
   }
@@ -83,15 +89,14 @@ async function load() {
 
 async function connect() {
   placing.value = true;
-  connectMsg.value = "";
-  error.value = "";
   try {
     const c = await api.post<Call>("/v1/calls/connect", connectForm.value);
-    connectMsg.value = `Call placed — ${c.from_number} → ${c.to_number} (${c.status})`;
+    toast.success(`Call placed — ${c.from_number} → ${c.to_number} (${c.status})`);
     connectForm.value = { agent_number: "", client_number: "" };
+    showConnect.value = false;
     await load();
   } catch (e) {
-    error.value = errMessage(e, "connect failed");
+    toast.error(errMessage(e, "connect failed"));
   } finally {
     placing.value = false;
   }
@@ -107,96 +112,128 @@ onMounted(load);
 <template>
   <div class="space-y-5">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold">Calls</h1>
-      <button
-        class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800"
-        @click="showConnect = !showConnect"
-      >
-        {{ showConnect ? "Cancel" : "Connect two numbers" }}
-      </button>
+      <h1 class="text-xl font-semibold tracking-tight">Calls</h1>
+      <Button @click="showConnect = true">Connect two numbers</Button>
     </div>
-
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
-    <p v-if="connectMsg" class="text-sm text-green-600">{{ connectMsg }}</p>
-
-    <form
-      v-if="showConnect"
-      class="bg-white rounded-xl border p-5 grid sm:grid-cols-3 gap-4 items-end"
-      @submit.prevent="connect"
-    >
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Agent number</span>
-        <input v-model="connectForm.agent_number" required class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="+919876543210" />
-      </label>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Client number</span>
-        <input v-model="connectForm.client_number" required class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="+919812345678" />
-      </label>
-      <button type="submit" :disabled="placing" class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50">
-        {{ placing ? "Placing…" : "Place call" }}
-      </button>
-    </form>
 
     <div class="flex items-center gap-2">
-      <span class="text-sm text-gray-500">Status:</span>
-      <select v-model="statusFilter" class="rounded-md border border-gray-300 px-2 py-1 text-sm" @change="load">
-        <option v-for="s in statuses" :key="s" :value="s">{{ s || "all" }}</option>
-      </select>
+      <span class="text-sm text-ink-muted">Status</span>
+      <Select v-model="statusFilter" :options="statusOptions" @update:model-value="load" />
     </div>
 
-    <div class="bg-white rounded-xl border overflow-x-auto">
+    <div class="rounded-xl bg-surface border border-border overflow-x-auto">
       <table class="w-full text-sm">
-        <thead class="text-left text-gray-500">
-          <tr>
-            <th class="px-5 py-2 font-medium">From</th>
-            <th class="px-5 py-2 font-medium">To</th>
-            <th class="px-5 py-2 font-medium">Agent</th>
-            <th class="px-5 py-2 font-medium">Dir</th>
-            <th class="px-5 py-2 font-medium">Status</th>
-            <th class="px-5 py-2 font-medium">Started</th>
-            <th class="px-5 py-2 font-medium">Duration</th>
-            <th class="px-5 py-2 font-medium">Recording</th>
-            <th class="px-5 py-2 font-medium">IVR path</th>
+        <thead>
+          <tr class="border-b border-border text-left">
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">From</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">To</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Agent</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Dir</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Status</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Started</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint text-right">Dur</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Recording</th>
+            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">IVR path</th>
           </tr>
         </thead>
         <tbody>
           <template v-for="c in calls" :key="c.id">
-            <tr class="border-t" :class="hasPath(c) ? 'cursor-pointer hover:bg-gray-50' : ''" @click="hasPath(c) && toggle(c.id)">
-              <td class="px-5 py-2 font-mono"><div class="max-w-[220px] truncate" :title="c.client_ref || c.from_number">{{ c.client_ref || c.from_number }}</div></td>
-              <td class="px-5 py-2 font-mono"><div class="max-w-[220px] truncate" :title="c.to_number">{{ c.to_number }}</div></td>
-              <td class="px-5 py-2">{{ c.agent_name || "—" }}</td>
-              <td class="px-5 py-2">{{ c.direction }}</td>
-              <td class="px-5 py-2">{{ c.status }}</td>
-              <td class="px-5 py-2 text-gray-500">{{ fmt(c.started_at) }}</td>
-              <td class="px-5 py-2">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
-              <td class="px-5 py-2">
-                <audio v-if="recUrl[c.id]" :src="recUrl[c.id]" controls autoplay class="h-8" @click.stop></audio>
-                <button v-else-if="c.recording_url" class="text-gray-600 hover:text-gray-900 underline" @click.stop="playRecording(c)">play</button>
-                <span v-else class="text-gray-300">—</span>
+            <tr
+              class="border-b border-border/60 transition-colors"
+              :class="hasPath(c) ? 'cursor-pointer hover:bg-surface-2/40' : ''"
+              @click="hasPath(c) && toggle(c.id)"
+            >
+              <td class="px-4 py-2.5 font-mono text-xs text-ink">
+                <div class="max-w-[200px] truncate" :title="c.client_ref || c.from_number">
+                  {{ c.client_ref || c.from_number }}
+                </div>
               </td>
-              <td class="px-5 py-2">
-                <button v-if="hasPath(c)" class="text-gray-600 hover:text-gray-900" @click.stop="toggle(c.id)">
-                  {{ expanded.has(c.id) ? "▾ hide" : `▸ view (${c.ivr_path!.length})` }}
+              <td class="px-4 py-2.5 font-mono text-xs text-ink">
+                <div class="max-w-[200px] truncate" :title="c.to_number">{{ c.to_number }}</div>
+              </td>
+              <td class="px-4 py-2.5 text-ink">{{ c.agent_name || "—" }}</td>
+              <td class="px-4 py-2.5 text-ink-muted">{{ c.direction }}</td>
+              <td class="px-4 py-2.5"><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
+              <td class="px-4 py-2.5 text-ink-muted whitespace-nowrap">{{ fmt(c.started_at) }}</td>
+              <td class="px-4 py-2.5 text-right font-mono text-xs tabular-nums text-ink">
+                {{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}
+              </td>
+              <td class="px-4 py-2.5">
+                <audio
+                  v-if="recUrl[c.id]"
+                  :src="recUrl[c.id]"
+                  controls
+                  autoplay
+                  class="h-8"
+                  @click.stop
+                ></audio>
+                <button
+                  v-else-if="c.recording_url"
+                  class="text-accent hover:text-accent-hover"
+                  @click.stop="playRecording(c)"
+                >
+                  Play
                 </button>
-                <span v-else class="text-gray-300">—</span>
+                <span v-else class="text-ink-faint">—</span>
+              </td>
+              <td class="px-4 py-2.5">
+                <button
+                  v-if="hasPath(c)"
+                  class="inline-flex items-center gap-1 text-ink-muted hover:text-ink"
+                  @click.stop="toggle(c.id)"
+                >
+                  <component :is="expanded.has(c.id) ? ChevronDown : ChevronRight" class="h-3.5 w-3.5" />
+                  {{ expanded.has(c.id) ? "Hide" : `View (${c.ivr_path!.length})` }}
+                </button>
+                <span v-else class="text-ink-faint">—</span>
               </td>
             </tr>
-            <tr v-if="hasPath(c) && expanded.has(c.id)" class="bg-gray-50 border-t">
+            <tr v-if="hasPath(c) && expanded.has(c.id)" class="bg-surface-2/40 border-b border-border">
               <td colspan="9" class="px-8 py-3">
                 <ol class="space-y-1">
-                  <li v-for="(step, i) in c.ivr_path" :key="i" class="flex items-center gap-3 text-sm">
-                    <span class="text-gray-400 tabular-nums w-5 text-right">{{ i + 1 }}.</span>
-                    <span class="text-gray-800">{{ stepText(step) }}</span>
+                  <li
+                    v-for="(step, i) in c.ivr_path"
+                    :key="i"
+                    class="flex items-center gap-3 text-sm"
+                  >
+                    <span class="text-ink-faint font-mono tabular-nums w-5 text-right">{{ i + 1 }}.</span>
+                    <span class="text-ink">{{ stepText(step) }}</span>
                   </li>
                 </ol>
               </td>
             </tr>
           </template>
           <tr v-if="!loading && calls.length === 0">
-            <td colspan="9" class="px-5 py-6 text-center text-gray-400">No calls</td>
+            <td colspan="9" class="px-4 py-10 text-center text-ink-faint">No calls</td>
+          </tr>
+          <tr v-if="loading">
+            <td colspan="9" class="px-4 py-10 text-center text-ink-faint">Loading…</td>
           </tr>
         </tbody>
       </table>
     </div>
+
+    <Modal v-model:open="showConnect" title="Connect two numbers">
+      <form id="connect-form" class="space-y-4" @submit.prevent="connect">
+        <TextField
+          v-model="connectForm.agent_number"
+          label="Agent number"
+          mono
+          required
+          placeholder="+919876543210"
+        />
+        <TextField
+          v-model="connectForm.client_number"
+          label="Client number"
+          mono
+          required
+          placeholder="+919812345678"
+        />
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="showConnect = false">Cancel</Button>
+        <Button type="submit" form="connect-form" :loading="placing">Place call</Button>
+      </template>
+    </Modal>
   </div>
 </template>

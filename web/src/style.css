@@ -1,1 +1,194 @@
 @import "tailwindcss";
+
+/*
+ * Tring console — "Operator" design tokens.
+ *
+ * Tailwind v4 is CSS-first: tokens declared in @theme both (a) become CSS
+ * variables and (b) generate utilities by namespace —
+ *   --color-surface  -> bg-surface / text-surface / border-surface
+ *   --radius-lg      -> rounded-lg
+ *   --font-mono      -> font-mono
+ * The utilities resolve through var(), so a theme is just a re-declaration of
+ * the same variables. LIGHT is the default (defined here in @theme); DARK is
+ * an override applied via html[data-theme="dark"] (see below). lib/theme.ts
+ * sets the attribute and persists the choice.
+ */
+@theme {
+  /* ── Light (default) ─────────────────────────────────────────────── */
+  --color-base: #f6f7f9; /* app background */
+  --color-surface: #ffffff; /* cards / panels */
+  --color-surface-2: #f1f3f5; /* raised / hover / table header */
+  --color-overlay: #0f172a; /* modal scrim base (stays dark in both themes) */
+
+  --color-border: #e4e7eb;
+  --color-border-strong: #cdd2d9;
+
+  --color-ink: #1a1d21; /* primary text */
+  --color-ink-muted: #5a636e; /* secondary */
+  --color-ink-faint: #8b95a1; /* tertiary / placeholders */
+
+  --color-accent: #0d9488; /* signal teal (deepened for white bg) */
+  --color-accent-hover: #0f766e;
+  --color-accent-ink: #ffffff; /* text on accent fills */
+  --color-accent-soft: #d8f3ee;
+
+  --color-live: #d97706; /* on-call amber */
+  --color-live-soft: #fdeccd;
+
+  --color-success: #15803d;
+  --color-success-soft: #dcfce7;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fde4e4;
+  --color-warning: #b45309;
+  --color-warning-soft: #fcefc7;
+
+  --color-online: #0d9488;
+  --color-oncall: #d97706;
+  --color-away: #b45309;
+  --color-offline: #94a3b8;
+
+  /* Radius (theme-agnostic) */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  /* Type (theme-agnostic) */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular",
+    "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+/*
+ * ── Dark override ──────────────────────────────────────────────────
+ * html[…] (specificity 0,1,1) beats the :root that @theme emits (0,1,0),
+ * so these win whenever the attribute is present, regardless of source order.
+ */
+html[data-theme="dark"] {
+  --color-base: #0e1116;
+  --color-surface: #161b22;
+  --color-surface-2: #1c232d;
+  --color-overlay: #0a0d12;
+
+  --color-border: #2a323d;
+  --color-border-strong: #3a4451;
+
+  --color-ink: #e6edf3;
+  --color-ink-muted: #9ba8b7;
+  --color-ink-faint: #6b7682;
+
+  --color-accent: #2dd4bf;
+  --color-accent-hover: #5ee0d0;
+  --color-accent-ink: #07140f;
+  --color-accent-soft: #133a35;
+
+  --color-live: #f5a524;
+  --color-live-soft: #3a2a0e;
+
+  --color-success: #3fb950;
+  --color-success-soft: #0f2a17;
+  --color-danger: #f85149;
+  --color-danger-soft: #3a1414;
+  --color-warning: #d29922;
+  --color-warning-soft: #332811;
+
+  --color-online: #2dd4bf;
+  --color-oncall: #f5a524;
+  --color-away: #d29922;
+  --color-offline: #5a6573;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  html[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  body {
+    background: var(--color-base);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * Tailwind v4's bare `border` utility resolves to currentColor, not a gray.
+   * Default every element's border to our hairline token so a plain `border`
+   * renders correctly and re-themes with the rest.
+   */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--color-border);
+  }
+
+  /* Slim scrollbars that track the active theme. */
+  * {
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-border-strong);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-faint);
+    background-clip: content-box;
+  }
+}
+
+/*
+ * Signature motion — the live-signal language. Gated behind
+ * prefers-reduced-motion so the quality floor holds.
+ */
+@layer utilities {
+  @keyframes tring-pulse-ring {
+    0% {
+      transform: scale(0.9);
+      opacity: 0.7;
+    }
+    70% {
+      transform: scale(2.2);
+      opacity: 0;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+
+  @keyframes tring-level {
+    0%,
+    100% {
+      transform: scaleY(0.35);
+    }
+    50% {
+      transform: scaleY(1);
+    }
+  }
+
+  .animate-pulse-ring {
+    animation: tring-pulse-ring 1.8s ease-out infinite;
+  }
+
+  .animate-level {
+    animation: tring-level 0.9s ease-in-out infinite;
+    transform-origin: bottom;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-pulse-ring,
+    .animate-level {
+      animation: none !important;
+    }
+  }
+}
