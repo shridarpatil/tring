@@ -21,6 +21,7 @@ import (
 	"github.com/whatomate/tring/internal/orchestrator"
 	"github.com/whatomate/tring/internal/presence"
 	"github.com/whatomate/tring/internal/queries"
+	"github.com/whatomate/tring/internal/tts"
 	"github.com/whatomate/tring/internal/webhook"
 	"github.com/whatomate/tring/internal/webui"
 	"github.com/whatomate/tring/internal/widget"
@@ -65,6 +66,10 @@ type Config struct {
 	// returned to visitors in a guest mint response (ADR-001 M5).
 	GatewayPublicURL string
 
+	// TTS synthesizes IVR node prompt text to an audio file at flow-save time
+	// (so both planes play it via the normal audio_file path). nil/disabled →
+	// text nodes without an uploaded audio file stay silent.
+	TTS *tts.Engine
 	// AudioDir is where uploaded sound files are written; AudioFSDir is the path
 	// prefix FreeSWITCH plays them from (default equal — one shared mount). See
 	// internal/config and handlers_audio.go.
@@ -108,6 +113,10 @@ type Server struct {
 	// gatewayPublicURL: browser-reachable gateway base URL, returned to
 	// visitors in a guest mint response.
 	gatewayPublicURL string
+
+	// tts pre-renders IVR node prompt text to an audio file on flow save. nil →
+	// text nodes stay silent (no Piper). See handlers_flows.go.
+	tts *tts.Engine
 
 	// audioDir / audioFSDir: where uploaded sounds are written vs the path
 	// FreeSWITCH plays them from (default equal). See handlers_audio.go.
@@ -173,6 +182,7 @@ func NewServer(cfg Config) *Server {
 		agentGateway:     cfg.AgentGateway,
 		agentJitter:      cfg.AgentJitter,
 		gatewayPublicURL: cfg.GatewayPublicURL,
+		tts:              cfg.TTS,
 		audioDir:         cfg.AudioDir,
 		audioFSDir:       cfg.AudioFSDir,
 		recordingsDir:    cfg.RecordingsDir,

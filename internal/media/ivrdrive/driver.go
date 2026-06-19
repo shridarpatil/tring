@@ -21,7 +21,9 @@ import (
 
 // Prompts plays a prompt audio file into the room, blocking until it finishes
 // (or ctx is done). The real implementation streams an Ogg/Opus file through a
-// prompt.Player; tests fake it.
+// prompt.Player; tests fake it. Node prompt text is pre-rendered to an audio
+// file at flow-save time (see the API's flow handler), so the play path is
+// uniform — text and uploaded audio both arrive here as a file.
 type Prompts interface {
 	Play(ctx context.Context, file string) error
 }
@@ -110,8 +112,8 @@ func (d *Driver) Played() []string { return append([]string(nil), d.played...) }
 func (d *Driver) Vars() map[string]string { return d.vars }
 
 // play plays a node's audio_file prompt (no-op when absent) and returns the file
-// played (for the trace Detail). greeting_text-only nodes are skipped on the web
-// path (no server-side TTS yet).
+// played (for the trace Detail). Node prompt text is pre-rendered to an audio
+// file at flow-save time, so by call time a text node carries an audio_file too.
 func (d *Driver) play(ctx context.Context, n *ivr.Node) (string, error) {
 	file := ivr.StringFromConfig(n.Config, "audio_file")
 	if file == "" {
