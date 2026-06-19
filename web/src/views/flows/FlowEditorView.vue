@@ -415,16 +415,36 @@ function loadFromIVRFlowData(d: IVRFlowData) {
   }
 }
 
+// syncRenderedAudio pulls the server's freshly-rendered prompt audio back into
+// the canvas. On save the API synthesizes node text (greeting_text) to an audio
+// file and stamps each node's audio_file; without copying that back, the play
+// button keeps the stale/empty path until a page refresh.
+function syncRenderedAudio(def?: IVRFlowData) {
+  if (!def?.nodes) return;
+  for (const sn of def.nodes) {
+    const idx = nodes.value.findIndex((n) => n.id === sn.id);
+    if (idx < 0) continue;
+    const serverAF = ((sn.config as Record<string, unknown>)?.audio_file as string) || "";
+    const cfg = (nodes.value[idx].data?.config || {}) as Record<string, unknown>;
+    if (((cfg.audio_file as string) || "") === serverAF) continue;
+    nodes.value[idx] = {
+      ...nodes.value[idx],
+      data: { ...nodes.value[idx].data, config: { ...cfg, audio_file: serverAF } },
+    };
+  }
+}
+
 async function saveFlow() {
   saving.value = true;
   savedMsg.value = "";
   try {
-    await api.patch<Flow>(`/v1/flows/${flowId.value}`, {
+    const updated = await api.patch<Flow>(`/v1/flows/${flowId.value}`, {
       name: flowName.value || "Untitled flow",
       is_active: isActive.value,
       is_outgoing_end: isOutgoingEnd.value,
       definition: buildIVRFlowData(),
     });
+    syncRenderedAudio(updated.definition); // reflect server-rendered TTS audio at once
     savedMsg.value = "Saved";
     setTimeout(() => (savedMsg.value = ""), 1500);
   } catch (e) {
@@ -532,6 +552,7 @@ onMounted(async () => {
       >
         <IVRNodeProperties
           v-if="selectedNode"
+          :key="selectedNode.id + '|' + ((selectedNode.data?.config?.audio_file as string) || '')"
           :node="selectedNode as any"
           :current-flow-id="flowId"
           :available-flows="availableFlows"
