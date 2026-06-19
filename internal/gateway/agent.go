@@ -129,6 +129,18 @@ func (r *agentRegistry) remove(s *agentSession) {
 	}
 }
 
+// onCall reports whether the agent has any bridged call in progress (across all
+// tabs). The orchestrator's ring-all already skips on_call agents via presence,
+// but a fresh INVITE can still arrive in the race window between enterCall and
+// the next routing decision — fsuas consults this to reply 486 rather than pop a
+// second incoming-call UI on a busy agent.
+func (r *agentRegistry) onCall(k agentKey) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g := r.m[k]
+	return g != nil && g.active > 0
+}
+
 // sessionsFor returns a snapshot of the agent's live sessions (nil if offline).
 func (r *agentRegistry) sessionsFor(k agentKey) []*agentSession {
 	r.mu.Lock()

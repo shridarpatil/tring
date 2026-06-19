@@ -200,6 +200,7 @@ func main() {
 		Tokens:     redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
 		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard
 		Calls:      calls,                    // CDRs + recordings (one path for web + phone)
+		Cache:      redisCache,               // publish web team-queue depth for the dashboard
 		Logger:     logger,
 	})
 	// Edge side of the media control channel (Phase 2). When control_url is set,
