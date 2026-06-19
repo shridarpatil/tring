@@ -7,6 +7,17 @@ const routes: RouteRecordRaw[] = [
     name: "login",
     component: () => import("../views/LoginView.vue"),
   },
+  // Living component gallery — dev-only, tree-shaken out of the embedded
+  // production build via the import.meta.env.DEV guard.
+  ...(import.meta.env.DEV
+    ? [
+        {
+          path: "/styleguide",
+          name: "styleguide",
+          component: () => import("../views/StyleguideView.vue"),
+        },
+      ]
+    : []),
   {
     // Flow editor is full-screen — sits outside AppLayout so it can use
     // the whole viewport for the canvas.
@@ -42,6 +53,7 @@ const router = createRouter({
 });
 
 router.beforeEach((to) => {
+  if (to.name === "styleguide") return; // dev-only, no auth
   if (to.name !== "login" && !auth.isAuthed()) return { name: "login" };
   if (to.name === "login" && auth.isAuthed()) return { name: "dashboard" };
 });

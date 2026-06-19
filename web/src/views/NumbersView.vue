@@ -2,16 +2,27 @@
 // NumbersView — register DIDs and bind them to a trunk. Outbound numbers
 // MUST reference a trunk (where the call lands); inbound/masking numbers
 // can stand alone.
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
+import { toast } from "../lib/toast";
 import type { PhoneNumber, Trunk, Flow } from "../api/types";
+import {
+  Button,
+  Panel,
+  DataTable,
+  type Column,
+  Badge,
+  Modal,
+  TextField,
+  Select,
+} from "../components/ui";
+import { Power } from "lucide-vue-next";
 
 const numbers = ref<PhoneNumber[]>([]);
 const trunks = ref<Trunk[]>([]);
 const flows = ref<Flow[]>([]);
 const loading = ref(true);
-const error = ref("");
 
 const showForm = ref(false);
 const saving = ref(false);
@@ -28,9 +39,37 @@ const form = ref<{
 
 const types = ["outbound", "inbound", "masking"];
 
+const cols: Column[] = [
+  { key: "e164", label: "Number", mono: true },
+  { key: "type", label: "Type" },
+  { key: "trunk", label: "Trunk" },
+  { key: "flow", label: "Flow" },
+  { key: "priority", label: "Priority" },
+  { key: "active", label: "Active" },
+];
+
+const typeOptions = computed(() => types.map((t) => ({ value: t, label: t })));
+
+const trunkOptions = computed(() => [
+  { value: "", label: "— none —" },
+  ...trunks.value
+    .filter((x) => x.active)
+    .map((t) => ({ value: t.id, label: `${t.name}${t.status ? ` (${t.status})` : ""}` })),
+]);
+
+const flowOptions = computed(() => [
+  { value: "", label: "— none —" },
+  ...flows.value.filter((x) => x.is_active).map((f) => ({ value: f.id, label: f.name })),
+]);
+
+// Per-row flow assignment options (lists all flows, not just active ones).
+const rowFlowOptions = computed(() => [
+  { value: "", label: "— none —" },
+  ...flows.value.map((f) => ({ value: f.id, label: f.name })),
+]);
+
 async function load() {
   loading.value = true;
-  error.value = "";
   try {
     const [n, t, f] = await Promise.all([
       api.get<PhoneNumber[]>("/v1/numbers"),
@@ -41,7 +80,7 @@ async function load() {
     trunks.value = t;
     flows.value = f;
   } catch (e) {
-    error.value = errMessage(e, "failed to load");
+    toast.error(errMessage(e, "failed to load"));
   } finally {
     loading.value = false;
   }
@@ -49,7 +88,6 @@ async function load() {
 
 async function create() {
   saving.value = true;
-  error.value = "";
   try {
     const body: Record<string, unknown> = {
       e164: form.value.e164,
@@ -62,28 +100,26 @@ async function create() {
     form.value = { e164: "", type: "outbound", trunk_id: "", flow_id: "", priority: 100 };
     showForm.value = false;
     await load();
+    toast.success("Number registered");
   } catch (e) {
-    error.value = errMessage(e, "create failed");
+    toast.error(errMessage(e, "create failed"));
   } finally {
     saving.value = false;
   }
 }
 
 async function toggleActive(n: PhoneNumber) {
-  error.value = "";
   try {
     await api.patch(`/v1/numbers/${n.id}`, { active: !n.active });
     await load();
   } catch (e) {
-    error.value = errMessage(e, "update failed");
+    toast.error(errMessage(e, "update failed"));
   }
 }
 
-// assignFlow drives the per-row Flow <select>: empty value means
+// assignFlow drives the per-row Flow select: empty value means
 // explicit unassign (clear_flow=true), otherwise set the chosen flow.
-async function assignFlow(n: PhoneNumber, ev: Event) {
-  const newId = (ev.target as HTMLSelectElement).value;
-  error.value = "";
+async function assignFlow(n: PhoneNumber, newId: string) {
   try {
     if (newId === "") {
       await api.patch(`/v1/numbers/${n.id}`, { clear_flow: true });
@@ -92,7 +128,7 @@ async function assignFlow(n: PhoneNumber, ev: Event) {
     }
     await load();
   } catch (e) {
-    error.value = errMessage(e, "update failed");
+    toast.error(errMessage(e, "update failed"));
   }
 }
 
@@ -108,104 +144,51 @@ onMounted(load);
 <template>
   <div class="space-y-5">
     <div class="flex items-center justify-between">
-      <h1 class="text-2xl font-semibold">Numbers</h1>
-      <button
-        class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800"
-        @click="showForm = !showForm"
-      >
-        {{ showForm ? "Cancel" : "Register number" }}
-      </button>
+      <h1 class="text-xl font-semibold tracking-tight">Numbers</h1>
+      <Button @click="showForm = true">Register number</Button>
     </div>
 
-    <p v-if="error" class="text-sm text-red-600">{{ error }}</p>
+    <Panel>
+      <DataTable :columns="cols" :rows="numbers" :loading="loading" empty-text="No numbers registered">
+        <template #cell-trunk="{ row }">
+          <span class="text-ink-muted">{{ trunkName(row.trunk_id) }}</span>
+        </template>
+        <template #cell-flow="{ row }">
+          <Select
+            :model-value="row.flow_id || ''"
+            :options="rowFlowOptions"
+            @update:model-value="assignFlow(row, $event)"
+          />
+        </template>
+        <template #cell-active="{ row }">
+          <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
+        </template>
+        <template #row-actions="{ row }">
+          <Button variant="ghost" size="sm" @click="toggleActive(row)">
+            <Power class="h-4 w-4" />
+            {{ row.active ? "Deactivate" : "Activate" }}
+          </Button>
+        </template>
+      </DataTable>
+    </Panel>
 
-    <form
-      v-if="showForm"
-      class="bg-white rounded-xl border border-gray-200 p-5 grid sm:grid-cols-6 gap-4 items-end"
-      @submit.prevent="create"
-    >
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">E.164</span>
-        <input v-model="form.e164" required class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" placeholder="+918001234567" />
-      </label>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Type</span>
-        <select v-model="form.type" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-          <option v-for="t in types" :key="t" :value="t">{{ t }}</option>
-        </select>
-      </label>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">
-          Trunk<span v-if="form.type === 'outbound'" class="text-red-500">*</span>
-        </span>
-        <select v-model="form.trunk_id" :required="form.type === 'outbound'" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-          <option value="">— none —</option>
-          <option v-for="t in trunks.filter((x) => x.active)" :key="t.id" :value="t.id">
-            {{ t.name }}{{ t.status ? ` (${t.status})` : '' }}
-          </option>
-        </select>
-      </label>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Flow</span>
-        <select v-model="form.flow_id" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm">
-          <option value="">— none —</option>
-          <option v-for="f in flows.filter((x) => x.is_active)" :key="f.id" :value="f.id">
-            {{ f.name }}
-          </option>
-        </select>
-      </label>
-      <label class="block">
-        <span class="text-sm font-medium text-gray-700">Priority</span>
-        <input v-model.number="form.priority" type="number" class="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm" />
-      </label>
-      <button type="submit" :disabled="saving" class="bg-gray-900 text-white text-sm rounded-md px-4 py-2 hover:bg-gray-800 disabled:opacity-50">
-        {{ saving ? "Saving…" : "Register" }}
-      </button>
-    </form>
-
-    <div class="bg-white rounded-xl border border-gray-200">
-      <table class="w-full text-sm">
-        <thead class="text-left text-gray-500">
-          <tr>
-            <th class="px-5 py-2 font-medium">Number</th>
-            <th class="px-5 py-2 font-medium">Type</th>
-            <th class="px-5 py-2 font-medium">Trunk</th>
-            <th class="px-5 py-2 font-medium">Flow</th>
-            <th class="px-5 py-2 font-medium">Priority</th>
-            <th class="px-5 py-2 font-medium">Active</th>
-            <th class="px-5 py-2 font-medium"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="n in numbers" :key="n.id" class="border-t border-gray-200">
-            <td class="px-5 py-2 font-mono">{{ n.e164 }}</td>
-            <td class="px-5 py-2">{{ n.type }}</td>
-            <td class="px-5 py-2 text-xs">{{ trunkName(n.trunk_id) }}</td>
-            <td class="px-5 py-2 text-xs">
-              <select
-                :value="n.flow_id || ''"
-                class="rounded-md border border-gray-300 px-2 py-1 text-xs bg-white"
-                @change="assignFlow(n, $event)"
-              >
-                <option value="">— none —</option>
-                <option v-for="f in flows" :key="f.id" :value="f.id">{{ f.name }}</option>
-              </select>
-            </td>
-            <td class="px-5 py-2">{{ n.priority }}</td>
-            <td class="px-5 py-2">
-              <span :class="n.active ? 'text-green-600' : 'text-gray-400'">{{ n.active ? "yes" : "no" }}</span>
-            </td>
-            <td class="px-5 py-2 text-right">
-              <button class="text-gray-600 hover:text-gray-900" @click="toggleActive(n)">
-                {{ n.active ? "Deactivate" : "Activate" }}
-              </button>
-            </td>
-          </tr>
-          <tr v-if="!loading && numbers.length === 0">
-            <td colspan="7" class="px-5 py-6 text-center text-gray-400">No numbers registered</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <Modal v-model:open="showForm" title="Register number">
+      <form id="number-form" class="space-y-4" @submit.prevent="create">
+        <TextField v-model="form.e164" label="E.164" mono required placeholder="+918001234567" />
+        <Select v-model="form.type" label="Type" :options="typeOptions" />
+        <Select
+          v-model="form.trunk_id"
+          label="Trunk"
+          :options="trunkOptions"
+          :required="form.type === 'outbound'"
+        />
+        <Select v-model="form.flow_id" label="Flow" :options="flowOptions" />
+        <TextField v-model.number="form.priority" label="Priority" type="number" />
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="showForm = false">Cancel</Button>
+        <Button type="submit" form="number-form" :loading="saving">Register</Button>
+      </template>
+    </Modal>
   </div>
 </template>
