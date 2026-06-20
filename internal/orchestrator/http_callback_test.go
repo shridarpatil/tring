@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/whatomate/tring/internal/routing"
 )
 
 // http_callback on a 2xx stashes the JSON response into flow vars (so a later
@@ -24,7 +26,7 @@ func TestRunHTTPCallback2xxStashesVars(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: newMemQueue(), rr: map[string]int{}}
+	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: routing.NewMemQueue(), rr: routing.NewMemRR()}
 	st := &callState{
 		uuid:     "u1",
 		tenantID: uuid.New(),
@@ -65,7 +67,7 @@ func TestRunHTTPCallbackNon2xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: newMemQueue(), rr: map[string]int{}}
+	e := &Executor{Logger: slog.Default(), HTTP: srv.Client(), queue: routing.NewMemQueue(), rr: routing.NewMemRR()}
 	st := &callState{uuid: "u1", tenantID: uuid.New(), vars: map[string]string{}, log: slog.Default()}
 	node := &ivrNode{ID: "h", Type: nodeHTTPCallback, Config: map[string]interface{}{"url": srv.URL}}
 
