@@ -43,10 +43,9 @@ type RouteConfig struct {
 }
 
 const (
-	defaultMaxWait      = 2 * time.Minute
-	defaultRingAttempt  = 30 * time.Second
-	defaultPollInterval = 2 * time.Second
-	reserveBuffer       = 5 * time.Second
+	defaultMaxWait     = 2 * time.Minute
+	defaultRingAttempt = 30 * time.Second
+	reserveBuffer      = 5 * time.Second
 )
 
 // Outcome values returned by Run.
@@ -80,8 +79,11 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 
 	deadline := time.Now().Add(cfg.MaxWait)
 	// holdReady breaks the hold early: an available candidate is head-of-line, or
-	// the wait is up. The Hold effect polls this and returns when it goes true.
+	// the wait is up. The Hold effect polls this each tick (FS watcher / pion
+	// ticker), so it's also where we refresh the published depth's TTL — a single
+	// gapless FS hold can outlast the depth key otherwise, blanking the dashboard.
 	holdReady := func() bool {
+		r.publishDepth(ctx, cfg)
 		if time.Now().After(deadline) || ctx.Err() != nil {
 			return true
 		}
@@ -127,7 +129,11 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 		}
 
 		r.publishDepth(ctx, cfg)
-		eff.Hold(ctx, defaultPollInterval, holdReady)
+		// Hold up to the remaining wait, returning early when holdReady() trips.
+		// Passing the full remaining window (not a fixed poll) lets the FreeSWITCH
+		// plane play ONE gapless hold-music stream broken by its watcher, while the
+		// pion plane just polls holdReady on its own ticker.
+		eff.Hold(ctx, time.Until(deadline), holdReady)
 		if ctx.Err() != nil {
 			return OutcomeAbandoned, false, ""
 		}
