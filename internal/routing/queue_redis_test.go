@@ -1,4 +1,4 @@
-package orchestrator
+package routing
 
 import (
 	"context"
@@ -30,62 +30,62 @@ func testRedis(t *testing.T) *cache.Cache {
 func TestRedisQueueFIFOAndPriority(t *testing.T) {
 	c := testRedis(t)
 	ctx := context.Background()
-	q := newRedisQueue(c)
+	q := NewRedisQueue(c)
 	key := "test:" + uuid.NewString() // unique so we never collide with live data
 
-	a := q.enqueue(ctx, key, false)
-	b := q.enqueue(ctx, key, false)
-	if !q.isHead(ctx, key, a) {
+	a := q.Enqueue(ctx, key, false)
+	b := q.Enqueue(ctx, key, false)
+	if !q.IsHead(ctx, key, a) {
 		t.Fatal("first normal waiter should be head")
 	}
-	if q.isHead(ctx, key, b) {
+	if q.IsHead(ctx, key, b) {
 		t.Fatal("second normal waiter should wait")
 	}
-	if q.depth(ctx, key) != 2 {
-		t.Fatalf("depth = %d, want 2", q.depth(ctx, key))
+	if q.Depth(ctx, key) != 2 {
+		t.Fatalf("depth = %d, want 2", q.Depth(ctx, key))
 	}
 
-	p := q.enqueue(ctx, key, true) // priority jumps ahead
-	if !q.isHead(ctx, key, p) {
+	p := q.Enqueue(ctx, key, true) // priority jumps ahead
+	if !q.IsHead(ctx, key, p) {
 		t.Fatal("priority waiter should be head")
 	}
 
-	q.remove(ctx, key, p)
-	if !q.isHead(ctx, key, a) {
+	q.Remove(ctx, key, p)
+	if !q.IsHead(ctx, key, a) {
 		t.Fatal("first normal should be head once priority drains")
 	}
-	q.remove(ctx, key, a)
-	if !q.isHead(ctx, key, b) {
+	q.Remove(ctx, key, a)
+	if !q.IsHead(ctx, key, b) {
 		t.Fatal("second normal should be head after first leaves")
 	}
-	q.remove(ctx, key, b)
-	if q.depth(ctx, key) != 0 {
-		t.Fatalf("depth = %d, want 0 after draining", q.depth(ctx, key))
+	q.Remove(ctx, key, b)
+	if q.Depth(ctx, key) != 0 {
+		t.Fatalf("depth = %d, want 0 after draining", q.Depth(ctx, key))
 	}
 }
 
 func TestRedisReservations(t *testing.T) {
 	c := testRedis(t)
 	ctx := context.Background()
-	r := newRedisReservations(c)
+	r := NewRedisReservations(c)
 	key := "test:" + uuid.NewString()
 
-	if r.reserved(ctx, key) {
+	if r.Reserved(ctx, key) {
 		t.Fatal("nothing reserved yet")
 	}
-	r.reserve(ctx, key, time.Minute)
-	if !r.reserved(ctx, key) {
+	r.Reserve(ctx, key, time.Minute)
+	if !r.Reserved(ctx, key) {
 		t.Fatal("should be reserved")
 	}
-	r.release(ctx, key)
-	if r.reserved(ctx, key) {
+	r.Release(ctx, key)
+	if r.Reserved(ctx, key) {
 		t.Fatal("should be free after release")
 	}
 
 	// Native Redis TTL expiry.
-	r.reserve(ctx, key, 150*time.Millisecond)
+	r.Reserve(ctx, key, 150*time.Millisecond)
 	time.Sleep(300 * time.Millisecond)
-	if r.reserved(ctx, key) {
+	if r.Reserved(ctx, key) {
 		t.Fatal("reservation should expire via Redis TTL")
 	}
 }

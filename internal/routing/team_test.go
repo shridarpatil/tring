@@ -1,8 +1,8 @@
-package orchestrator
+package routing
 
 import "testing"
 
-// effectiveMOH: a real per-team override wins; else the tenant's uploaded hold
+// EffectiveMOH: a real per-team override wins; else the tenant's uploaded hold
 // music; else the built-in default. The schema default (local_stream://moh) is
 // treated as "no override".
 func TestEffectiveMOH(t *testing.T) {
@@ -18,8 +18,8 @@ func TestEffectiveMOH(t *testing.T) {
 		{"/snd/team.wav", "", "/snd/team.wav"},
 	}
 	for _, c := range cases {
-		if got := effectiveMOH(c.teamMOH, c.tenant); got != c.want {
-			t.Errorf("effectiveMOH(%q,%q) = %q, want %q", c.teamMOH, c.tenant, got, c.want)
+		if got := EffectiveMOH(c.teamMOH, c.tenant); got != c.want {
+			t.Errorf("EffectiveMOH(%q,%q) = %q, want %q", c.teamMOH, c.tenant, got, c.want)
 		}
 	}
 }
