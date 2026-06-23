@@ -6,7 +6,7 @@ import { ref, onMounted, computed } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
-import type { PhoneNumber, Trunk, Flow } from "../api/types";
+import type { PhoneNumber, Trunk, Flow, Paginated } from "../api/types";
 import {
   Button,
   Panel,
@@ -74,11 +74,11 @@ async function load() {
     const [n, t, f] = await Promise.all([
       api.get<PhoneNumber[]>("/v1/numbers"),
       api.get<Trunk[]>("/v1/trunks"),
-      api.get<Flow[]>("/v1/flows"),
+      api.get<Paginated<Flow>>("/v1/flows"),
     ]);
     numbers.value = n;
     trunks.value = t;
-    flows.value = f;
+    flows.value = f.items;
   } catch (e) {
     toast.error(errMessage(e, "failed to load"));
   } finally {

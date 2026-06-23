@@ -323,6 +323,11 @@ func callPayload(c Call) map[string]interface{} {
 const (
 	callsDefaultLimit = 50
 	callsMaxLimit     = 200
+
+	// defaultPageSize / maxPageSize bound the numbered-pagination window shared
+	// by every paginated list endpoint (see pageParams).
+	defaultPageSize = 25
+	maxPageSize     = callsMaxLimit
 )
 
 func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
@@ -434,26 +439,65 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	limit := callsDefaultLimit
-	if v := r.URL.Query().Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
+	status := r.URL.Query().Get("status")
+
+	// active=true: the cockpit "Live calls" panel wants only in-progress calls
+	// (ended_at IS NULL, ringing/answered), oldest first, unpaginated. Bypasses
+	// the page/status machinery below — it's its own bounded query.
+	if r.URL.Query().Get("active") == "true" {
+		rows, err := s.db.Pool.Query(r.Context(), s.q.ListActiveCalls, t.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+			return
 		}
+		defer rows.Close()
+		out := []Call{}
+		for rows.Next() {
+			c, err := scanCall(rows)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "scan failed")
+				return
+			}
+			out = append(out, c)
+		}
+		writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: len(out), Limit: len(out), Offset: 0})
+		return
 	}
-	if limit > callsMaxLimit {
-		limit = callsMaxLimit
+
+	limit, offset, paged := pageParams(r)
+	if !paged {
+		// No page param: keep the legacy default volume (first callsDefaultLimit,
+		// no offset), still honouring an explicit ?limit (e.g. the dashboard's 8).
+		limit = callsDefaultLimit
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				limit = n
+			}
+		}
+		if limit > callsMaxLimit {
+			limit = callsMaxLimit
+		}
+		offset = 0
 	}
 
 	// Two static queries instead of string-building: the status filter just
-	// swaps which named query (and arg set) we use.
-	query := s.q.ListCalls
-	args := []interface{}{t.ID, limit}
-	if v := r.URL.Query().Get("status"); v != "" {
-		query = s.q.ListCallsByStatus
-		args = append(args, v)
+	// swaps which named queries (and arg sets) we use. Positional args follow
+	// the query text: list-calls is ($1 tenant, $2 limit, $3 offset);
+	// list-calls-by-status is ($1 tenant, $2 limit, $3 status, $4 offset).
+	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID}
+	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset}
+	if status != "" {
+		countQuery, countArgs = s.q.CountCallsByStatus, []interface{}{t.ID, status}
+		listQuery, listArgs = s.q.ListCallsByStatus, []interface{}{t.ID, limit, status, offset}
 	}
 
-	rows, err := s.db.Pool.Query(r.Context(), query, args...)
+	var total int
+	if err := s.db.Pool.QueryRow(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
+		writeError(w, http.StatusInternalServerError, "count failed: "+err.Error())
+		return
+	}
+
+	rows, err := s.db.Pool.Query(r.Context(), listQuery, listArgs...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
@@ -469,5 +513,5 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, c)
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
 }

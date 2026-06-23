@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import { toast } from "../lib/toast";
 import AudioPicker from "../components/AudioPicker.vue";
 import { Card, Button, Select, Toggle, Badge } from "../components/ui";
-import type { Tenant, GuestConfig, Flow } from "../api/types";
+import type { Tenant, GuestConfig, Flow, Paginated } from "../api/types";
 
 const tenant = ref<Tenant | null>(null);
 const loading = ref(true);
@@ -49,10 +49,10 @@ async function load() {
   try {
     const [g, fl] = await Promise.all([
       api.get<GuestConfig>("/v1/guest-config"),
-      api.get<Flow[]>("/v1/flows"),
+      api.get<Paginated<Flow>>("/v1/flows"),
     ]);
     guest.value = g;
-    flows.value = fl;
+    flows.value = fl.items;
     defaultFlowId.value = g.default_flow_id || "";
   } catch (e) {
     toast.error(errMessage(e, "failed to load guest config"));

@@ -197,11 +197,18 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	key := flowListCacheKey(t.ID)
 
-	// Cache-aside: the full per-tenant list is read often (console refresh)
-	// but only changes on a flow create/update/delete, each of which
-	// invalidates this key. Serve the pre-encoded JSON verbatim on a hit.
+	limit, offset, paged := pageParams(r)
+	if paged {
+		s.listFlowsPage(w, r, t.ID, limit, offset)
+		return
+	}
+
+	// Unpaged: the full per-tenant list, served as a uniform envelope and
+	// cache-aside. The list is read often (console refresh, flow dropdowns)
+	// but only changes on a create/update/delete, each of which invalidates
+	// this key. Serve the pre-encoded JSON verbatim on a hit.
+	key := flowListCacheKey(t.ID)
 	if b, ok := s.cache.Get(r.Context(), key); ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -209,23 +216,13 @@ func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := s.db.Pool.Query(r.Context(), s.q.ListFlows, t.ID)
+	out, err := s.scanFlows(r, s.q.ListFlows, t.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed")
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer rows.Close()
-	out := []Flow{}
-	for rows.Next() {
-		f, err := scanFlow(rows)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "scan failed")
-			return
-		}
-		out = append(out, f)
-	}
 
-	b, err := json.Marshal(out)
+	b, err := json.Marshal(pageEnvelope{Items: out, Total: len(out), Limit: len(out), Offset: 0})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "encode failed")
 		return
@@ -234,6 +231,40 @@ func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
+}
+
+// listFlowsPage serves one numbered page of flows (cache-bypassed — paging is a
+// console-only access pattern, and the full-list cache stays the hot path).
+func (s *Server) listFlowsPage(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, limit, offset int) {
+	var total int
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.CountFlows, tenantID).Scan(&total); err != nil {
+		writeError(w, http.StatusInternalServerError, "count failed")
+		return
+	}
+	out, err := s.scanFlows(r, s.q.ListFlowsPage, tenantID, limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
+}
+
+// scanFlows runs a flow-listing query and scans every row into a non-nil slice.
+func (s *Server) scanFlows(r *http.Request, query string, args ...interface{}) ([]Flow, error) {
+	rows, err := s.db.Pool.Query(r.Context(), query, args...)
+	if err != nil {
+		return nil, errors.New("query failed")
+	}
+	defer rows.Close()
+	out := []Flow{}
+	for rows.Next() {
+		f, err := scanFlow(rows)
+		if err != nil {
+			return nil, errors.New("scan failed")
+		}
+		out = append(out, f)
+	}
+	return out, nil
 }
 
 func (s *Server) handleGetFlow(w http.ResponseWriter, r *http.Request) {
