@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -319,6 +320,8 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/teams/{name}/agents/{agentID}", s.handleRemoveTeamAgent)
 			// Live queue depth per team (orchestrator publishes → Redis → here).
 			r.Get("/queues", s.handleListQueues)
+			// "Today so far" aggregates for the dashboard trend strip.
+			r.Get("/stats/overview", s.handleStatsOverview)
 			// Sound library — uploaded audio reused for IVR prompts + hold music.
 			r.Get("/audio", s.handleListAudio)
 			r.Post("/audio", s.handleUploadAudio)
@@ -444,6 +447,38 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// pageEnvelope is the uniform shape every paginated list endpoint returns:
+// the rows plus the total matching the query (before LIMIT) and the window
+// that produced them. Items is always a non-nil slice so it marshals to [].
+type pageEnvelope struct {
+	Items  interface{} `json:"items"`
+	Total  int         `json:"total"`
+	Limit  int         `json:"limit"`
+	Offset int         `json:"offset"`
+}
+
+// pageParams reads the optional 1-based `page` + `limit` query params. `paged`
+// is false when no `page` is present, so the caller can fall back to its own
+// default volume (the no-page envelope still carries a total). `limit` defaults
+// to defaultPageSize and is clamped to maxPageSize.
+func pageParams(r *http.Request) (limit, offset int, paged bool) {
+	q := r.URL.Query()
+	paged = q.Get("page") != ""
+	limit = defaultPageSize
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > maxPageSize {
+		limit = maxPageSize
+	}
+	if n, err := strconv.Atoi(q.Get("page")); err == nil && n > 1 {
+		offset = (n - 1) * limit
+	}
+	return
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

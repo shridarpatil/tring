@@ -708,5 +708,109 @@ func TestPeerLeaveEndsLoneRemaining(t *testing.T) {
 	}
 }
 
+// orderedCallLog records the ORDER of Journey vs Ended (and the stamped steps)
+// so a test can assert the abandoned-call fix: the IVR journey must be stamped
+// BEFORE the CDR settles, because Ended() drops the active-call tracking that
+// Journey() needs. Regression guard for the stopIVR→Journey→Ended race that left
+// abandoned web calls with an empty ivr_path (so the dashboard "abandoned" metric,
+// which keys on the transfer step, under-counted them).
+type orderedCallLog struct {
+	mu     sync.Mutex
+	events []string
+	steps  []ivr.Step
+}
+
+func (o *orderedCallLog) Started(context.Context, uuid.UUID, string, string, string, string, string, room.ParticipantID) room.TrackSink {
+	return nil
+}
+func (o *orderedCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
+func (o *orderedCallLog) Journey(_ string, steps []ivr.Step) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.steps = steps
+	o.events = append(o.events, "journey")
+}
+func (o *orderedCallLog) Ended(string, string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.events = append(o.events, "ended")
+}
+func (o *orderedCallLog) snap() ([]string, []ivr.Step) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.events...), o.steps
+}
+
+// TestAbandonedCallStampsJourneyBeforeEnded reproduces a caller who is transferred
+// to a team, queued (no agent free), and hangs up. The IVR walk is in progress at
+// that moment, so the caller-left path races the async journey stamp. The fix makes
+// stopIVR stamp the journey (incl. the transfer step) before Ended settles the CDR.
+func TestAbandonedCallStampsJourneyBeforeEnded(t *testing.T) {
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	cl := &orderedCallLog{}
+	sig := signaling.New(signaling.Config{
+		SFU:       s,
+		JWTSecret: testSecret,
+		Flows:     transferFlows{},
+		Teams:     fakeTeams{members: map[string][]string{"sales": {"alice"}}},
+		Calls:     cl,
+	})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+
+	// alice is online but already on another call → the transfer can't connect, so
+	// the visitor is held in the queue and the IVR walk stays IN PROGRESS.
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+	busy := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	busy.send(map[string]any{"type": "join", "room": "busyroom", "name": "Alice"})
+	busy.readUntil("joined") // alice is now on_call
+
+	// Visitor enters the flow → IVR transfers to sales → queued (alice busy).
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	// Let the walk reach the transfer/queue so leaving now races Journey vs Ended.
+	time.Sleep(400 * time.Millisecond)
+
+	// Visitor abandons while queued.
+	visitor.send(map[string]any{"type": "bye"})
+
+	// Wait for both CDR hooks to fire.
+	var seq []string
+	var steps []ivr.Step
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if seq, steps = cl.snap(); len(seq) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(seq) < 2 {
+		t.Fatalf("expected journey + ended hooks, got %v", seq)
+	}
+	// THE REGRESSION: journey must be stamped before the CDR settles.
+	if seq[0] != "journey" {
+		t.Fatalf("journey must be stamped before ended, got order %v", seq)
+	}
+	// And it must carry the transfer step — the abandonment signal the dashboard
+	// counts (ivr_path @> '[{"node_type":"transfer"}]').
+	hasTransfer := false
+	for _, st := range steps {
+		if st.NodeType == "transfer" {
+			hasTransfer = true
+		}
+	}
+	if !hasTransfer {
+		t.Fatalf("abandoned journey missing transfer step: %+v", steps)
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()

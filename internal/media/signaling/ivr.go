@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
@@ -19,12 +20,16 @@ import (
 
 // ivrSession is a running IVR for one room: the prompt player injected as the
 // IVR participant, the driver the walker drives, and a cancel to stop it when
-// the caller leaves.
+// the caller leaves. done is closed once the walk goroutine has unwound and
+// stored its path, so stopIVR can stamp the journey (incl. a transfer step the
+// caller abandoned during) BEFORE the caller-left path settles the CDR.
 type ivrSession struct {
 	pid    room.ParticipantID
 	player *prompt.Player
 	driver *ivrdrive.Driver
 	cancel context.CancelFunc
+	done   chan struct{} // closed when the walk finished and path is set
+	path   []ivr.Step    // the walked journey; read only after <-done
 }
 
 // devFlowID is the magic flow id that, with dev tokens on, runs the built-in
@@ -72,7 +77,8 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 		ClientRef: callerRef,
 		Logger:    s.log,
 	})
-	s.ivr[roomID] = &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel}
+	sess := &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel, done: make(chan struct{})}
+	s.ivr[roomID] = sess
 	s.mu.Unlock()
 
 	var (
@@ -89,6 +95,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 	}
 	if err != nil || flow == nil {
 		s.log.Warn("ivr: flow load failed", "room", roomID, "flow", flowID, "err", err)
+		close(sess.done) // no walk will run — unblock stopIVR's wait
 		s.stopIVR(roomID)
 		return
 	}
@@ -98,6 +105,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
 	}); err != nil {
 		s.log.Error("ivr: inject source failed", "room", roomID, "err", err)
+		close(sess.done) // no walk will run — unblock stopIVR's wait
 		s.stopIVR(roomID)
 		return
 	}
@@ -106,10 +114,9 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 	go func() {
 		path, walkErr := ivr.Walk(ctx, flow, flow.EntryNode, driver)
 		s.log.Info("ivr flow ended", "room", roomID, "steps", len(path), "err", walkErr)
-		if s.cfg.Calls != nil {
-			s.cfg.Calls.Journey(string(roomID), path) // stamp the walk on the CDR
-		}
-		s.stopIVR(roomID) // teardown: remove the IVR participant + close the player
+		sess.path = path
+		close(sess.done)  // publish the path (happens-before stopIVR's read)
+		s.stopIVR(roomID) // teardown: stamp the journey, remove the participant, close the player
 	}()
 }
 
@@ -134,6 +141,18 @@ func (s *Server) stopIVR(roomID room.RoomID) {
 		return
 	}
 	sess.cancel()
+	// Wait for the walk to unwind so its journey is captured BEFORE the caller-left
+	// path settles the CDR (which drops the active-call tracking Journey needs). The
+	// walk returns near-instantly once ctx is cancelled; the cap just bounds a stuck
+	// node. Only the goroutine that won the map delete reaches here, so Journey runs
+	// once. This is what makes an abandoned call's transfer step persist.
+	select {
+	case <-sess.done:
+	case <-time.After(2 * time.Second):
+	}
+	if s.cfg.Calls != nil {
+		s.cfg.Calls.Journey(string(roomID), sess.path) // stamp the walk on the CDR
+	}
 	s.sfu.RemoveSource(roomID, sess.pid)
 	_ = sess.player.Close()
 	s.log.Info("ivr stopped", "room", roomID)
