@@ -1,5 +1,15 @@
 // Mirror of the Go API response shapes (internal/api).
 
+// Paginated<T> is the uniform envelope every list endpoint returns (pageEnvelope
+// in Go): the rows plus the total matching the query and the window that
+// produced them.
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -73,6 +83,22 @@ export interface Queues {
   total: number; // callers waiting across all team queues
   on_call: number; // live calls currently connected to an agent
   queues: QueueDepth[];
+}
+
+// Dashboard "today so far" aggregates (GET /v1/stats/overview) — powers the
+// cockpit trend strip.
+export interface StatsHourBucket {
+  hour: string; // ISO start-of-hour (UTC); render the label in local time
+  count: number;
+}
+export interface StatsOverview {
+  calls_today: number;
+  answered_pct: number; // 0–100
+  abandoned_today: number; // callers who hung up while waiting
+  failed_today: number; // calls that errored before connecting
+  avg_wait_seconds: number; // time-to-answer (start→connect) of answered calls
+  avg_talk_seconds: number;
+  hourly: StatsHourBucket[]; // always 12 buckets, oldest→newest
 }
 
 export interface PhoneNumber {

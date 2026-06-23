@@ -118,6 +118,48 @@ click → [mic grabbed in gesture] → your backend mints token (API key)
   → hangup → CDR settled + recording finalized (stereo Ogg, optional S3)
 ```
 
+**The same flow in plain language** (what happens from clicking the button). Note
+a pure web call never touches FreeSWITCH — that's only for real phone legs (6b).
+Mental model: a call is a **room of participants** (visitor, IVR robot, agent),
+and the gateway's **SFU** is the switchboard everyone connects to once; it copies
+each participant's audio to the others.
+
+1. **Click.** The widget asks the browser for the microphone.
+2. **Get a one-time ticket.** It fetches a short-lived, **single-use** call token
+   from the CRM backend (`POST /v1/guest-credentials`). The token secretly pins
+   *which IVR flow* runs, so the browser can't tamper with routing.
+3. **One connection up.** The browser opens a single WebSocket to the gateway
+   (`/rtc`) and sends `join` with the ticket.
+4. **Gateway checks the ticket + opens a room.** It validates the token and burns
+   its id so it can't be reused (if that check can't run, the call is refused —
+   fail-closed). Then it creates a fresh room and adds the visitor as participant #1.
+5. **Audio path is built (WebRTC handshake).** The **gateway offers, the browser
+   answers** (the reverse of the usual assumption). Both trade ICE candidates
+   (via STUN/TURN to get through firewalls/NAT) and do a DTLS-SRTP encryption
+   handshake. The visitor's encrypted audio is now flowing into the SFU.
+6. **IVR greets (if the flow has one).** The IVR joins the room as a participant
+   and plays the greeting/menu — the visitor hears it via the SFU. Key presses go
+   up as `dtmf` messages and drive the flow graph.
+7. **Flow decides to reach an agent.** A `transfer` node picks who to ring: one
+   agent, a team, or every online agent (ring-all).
+8. **The ring.** Each online agent already holds a quiet **presence socket**
+   (registered at login). To ring them the gateway just **pushes an `incoming`
+   message** down those sockets and their widget rings — no phone network, just a
+   message on an open connection. Rings up to 30s, else `no_answer`.
+9. **An agent accepts.** Their browser grabs its mic and opens its own `join` into
+   the **same room** (same handshake as step 5). First to answer wins; the rest
+   stop ringing.
+10. **Connected.** The SFU now forwards visitor↔agent audio both ways. The CDR
+    flips `ringing → answered`; if recording is on, each side is captured
+    separately and merged to one stereo file.
+11. **Hang up.** Either side sends `bye`; the room closes, the CDR is settled, the
+    recording is finalized.
+
+A brief socket blip won't drop the call: while the page stays open, a ~30s grace
+window + reattach token (`media_grace_seconds`) lets the browser rejoin the same
+room. A full page reload or a gateway restart *does* end it — live media can't be
+relocated (see [`STATE_AND_HA.md`](STATE_AND_HA.md)).
+
 ### 6b. Inbound phone
 ```
 telco → FreeSWITCH (terminate trunk, G.711↔Opus) → dialplan tring_pstn_plug

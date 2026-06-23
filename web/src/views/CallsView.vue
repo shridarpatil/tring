@@ -1,17 +1,26 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import { callStatusTone } from "../lib/status";
+import { usePagedList } from "../composables/usePagedList";
 import type { Call, IvrStep } from "../api/types";
-import { Button, Select, Badge, Modal, TextField } from "../components/ui";
+import { Button, Select, Badge, Modal, TextField, Pagination } from "../components/ui";
 import { ChevronRight, ChevronDown } from "lucide-vue-next";
 
-const calls = ref<Call[]>([]);
-const loading = ref(true);
 const statusFilter = ref("");
+const params = computed(() => ({ status: statusFilter.value }));
+const {
+  items: calls,
+  page,
+  pageSize,
+  total,
+  loading,
+  load,
+  setPage,
+} = usePagedList<Call>("/v1/calls", { params });
 
 // Recordings are served behind auth, so a plain <a href>/<audio src> can't send
 // the bearer token. Fetch the WAV as a blob and bind it to an inline <audio>
@@ -75,18 +84,6 @@ const statusOptions = [
   { value: "ended", label: "Ended" },
 ];
 
-async function load() {
-  loading.value = true;
-  try {
-    const q = statusFilter.value ? `?status=${statusFilter.value}&limit=100` : "?limit=100";
-    calls.value = await api.get<Call[]>(`/v1/calls${q}`);
-  } catch (e) {
-    toast.error(errMessage(e, "failed to load"));
-  } finally {
-    loading.value = false;
-  }
-}
-
 async function connect() {
   placing.value = true;
   try {
@@ -105,8 +102,6 @@ async function connect() {
 function fmt(d?: string) {
   return d ? new Date(d).toLocaleString() : "—";
 }
-
-onMounted(load);
 </script>
 
 <template>
@@ -118,11 +113,12 @@ onMounted(load);
 
     <div class="flex items-center gap-2">
       <span class="text-sm text-ink-muted">Status</span>
-      <Select v-model="statusFilter" :options="statusOptions" @update:model-value="load" />
+      <Select v-model="statusFilter" :options="statusOptions" />
     </div>
 
-    <div class="rounded-xl bg-surface border border-border overflow-x-auto">
-      <table class="w-full text-sm">
+    <div class="rounded-xl bg-surface border border-border">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border text-left">
             <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">From</th>
@@ -211,6 +207,14 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
+      </div>
+      <Pagination
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        label="calls"
+        @update:page="setPage"
+      />
     </div>
 
     <Modal v-model:open="showConnect" title="Connect two numbers">

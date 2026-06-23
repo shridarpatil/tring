@@ -8,6 +8,7 @@ export { default as EmptyState } from "./EmptyState.vue";
 export { default as IconButton } from "./IconButton.vue";
 export { default as LevelMeter } from "./LevelMeter.vue";
 export { default as Modal } from "./Modal.vue";
+export { default as Pagination } from "./Pagination.vue";
 export { default as Panel } from "./Panel.vue";
 export { default as Select } from "./Select.vue";
 export { default as SignalDot } from "./SignalDot.vue";
