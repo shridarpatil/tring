@@ -209,6 +209,39 @@ DELETE FROM audio_assets WHERE id = $1 AND tenant_id = $2;
 SELECT COUNT(*) FROM calls
 WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
 
+-- name: stats-today
+-- Running "today so far" totals for the cockpit: calls started today, answered,
+-- abandoned, failed, plus average wait (time-to-answer) and talk time. Day
+-- boundary is server-local midnight (date_trunc on now()). avgs are NULL with no
+-- qualifying calls — the handler coalesces to 0.
+--   abandoned = the call was transferred to a team/agent (an ivr_path "transfer"
+--     step exists) but ended without any agent connecting (agent_id IS NULL —
+--     stamped ONLY on answer, on both the phone set-call-agent and web/pion
+--     set-call-agent-id paths). Both planes persist the transfer step even when
+--     the caller bails (the web plane stamps the journey on IVR teardown before the
+--     CDR settles). There is no 'abandoned' call_status, so this IS the signal.
+--   failed = status 'failed' (originate/connect error before the call got going).
+--   wait = time-to-answer (started_at→answered_at); not pure queue time (we don't
+--     persist a per-caller enqueue timestamp).
+SELECT
+  count(*),
+  count(*) FILTER (WHERE answered_at IS NOT NULL),
+  count(*) FILTER (WHERE agent_id IS NULL AND ended_at IS NOT NULL
+                     AND ivr_path @> '[{"node_type":"transfer"}]'),
+  count(*) FILTER (WHERE status = 'failed'),
+  COALESCE(avg(EXTRACT(EPOCH FROM (answered_at - started_at))) FILTER (WHERE answered_at IS NOT NULL), 0)::float8,
+  COALESCE(avg(duration_seconds) FILTER (WHERE duration_seconds IS NOT NULL), 0)::float8
+FROM calls
+WHERE tenant_id = $1 AND started_at >= date_trunc('day', now());
+
+-- name: stats-hourly
+-- Calls bucketed by hour over the last 12h for the trend chart. Only non-empty
+-- hours come back; the handler fills the gaps so the x-axis always has 12 bars.
+SELECT date_trunc('hour', started_at) AS hour, count(*)
+FROM calls
+WHERE tenant_id = $1 AND started_at >= now() - interval '12 hours'
+GROUP BY 1 ORDER BY 1;
+
 -- ===========================================================================
 -- calls
 -- ===========================================================================
@@ -315,7 +348,7 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1
-ORDER BY c.started_at DESC LIMIT $2;
+ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 
 -- name: list-calls-by-status
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
@@ -324,7 +357,25 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1 AND c.status = $3::call_status
-ORDER BY c.started_at DESC LIMIT $2;
+ORDER BY c.started_at DESC LIMIT $2 OFFSET $4;
+
+-- name: list-active-calls
+-- In-progress calls for the cockpit "Live calls" panel: not yet ended, still
+-- ringing or connected. Oldest first so the longest-running call stays put at the
+-- top. Capped — active calls are naturally bounded, the LIMIT is just a backstop.
+SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
+       c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
+FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
+WHERE c.tenant_id = $1 AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
+ORDER BY c.started_at ASC LIMIT 100;
+
+-- name: count-calls
+SELECT count(*) FROM calls WHERE tenant_id = $1;
+
+-- name: count-calls-by-status
+SELECT count(*) FROM calls WHERE tenant_id = $1 AND status = $2::call_status;
 
 -- ===========================================================================
 -- mod_xml_curl directory (/fs) — FreeSWITCH SIP auth lookups
@@ -407,6 +458,14 @@ RETURNING id, tenant_id, name, description, is_active, is_outgoing_end,
 SELECT id, tenant_id, name, description, is_active, is_outgoing_end,
        definition, welcome_audio_url, created_at, updated_at
 FROM flows WHERE tenant_id = $1 ORDER BY updated_at DESC;
+
+-- name: list-flows-page
+SELECT id, tenant_id, name, description, is_active, is_outgoing_end,
+       definition, welcome_audio_url, created_at, updated_at
+FROM flows WHERE tenant_id = $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3;
+
+-- name: count-flows
+SELECT count(*) FROM flows WHERE tenant_id = $1;
 
 -- name: get-flow
 SELECT id, tenant_id, name, description, is_active, is_outgoing_end,

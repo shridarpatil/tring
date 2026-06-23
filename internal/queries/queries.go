@@ -66,6 +66,8 @@ type Queries struct {
 
 	// ---- api: dashboard live stats ----
 	CountActiveAgentCalls string `query:"count-active-agent-calls"`
+	StatsToday            string `query:"stats-today"`
+	StatsHourly           string `query:"stats-hourly"`
 
 	// ---- api: calls ----
 	GetAgentSipUsername   string `query:"get-agent-sip-username"`
@@ -94,6 +96,9 @@ type Queries struct {
 	GetCall             string `query:"get-call"`
 	ListCalls           string `query:"list-calls"`
 	ListCallsByStatus   string `query:"list-calls-by-status"`
+	ListActiveCalls     string `query:"list-active-calls"`
+	CountCalls          string `query:"count-calls"`
+	CountCallsByStatus  string `query:"count-calls-by-status"`
 
 	// ---- api: mod_xml_curl directory (/fs) ----
 	GetTenantIDBySipDomain string `query:"get-tenant-id-by-sip-domain"`
@@ -111,6 +116,8 @@ type Queries struct {
 	// ---- api: flows ----
 	CreateFlow        string `query:"create-flow"`
 	ListFlows         string `query:"list-flows"`
+	ListFlowsPage     string `query:"list-flows-page"`
+	CountFlows        string `query:"count-flows"`
 	GetFlow           string `query:"get-flow"`
 	UpdateFlow        string `query:"update-flow"`
 	DeleteFlow        string `query:"delete-flow"`

@@ -2,7 +2,7 @@
 // FlowsListView — list/create/delete IVR flows via the Tring API.
 import { ref } from "vue";
 import { errMessage } from "../../lib/errors";
-import { useList } from "../../composables/useList";
+import { usePagedList } from "../../composables/usePagedList";
 import { useRouter } from "vue-router";
 import { Trash2, ArrowRight } from "lucide-vue-next";
 import { api } from "../../api/client";
@@ -14,6 +14,7 @@ import {
   IconButton,
   Modal,
   Panel,
+  Pagination,
   DataTable,
   type Column,
   TextField,
@@ -21,7 +22,15 @@ import {
 
 const router = useRouter();
 
-const { items: flows, loading, load: refresh } = useList<Flow>("/v1/flows");
+const {
+  items: flows,
+  page,
+  pageSize,
+  total,
+  loading,
+  load: refresh,
+  setPage,
+} = usePagedList<Flow>("/v1/flows");
 const showCreate = ref(false);
 const newName = ref("");
 const creating = ref(false);
@@ -93,6 +102,13 @@ async function deleteFlow(id: string) {
           </IconButton>
         </template>
       </DataTable>
+      <Pagination
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        label="flows"
+        @update:page="setPage"
+      />
     </Panel>
 
     <p class="text-xs text-ink-faint">

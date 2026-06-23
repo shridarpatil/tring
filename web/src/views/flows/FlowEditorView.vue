@@ -54,7 +54,7 @@ import TimingNode from "../../components/calling/nodes/TimingNode.vue";
 import HangupNode from "../../components/calling/nodes/HangupNode.vue";
 import IVRNodeProperties from "../../components/calling/IVRNodeProperties.vue";
 
-import type { Flow, IVRFlowData, IVRNodeType, Agent, Team } from "../../api/types";
+import type { Flow, IVRFlowData, IVRNodeType, Agent, Team, Paginated } from "../../api/types";
 
 const route = useRoute();
 const router = useRouter();
@@ -458,7 +458,7 @@ onMounted(async () => {
   try {
     const [f, list, agents, teams] = await Promise.all([
       api.get<Flow>(`/v1/flows/${flowId.value}`),
-      api.get<Flow[]>("/v1/flows"),
+      api.get<Paginated<Flow>>("/v1/flows"),
       api.get<Agent[]>("/v1/agents"),
       api.get<Team[]>("/v1/teams"),
     ]);
@@ -474,7 +474,7 @@ onMounted(async () => {
       // blank and the entry-point invariant always holds.
       ensureStartNode();
     }
-    availableFlows.value = list;
+    availableFlows.value = list.items;
   } catch (e) {
     savedMsg.value = errMessage(e, "load failed");
   }

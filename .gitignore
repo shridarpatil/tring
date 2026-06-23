@@ -56,3 +56,4 @@ sdk/js/dist/
 # Python demo caches
 __pycache__/
 *.pyc
+.superpowers/
