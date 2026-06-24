@@ -13,7 +13,7 @@ import (
 // Read-only, tenant-scoped; cheap enough to poll alongside the other panels.
 
 type statsHourBucket struct {
-	Hour  time.Time `json:"hour"`  // start of the hour (UTC); the client renders the local label
+	Hour  time.Time `json:"hour"`  // start of the hour, in the DB session timezone
 	Count int       `json:"count"`
 }
 
@@ -26,8 +26,6 @@ type statsOverview struct {
 	AvgTalkSeconds int               `json:"avg_talk_seconds"` // average completed-call duration
 	Hourly         []statsHourBucket `json:"hourly"`           // always 12 buckets, oldest→newest
 }
-
-const statsHourlyWindow = 12
 
 func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
@@ -51,43 +49,28 @@ func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
 		FailedToday:    failed,
 		AvgWaitSeconds: int(math.Round(avgWait)),
 		AvgTalkSeconds: int(math.Round(avgTalk)),
-		Hourly:         hourlyBuckets(nil, time.Now()),
+		Hourly:         []statsHourBucket{},
 	}
 	if total > 0 {
 		out.AnsweredPct = int(math.Round(float64(answered) / float64(total) * 100))
 	}
 
+	// The query already returns exactly 12 gap-filled buckets, bucketed in the DB
+	// session timezone — no timezone math here, so nothing can mismatch.
 	rows, err := s.db.Pool.Query(r.Context(), s.q.StatsHourly, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
 		return
 	}
 	defer rows.Close()
-	counts := map[int64]int{}
 	for rows.Next() {
-		var hour time.Time
-		var n int
-		if err := rows.Scan(&hour, &n); err != nil {
+		var b statsHourBucket
+		if err := rows.Scan(&b.Hour, &b.Count); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		counts[hour.Unix()] = n
+		out.Hourly = append(out.Hourly, b)
 	}
-	out.Hourly = hourlyBuckets(counts, time.Now())
 
 	writeJSON(w, http.StatusOK, out)
-}
-
-// hourlyBuckets returns a fixed-length series of the last statsHourlyWindow hours
-// ending at now's hour, filling absent hours with 0 so the chart's x-axis is
-// stable. counts maps an hour's Unix start to its call count (nil ⇒ all zero).
-// Pure (clock injected) so it's unit-testable without a DB.
-func hourlyBuckets(counts map[int64]int, now time.Time) []statsHourBucket {
-	cur := now.UTC().Truncate(time.Hour)
-	out := make([]statsHourBucket, statsHourlyWindow)
-	for i := range statsHourlyWindow {
-		h := cur.Add(time.Duration(i-(statsHourlyWindow-1)) * time.Hour)
-		out[i] = statsHourBucket{Hour: h, Count: counts[h.Unix()]}
-	}
-	return out
 }
