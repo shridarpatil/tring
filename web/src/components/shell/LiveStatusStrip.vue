@@ -1,24 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
-import { usePoll } from "../../composables/usePoll";
-import { api } from "../../api/client";
-import type { Queues } from "../../api/types";
+import { useQueues } from "../../composables/useQueues";
 import SignalDot from "../ui/SignalDot.vue";
 import LevelMeter from "../ui/LevelMeter.vue";
 
 // Global live call-state, visible from every view — the signature feature at
-// shell level. Best-effort: keeps the last value if /v1/queues blips.
-const q = ref<Queues>({ total: 0, on_call: 0, queues: [] });
-
-async function load() {
-  try {
-    q.value = await api.get<Queues>("/v1/queues");
-  } catch {
-    /* keep last value */
-  }
-}
-
-usePoll(load, 5000);
+// shell level. Shares ONE poller with the dashboard via useQueues so /v1/queues
+// isn't fetched twice when both are mounted.
+const q = useQueues();
 </script>
 
 <template>
