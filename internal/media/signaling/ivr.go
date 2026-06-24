@@ -43,6 +43,10 @@ func devTransferFlow() *ivr.Flow {
 // the agent (a phone caller's number / a trusted client_ref; "" → generic). When
 // the flow ends (or the caller leaves) the IVR is torn down.
 func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
+	if s.brain.Running(roomID) {
+		return // an IVR is already running for this room
+	}
+
 	pid := room.ParticipantID("ivr-" + uuid.NewString())
 	player := prompt.NewPlayer(pid, 0)
 	driver := ivrdrive.New(ivrdrive.Config{
