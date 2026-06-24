@@ -9,7 +9,7 @@
 // The SFU is the sole offerer, so the directions are:
 //   client → server:  join | register | answer | ice | publish | unpublish | dtmf | bye
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
-//                     | incoming | ready | error
+//                     | incoming | incoming-cancel | ready | error
 // Trickle ICE rides `ice` both ways. Resumption: the client stores
 // `session_token` from `joined` and re-sends it in a later `join`.
 
@@ -35,6 +35,7 @@ export const ServerMsgType = {
   PeerState: "peer-state",
   PeerLeft: "peer-left",
   Incoming: "incoming",
+  IncomingCancel: "incoming-cancel",
   Ready: "ready",
   Ended: "ended",
   Error: "error",
