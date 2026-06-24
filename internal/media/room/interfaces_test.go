@@ -43,8 +43,8 @@ type stubGateway struct {
 }
 
 func (g *stubGateway) OnInbound(f func(room.InboundCall)) { g.inbound = f }
-func (g *stubGateway) Answer(room.CallID) (*room.PstnLeg, error) {
-	return &room.PstnLeg{Source: &stubSource{id: "pstn"}}, nil
+func (g *stubGateway) Answer(room.CallID) (*room.Leg, error) {
+	return &room.Leg{Source: &stubSource{id: "pstn"}}, nil
 }
 func (g *stubGateway) Reject(room.CallID) error { return nil }
 func (g *stubGateway) Hangup(room.CallID) error { return nil }

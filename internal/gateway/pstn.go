@@ -7,7 +7,7 @@ package gateway
 // the trunk (SIP/G.711 toward the telco), transcode to Opus, and hand the leg to
 // the media plane. The dialplan routes an inbound DID to the gateway's SIP UAS
 // (sofia/gateway/tring-gw) with the DID in X-Tring-DID; this adapter answers the
-// INVITE and exposes the leg as a room.PstnLeg — caller audio in (Opus RTP),
+// INVITE and exposes the leg as a room.Leg — caller audio in (Opus RTP),
 // room audio out, RFC2833 keypresses as digits. The media plane never sees SIP
 // or FS. Swapping FS for another stack (a sipgo trunk, a WebRTC trunk provider)
 // = implementing room.PstnGateway in a sibling package; nothing else changes.
@@ -151,8 +151,8 @@ func (a *PstnAdapter) handleInvite(req *sip.Request, tx sip.ServerTransaction, d
 }
 
 // Answer implements room.PstnGateway: 200-OK the leg and start media. The
-// returned PstnLeg plugs straight into sfu.AttachPort.
-func (a *PstnAdapter) Answer(id room.CallID) (*room.PstnLeg, error) {
+// returned Leg plugs straight into sfu.AttachPort.
+func (a *PstnAdapter) Answer(id room.CallID) (*room.Leg, error) {
 	a.mu.Lock()
 	call := a.calls[id]
 	a.mu.Unlock()
@@ -189,7 +189,7 @@ func (a *PstnAdapter) Answer(id room.CallID) (*room.PstnLeg, error) {
 	}()
 
 	a.g.log.Info("pstn: answered", "call", id, "fs_rtp", call.fsAddr)
-	return &room.PstnLeg{
+	return &room.Leg{
 		Source: call.src,
 		Write:  a.writerFor(call),
 		DTMF:   call.dtmf,

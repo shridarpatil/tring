@@ -55,12 +55,12 @@ type InboundCall struct {
 	To     string // dialed number (the DID — resolves the tenant + IVR flow)
 }
 
-// PstnLeg is one ANSWERED phone call's media + events, ready to plug into a room
+// Leg is one ANSWERED call's media + events, ready to plug into a room
 // (sfu.AttachPort): the caller's audio enters as Source, the room's audio goes
-// back via Write, keypresses arrive on DTMF, and Done closes when the carrier
-// side hangs up. Source always yields Opus — the adapter owns any transcode, so
-// the media plane never sees a PSTN codec.
-type PstnLeg struct {
+// back via Write, keypresses arrive on DTMF, and Done closes when the far side
+// hangs up. Source always yields Opus — the plug owns any transcode, so the
+// media plane never sees a channel-native codec.
+type Leg struct {
 	Source ParticipantSource
 	Write  func(pkt *rtp.Packet) error
 	DTMF   <-chan string
@@ -79,7 +79,7 @@ type PstnGateway interface {
 	// OnInbound registers the single consumer for incoming calls. The consumer
 	// must Answer or Reject promptly (the adapter times the call out otherwise).
 	OnInbound(func(InboundCall))
-	Answer(id CallID) (*PstnLeg, error)
+	Answer(id CallID) (*Leg, error)
 	Reject(id CallID) error
 	Hangup(id CallID) error
 }
