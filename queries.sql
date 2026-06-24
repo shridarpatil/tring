@@ -235,12 +235,26 @@ FROM calls
 WHERE tenant_id = $1 AND started_at >= date_trunc('day', now());
 
 -- name: stats-hourly
--- Calls bucketed by hour over the last 12h for the trend chart. Only non-empty
--- hours come back; the handler fills the gaps so the x-axis always has 12 bars.
-SELECT date_trunc('hour', started_at) AS hour, count(*)
-FROM calls
-WHERE tenant_id = $1 AND started_at >= now() - interval '12 hours'
-GROUP BY 1 ORDER BY 1;
+-- Calls per hour for the last 12h for the trend chart, ALWAYS 12 rows (gaps
+-- filled with 0 via generate_series). Bucketing and gap-filling both live here so
+-- the series and the data share ONE date_trunc in the DB's session timezone (set
+-- by the deploy, e.g. Asia/Kolkata) — the handler does no timezone math, so there's
+-- nothing to mismatch. (The previous handler truncated buckets in UTC and matched
+-- by unix epoch, which zeroed the whole chart on any fractional-offset session zone
+-- like IST +5:30, where local hour starts fall at :30 past the UTC hour.)
+SELECT g.hour, COALESCE(c.n, 0)
+FROM generate_series(
+       date_trunc('hour', now()) - interval '11 hours',
+       date_trunc('hour', now()),
+       interval '1 hour'
+     ) AS g(hour)
+LEFT JOIN (
+  SELECT date_trunc('hour', started_at) AS hour, count(*) AS n
+  FROM calls
+  WHERE tenant_id = $1 AND started_at >= date_trunc('hour', now()) - interval '11 hours'
+  GROUP BY 1
+) c ON c.hour = g.hour
+ORDER BY g.hour;
 
 -- ===========================================================================
 -- calls
