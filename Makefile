@@ -1,16 +1,15 @@
 # Tring dev convenience. Keep targets thin — anything non-trivial belongs
 # in a script or in the README, not here.
 
-.PHONY: help up down api orchestrator server build sdk sdk-watch test fmt vet clean demo
+.PHONY: help up down api server build sdk sdk-watch test fmt vet clean demo
 
 help:
 	@echo "Common targets:"
-	@echo "  make up            - docker compose up -d  (FS + Postgres + API + orchestrator + server)"
+	@echo "  make up            - docker compose up -d  (FS + Postgres + Redis + API + server)"
 	@echo "  make down          - docker compose down"
 	@echo "  make logs          - tail logs of all services"
 	@echo "  make images        - rebuild the Go images (forces fresh binary)"
 	@echo "  make api           - run the API on :8085 (foreground, host) — for dev hot-iterate"
-	@echo "  make orchestrator  - run the orchestrator (foreground, host) — for dev hot-iterate"
 	@echo "  make server        - run the call-plane server on :8087 (foreground, host)"
 	@echo "  make build         - go build ./... (all binaries)"
 	@echo "  make sdk           - npm run build in sdk/js"
@@ -33,13 +32,10 @@ logs:
 	docker compose logs -f --tail=20
 
 images:
-	docker compose build api orchestrator server freeswitch
+	docker compose build api server freeswitch
 
 api:
 	go run ./cmd/api
-
-orchestrator:
-	go run ./cmd/orchestrator
 
 server:
 	go run ./cmd/server

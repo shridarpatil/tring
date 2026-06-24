@@ -57,3 +57,6 @@ sdk/js/dist/
 __pycache__/
 *.pyc
 .superpowers/
+/server
+/api
+/orchestrator
