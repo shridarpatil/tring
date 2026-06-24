@@ -506,8 +506,8 @@ func newFakePstn() *fakePstn {
 }
 
 func (f *fakePstn) OnInbound(fn func(room.InboundCall)) { f.inbound = fn }
-func (f *fakePstn) Answer(room.CallID) (*room.PstnLeg, error) {
-	return &room.PstnLeg{
+func (f *fakePstn) Answer(room.CallID) (*room.Leg, error) {
+	return &room.Leg{
 		Source: f.src,
 		Write:  func(*rtp.Packet) error { return nil },
 		DTMF:   f.dtmf,
