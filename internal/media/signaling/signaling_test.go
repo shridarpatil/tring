@@ -303,19 +303,25 @@ func TestTransferRingsAgentIntoRoom(t *testing.T) {
 	}
 }
 
-// fakeTeams resolves a fixed team membership (no DB).
-type fakeTeams struct{ members map[string][]string }
+// fakeTeams resolves a fixed team membership (no DB). strategy/ringSeconds/maxWait
+// are optional — zero values give a ring-all team with routing defaults.
+type fakeTeams struct {
+	members     map[string][]string
+	strategy    string
+	ringSeconds int
+	maxWait     int
+}
 
 func (f fakeTeams) TeamSIPs(_ context.Context, _ uuid.UUID, team string) ([]string, error) {
 	return f.members[team], nil
 }
 
-// TeamConfig: a team exists (with default queue settings) iff it has members.
+// TeamConfig: a team exists (with the configured strategy/timers) iff it has members.
 func (f fakeTeams) TeamConfig(_ context.Context, _ uuid.UUID, team string) (routing.TeamConfig, bool, error) {
 	if _, ok := f.members[team]; !ok {
 		return routing.TeamConfig{}, false, nil
 	}
-	return routing.TeamConfig{Name: team}, true, nil
+	return routing.TeamConfig{Name: team, Strategy: f.strategy, RingSeconds: f.ringSeconds, MaxWait: f.maxWait}, true, nil
 }
 
 // TestTransferRingsOnlyTeamMembers checks team-resolution parity: a transfer to
@@ -809,6 +815,65 @@ func TestAbandonedCallStampsJourneyBeforeEnded(t *testing.T) {
 	}
 	if !hasTransfer {
 		t.Fatalf("abandoned journey missing transfer step: %+v", steps)
+	}
+}
+
+// sawIncoming reports whether the client receives an `incoming` within d.
+func sawIncoming(c *wsClient, d time.Duration) bool {
+	_ = c.conn.SetReadDeadline(time.Now().Add(d))
+	for {
+		data, err := wsutil.ReadServerText(c.conn)
+		if err != nil {
+			return false
+		}
+		var m map[string]any
+		if json.Unmarshal(data, &m) == nil && m["type"] == "incoming" {
+			return true
+		}
+	}
+}
+
+// TestRoundRobinRingsOneAgentAtATime guards the web-plane strategy fix: a team
+// configured round_robin must ring ONE agent at a time, not blast every agent at
+// once (the ring_all bug). With three online team members, exactly one gets an
+// `incoming` within a single ring window. Pre-fix, pionRing rang all three.
+func TestRoundRobinRingsOneAgentAtATime(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: transferFlows{},
+		Teams: fakeTeams{
+			members:     map[string][]string{"sales": {"alice", "bob", "carol"}},
+			strategy:    "round_robin",
+			ringSeconds: 10, // long ring window so no advance happens during the check
+			maxWait:     30,
+		},
+	})
+	tenant := uuid.New()
+
+	var agents []*wsClient
+	for _, sip := range []string{"alice", "bob", "carol"} {
+		a := dial(t, ts.URL, mintToken(t, tenant, sip))
+		a.send(map[string]any{"type": "register"})
+		a.readUntil("ready")
+		agents = append(agents, a)
+	}
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	// Within one ring window (well under ringSeconds), exactly ONE agent rings.
+	ch := make(chan bool, len(agents))
+	for _, a := range agents {
+		go func(c *wsClient) { ch <- sawIncoming(c, 3*time.Second) }(a)
+	}
+	rung := 0
+	for range agents {
+		if <-ch {
+			rung++
+		}
+	}
+	if rung != 1 {
+		t.Fatalf("round_robin rang %d agents at once, want exactly 1", rung)
 	}
 }
 
