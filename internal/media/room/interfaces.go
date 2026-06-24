@@ -18,7 +18,7 @@ type ParticipantID string
 // RoomID identifies a call/room.
 type RoomID string
 
-// CallID identifies a PSTN-side call leg (Plug scope), distinct from the
+// CallID identifies a channel-side call leg (Plug scope), distinct from the
 // room-side ParticipantID it maps to.
 type CallID string
 
@@ -31,10 +31,10 @@ type TrackSink interface {
 }
 
 // ParticipantSource injects a participant whose media originates OUTSIDE WebRTC.
-// The IVR prompt player (M8, the first real implementation) and the FreeSWITCH
-// phone leg (Phase 2) both implement it: they appear in the room as ordinary
-// participants publishing Opus. pion never sees PSTN codecs — a Plug
-// transcodes G.711↔Opus before the source, so ReadRTP always yields Opus.
+// The IVR prompt player and a channel's phone/PSTN leg both implement it: they
+// appear in the room as ordinary participants publishing Opus. pion never sees a
+// channel-native codec — a Plug transcodes (e.g. G.711↔Opus) before the source,
+// so ReadRTP always yields Opus.
 type ParticipantSource interface {
 	ID() ParticipantID
 	ReadRTP() (*rtp.Packet, error)
