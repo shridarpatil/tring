@@ -35,6 +35,44 @@ func flowGreetThenTransfer() *ivr.Flow {
 	}
 }
 
+// TestStartClaimsBeforeSetup verifies that the room slot is claimed atomically
+// before setup runs, so a concurrent second Start loses the slot and never calls
+// its setup — preventing a leaked orphaned player/source (the TOCTOU bug).
+func TestStartClaimsBeforeSetup(t *testing.T) {
+	r := NewRunner(nil)
+
+	var setupCalls int
+	var mu sync.Mutex
+	countSetup := func() error {
+		mu.Lock()
+		setupCalls++
+		mu.Unlock()
+		return nil
+	}
+
+	// First Start: setup runs; walk blocks until Stop.
+	got1 := r.Start(context.Background(), "room-x", flowGreetThenTransfer(), &blockingDriver{}, countSetup, nil, nil)
+	if !got1 {
+		t.Fatal("first Start should return true (took ownership)")
+	}
+
+	// Second Start for the same room (sequential, first session still live):
+	// must not call its setup and must return false.
+	got2 := r.Start(context.Background(), "room-x", flowGreetThenTransfer(), &blockingDriver{}, countSetup, nil, nil)
+	if got2 {
+		t.Fatal("second Start should return false (room already claimed)")
+	}
+
+	mu.Lock()
+	n := setupCalls
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("setup should have been called exactly once, got %d", n)
+	}
+
+	r.Stop("room-x") // clean up first session
+}
+
 func TestRunnerStampsJourneyBeforeDone(t *testing.T) {
 	r := NewRunner(nil)
 	var mu sync.Mutex
@@ -43,7 +81,7 @@ func TestRunnerStampsJourneyBeforeDone(t *testing.T) {
 	onJourney := func(s []ivr.Step) { mu.Lock(); order = append(order, "journey"); steps = s; mu.Unlock() }
 	onDone := func() { mu.Lock(); order = append(order, "done"); mu.Unlock() }
 
-	r.Start(context.Background(), "room-1", flowGreetThenTransfer(), &blockingDriver{}, onJourney, onDone)
+	r.Start(context.Background(), "room-1", flowGreetThenTransfer(), &blockingDriver{}, nil, onJourney, onDone)
 	time.Sleep(50 * time.Millisecond) // let the walk reach the blocking Transfer
 	r.Stop("room-1")
 	r.Stop("room-1") // idempotent — must not stamp twice
