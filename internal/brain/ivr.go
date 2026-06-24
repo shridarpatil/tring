@@ -64,6 +64,13 @@ func (r *Runner) Start(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, 
 	}()
 }
 
+// Running reports whether an IVR session is active for the room.
+func (r *Runner) Running(roomID room.RoomID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.s[roomID] != nil
+}
+
 // DTMF routes a digit to the room's driver if it accepts DTMF.
 func (r *Runner) DTMF(roomID room.RoomID, digit string) {
 	r.mu.Lock()
