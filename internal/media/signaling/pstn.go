@@ -2,7 +2,7 @@ package signaling
 
 // pstn.go — inbound PHONE calls on the media plane (Phase 4c).
 //
-// The phone side is a PLUG (room.PstnGateway — FreeSWITCH today, anything
+// The phone side is a PLUG (room.Plug — FreeSWITCH today, anything
 // tomorrow): an inbound call arrives as an InboundCall, this server resolves the
 // dialed DID to a tenant + IVR flow, answers, and attaches the leg to a room as
 // a bidirectional port (sfu.AttachPort). From there the call is EXACTLY a web
@@ -28,7 +28,7 @@ type DIDResolver interface {
 
 // AttachPstn wires a phone plug into the server: inbound calls become rooms
 // running the IVR. Call once at startup (cmd/gateway) when a plug is configured.
-func (s *Server) AttachPstn(gw room.PstnGateway, resolve DIDResolver) {
+func (s *Server) AttachPstn(gw room.Plug, resolve DIDResolver) {
 	s.pstnGW = gw
 	s.pstnDID = resolve
 	gw.OnInbound(func(ic room.InboundCall) { go s.handleInboundPhone(ic) })

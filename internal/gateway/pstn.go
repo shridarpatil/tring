@@ -1,6 +1,6 @@
 package gateway
 
-// pstn.go — the FreeSWITCH adapter behind room.PstnGateway (Phase 4: FS as a
+// pstn.go — the FreeSWITCH adapter behind room.Plug (Phase 4: FS as a
 // PLUG, docs/ARCHITECTURE.md).
 //
 // FreeSWITCH's only remaining job on this path is the carrier edge: terminate
@@ -10,7 +10,7 @@ package gateway
 // INVITE and exposes the leg as a room.Leg — caller audio in (Opus RTP),
 // room audio out, RFC2833 keypresses as digits. The media plane never sees SIP
 // or FS. Swapping FS for another stack (a sipgo trunk, a WebRTC trunk provider)
-// = implementing room.PstnGateway in a sibling package; nothing else changes.
+// = implementing room.Plug in a sibling package; nothing else changes.
 
 import (
 	"context"
@@ -39,7 +39,7 @@ const answerTimeout = 25 * time.Second
 // errUnknownCall is returned for Answer/Reject/Hangup on an unknown CallID.
 var errUnknownCall = errors.New("pstn: unknown call id")
 
-// PstnAdapter implements room.PstnGateway over the gateway's existing FS SIP
+// PstnAdapter implements room.Plug over the gateway's existing FS SIP
 // machinery (fsClient). One instance per gateway; built when FS is configured.
 type PstnAdapter struct {
 	g *Gateway
@@ -79,14 +79,14 @@ func newPstnAdapter(g *Gateway) *PstnAdapter {
 }
 
 // Pstn returns the gateway's phone plug (nil when FS isn't configured).
-func (g *Gateway) Pstn() room.PstnGateway {
+func (g *Gateway) Pstn() room.Plug {
 	if g.pstn == nil {
 		return nil // typed-nil guard: callers compare against plain nil
 	}
 	return g.pstn
 }
 
-// OnInbound implements room.PstnGateway.
+// OnInbound implements room.Plug.
 func (a *PstnAdapter) OnInbound(f func(room.InboundCall)) {
 	a.mu.Lock()
 	a.inbound = f
@@ -150,7 +150,7 @@ func (a *PstnAdapter) handleInvite(req *sip.Request, tx sip.ServerTransaction, d
 	}
 }
 
-// Answer implements room.PstnGateway: 200-OK the leg and start media. The
+// Answer implements room.Plug: 200-OK the leg and start media. The
 // returned Leg plugs straight into sfu.AttachPort.
 func (a *PstnAdapter) Answer(id room.CallID) (*room.Leg, error) {
 	a.mu.Lock()
@@ -197,7 +197,7 @@ func (a *PstnAdapter) Answer(id room.CallID) (*room.Leg, error) {
 	}, nil
 }
 
-// Reject implements room.PstnGateway (pre-answer decline).
+// Reject implements room.Plug (pre-answer decline).
 func (a *PstnAdapter) Reject(id room.CallID) error {
 	a.mu.Lock()
 	call := a.calls[id]
@@ -211,7 +211,7 @@ func (a *PstnAdapter) Reject(id room.CallID) error {
 	return nil
 }
 
-// Hangup implements room.PstnGateway: end an answered leg (BYE toward FS).
+// Hangup implements room.Plug: end an answered leg (BYE toward FS).
 func (a *PstnAdapter) Hangup(id room.CallID) error {
 	a.mu.Lock()
 	call := a.calls[id]
@@ -360,4 +360,4 @@ func (s *pstnSource) Close() error {
 	return nil
 }
 
-var _ room.PstnGateway = (*PstnAdapter)(nil)
+var _ room.Plug = (*PstnAdapter)(nil)

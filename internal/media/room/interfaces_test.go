@@ -53,7 +53,7 @@ var (
 	_ room.TrackSink         = (*stubSink)(nil)
 	_ room.ParticipantSource = (*stubSource)(nil)
 	_ room.Supervisor        = (*stubSupervisor)(nil)
-	_ room.PstnGateway       = (*stubGateway)(nil)
+	_ room.Plug              = (*stubGateway)(nil)
 )
 
 func TestExtensionInterfaceStubs(t *testing.T) {
@@ -78,7 +78,7 @@ func TestExtensionInterfaceStubs(t *testing.T) {
 		t.Fatalf("supervise: %v", err)
 	}
 
-	var gw room.PstnGateway = &stubGateway{}
+	var gw room.Plug = &stubGateway{}
 	gw.OnInbound(func(room.InboundCall) {})
 	leg, err := gw.Answer("c1")
 	if err != nil || leg == nil || leg.Source == nil {

@@ -118,10 +118,10 @@ type Server struct {
 	// walking the flow locally. nil/disconnected → local IVR fallback.
 	control controlChannel
 
-	// pstnGW is the phone plug (room.PstnGateway — FS today, swappable); nil
+	// pstnGW is the phone plug (room.Plug — FS today, swappable); nil
 	// when no phone side is configured. pstnDID resolves a dialed DID to its
 	// tenant + flow. See pstn.go.
-	pstnGW  room.PstnGateway
+	pstnGW  room.Plug
 	pstnDID DIDResolver
 
 	mu        sync.Mutex

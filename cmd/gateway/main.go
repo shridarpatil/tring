@@ -214,7 +214,7 @@ func main() {
 	}
 
 	// Phone plug (Phase 4): inbound DID calls delivered by the PSTN adapter (FS
-	// today — swappable behind room.PstnGateway) become rooms running the same
+	// today — swappable behind room.Plug) become rooms running the same
 	// IVR as web calls. Needs the DB to resolve DID → tenant + flow.
 	if pstn := gw.Pstn(); pstn != nil {
 		if store, ok := flows.(*flowstore.Store); ok && store != nil {
