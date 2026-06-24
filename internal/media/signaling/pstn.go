@@ -148,7 +148,7 @@ func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 	// Also no IVR running? Then nothing is serving the caller — hang up. (While
 	// the IVR runs, the room legitimately has zero human participants.)
 	s.mu.Lock()
-	ivrRunning := s.ivr[roomID] != nil || s.edge[roomID] != nil
+	ivrRunning := s.brain.Running(roomID) || s.edge[roomID] != nil
 	s.mu.Unlock()
 	if ivrRunning {
 		return

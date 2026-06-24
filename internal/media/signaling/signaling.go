@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/whatomate/tring/internal/brain"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/ivr"
 	"github.com/whatomate/tring/internal/media/control"
@@ -118,16 +119,19 @@ type Server struct {
 	// walking the flow locally. nil/disconnected → local IVR fallback.
 	control controlChannel
 
+	// brain drives local IVR sessions (fallback / control off). One Runner shared
+	// across all rooms; state per-room inside the Runner.
+	brain *brain.Runner
+
 	// pstnGW is the phone plug (room.Plug — FS today, swappable); nil
 	// when no phone side is configured. pstnDID resolves a dialed DID to its
 	// tenant + flow. See pstn.go.
 	pstnGW  room.Plug
 	pstnDID DIDResolver
 
-	mu        sync.Mutex
-	conns     map[room.ParticipantID]*conn
-	ivr       map[room.RoomID]*ivrSession   // local IVR per room (fallback / control off)
-	edge      map[room.RoomID]*edgeVoice    // brain-driven IVR voice per room (control on)
+	mu    sync.Mutex
+	conns map[room.ParticipantID]*conn
+	edge  map[room.RoomID]*edgeVoice // brain-driven IVR voice per room (control on)
 	holds     map[room.RoomID]*edgeVoice    // brain-driven hold music per room
 	agents    map[string]map[string]*conn   // online agents: tenant → sip → presence socket
 	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
@@ -151,8 +155,8 @@ func New(cfg Config) *Server {
 		cfg:       cfg,
 		sfu:       cfg.SFU,
 		log:       cfg.Logger.With("component", "signaling"),
+		brain:     brain.NewRunner(cfg.Logger),
 		conns:     make(map[room.ParticipantID]*conn),
-		ivr:       make(map[room.RoomID]*ivrSession),
 		edge:      make(map[room.RoomID]*edgeVoice),
 		holds:     make(map[room.RoomID]*edgeVoice),
 		agents:    make(map[string]map[string]*conn),
