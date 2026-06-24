@@ -103,7 +103,7 @@ services:
 
   # ---- Tring Go services ------------------------------------------------
   # Both are built from the same Dockerfile via build args (CMD=api or
-  # CMD=orchestrator). Distroless final image, statically linked binary,
+  # CMD=server). Distroless final image, statically linked binary,
   # ~15 MB. Use host networking so they can speak to FreeSWITCH on the
   # standard 127.0.0.1:8021 ESL port and the host-mapped Postgres on :5434
   # without bridge-DNS gymnastics.
@@ -151,32 +151,6 @@ services:
       # Call recordings — read-only here; FreeSWITCH writes them, the api serves
       # them (GET /v1/calls/{id}/recording). Same named volume as the fs service.
       - freeswitch-recordings:/usr/share/freeswitch/recordings/tring:ro
-    restart: unless-stopped
-
-  orchestrator:
-    # NOTE: also mounts the recordings volume (rw) below — the orchestrator
-    # uploads finished recordings to S3 on RECORD_STOP and deletes the local
-    # spool, so it needs read+write access to the same files FreeSWITCH wrote.
-    image: shridh0r/tring-orchestrator:${TRING_TAG:-develop}
-    build:
-      context: .
-      args:
-        CMD: orchestrator
-    container_name: tring-orchestrator
-    network_mode: host
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # All config from .env — see .env.example.
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      # rw: the orchestrator uploads finished recordings to S3 then deletes the
-      # local spool. Same named volume FreeSWITCH writes to.
-      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
     restart: unless-stopped
 
   # Call-plane server (web plug): pion media SFU + brain, served on /rtc.

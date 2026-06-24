@@ -12,7 +12,7 @@ name: CI
 # on main + manual dispatch.
 #
 # Build/release stage (gated on the tests, push events only):
-#   - images : all four images -> :develop on main, :<tag> on a v* tag, to
+#   - images : three images -> :develop on main, :<tag> on a v* tag, to
 #              GHCR + Docker Hub.
 #   - release: GoReleaser on a v* tag -> binaries + GitHub Release.
 
@@ -129,8 +129,8 @@ jobs:
           cache: true
 
       # Boot just the bits the FS integration test needs. Bringing up `api`
-      # and `orchestrator` here too would force a rebuild of two images per
-      # CI run; we don't need them for the ESL-level test.
+      # here too would force a rebuild of an image per CI run; we don't need
+      # it for the ESL-level test.
       - name: Boot FreeSWITCH + Postgres
         run: |
           docker compose up -d freeswitch postgres
@@ -162,11 +162,11 @@ jobs:
   #                                          release notes + version-
   #                                          tagged multi-arch images)
 
-  # ONE job builds & pushes ALL FOUR images on BOTH triggers, gated on the tests
+  # ONE job builds & pushes three images on BOTH triggers, gated on the tests
   # above:
   #   push to main   -> :develop
   #   push a v* tag  -> :<tag>   (the tag name verbatim, e.g. v0.1.0)
-  # to GHCR + Docker Hub. The three Go binaries share the root Dockerfile
+  # to GHCR + Docker Hub. The two Go binaries share the root Dockerfile
   # (--build-arg CMD); freeswitch is its own image (amd64 only — its base
   # safarov/freeswitch has no arm64). GoReleaser (the `release` job) no longer
   # builds images — only binaries + the GitHub Release.
@@ -182,10 +182,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: api,          context: ".",          file: Dockerfile,             args: "CMD=api",          platforms: "linux/amd64,linux/arm64" }
-          - { name: orchestrator, context: ".",          file: Dockerfile,             args: "CMD=orchestrator", platforms: "linux/amd64,linux/arm64" }
-          - { name: server,       context: ".",          file: Dockerfile,             args: "CMD=server",       platforms: "linux/amd64,linux/arm64" }
-          - { name: freeswitch,   context: "freeswitch", file: "freeswitch/Dockerfile", args: "",                 platforms: "linux/amd64" }
+          - { name: api,        context: ".",          file: Dockerfile,             args: "CMD=api",    platforms: "linux/amd64,linux/arm64" }
+          - { name: server,     context: ".",          file: Dockerfile,             args: "CMD=server", platforms: "linux/amd64,linux/arm64" }
+          - { name: freeswitch, context: "freeswitch", file: "freeswitch/Dockerfile", args: "",          platforms: "linux/amd64" }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
