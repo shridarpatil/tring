@@ -150,8 +150,8 @@ func main() {
 	sigHandler := sig.Handler()
 
 	// One listener serves the pion media plane only: /rtc (WebSocket signaling).
-	// The legacy bridge (/webrtc/offer, /agent/ws) is not wired here — use
-	// cmd/gateway for that path.
+	// The legacy bridge endpoints are not wired in this binary — server
+	// implements only the web plug (pion-based N-party calls on /rtc).
 	root := http.NewServeMux()
 	root.Handle("/rtc", sigHandler)
 	root.Handle("/rtc/", sigHandler)

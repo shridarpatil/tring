@@ -179,18 +179,18 @@ services:
       - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
     restart: unless-stopped
 
-  # WebRTC media gateway (ADR-001). Browsers peer with this over raw WebRTC
-  # (HTTPS signaling on :8087); it bridges media into the PRIVATE FreeSWITCH —
-  # browsers never touch SIP or FS directly. host networking so the UDP RTP
-  # range + SIP UAS exchange media with FS and browsers without NAT hairpinning
-  # (same reason FS uses it).
-  gateway:
-    image: shridh0r/tring-gateway:${TRING_TAG:-develop}
+  # Call-plane server (web plug): pion media SFU + brain, served on /rtc.
+  # Browsers peer with this over raw WebRTC (WebSocket signaling on :8087);
+  # the SFU fans media between participants. FreeSWITCH / PSTN adapters are
+  # not wired here — this binary is the pure web plug. host networking so
+  # the UDP RTP range exchanges media with browsers without NAT hairpinning.
+  server:
+    image: shridh0r/tring-server:${TRING_TAG:-develop}
     build:
       context: .
       args:
-        CMD: gateway
-    container_name: tring-gateway
+        CMD: server
+    container_name: tring-server
     network_mode: host
     depends_on:
       freeswitch:
