@@ -143,6 +143,11 @@ type Server struct {
 	// max_wait, reservations and queue depth identically. The pion plane supplies
 	// the transport via a pionRing Effects adapter (see agents.go).
 	router *routing.Router
+
+	// agentRouter is the brain-owned ivrdrive.Agents implementation: it drives
+	// team-resolution → RouteConfig → routing.Router.Run, delegating back to
+	// Server.Prepare for the pion-specific transport pieces.
+	agentRouter *brain.AgentRouter
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -175,6 +180,7 @@ func New(cfg Config) *Server {
 		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
 	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, s.log)
+	s.agentRouter = brain.NewAgentRouter(cfg.Teams, s.router, s, s.log)
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
 }
