@@ -206,8 +206,12 @@ func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (st
 		}
 	}
 
-	eff := &pionRing{s: s, tenant: tenant, roomName: name, label: t.Label, ring: ring, rung: map[string]bool{}}
-	if outcome, _, _ := s.router.Run(ctx, rc, candidates, eff); outcome == routing.OutcomeCompleted {
+	eff := &pionRing{s: s, tenant: tenant, roomName: name, label: t.Label, strategy: rc.Strategy, ring: ring, rung: map[string]bool{}}
+	outcome, _, _ := s.router.Run(ctx, rc, candidates, eff)
+	// Catch-all: withdraw any popups still showing however the run ended (answered
+	// elsewhere via the async backstop, queue timeout, or caller hangup).
+	eff.cancelRung()
+	if outcome == routing.OutcomeCompleted {
 		return "completed", nil
 	}
 	return "no_answer", nil
@@ -221,8 +225,9 @@ type pionRing struct {
 	tenant   string
 	roomName string          // un-namespaced name agents join
 	label    string          // caller label shown to the agent
+	strategy string          // team strategy; "" / ring_all → all at once, else one at a time
 	ring     <-chan struct{} // closed on a room join
-	rung     map[string]bool // sips already popped this transfer
+	rung     map[string]bool // sips popped (and not yet withdrawn) this transfer
 }
 
 // Answered backstops the async case: an agent joined mid-hold (outside a Ring).
@@ -239,9 +244,16 @@ func (p *pionRing) Answered() (bool, string) {
 // call ends; the caller is a room participant, not polled here.
 func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == nil }
 
-// Ring pops the incoming-call UI on the ordered agents (deduped within a
-// transfer) and waits up to perAttempt for one to join the room.
+// Ring pops the incoming-call UI per the team strategy and waits up to perAttempt
+// for an agent to join the room. ring_all (or no strategy) pops ALL available
+// agents at once; the ordered strategies (round_robin / sequential / longest_wait)
+// pop exactly ONE — the next in OrderByStrategy order not yet tried this round —
+// mirroring the FreeSWITCH plane's '|' one-at-a-time bridge. On no-answer the
+// single rung agent's popup is withdrawn so only one agent ever rings at a time;
+// the Router's next iteration re-orders and Ring advances to the next.
 func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.Duration) (routing.RingOutcome, error) {
+	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
+
 	p.s.mu.Lock()
 	inSet := make(map[string]bool, len(ordered))
 	for _, sip := range ordered {
@@ -252,11 +264,35 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 			delete(p.rung, sip)
 		}
 	}
-	for _, sip := range ordered {
-		if !p.rung[sip] {
-			if c := p.s.agents[p.tenant][sip]; c != nil {
-				_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
-				p.rung[sip] = true
+
+	pop := func(sip string) {
+		if c := p.s.agents[p.tenant][sip]; c != nil {
+			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
+			p.rung[sip] = true
+		}
+	}
+
+	var rungNow string // the single agent rung this attempt (one-at-a-time only)
+	if oneAtATime {
+		next := ""
+		for _, sip := range ordered {
+			if !p.rung[sip] {
+				next = sip
+				break
+			}
+		}
+		if next == "" && len(ordered) > 0 { // all tried, none answered → new round
+			p.rung = map[string]bool{}
+			next = ordered[0]
+		}
+		if next != "" {
+			pop(next)
+			rungNow = next
+		}
+	} else {
+		for _, sip := range ordered {
+			if !p.rung[sip] {
+				pop(sip)
 			}
 		}
 	}
@@ -266,10 +302,40 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	case <-p.ring:
 		return routing.RingOutcome{Answered: true}, nil
 	case <-time.After(perAttempt):
+		// One-at-a-time: withdraw this agent's popup before the Router advances, so
+		// only ever one agent is ringing. (ring_all keeps everyone popped.)
+		if oneAtATime && rungNow != "" {
+			p.cancelSips([]string{rungNow})
+		}
 		return routing.RingOutcome{}, nil
 	case <-ctx.Done():
 		return routing.RingOutcome{}, ctx.Err()
 	}
+}
+
+// cancelSips withdraws the incoming-call UI on the given agents (best-effort).
+func (p *pionRing) cancelSips(sips []string) {
+	p.s.mu.Lock()
+	defer p.s.mu.Unlock()
+	for _, sip := range sips {
+		if c := p.s.agents[p.tenant][sip]; c != nil {
+			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
+		}
+	}
+}
+
+// cancelRung withdraws the popup on every agent rung this transfer — used as the
+// catch-all teardown (answered elsewhere, timed out, or caller hung up) so no
+// stale "incoming call" UI is left ringing on the losers.
+func (p *pionRing) cancelRung() {
+	p.s.mu.Lock()
+	sips := make([]string, 0, len(p.rung))
+	for sip := range p.rung {
+		sips = append(sips, sip)
+	}
+	p.rung = map[string]bool{}
+	p.s.mu.Unlock()
+	p.cancelSips(sips)
 }
 
 // Hold waits up to maxDur, returning early when ready() goes true or an agent

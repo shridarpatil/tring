@@ -31,6 +31,7 @@ import type { Call, CallStatus, InitOpts, TringEvent } from "./types";
 export class Tring extends Emitter<TringEvent> {
   private readonly agent: RtcAgent;
   private readonly autoAnswer: boolean;
+  private ringing: Call | null = null; // the not-yet-accepted inbound call, if any
 
   static async init(opts: InitOpts): Promise<Tring> {
     const t = new Tring(opts);
@@ -61,6 +62,19 @@ export class Tring extends Emitter<TringEvent> {
     this.agent.on("offline", () => this.emit({ type: "unregistered" }));
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
     this.agent.on("incoming", ({ from }) => this.handleIncoming(from));
+    // The server withdrew an unanswered ring (round-robin/sequential advanced to
+    // the next agent, or someone else answered). End the ringing call so the UI
+    // dismisses — it never connected.
+    this.agent.on("incoming-canceled", () => {
+      // ONLY dismiss a still-ringing, not-yet-accepted call. Never touch an active
+      // call: the server's catch-all cancel fires on answer too, and it reaches the
+      // agent who just accepted — ending their live call here would be a bug.
+      const call = this.ringing;
+      if (!call || call.status !== "ringing") return;
+      this.ringing = null;
+      call.status = "ended";
+      this.emit({ type: "call:ended", call });
+    });
   }
 
   private async connect(): Promise<void> {
@@ -85,6 +99,9 @@ export class Tring extends Emitter<TringEvent> {
       status: "ringing" as CallStatus,
       accept: async () => {
         if (rtc) return;
+        // Committing to this call — drop the ringing ref so a late incoming-cancel
+        // (e.g. the server's answer catch-all) can't end the call we're answering.
+        this.ringing = null;
         rtc = await this.agent.accept();
         if (!rtc) return;
         rtc.on("connected", () => {
@@ -136,6 +153,7 @@ export class Tring extends Emitter<TringEvent> {
       },
     };
 
+    this.ringing = call;
     this.emit({ type: "call:ringing", call });
     if (this.autoAnswer) {
       void call.accept().catch((err) => this.emit({ type: "error", error: err as Error }));

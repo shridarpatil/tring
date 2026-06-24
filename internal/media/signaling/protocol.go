@@ -31,8 +31,9 @@ const (
 	msgPeerJoined = "peer-joined" // {participant_id, name}
 	msgPeerState  = "peer-state"  // {participant_id, state}
 	msgPeerLeft   = "peer-left"   // {participant_id}
-	msgIncoming   = "incoming"    // s→agent: a call is ringing — {room, from}
-	msgReady      = "ready"       // s→agent: presence registered
+	msgIncoming   = "incoming"        // s→agent: a call is ringing — {room, from}
+	msgCancelRing = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
+	msgReady      = "ready"           // s→agent: presence registered
 	msgEnded      = "ended"       // s→client: the call is over (terminal — don't reconnect)
 	msgError      = "error"       // {reason}
 )

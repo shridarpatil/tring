@@ -354,6 +354,7 @@ export type RtcAgentEvent =
   | { type: "reconnecting" }
   | { type: "offline" }
   | { type: "incoming"; room: string; from?: string }
+  | { type: "incoming-canceled"; room: string }
   | { type: "error"; error: Error };
 
 // The gateway closes an idle presence socket after ~90s with no inbound frame,
@@ -411,6 +412,13 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
       } else if (m.type === ServerMsgType.Incoming) {
         this.incoming = { room: m.room ?? "", from: m.from };
         this.emit({ type: "incoming", room: this.incoming.room, from: m.from });
+      } else if (m.type === ServerMsgType.IncomingCancel) {
+        // The server withdrew the ring (advanced to the next agent per the team
+        // strategy, or someone else answered). Drop the pending ring so a later
+        // accept() no-ops, and tell the UI to dismiss the popup.
+        const room = m.room ?? this.incoming?.room ?? "";
+        this.incoming = null;
+        this.emit({ type: "incoming-canceled", room });
       }
     };
     ws.onclose = () => {
