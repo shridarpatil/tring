@@ -79,15 +79,6 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 		return
 	}
 
-	// Inject the IVR's voice into the room (existing peers subscribe to it).
-	if err := s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-	}); err != nil {
-		s.log.Error("ivr: inject source failed", "room", roomID, "err", err)
-		_ = player.Close()
-		return
-	}
-
 	onJourney := func(path []ivr.Step) {
 		if s.cfg.Calls != nil {
 			s.cfg.Calls.Journey(string(roomID), path)
@@ -104,8 +95,20 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 		s.hangupPstnIfAbandoned(roomID)
 	}
 
+	// Inject the IVR's voice into the room as the setup step. By passing this
+	// inside setup, brain.Runner claims the room slot first — so a concurrent
+	// startIVR that also races past the Running() check above will lose the slot
+	// race and never inject, preventing a leaked orphaned player/source.
+	setup := func() error {
+		return s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+		})
+	}
 	s.log.Info("ivr started", "room", roomID, "flow", flowID, "entry", flow.EntryNode)
-	s.brain.Start(context.Background(), roomID, flow, driver, onJourney, onDone)
+	if !s.brain.Start(context.Background(), roomID, flow, driver, setup, onJourney, onDone) {
+		_ = player.Close() // lost the race or setup failed — nothing injected for us to remove
+		return
+	}
 }
 
 // routeDTMF delivers a caller keypress to the room's IVR, if one is running.

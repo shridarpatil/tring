@@ -41,19 +41,40 @@ func NewRunner(log *slog.Logger) *Runner {
 	return &Runner{log: log.With("component", "brain.ivr"), s: map[room.RoomID]*session{}}
 }
 
-// Start walks the flow in a goroutine. onJourney is called once with the path,
+// Start claims the room slot, runs setup (the winner's media wiring, e.g.
+// InjectSource), then walks the flow in a goroutine. Returns true if this call
+// took ownership of the room's IVR slot, false if the slot was already taken or
+// setup returned an error. When Start returns false the caller is responsible for
+// cleaning up any resources it allocated before calling (setup was NOT called for
+// a false-because-already-running return; it was called and rolled back for a
+// false-because-setup-failed return). onJourney is called once with the path,
 // onDone after teardown — both via Stop, so callers see one consistent ordering.
-func (r *Runner) Start(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, driver ivr.CallDriver, onJourney Journey, onDone func()) {
+// setup may be nil (no media wiring needed).
+func (r *Runner) Start(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, driver ivr.CallDriver, setup func() error, onJourney Journey, onDone func()) bool {
 	cctx, cancel := context.WithCancel(ctx)
 	sess := &session{cancel: cancel, done: make(chan struct{}), driver: driver, onJrn: onJourney, onDone: onDone}
+
+	// Claim the slot BEFORE running setup so a concurrent caller sees it taken.
 	r.mu.Lock()
 	if r.s[roomID] != nil {
 		r.mu.Unlock()
 		cancel()
-		return // already running
+		return false // already running — caller must clean up its resources
 	}
 	r.s[roomID] = sess
 	r.mu.Unlock()
+
+	// Run setup outside the lock. On failure roll back the claim.
+	if setup != nil {
+		if err := setup(); err != nil {
+			r.log.Error("ivr: setup failed; rolling back room claim", "room", roomID, "err", err)
+			r.mu.Lock()
+			delete(r.s, roomID)
+			r.mu.Unlock()
+			cancel()
+			return false
+		}
+	}
 
 	go func() {
 		path, err := ivr.Walk(cctx, flow, flow.EntryNode, driver)
@@ -62,6 +83,7 @@ func (r *Runner) Start(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, 
 		close(sess.done) // publish path (happens-before Stop's read)
 		r.Stop(roomID)
 	}()
+	return true
 }
 
 // Running reports whether an IVR session is active for the room.
