@@ -4,11 +4,11 @@ import (
 	"github.com/pion/rtp"
 )
 
-// The four extension interfaces are the seams that keep browser and non-browser
-// participants indistinguishable to the room. They are DEFINED here in M1 and
-// exercised by stubs/tests; their real implementations land in later phases
-// (see docs/ARCHITECTURE.md). Keeping them in the core package — and free of
-// any FreeSWITCH/SIP concept — is what lets the PSTN side be a swappable adapter.
+// The extension interfaces below are the seams that keep every channel's
+// participants indistinguishable to the room. The core defines them and stays
+// free of any channel-specific concept (FreeSWITCH/SIP, WhatsApp, WebRTC) — that
+// is what lets each channel be a swappable Plug adapter. See
+// docs/superpowers/specs/2026-06-24-plug-architecture-design.md.
 
 // ParticipantID identifies a participant within its room. Stable across a
 // transport drop + reattach, so the slot (and the peer's subscription to it)
@@ -76,6 +76,8 @@ type Leg struct {
 // Outbound origination grows the contract later (Originator, Phase 3) — inbound
 // lands first.
 type Plug interface {
+	// OnInbound registers the single consumer for incoming calls. The consumer
+	// must Answer or Reject promptly (the plug times the call out otherwise).
 	OnInbound(func(InboundCall))
 	Answer(id CallID) (*Leg, error)
 	Reject(id CallID) error
