@@ -55,7 +55,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 			player:    player,
 			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
 		},
-		Agents:    s, // Server implements ivrdrive.Agents (rings agents into the room)
+		Agents:    s.agentRouter, // brain.AgentRouter drives team-resolution + routing loop
 		Room:      string(roomID),
 		ClientRef: callerRef,
 		Logger:    s.log,

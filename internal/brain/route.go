@@ -23,8 +23,10 @@ type Teams interface {
 // transfer, the live candidate source + the routing Effects (how to ring/hold/
 // detect-answer on this channel) + a cleanup run after the loop. The brain owns
 // team resolution + the routing.Router queue/ring loop; the plug owns the wires.
+// strategy is the resolved team strategy (e.g. "round_robin") so the transport
+// can drive one-at-a-time vs ring-all behaviour inside its Effects adapter.
 type RingTransport interface {
-	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
+	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
 }
 
 // AgentRouter is the brain-owned implementation of ivrdrive.Agents: it sequences
@@ -80,7 +82,7 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 		}
 	}
 
-	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, sips)
+	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, sips, rc.Strategy)
 	outcome, _, _ := a.router.Run(ctx, rc, candidates, eff)
 	if cleanup != nil {
 		cleanup()

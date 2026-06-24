@@ -30,7 +30,7 @@ func (e *answerEffects) CallerAlive(context.Context) bool                  { ret
 
 type fakeTransport struct{ eff *answerEffects }
 
-func (f *fakeTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, sips []string) (func(context.Context) []string, routing.Effects, func()) {
+func (f *fakeTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, sips []string, _ string) (func(context.Context) []string, routing.Effects, func()) {
 	return func(context.Context) []string { return sips }, f.eff, func() {}
 }
 
