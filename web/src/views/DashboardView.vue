@@ -2,15 +2,17 @@
 import { ref, onMounted, computed } from "vue";
 import { errMessage } from "../lib/errors";
 import { usePoll } from "../composables/usePoll";
+import { useQueues } from "../composables/useQueues";
 import { api } from "../api/client";
-import type { Call, Agent, Queues, StatsOverview, Paginated } from "../api/types";
+import type { Call, Agent, StatsOverview, Paginated } from "../api/types";
 import { Panel, SignalDot, LevelMeter } from "../components/ui";
 import MiniBarChart from "../components/MiniBarChart.vue";
 import QueuePressureBar from "../components/QueuePressureBar.vue";
 
 const calls = ref<Call[]>([]);
 const agents = ref<Agent[]>([]);
-const queues = ref<Queues>({ total: 0, on_call: 0, queues: [] });
+// Shared with the shell's LiveStatusStrip — one poller for /v1/queues, not two.
+const queues = useQueues();
 const stats = ref<StatsOverview | null>(null);
 const loading = ref(true);
 const error = ref("");
@@ -87,11 +89,7 @@ async function loadLive() {
   } catch {
     /* keep last value */
   }
-  try {
-    queues.value = await api.get<Queues>("/v1/queues");
-  } catch {
-    /* keep last value */
-  }
+  // queues come from the shared useQueues poller (see above) — not fetched here.
   try {
     stats.value = await api.get<StatsOverview>("/v1/stats/overview");
   } catch {
