@@ -78,7 +78,8 @@ func (r *Runner) DTMF(roomID room.RoomID, digit string) {
 }
 
 // Stop cancels the walk, waits for the path, stamps the journey once, then runs
-// onDone. Idempotent: the map-delete under lock picks a single winner.
+// onDone. Idempotent: the map-delete under lock picks a single winner. On timeout
+// the journey is skipped (and logged), but teardown (onDone) still runs.
 func (r *Runner) Stop(roomID room.RoomID) {
 	r.mu.Lock()
 	sess := r.s[roomID]
@@ -90,10 +91,11 @@ func (r *Runner) Stop(roomID room.RoomID) {
 	sess.cancel()
 	select {
 	case <-sess.done:
+		if sess.onJrn != nil {
+			sess.onJrn(sess.path)
+		}
 	case <-time.After(2 * time.Second):
-	}
-	if sess.onJrn != nil {
-		sess.onJrn(sess.path)
+		r.log.Warn("ivr walk did not unwind in time; skipping journey", "room", roomID)
 	}
 	if sess.onDone != nil {
 		sess.onDone()
