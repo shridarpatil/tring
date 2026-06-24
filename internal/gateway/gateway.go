@@ -76,7 +76,7 @@ type Gateway struct {
 	cfg      Config
 	api      *webrtc.API
 	fs       *fsClient       // nil = standalone echo mode
-	pstn     *PstnAdapter    // the phone plug (room.PstnGateway, pstn.go); nil without FS
+	pstn     *PstnAdapter    // the phone plug (room.Plug, pstn.go); nil without FS
 	agents   *agentRegistry  // online agents' signaling WebSockets (M4b)
 	presence *presence.Store // publishes agent presence to Redis (M5)
 	tokens   jtiStore        // consumes one-time gateway-call-token jti (*cache.Cache in prod)
