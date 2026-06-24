@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1.7
 #
-# Multi-stage build for the Tring Go binaries. Build either binary with:
+# Multi-stage build for the Tring Go binaries. Build any binary with:
 #
 #   docker build --build-arg CMD=api          -t tring-api          .
 #   docker build --build-arg CMD=orchestrator -t tring-orchestrator .
+#   docker build --build-arg CMD=server       -t tring-server       .
 #
 # Final images are distroless/cc running as non-root. CGO is off so the Go
 # binary is statically linked; the runtime carries glibc only for the bundled
