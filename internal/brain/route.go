@@ -29,6 +29,18 @@ type RingTransport interface {
 	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
 }
 
+// HandoffWaiter is an OPTIONAL transport capability. After an agent answers a
+// transfer, the brain asks the transport to block until the bridged call ends,
+// so a node wired to the transfer's "completed" edge runs AFTER the agent hangs
+// up (to the caller only) rather than the instant the agent picks up. It returns
+// true when the agent has left with the caller still on the line (continue the
+// flow), or false when the call is over / the caller left (stop the flow). A
+// transport that doesn't implement this keeps the legacy behaviour: "completed"
+// fires as soon as an agent answers.
+type HandoffWaiter interface {
+	AwaitHandoffEnd(ctx context.Context, roomID string) bool
+}
+
 // AgentRouter is the brain-owned implementation of ivrdrive.Agents: it sequences
 // team resolution → RouteConfig → routing.Router.Run, transport-agnostically.
 type AgentRouter struct {
@@ -89,8 +101,17 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 	if cleanup != nil {
 		cleanup()
 	}
-	if outcome == routing.OutcomeCompleted {
-		return "completed", nil
+	if outcome != routing.OutcomeCompleted {
+		return "no_answer", nil
 	}
-	return "no_answer", nil
+	// An agent answered. If the transport can tell us when the handoff ends, wait
+	// for it so a node wired to the transfer's "completed" edge runs AFTER the
+	// agent disconnects (to the caller only), not the moment the agent picks up.
+	// If the caller leaves first, AwaitHandoffEnd returns false → end the flow here.
+	if hw, ok := a.tport.(HandoffWaiter); ok {
+		if !hw.AwaitHandoffEnd(ctx, roomID) {
+			return "", nil
+		}
+	}
+	return "completed", nil
 }
