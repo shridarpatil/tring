@@ -126,6 +126,24 @@ func (p *Player) pacingLocked() time.Duration {
 	return p.frameDur - elapsed
 }
 
+// Flush stops the prompt currently playing: it discards any queued frames and
+// ends the in-flight batch (its Play done channel closes, unblocking the waiter),
+// but does NOT close the player — unlike Close, it stays usable for the next
+// Play. This is the IVR barge-in primitive: a caller's keypress halts the current
+// prompt at once instead of after it finishes. A no-op when nothing is queued.
+//
+// Closing p.done here is safe against ReadRTP's own drain-close: both clear
+// p.done under p.mu before closing, so exactly one path closes the channel.
+func (p *Player) Flush() {
+	p.mu.Lock()
+	p.frames = nil
+	if p.done != nil {
+		close(p.done)
+		p.done = nil
+	}
+	p.mu.Unlock()
+}
+
 // Close ends playback and unblocks ReadRTP (the SFU copy loop then exits).
 func (p *Player) Close() error {
 	p.mu.Lock()

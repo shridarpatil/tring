@@ -157,6 +157,11 @@ func (p *filePrompts) Play(ctx context.Context, file string) error {
 	}
 }
 
+// Stop halts the prompt currently playing (IVR barge-in): it flushes the player's
+// queued audio so a Play in flight returns at once. Safe to call when nothing is
+// playing. Leaves the player usable for the next prompt (unlike Close).
+func (p *filePrompts) Stop() { p.player.Flush() }
+
 func (p *filePrompts) load(file string) ([][]byte, error) {
 	p.mu.Lock()
 	if p.cache == nil {
