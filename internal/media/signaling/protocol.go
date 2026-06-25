@@ -23,6 +23,7 @@ const (
 	msgHold      = "hold"      // agent: put the other party on hold (they hear MOH)
 	msgResume    = "resume"    // agent: take the other party off hold
 	msgTransfer  = "transfer"  // agent: re-route the call — {to_team | to_sip}
+	msgPing      = "ping"      // keepalive: a no-op frame that resets the socket read deadline
 	msgBye       = "bye"
 
 	// server → client
