@@ -64,6 +64,41 @@ func TestPlayerCloseUnblocksRead(t *testing.T) {
 	}
 }
 
+// TestFlushStopsCurrentBatchAndKeepsPlayerUsable: Flush must end the in-flight
+// batch (its done channel closes, so a Play waiter unblocks) and drop the queued
+// frames, but leave the player usable for the next Play — unlike Close. This is
+// the IVR barge-in primitive: a keypress halts the current prompt immediately.
+func TestFlushStopsCurrentBatchAndKeepsPlayerUsable(t *testing.T) {
+	p := prompt.NewPlayer("ivr", time.Millisecond)
+	done := p.Play([][]byte{{1}, {2}, {3}, {4}, {5}})
+
+	if _, err := p.ReadRTP(); err != nil { // consume one frame mid-batch
+		t.Fatalf("read first frame: %v", err)
+	}
+	p.Flush()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Flush did not close the current batch's done channel")
+	}
+
+	// Player still works: a fresh Play plays out and its done closes.
+	done2 := p.Play([][]byte{{9}})
+	pkt, err := p.ReadRTP()
+	if err != nil {
+		t.Fatalf("player unusable after Flush: %v", err)
+	}
+	if len(pkt.Payload) != 1 || pkt.Payload[0] != 9 {
+		t.Fatalf("after Flush got payload %v, want [9] (stale flushed frame leaked)", pkt.Payload)
+	}
+	select {
+	case <-done2:
+	case <-time.After(time.Second):
+		t.Fatal("second batch done never closed after Flush")
+	}
+}
+
 func TestPlayEmptyBatchClosesImmediately(t *testing.T) {
 	p := prompt.NewPlayer("ivr", time.Millisecond)
 	select {
