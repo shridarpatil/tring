@@ -71,13 +71,12 @@ type Config struct {
 	// (so both planes play it via the normal audio_file path). nil/disabled →
 	// text nodes without an uploaded audio file stay silent.
 	TTS *tts.Engine
-	// AudioDir is where uploaded sound files are written; AudioFSDir is the path
-	// prefix FreeSWITCH plays them from (default equal — one shared mount). See
+	// AudioDir is the shared-mount path where uploaded sound files + synthesized
+	// TTS are written; the gateway reads + plays them on the media plane. See
 	// internal/config and handlers_audio.go.
-	AudioDir   string
-	AudioFSDir string
-	// RecordingsDir is the shared-mount path FreeSWITCH writes call recordings to
-	// and the API serves them from. See handleGetCallRecording.
+	AudioDir string
+	// RecordingsDir is the shared-mount path the gateway writes call recordings
+	// to and the API serves them from. See handleGetCallRecording.
 	RecordingsDir string
 	// RecordingsFormat is the recording file extension (no dot) — "ogg"/"mp3"/
 	// "wav" — used to locate the local spool file. Empty defaults to "wav".
@@ -119,10 +118,9 @@ type Server struct {
 	// text nodes stay silent (no Piper). See handlers_flows.go.
 	tts *tts.Engine
 
-	// audioDir / audioFSDir: where uploaded sounds are written vs the path
-	// FreeSWITCH plays them from (default equal). See handlers_audio.go.
-	audioDir   string
-	audioFSDir string
+	// audioDir: shared-mount path where uploaded sounds + TTS are written and
+	// the gateway plays them from on the media plane. See handlers_audio.go.
+	audioDir string
 
 	// recordingsDir: where FreeSWITCH writes call recordings; the API reads them
 	// back from the same shared-mount path to serve. See handleGetCallRecording.
@@ -185,7 +183,6 @@ func NewServer(cfg Config) *Server {
 		gatewayPublicURL: cfg.GatewayPublicURL,
 		tts:              cfg.TTS,
 		audioDir:         cfg.AudioDir,
-		audioFSDir:       cfg.AudioFSDir,
 		recordingsDir:    cfg.RecordingsDir,
 		recordingsFormat: cfg.RecordingsFormat,
 		blob:             cfg.Blob,

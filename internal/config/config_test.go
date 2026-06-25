@@ -7,8 +7,8 @@ func TestLoadDefaults(t *testing.T) {
 	if got := k.String("esl_addr"); got != "127.0.0.1:8021" {
 		t.Errorf("esl_addr default = %q, want 127.0.0.1:8021", got)
 	}
-	if got := k.String("ivr_addr"); got != ":8086" {
-		t.Errorf("ivr_addr default = %q, want :8086", got)
+	if got := k.String("gateway_addr"); got != ":8087" {
+		t.Errorf("gateway_addr default = %q, want :8087", got)
 	}
 }
 

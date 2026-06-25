@@ -43,7 +43,7 @@ exec ffmpeg -nostdin -f lavfi -i anullsrc=r=22050:cl=mono -t 0.2 -y "$out" 2>/de
 }
 
 func TestPrerenderFlowAudio(t *testing.T) {
-	s := &Server{tts: stubPiperEngine(t), audioFSDir: "/sounds", log: slog.Default()}
+	s := &Server{tts: stubPiperEngine(t), audioDir: "/sounds", log: slog.Default()}
 
 	def := json.RawMessage(`{"version":2,"entry_node":"s","nodes":[
 		{"id":"g","type":"greeting","label":"Hi","position":{"x":1,"y":2},"config":{"greeting_text":"Welcome to support"}},

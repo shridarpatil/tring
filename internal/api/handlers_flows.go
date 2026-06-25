@@ -152,7 +152,7 @@ func (s *Server) synthFlowText(ctx context.Context, text string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return s.audioFSDir + "/" + ttsSubdir + "/" + filepath.Base(diskPath), nil
+	return s.audioDir + "/" + ttsSubdir + "/" + filepath.Base(diskPath), nil
 }
 
 func stringOf(v any) string {

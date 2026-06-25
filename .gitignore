@@ -53,7 +53,13 @@ sdk/js/dist/
 # stray go build output
 /gateway
 
+# Call recordings spool (bind-mounted into the gateway/api containers). The
+# .gitkeep is tracked so the bind-mount target exists on a fresh checkout.
+/recordings/*
+!/recordings/.gitkeep
+
 # Python demo caches
 __pycache__/
 *.pyc
 .superpowers/
+/api

@@ -1,9 +1,9 @@
-// Package main: Tring WebRTC media gateway (ADR-001).
+// Package main: Tring call-plane gateway (pion media + brain, served on /rtc).
 //
-// The browser-facing front door for web calling. Browsers peer with this
-// gateway over raw WebRTC (HTTPS offer/answer signaling) instead of SIP-over-
-// WSS to FreeSWITCH. The gateway terminates the browser leg and (milestone 2+)
-// bridges media into a PRIVATE FreeSWITCH. Milestone 1 = loopback echo.
+// The web-calling plane. Browsers join as rooms on /rtc (WebSocket signaling);
+// the SFU fans media between participants. The gateway runs the web plug with the
+// brain embedded in-process — IVR and team routing happen here, not over a remote
+// control channel. FreeSWITCH / PSTN adapters are not wired here.
 //
 // Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL, and either
 //
@@ -14,7 +14,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,17 +25,13 @@ import (
 	"github.com/whatomate/tring/internal/config"
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/flowstore"
-	"github.com/whatomate/tring/internal/gateway"
 	"github.com/whatomate/tring/internal/logging"
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
 	"github.com/whatomate/tring/internal/presence"
 )
 
 func main() {
-	dialTest := flag.Bool("dial-test", false, "one-shot: SIP-dial FreeSWITCH, read inbound RTP for 4s, print result, exit (headless 2a check)")
-	flag.Parse()
 	k := config.Load()
 
 	logger := logging.New(k.String("log_format"), k.String("log_level"))
@@ -44,36 +39,6 @@ func main() {
 
 	turnURL := k.String("turn_url")
 	turnSecret := k.String("turn_secret")
-
-	var ice []gateway.ICEServer
-	if stun := k.String("stun_url"); stun != "" {
-		ice = append(ice, gateway.ICEServer{URLs: []string{stun}})
-	}
-	// Static TURN creds are the legacy fallback — added ONLY when no secret is
-	// set. With a secret the gateway mints EPHEMERAL coturn creds per
-	// PeerConnection (gateway.newPeerConnection). A static turn_url with no
-	// username/password would make pion reject the PeerConnection outright
-	// ("turn server credentials required"), so we never add a credential-less one.
-	if turnURL != "" && turnSecret == "" {
-		ice = append(ice, gateway.ICEServer{
-			URLs:       []string{turnURL},
-			Username:   k.String("turn_username"),
-			Credential: k.String("turn_password"),
-		})
-	}
-
-	var fs *gateway.FSConfig
-	if addr := k.String("fs_sip_addr"); addr != "" {
-		fs = &gateway.FSConfig{
-			SIPAddr:  addr,
-			AuthUser: k.String("fs_auth_user"),
-			AuthPass: k.String("fs_auth_pass"),
-			Target:   k.String("fs_target"),
-			FlowID:   k.String("fs_flow_id"),
-			AdvertIP: k.String("gateway_advert_ip"),
-			SIPPort:  k.Int("gateway_sip_port"),
-		}
-	}
 
 	// Redis (shared with api/orchestrator) backs agent presence. Optional:
 	// log-and-disable if unreachable — presence just goes dark, calls still work.
@@ -95,42 +60,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	gw, err := gateway.New(gateway.Config{
-		ICEServers:       ice,
-		UDPPortMin:       uint16(k.Int("gateway_udp_min")),
-		UDPPortMax:       uint16(k.Int("gateway_udp_max")),
-		PublicIP:         k.String("public_ip"),
-		RelayOnly:        k.Bool("turn_relay_only"),
-		TURNURL:          turnURL,
-		TURNSecret:       turnSecret,
-		TURNTTL:          time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
-		FS:               fs,
-		JWTSecret:        []byte(k.String("jwt_secret")),
-		RequireAuth:      k.Bool("gateway_require_auth"),
-		AgentRingTimeout: time.Duration(k.Int("gateway_agent_ring_timeout")) * time.Second,
-		Cache:            redisCache,
-		Logger:           logger,
-	})
-	if err != nil {
-		logger.Error("gateway init failed", "err", err)
-		os.Exit(1)
-	}
-
-	if *dialTest {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		n, err := gw.TestFSLeg(ctx)
-		if err != nil {
-			logger.Error("dial-test failed", "err", err)
-			os.Exit(1)
-		}
-		logger.Info("dial-test ok: freeswitch leg established", "inbound_rtp_packets_4s", n)
-		return
-	}
-
-	// Pion SFU media plane (internal/media) — the N-party web-calling path, served
-	// on its own /rtc signaling port alongside the legacy WebRTC↔FS bridge. Same
-	// ICE/TURN/public-IP config as the bridge; shares the media UDP range.
+	// Pion SFU media plane (internal/media) — the N-party web-calling path,
+	// served on /rtc. Same ICE/TURN/public-IP config as the legacy bridge;
+	// shares the media UDP range.
 	var sfuICE []sfu.ICEServer
 	if stun := k.String("stun_url"); stun != "" {
 		sfuICE = append(sfuICE, sfu.ICEServer{URLs: []string{stun}})
@@ -203,44 +135,23 @@ func main() {
 		Cache:      redisCache,               // publish web team-queue depth for the dashboard
 		Logger:     logger,
 	})
-	// Edge side of the media control channel (Phase 2). When control_url is set,
-	// the gateway dials the orchestrator (BRAIN) so web-call IVR/routing can be
-	// driven remotely. 2a only plumbs it — commands are logged; 2b/2c add behavior.
-	// Disabled (no dial) when control_url is empty.
-	if controlURL := k.String("control_url"); controlURL != "" {
-		ctrl := control.NewClient(controlURL, k.String("control_secret"), sig.HandleControlCommand, logger)
-		sig.SetControl(ctrl)
-		go ctrl.Run(context.Background())
-	}
-
-	// Phone plug (Phase 4): inbound DID calls delivered by the PSTN adapter (FS
-	// today — swappable behind room.PstnGateway) become rooms running the same
-	// IVR as web calls. Needs the DB to resolve DID → tenant + flow.
-	if pstn := gw.Pstn(); pstn != nil {
-		if store, ok := flows.(*flowstore.Store); ok && store != nil {
-			sig.AttachPstn(pstn, store)
-		} else {
-			logger.Warn("pstn plug present but DB unavailable — phone calls disabled")
-		}
-	}
 
 	addr := k.String("gateway_addr")
 	sigHandler := sig.Handler()
 
-	// One listener serves everything on the gateway port: the pion media plane
-	// (/rtc) plus the legacy bridge (/webrtc/offer, /agent/ws). The SDK/widgets
-	// need only this single public URL (TRING_GATEWAY_PUBLIC_URL).
+	// One listener serves the pion media plane only: /rtc (WebSocket signaling).
+	// The legacy bridge endpoints are not wired in this binary — the gateway
+	// implements only the web plug (pion-based N-party calls on /rtc).
 	root := http.NewServeMux()
 	root.Handle("/rtc", sigHandler)
 	root.Handle("/rtc/", sigHandler)
-	root.Handle("/", gw.Handler())
 
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	logger.Info("gateway listening", "addr", addr, "rtc", "also on this port at /rtc")
+	logger.Info("gateway listening", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil {
 		logger.Error("gateway serve failed", "err", err)
 		os.Exit(1)

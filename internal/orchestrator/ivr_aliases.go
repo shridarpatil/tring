@@ -1,11 +1,13 @@
 package orchestrator
 
-import "github.com/whatomate/tring/internal/ivr"
+import (
+	"github.com/google/uuid"
+	"github.com/whatomate/tring/internal/ivr"
+)
 
-// The IVR flow model + pure helpers live in internal/ivr (transport-agnostic,
-// shared with the pion driver so the FreeSWITCH executor and the web IVR can't
-// diverge). These aliases keep the orchestrator's existing local names working
-// unchanged — only the definitions moved. See docs/ARCHITECTURE.md (M7).
+// The IVR flow model + pure helpers live in internal/ivr (transport-agnostic).
+// These aliases keep the orchestrator's flow simulator working under its existing
+// local names — only the definitions moved. See docs/ARCHITECTURE.md (M7).
 
 type (
 	ivrNode     = ivr.Node
@@ -36,3 +38,7 @@ var (
 	substituteVars    = ivr.SubstituteVars
 	evalTimingOutcome = ivr.EvalTimingOutcome
 )
+
+// FlowCacheKey is the cache key for a flow's definition. Exported so the API
+// can invalidate the key when a flow is updated (PATCH /v1/flows/{id}).
+func FlowCacheKey(flowID uuid.UUID) string { return "ivr:flow:" + flowID.String() }

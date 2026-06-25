@@ -40,23 +40,23 @@ the call logic. A future AI voice agent plugs in as just another media leg
 
 ## 3. Processes & datastores
 
-Three Go binaries, one Postgres, one Redis, one (PRIVATE) FreeSWITCH:
+Two Go binaries, one Postgres, one Redis, one (PRIVATE) FreeSWITCH:
 
 | Binary | Role | Faces | State | Ports |
 |---|---|---|---|---|
-| **`cmd/api`** | Public REST + admin console + token minting; never talks to FS directly | integrators (server→server), operators | stateless | `8085` |
-| **`cmd/gateway`** | Browser-facing **pion media plane** (`/rtc`) + the FreeSWITCH PSTN plug; runs the IVR on the media plane | browsers (WebRTC), FS (SIP/RTP) | in-proc rooms/bridges | `8087` (+ `/rtc`), SIP `5090` to FS |
-| **`cmd/orchestrator`** | FS-facing ESL: the legacy ESL-driven IVR/masking path + the brain side of the control channel | FreeSWITCH | in-proc call sessions | ESL listener `8084`, IVR `8086`, control `8083` |
+| **`cmd/api`** | Public REST + admin console + token minting; outbound PSTN originate via FS ESL | integrators (server→server), operators | stateless | `8085` |
+| **`cmd/gateway`** | The call plane: browser-facing **pion media plane** (`/rtc`) with the **brain** (IVR + agent routing + CDR) embedded **in-process** | browsers (WebRTC) | in-proc rooms | `8087` (+ `/rtc`) |
 
 Datastores: **Postgres** (the system of record — see §10), **Redis** (agent
-presence + single-use token jtis; a hard dependency when gateway auth is on),
-**FreeSWITCH** (PSTN edge only — terminates trunks, transcodes G.711↔Opus; never
-internet-exposed).
+presence + single-use token jtis + cross-plane queue depth/reservations; a hard
+dependency when gateway auth is on), **FreeSWITCH** (PSTN trunk edge only —
+terminates outbound trunks, transcodes G.711↔Opus; never internet-exposed; not
+involved in web calls at all).
 
-> The api/orchestrator split exists because each plane scales differently; a
-> future option is to merge them into one core binary (the brain runs in-process
-> with the gateway). The gateway already runs the IVR locally when no control
-> channel is configured.
+> The brain is **not** a separate process — it's a library (`internal/brain`)
+> the gateway calls in-process. There is no orchestrator and no brain↔edge
+> control channel. The api/gateway split remains only because they scale
+> differently (stateless REST vs. stateful media plane).
 
 ## 4. The media plane (`internal/media`) — the product core
 
@@ -67,16 +67,17 @@ clients answer. Room-owned fan-out tracks survive PeerConnection swaps
 | Package | Role |
 |---|---|
 | `media/sfu` | The SFU: per-track subscriptions, source injection, the **bidirectional port** (`AttachPort` — an external leg publishes into a room *and* hears it; one active publisher, no mixing) |
-| `media/room` | Room/participant model + the **four extension seams** (interfaces): `TrackSink` (tap audio → recording/STT), `ParticipantSource` (inject non-WebRTC Opus → IVR/phone/AI TTS), `Supervisor`, `PstnGateway` |
-| `media/signaling` | The `/rtc` WebSocket: auth, join, trickle-ICE relay, membership fan-out, IVR start, ring-to-agent, the PSTN plug wiring (`pstn.go`), CDR hooks |
-| `media/ivrdrive` | Drives the unified IVR walker on the media plane (web + phone) |
+| `media/room` | Room/participant model + the extension seams (interfaces): `TrackSink` (tap audio → recording/STT), `ParticipantSource` (inject non-WebRTC Opus → IVR/phone/AI TTS), `Supervisor`, and **`Plug`/`Leg`** — THE PLUG, the channel-source contract (`interfaces.go`) |
+| `media/signaling` | The `/rtc` WebSocket: auth, join, trickle-ICE relay, membership fan-out, IVR start, ring-to-agent, the plug wiring (`AttachPstn` in `pstn.go`), CDR hooks. Embeds the brain (`internal/brain`) |
+| `media/ivrdrive` | Drives the unified IVR walker on the media plane (the one runtime driver) |
 | `media/prompt` | Opus-in-Ogg prompt player (Injects prompts as a room participant) |
 | `media/record` | Per-leg lossless capture → stereo Ogg merge (agent L / customer R) |
-| `media/control` | Brain↔edge control channel (events up: call.started/dtmf/joined; commands down: play/ring/ivr.stop/hold) |
 
-The `/rtc` wire contract is **frozen** (one JSON envelope, mirrored in Go
-`rtc-protocol` + TS `rtc-protocol.ts`, guarded by `TestWireContractFrozen`) so
-the brain/edge split is invisible to clients.
+The brain itself lives in **`internal/brain`** (`Runner` = IVR session lifecycle,
+`AgentRouter` = routing over the shared `internal/routing` engine, `RingTransport`
+= the transport seam the plug supplies) — transport-neutral, called in-process by
+the gateway. The `/rtc` wire contract is **frozen** (one JSON envelope, mirrored
+in Go `rtc-protocol` + TS `rtc-protocol.ts`, guarded by `TestWireContractFrozen`).
 
 ## 5. Call sources (the pluggable adapters)
 
@@ -85,18 +86,21 @@ Browsers (visitor `voice.js`, agent `agent.js`) peer with the gateway over raw
 WebRTC. No SIP, ever. The visitor presents a single-use gateway call token; the
 agent presents an agent JWT. See the flow in §6a.
 
-### 5b. Phone — the FreeSWITCH plug (`internal/gateway/pstn.go`)
-`room.PstnGateway` is the seam. FS's dialplan routes an inbound DID to the
-gateway's SIP UAS (`sofia/gateway/tring-gw`) with the dialed number in
-`X-Tring-DID`; the adapter answers Opus, exposes the leg as a `PstnLeg`
-(caller audio in, room audio out, RFC2833 DTMF as digits), and `AttachPort`s it
-into a room. From there it's a normal call. Enable with
-`TRING_PSTN_VIA_GATEWAY=true` (dialplan `tring_pstn_plug`). **Swapping FS** =
-implementing `room.PstnGateway` in a sibling package; nothing else changes.
+### 5b. Phone — the FreeSWITCH plug (seam ready; adapter is future work)
+`room.Plug` + `room.Leg` (in `internal/media/room/interfaces.go`) is **THE
+PLUG** — the channel-source contract: `OnInbound`/`Answer`/`Reject`/`Hangup`,
+returning a `Leg` (Opus source in, room audio out via `Write`, DTMF channel,
+`Done`). `signaling.AttachPstn(room.Plug, DIDResolver)` wires any plug into the
+media plane; an inbound call becomes a room, resolves DID→tenant+flow, and runs
+the **same** IVR/transfer/CDR as a web call.
 
-> Legacy path: `cmd/orchestrator`'s ESL IVR executor (`ivr_executor.go`) still
-> serves DIDs when the plug is off. It will be retired once trunk confidence is
-> built on the plug.
+The seam is **test-proven** today via `fakePstn` (`signaling_test.go`), but
+**no FreeSWITCH adapter is wired yet** — the old ESL inbound path
+(`cmd/orchestrator`) was deleted in the convergence migration, and the clean FS
+plug package is future work (gated on provisioning a real SIP trunk). Outbound
+PSTN still goes through FreeSWITCH today, originated by `cmd/api` over ESL.
+**Swapping/adding a channel** = implementing `room.Plug` in a sibling package;
+nothing in `internal/media` changes.
 
 ### 5c. WhatsApp (future)
 Another `ParticipantSource`/adapter feeding the WhatsApp Business Calling media
@@ -160,16 +164,18 @@ window + reattach token (`media_grace_seconds`) lets the browser rejoin the same
 room. A full page reload or a gateway restart *does* end it — live media can't be
 relocated (see [`STATE_AND_HA.md`](STATE_AND_HA.md)).
 
-### 6b. Inbound phone
+### 6b. Inbound phone (target design — FS plug pending)
+This is the shape the `room.Plug` seam is built for, once an FS adapter is wired
+(no SIP trunk yet, so it isn't live):
 ```
-telco → FreeSWITCH (terminate trunk, G.711↔Opus) → dialplan tring_pstn_plug
-  → INVITE sofia/gateway/tring-gw with X-Tring-DID → pstn.go answers (Opus)
-  → resolve DID → tenant + flow (numbers.flow_id) → AttachPort into a room
+telco → FreeSWITCH (terminate trunk, G.711↔Opus) → dialplan → FS plug adapter
+  → answers Opus, exposes the call as a room.Leg → AttachPstn wires it to a room
+  → resolve DID → tenant + flow (numbers.flow_id)
   → SAME IVR, SAME transfer-to-web-agent, SAME CDR + recording as 6a
 ```
 
 The convergence in one line: **6b reuses 6a's room + IVR + transfer + CDR**; only
-the entry adapter differs.
+the entry adapter differs — and that adapter is the only FreeSWITCH-specific code.
 
 ## 7. IVR flows
 
@@ -178,15 +184,16 @@ per-tenant in `flows.definition` (JSONB: `{nodes, edges, entry_node}`).
 `numbers.flow_id` attaches a flow to a DID. Node types: `start`, `greeting`,
 `menu`, `gather`, `http_callback`, `transfer`, `goto_flow`, `timing`, `hangup`.
 
-One **unified walker** (`internal/ivr.Walk`) is shared by:
-- **`media/ivrdrive`** — runs the flow on the pion plane (web + phone).
-- **`orchestrator/ivr_executor.go`** — the legacy ESL driver (FS direct).
+One **unified walker** (`internal/ivr.Walk`) has two consumers:
+- **`media/ivrdrive`** — the one runtime driver; runs the flow on the pion plane
+  (web today, any future plug — phone/WhatsApp — for free).
 - **`orchestrator/simulator.go`** — a deterministic, wall-clock-free walker that
   powers the console's Test panel (pure, fast tests). Interactive stepping pauses
-  at `menu`/`gather` and resumes on a PATCHed digit.
+  at `menu`/`gather` and resumes on a PATCHed digit. (`internal/orchestrator` is
+  now *only* the simulator — the ESL executor was deleted.)
 
-When adding a node type, update the walker **and** the matching Vue node
-component, or the editor and runtime diverge.
+When adding a node type, update the walker, both consumers **and** the matching
+Vue node component, or the editor and runtime diverge.
 
 ## 8. CDR & recording (`internal/callcdr`)
 
@@ -205,8 +212,8 @@ a no-media call never shows a dead play button. S3 upload (date-wise key) +
 `recording_s3_key` when `TRING_S3_BUCKET` is set; otherwise local spool. Served by
 `GET /v1/calls/{id}/recording` (streams from S3 when keyed, else local).
 
-> Both the gateway (uploader, deletes local after upload) and the api (server)
-> need the S3 config — `docker-compose.yml` shares `.env` across both.
+> Both the gateway (uploader, deletes local after upload) and the api (serves
+> recordings) need the S3 config — `docker-compose.yml` shares `.env` across both.
 
 ## 9. Auth — five distinct credentials (do not conflate)
 
@@ -243,34 +250,36 @@ into a typed `Queries` struct (`internal/queries`) — no inline SQL in handlers
 `defaults` map overlaid with `TRING_*` env vars; flat lowercase keys
 (`TRING_ESL_ADDR` → `esl_addr`). Precedence flag > env > default. Add a setting in
 **one place** (the `defaults` map) and read via `k.String("…")` — never
-`os.Getenv` in new code. (FreeSWITCH-side vars like `TRING_PSTN_VIA_GATEWAY`,
-`TRING_IVR_SOCKET` are consumed by `vars.xml`, not koanf.)
+`os.Getenv` in new code. FreeSWITCH consumes its own `TRING_*` vars (e.g.
+`TRING_PUBLIC_IP`, trunk creds) via `vars.xml`, not koanf. `audio_dir` and
+`recordings_dir` default to `/var/lib/tring/{sounds,recordings}` — the gateway
+writes/reads them and the API serves recordings; they are no longer under
+`/usr/share/freeswitch` (FS doesn't touch them).
 
 ## 12. Deployment topology — public vs private
 
 ```
         PUBLIC (internet)                    │   PRIVATE (VPC / subnet)
  browser ─WebRTC media (UDP) ─┐              │
-   visitor/agent ─HTTPS/WSS──▶│  GATEWAY     │  SIP 5090 + RTP   ┌────────────┐
-                              │  public+priv │──────────────────▶│ FreeSWITCH │
- (symmetric NAT) ─▶ TURN ────▶│  faces       │                   └─────┬──────┘
-                              └──────────────┘                ESL │   IVR/control
- your backend ─API key──▶ API ◀── /fs ──┘            ┌─────────────┴──────┐
- operators ─VPN/SSO──▶ /admin            Postgres ── orchestrator ── Redis  (all PRIVATE)
+   visitor/agent ─HTTPS/WSS──▶│  GATEWAY     │                   ┌────────────┐
+                              │  (web plug + │     ESL (outbound)│ FreeSWITCH │
+ (symmetric NAT) ─▶ TURN ────▶│  brain)      │  ┌───────────────▶│ (PSTN edge)│
+                              └──────────────┘  │                └────────────┘
+ your backend ─API key──▶ API ◀── /fs ─────────┘
+ operators ─VPN/SSO──▶ /admin            Postgres ──── API/gateway ──── Redis  (all PRIVATE)
 ```
 
 | Component | Net | Ports |
 |---|---|---|
-| Gateway browser face | **public** | `8087`→TLS `443` (HTTPS `/webrtc/offer`*, WSS `/rtc`, `/agent/ws`), UDP media `TRING_GATEWAY_UDP_MIN`–`MAX` (def 10000–10100) on `TRING_PUBLIC_IP` |
+| Gateway browser face | **public** | `8087`→TLS `443` (WSS `/rtc`), UDP media `TRING_GATEWAY_UDP_MIN`–`MAX` (def 10000–10100) on `TRING_PUBLIC_IP` |
 | TURN (coturn) | **public** | `3478` UDP/TCP, `5349` TLS, relay UDP range |
 | SDK bundles `/sdk/*.js` | **public** (CDN/proxy) | — |
-| FreeSWITCH | **private** | SIP `5060`, RTP, ESL `8021` |
-| Gateway→FS leg | **private** | SIP `5090` + RTP |
-| Orchestrator | **private** | ESL `8084`, IVR `8086` |
+| FreeSWITCH | **private** | SIP `5060`, RTP, ESL `8021` (outbound originate from the API) |
 | API | **private** (recommended) | `8085` (server→server mint; `/admin` over VPN) |
 | Postgres / Redis | **private** | `5432`/`5434`, `6379` |
 
-\* `/webrtc/offer` is the legacy WebRTC↔FS bridge; the converged path is `/rtc`.
+`/rtc` (WebSocket) is the only browser-facing signaling endpoint. The future FS
+PSTN plug (§5b) will add a private gateway↔FS SIP/RTP leg; it isn't wired today.
 
 The **API can stay fully private**: the browser only needs the SDK JS (CDN), a
 token (minted by your backend over server→server), and the gateway (public).
@@ -309,32 +318,32 @@ Scale by adding **gateway** instances (horizontal); FS scales vertically.
   contains `test` (a destructive-truncate guard). Use a migrated `tring_test` on
   `:5434`. DB-gated packages share one DB + tenant — run them with `go test -p 1`
   to avoid a `tenants_sip_domain_key` collision.
-- **Live smoke (phone plug):** with `TRING_PSTN_VIA_GATEWAY=true`,
-  `docker exec tring-fs fs_cli -x "originate loopback/<DID> &park()"` exercises
-  inbound → plug → room → IVR; a softphone registered to FS dialing the DID is
-  the audible end-to-end test (validated 2026-06-12).
+- **Plug seam** is covered by `fakePstn` in `media/signaling/signaling_test.go`
+  (inbound → plug → room → IVR), proving the channel-source contract end-to-end
+  without FreeSWITCH. The live FS-trunk smoke test returns once an FS plug
+  adapter is wired (§5b).
 - `sim/` — a SIPp UAS impersonating a carrier SBC for the **outbound** trunk path.
 
 ## 14. Roadmap (what's next)
 
-1. **Outbound origination on the plug** — click-to-call out the trunk via the
-   media plane (the contract deliberately omits `Originate` so far).
-2. **Webhooks for media-plane calls** — `call.answered`/`call.ended` parity with
-   the FS path.
+1. **FreeSWITCH PSTN plug** (§5b) — implement `room.Plug` as a clean FS adapter
+   package so inbound trunk calls join the media plane (seam + `fakePstn` test
+   already in place; gated on a real SIP trunk).
+2. **Outbound origination on the plug** — click-to-call out the trunk via the
+   media plane (the contract deliberately omits `Originate` so far), so the API's
+   ESL originate path can also move behind the plug.
 3. **WhatsApp adapter** (§5c) — needs Meta Business Calling API access.
-4. **Retire `eslDriver`** once the plug has trunk confidence; collapse the
-   FS-direct IVR path.
-5. **AI voice agent** — STT sink + TTS source on the plane that exists today.
-6. **Merge api+orchestrator** into one core binary (optional).
+4. **AI voice agent** — STT sink + TTS source on the plane that exists today.
 
 ## 15. Code map (where things live)
 
 | Question | File |
 |---|---|
 | Browser call (visitor/agent) | `internal/media/signaling/` (`signaling.go`, `ivr.go`, `pstn.go`) + `media/sfu/` |
-| Phone plug (FS adapter) | `internal/gateway/pstn.go` (`room.PstnGateway`) |
-| CDR + recording (web+phone) | `internal/callcdr/` |
-| IVR walker (shared) | `internal/ivr/` ; drivers: `media/ivrdrive`, `orchestrator/ivr_executor.go`, `orchestrator/simulator.go` |
+| The brain (IVR + routing, in-process) | `internal/brain/` (`ivr.go` `Runner`, `route.go` `AgentRouter`) |
+| Plug seam (THE PLUG) | `internal/media/room/interfaces.go` (`room.Plug`/`Leg`); wiring `media/signaling/pstn.go` (`AttachPstn`); FS adapter = future (§5b) |
+| CDR + recording (web; phone when plug lands) | `internal/callcdr/` + `media/record` |
+| IVR walker (shared) | `internal/ivr/` ; consumers: `media/ivrdrive` (runtime), `orchestrator/simulator.go` (Test panel) |
 | Agent bridge dial-string | `internal/agentleg/` |
 | Masking pool | `internal/masking/pool.go` |
 | Trunk providers | `internal/provider/` |
