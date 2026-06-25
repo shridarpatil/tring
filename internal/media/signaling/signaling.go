@@ -128,6 +128,8 @@ type Server struct {
 	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
 	onCall    map[string]int                // "tenant|sip" → active call legs (drives on_call presence)
+	callers   map[room.RoomID]room.ParticipantID // the IVR caller per room (flow-pinned joiner) — see handoff.go
+	handoffs  map[room.RoomID]*handoff           // rooms waiting for a transfer handoff to end (handoff.go)
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -157,6 +159,8 @@ func New(cfg Config) *Server {
 		rings:     make(map[room.RoomID]chan struct{}),
 		pstnCalls: make(map[room.RoomID]room.CallID),
 		onCall:    make(map[string]int),
+		callers:   make(map[room.RoomID]room.ParticipantID),
+		handoffs:  make(map[room.RoomID]*handoff),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -310,6 +314,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
 	if flowID != "" {
 		if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
+			// Record the caller so a later transfer handoff can tell the caller apart
+			// from the answering agent (post-call IVR runs to the caller). See handoff.go.
+			s.setCaller(roomID, p.ID())
 			s.startIVR(roomID, flowID, princ.clientRef) // brain runs the IVR in-process
 		}
 	}
@@ -442,6 +449,15 @@ func (s *Server) routeEvent(e room.Event) {
 			if s.cfg.Calls != nil {
 				s.cfg.Calls.Ended(string(e.Room), "ended")
 			}
+		} else if s.resumeHandoffIfAgentLeft(e.Room, e.Participant) {
+			// A transfer's answered agent just left with the caller still on the line:
+			// resume the IVR so a node wired to the transfer's "completed" edge runs
+			// to the caller (post-call survey). Do NOT end the caller — and do NOT
+			// fan out peer-left to the caller: the visitor SDK treats "the only peer
+			// left" as call-over (sends Bye), which would tear the caller down before
+			// the post-call flow can play. The SFU already removed the agent's track
+			// (renegotiation), so the caller simply hears the IVR again.
+			return
 		} else {
 			// A 1:1 call whose OTHER party just left: end the lone remaining leg now
 			// rather than wait for it to notice and tear down. That teardown closes

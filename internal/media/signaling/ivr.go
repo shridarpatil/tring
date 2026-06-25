@@ -87,6 +87,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 	onDone := func() {
 		s.sfu.RemoveSource(roomID, pid)
 		_ = player.Close()
+		s.clearCaller(roomID) // drop caller/handoff tracking (handoff.go)
 		s.log.Info("ivr stopped", "room", roomID)
 		// Flow ended with no agent → end the caller's call (else they're stranded in
 		// an empty room). Web caller: terminal `ended` + remove. Phone caller: hang

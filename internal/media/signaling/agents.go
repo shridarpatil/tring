@@ -310,5 +310,6 @@ func (s *Server) signalRing(roomID room.RoomID) {
 	}
 }
 
-// ensure the server satisfies the brain's ring-transport seam.
+// ensure the server satisfies the brain's ring-transport + handoff-wait seams.
 var _ brain.RingTransport = (*Server)(nil)
+var _ brain.HandoffWaiter = (*Server)(nil)
