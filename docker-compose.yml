@@ -169,8 +169,9 @@ services:
     depends_on:
       freeswitch:
         condition: service_started
-    # All config from .env — see .env.example (TRING_GATEWAY_*, TRING_FS_*,
-    # TRING_PUBLIC_IP, TURN, JWT secret shared with the api, …).
+    # All config from .env — see .env.example (TRING_GATEWAY_ADDR/_UDP_*/
+    # _REQUIRE_AUTH, TRING_PUBLIC_IP, STUN/TURN, JWT secret shared with the api,
+    # DB/Redis/S3, …).
     env_file:
       - path: .env
         required: false

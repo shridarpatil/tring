@@ -49,6 +49,7 @@ func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, lo
 func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
 	tenant, _, ok := strings.Cut(roomID, "/")
 	if !ok {
+		a.log.Debug("route: malformed roomID", "room", roomID)
 		return "no_answer", nil
 	}
 
@@ -72,6 +73,7 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 
 	rc := routing.RouteConfig{TenantID: tenant}
 	if !ringAll && t.Team != "" && a.teams != nil {
+		// TODO(plug): make per-plug when a 2nd plug lands
 		rc.Team, rc.Source = t.Team, queuekeys.SourceWeb
 		if tid, err := uuid.Parse(tenant); err == nil {
 			if tc, ok, _ := a.teams.TeamConfig(ctx, tid, t.Team); ok {

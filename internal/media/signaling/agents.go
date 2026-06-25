@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/whatomate/tring/internal/brain"
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/ivrdrive"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/presence"
@@ -62,10 +61,6 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	s.mu.Unlock()
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
-	// Tell the brain (it owns routing/presence in 2c).
-	if s.controlUp() {
-		_ = s.control.Send(control.Message{Type: control.EvAgentOnline, Tenant: tenant, Sip: sip})
-	}
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
@@ -103,9 +98,6 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		s.mu.Unlock()
 		_ = c.Close()
 		s.log.Info("agent offline", "tenant", tenant, "sip", sip)
-		if s.controlUp() {
-			_ = s.control.Send(control.Message{Type: control.EvAgentOffline, Tenant: tenant, Sip: sip})
-		}
 	}()
 
 	for {

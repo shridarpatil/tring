@@ -5,10 +5,9 @@ import (
 	"github.com/whatomate/tring/internal/ivr"
 )
 
-// The IVR flow model + pure helpers live in internal/ivr (transport-agnostic,
-// shared with the pion driver so the FreeSWITCH executor and the web IVR can't
-// diverge). These aliases keep the orchestrator's existing local names working
-// unchanged — only the definitions moved. See docs/ARCHITECTURE.md (M7).
+// The IVR flow model + pure helpers live in internal/ivr (transport-agnostic).
+// These aliases keep the orchestrator's flow simulator working under its existing
+// local names — only the definitions moved. See docs/ARCHITECTURE.md (M7).
 
 type (
 	ivrNode     = ivr.Node
