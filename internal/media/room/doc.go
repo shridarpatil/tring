@@ -4,8 +4,8 @@
 // socket, which live in internal/media/sfu and internal/media/signaling).
 //
 // The room cannot tell a browser participant from an externally-fed one — that
-// is the whole point. The IVR executor (and later an AI voice agent) joins as an
-// ordinary participant that publishes prompt audio and consumes the caller's
+// is the whole point. The IVR (a prompt participant, and later an AI voice agent)
+// joins as an ordinary participant that publishes prompt audio and consumes the caller's
 // audio + DTMF; the phone leg (FreeSWITCH or other PSTN adapter, behind
 // Plug) joins as an Opus ParticipantSource; routing a call to a human is
 // just a membership change. See docs/ARCHITECTURE.md.

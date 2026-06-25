@@ -26,7 +26,6 @@ import (
 	"github.com/whatomate/tring/internal/brain"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/presence"
@@ -113,14 +112,8 @@ type Server struct {
 	rooms *room.Manager
 	log   *slog.Logger
 
-	// control is the brain↔edge channel (Phase 2). When set + connected, the
-	// orchestrator runs the IVR remotely: this edge sends call.started/dtmf/
-	// call.ended UP and executes play/ring/ivr.stop commands DOWN instead of
-	// walking the flow locally. nil/disconnected → local IVR fallback.
-	control controlChannel
-
-	// brain drives local IVR sessions (fallback / control off). One Runner shared
-	// across all rooms; state per-room inside the Runner.
+	// brain drives IVR sessions in-process — the brain is embedded in this server.
+	// One Runner shared across all rooms; state per-room inside the Runner.
 	brain *brain.Runner
 
 	// pstnGW is the phone plug (room.Plug — FS today, swappable); nil
@@ -129,10 +122,8 @@ type Server struct {
 	pstnGW  room.Plug
 	pstnDID DIDResolver
 
-	mu    sync.Mutex
-	conns map[room.ParticipantID]*conn
-	edge  map[room.RoomID]*edgeVoice // brain-driven IVR voice per room (control on)
-	holds     map[room.RoomID]*edgeVoice    // brain-driven hold music per room
+	mu        sync.Mutex
+	conns     map[room.ParticipantID]*conn
 	agents    map[string]map[string]*conn   // online agents: tenant → sip → presence socket
 	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
@@ -162,8 +153,6 @@ func New(cfg Config) *Server {
 		log:       cfg.Logger.With("component", "signaling"),
 		brain:     brain.NewRunner(cfg.Logger),
 		conns:     make(map[room.ParticipantID]*conn),
-		edge:      make(map[room.RoomID]*edgeVoice),
-		holds:     make(map[room.RoomID]*edgeVoice),
 		agents:    make(map[string]map[string]*conn),
 		rings:     make(map[room.RoomID]chan struct{}),
 		pstnCalls: make(map[room.RoomID]room.CallID),
@@ -320,20 +309,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Flow-pinned room → run the IVR as a participant (once per room). The dev
 	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
 	if flowID != "" {
-		if s.controlUp() {
-			// Brain runs the IVR: announce the call; the orchestrator drives prompts
-			// and the ring back over the control channel (Phase 2b).
-			_ = s.control.Send(control.Message{
-				Type:        control.EvCallStarted,
-				Tenant:      tenant,
-				Room:        string(roomID),
-				Participant: string(p.ID()),
-				FlowID:      flowID,
-				ClientRef:   princ.clientRef,
-				Name:        first.Name,
-			})
-		} else if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
-			s.startIVR(roomID, flowID, princ.clientRef) // local fallback (control down)
+		if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
+			s.startIVR(roomID, flowID, princ.clientRef) // brain runs the IVR in-process
 		}
 	}
 	// A flow-pinned FRESH join is a web CALL — open its CDR (and attach the
@@ -378,16 +355,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		defer s.setAgentOnCall(tenant, princ.sip, false)
 	}
 
-	// If a transfer is ringing for this room, this join is the agent answering.
-	// Local fallback resolves it via signalRing; with control up, tell the brain
-	// (it owns the pending ring) via participant.joined.
+	// If a transfer is ringing for this room, this join is the agent answering:
+	// signalRing resolves the pending ring.
 	s.signalRing(roomID)
-	if s.controlUp() {
-		_ = s.control.Send(control.Message{
-			Type: control.EvParticipantJoined, Room: string(roomID),
-			Participant: string(p.ID()), Name: first.Name,
-		})
-	}
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
 	s.readLoop(c, p)
@@ -441,30 +411,10 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 		case msgUnpublish:
 			s.sfu.Unpublish(p.Room().ID(), p.ID(), codecKind(m.Kind))
 		case msgDTMF:
-			if s.controlUp() {
-				_ = s.control.Send(control.Message{
-					Type: control.EvDTMF, Room: string(p.Room().ID()),
-					Participant: string(p.ID()), Digit: m.Digit,
-				})
-			} else {
-				s.routeDTMF(p.Room().ID(), m.Digit)
-			}
+			s.routeDTMF(p.Room().ID(), m.Digit)
 		case msgHold, msgResume, msgTransfer:
-			// Agent call control — forward to the brain, which actuates on the room.
-			if s.controlUp() {
-				ev := control.Message{Room: string(p.Room().ID()), Participant: string(p.ID())}
-				switch m.Type {
-				case msgHold:
-					ev.Type = control.EvHold
-				case msgResume:
-					ev.Type = control.EvResume
-				case msgTransfer:
-					ev.Type, ev.Team, ev.Sip = control.EvTransfer, m.ToTeam, m.ToSip
-				}
-				_ = s.control.Send(ev)
-			} else {
-				s.log.Warn("call control needs the control channel", "type", m.Type)
-			}
+			// Agent call control — not yet wired on the embedded-brain plane.
+			s.log.Warn("call control not yet implemented", "type", m.Type)
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
@@ -484,14 +434,9 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
-		// If no human participants remain, end the call: tell the brain (it cancels
-		// its walk) and drop the edge voice; also stop any local IVR — and if a
+		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
-			if s.controlUp() {
-				_ = s.control.Send(control.Message{Type: control.EvCallEnded, Room: string(e.Room)})
-				s.edgeStopVoice(e.Room)
-			}
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
 			if s.cfg.Calls != nil {

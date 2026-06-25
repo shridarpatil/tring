@@ -1,9 +1,9 @@
 // Package main: Tring call-plane server (pion media + brain, served on /rtc).
 //
 // The web-calling plane. Browsers join as rooms on /rtc (WebSocket signaling);
-// the SFU fans media between participants. The orchestrator brain drives IVR and
-// team routing over the control channel. FreeSWITCH / PSTN adapters are not
-// wired here — this binary is the pure web plug.
+// the SFU fans media between participants. The server runs the web plug with the
+// brain embedded in-process — IVR and team routing happen here, not over a remote
+// control channel. FreeSWITCH / PSTN adapters are not wired here.
 //
 // Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL, and either
 //
@@ -26,7 +26,6 @@ import (
 	"github.com/whatomate/tring/internal/db"
 	"github.com/whatomate/tring/internal/flowstore"
 	"github.com/whatomate/tring/internal/logging"
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
 	"github.com/whatomate/tring/internal/presence"
@@ -136,15 +135,6 @@ func main() {
 		Cache:      redisCache,               // publish web team-queue depth for the dashboard
 		Logger:     logger,
 	})
-	// Edge side of the media control channel (Phase 2). When control_url is set,
-	// the gateway dials the orchestrator (BRAIN) so web-call IVR/routing can be
-	// driven remotely. 2a only plumbs it — commands are logged; 2b/2c add behavior.
-	// Disabled (no dial) when control_url is empty.
-	if controlURL := k.String("control_url"); controlURL != "" {
-		ctrl := control.NewClient(controlURL, k.String("control_secret"), sig.HandleControlCommand, logger)
-		sig.SetControl(ctrl)
-		go ctrl.Run(context.Background())
-	}
 
 	addr := k.String("gateway_addr")
 	sigHandler := sig.Handler()

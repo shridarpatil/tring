@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
 )
 
@@ -74,20 +73,9 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 		ccancel()
 	}
 
-	// Same IVR split as a web call: brain when the control channel is up, local
-	// fallback otherwise. The caller's number rides as the name/label the agent
-	// sees on a transfer ring.
-	if s.controlUp() {
-		_ = s.control.Send(control.Message{
-			Type:   control.EvCallStarted,
-			Tenant: tenant.String(),
-			Room:   string(roomID),
-			FlowID: flowID,
-			Name:   ic.From,
-		})
-	} else {
-		s.startIVR(roomID, flowID, ic.From)
-	}
+	// Run the IVR locally — the brain is embedded in-process. The caller's number
+	// rides as the name/label the agent sees on a transfer ring.
+	s.startIVR(roomID, flowID, ic.From)
 	s.log.Info("pstn: call attached", "room", roomID, "did", ic.To, "from", ic.From, "flow", flowID)
 
 	// Pump the caller's keypresses into the same DTMF path a browser uses, and
@@ -95,11 +83,7 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 	for {
 		select {
 		case d := <-leg.DTMF:
-			if s.controlUp() {
-				_ = s.control.Send(control.Message{Type: control.EvDTMF, Room: string(roomID), Digit: d})
-			} else {
-				s.routeDTMF(roomID, d)
-			}
+			s.routeDTMF(roomID, d)
 		case <-leg.Done:
 			s.endPstnRoom(roomID)
 			return
@@ -112,10 +96,6 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 // and the port.
 func (s *Server) endPstnRoom(roomID room.RoomID) {
 	s.forgetPstn(roomID)
-	if s.controlUp() {
-		_ = s.control.Send(control.Message{Type: control.EvCallEnded, Room: string(roomID)})
-		s.edgeStopVoice(roomID)
-	}
 	s.stopIVR(roomID)
 	if s.cfg.Calls != nil {
 		s.cfg.Calls.Ended(string(roomID), "caller_hangup")
@@ -147,10 +127,7 @@ func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 	}
 	// Also no IVR running? Then nothing is serving the caller — hang up. (While
 	// the IVR runs, the room legitimately has zero human participants.)
-	s.mu.Lock()
-	ivrRunning := s.brain.Running(roomID) || s.edge[roomID] != nil
-	s.mu.Unlock()
-	if ivrRunning {
+	if s.brain.Running(roomID) {
 		return
 	}
 	s.log.Info("pstn: no one serving the caller, hanging up", "room", roomID)
