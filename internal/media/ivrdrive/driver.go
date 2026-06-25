@@ -11,6 +11,7 @@ package ivrdrive
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -24,8 +25,15 @@ import (
 // prompt.Player; tests fake it. Node prompt text is pre-rendered to an audio
 // file at flow-save time (see the API's flow handler), so the play path is
 // uniform — text and uploaded audio both arrive here as a file.
+//
+// Stop halts the prompt currently playing (if any), flushing queued audio so a
+// caller who presses a valid option mid-prompt (barge-in) is taken to the next
+// step immediately instead of after the prompt finishes. It's a no-op when
+// nothing is playing and leaves the player usable for the next Play (unlike a
+// permanent Close).
 type Prompts interface {
 	Play(ctx context.Context, file string) error
+	Stop()
 }
 
 // Target identifies who a Transfer node routes to.
@@ -146,6 +154,62 @@ func (d *Driver) awaitDigit(ctx context.Context, timeout time.Duration) (string,
 	}
 }
 
+// playAndCollect plays a node's prompt while listening for a caller digit so the
+// caller can barge in (interrupt the prompt) instead of waiting it out. The
+// prompt streams in a goroutine; `accept` decides which digits barge in while it
+// plays — a menu passes "is this a configured option" so a stray/invalid key is
+// ignored and the prompt keeps playing; a gather accepts any digit. The first
+// accepted digit stops the prompt (Stop flushes queued audio) and returns
+// immediately. If the prompt finishes with no accepted digit, it then waits up
+// to timeout for ANY digit (so an invalid choice after the prompt can drive a
+// retry). ok=false on timeout/cancellation; file is the prompt played (for the
+// trace Detail), err is a real play failure (a missing file), never our own stop.
+func (d *Driver) playAndCollect(ctx context.Context, n *ivr.Node, timeout time.Duration, accept func(string) bool) (digit string, ok bool, file string, err error) {
+	file = ivr.StringFromConfig(n.Config, "audio_file")
+	if file != "" {
+		d.played = append(d.played, file)
+	}
+
+	playDone := make(chan struct{})
+	var playErr error
+	go func() {
+		defer close(playDone)
+		if file != "" {
+			playErr = d.prompts.Play(ctx, file)
+		}
+	}()
+
+	digit, ok = d.collect(ctx, playDone, timeout, accept)
+	d.prompts.Stop() // flush any queued audio so a barge-in halts the prompt now
+	<-playDone       // current prompt fully stopped before we return (no overlap on replay)
+
+	if playErr != nil && !errors.Is(playErr, context.Canceled) {
+		return "", false, file, playErr
+	}
+	return digit, ok, file, nil
+}
+
+// collect waits for a digit across two phases. While the prompt plays (phase 1)
+// only an accepted digit barges in; non-accepted digits are dropped so the prompt
+// keeps playing. Once the prompt finishes (phase 2) it waits up to timeout for
+// ANY digit. ok=false on timeout or ctx cancellation.
+func (d *Driver) collect(ctx context.Context, playDone <-chan struct{}, timeout time.Duration, accept func(string) bool) (string, bool) {
+	for { // phase 1: prompt is playing — barge in only on an accepted digit
+		select {
+		case digit := <-d.dtmf:
+			if accept(digit) {
+				return digit, true
+			}
+			// not accepted mid-prompt → ignore, let the prompt keep playing
+		case <-playDone:
+			// phase 2: prompt finished — accept any digit, up to timeout
+			return d.awaitDigit(ctx, timeout)
+		case <-ctx.Done():
+			return "", false
+		}
+	}
+}
+
 // Greeting plays the greeting and continues.
 func (d *Driver) Greeting(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	file, err := d.play(ctx, n)
@@ -164,15 +228,18 @@ func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) 
 	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
 	retries := ivr.IntFromConfig(n.Config, "max_retries", 3)
 
+	// Only a configured option barges in while the prompt plays; an invalid key
+	// is ignored mid-prompt and only counts as a bad choice (→ retry) after it.
+	isOption := func(digit string) bool { _, ok := options[digit]; return ok }
+
 	var file string
 	for attempt := 0; attempt <= retries; attempt++ {
 		d.drainDTMF()
-		f, err := d.play(ctx, n)
+		digit, ok, f, err := d.playAndCollect(ctx, n, timeout, isOption)
 		if err != nil {
 			return ivr.NodeResult{}, err
 		}
 		file = f
-		digit, ok := d.awaitDigit(ctx, timeout)
 		if !ok {
 			return ivr.NodeResult{Outcome: "timeout", Action: "prompt_dtmf", Detail: file}, nil
 		}
@@ -192,13 +259,13 @@ func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error
 	store := ivr.StringFromConfig(n.Config, "store_as")
 
 	d.drainDTMF()
-	file, err := d.play(ctx, n)
+	// A gather collects free-form digits, so any keypress barges in on the prompt.
+	digit, ok, file, err := d.playAndCollect(ctx, n, timeout, func(string) bool { return true })
 	if err != nil {
 		return ivr.NodeResult{}, err
 	}
 	var collected strings.Builder
-	for collected.Len() < ndigits {
-		digit, ok := d.awaitDigit(ctx, timeout)
+	for {
 		if !ok {
 			if collected.Len() == 0 {
 				return ivr.NodeResult{Outcome: "timeout", Action: "gather", Detail: file}, nil
@@ -209,6 +276,10 @@ func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error
 			break
 		}
 		collected.WriteString(digit)
+		if collected.Len() >= ndigits {
+			break
+		}
+		digit, ok = d.awaitDigit(ctx, timeout)
 	}
 	if store != "" {
 		d.vars[store] = collected.String()

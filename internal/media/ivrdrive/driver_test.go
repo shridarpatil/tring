@@ -2,6 +2,7 @@ package ivrdrive_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,12 +12,66 @@ import (
 
 // fakePrompts records played files and notifies a channel so the test can feed
 // DTMF exactly when a prompt plays (the driver drains DTMF before each prompt,
-// so feeding after the play notification is race-free).
+// so feeding after the play notification is race-free). Play returns at once, so
+// it models a prompt that has already finished by the time DTMF is fed — fine
+// for the routing/timeout tests, but barge-in needs a prompt that's still
+// playing (see blockingPrompts).
 type fakePrompts struct{ played chan string }
 
 func (f *fakePrompts) Play(_ context.Context, file string) error {
 	f.played <- file
 	return nil
+}
+
+func (f *fakePrompts) Stop() {}
+
+// blockingPrompts models a prompt that is STILL PLAYING: Play blocks until Stop
+// flushes it (barge-in) or ctx is cancelled. started is signalled with the file
+// when each prompt begins; stops counts Stop calls. This is what lets a test
+// prove a digit interrupts an in-progress prompt rather than waiting it out.
+type blockingPrompts struct {
+	started chan string
+	mu      sync.Mutex
+	cur     chan struct{} // closed by Stop to end the current Play
+	stops   int
+}
+
+func newBlockingPrompts() *blockingPrompts {
+	return &blockingPrompts{started: make(chan string, 8)}
+}
+
+func (b *blockingPrompts) Play(ctx context.Context, file string) error {
+	b.mu.Lock()
+	ch := make(chan struct{})
+	b.cur = ch
+	b.mu.Unlock()
+	b.started <- file
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (b *blockingPrompts) Stop() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stops++
+	if b.cur != nil {
+		select {
+		case <-b.cur:
+		default:
+			close(b.cur)
+		}
+		b.cur = nil
+	}
+}
+
+func (b *blockingPrompts) stopCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stops
 }
 
 var _ ivr.CallDriver = (*ivrdrive.Driver)(nil)
@@ -116,6 +171,102 @@ func TestMenuDigitRoutesAndPlaysPrompts(t *testing.T) {
 	}
 	if want := []string{"greeting.ogg", "menu.ogg", "bye.ogg"}; !eq(d.Played(), want) {
 		t.Fatalf("played = %v, want %v", d.Played(), want)
+	}
+}
+
+// bargeMenuFlow: start → menu(menu.ogg, option 1) --digit:1--> h(hangup, no
+// audio) / --timeout--> h2(hangup, no audio). The hangup nodes have no prompt so
+// a blocking prompt fake can't stall there — only the menu prompt blocks.
+func bargeMenuFlow() *ivr.Flow {
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "m", Type: ivr.NodeMenu, Config: map[string]interface{}{
+				"audio_file": "menu.ogg", "timeout_seconds": float64(1),
+				"options": map[string]interface{}{"1": "sales"},
+			}},
+			{ID: "h", Type: ivr.NodeHangup},
+			{ID: "h2", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "m", Condition: "default"},
+			{From: "m", To: "h", Condition: "digit:1"},
+			{From: "m", To: "h2", Condition: "timeout"},
+		},
+	}
+}
+
+// TestMenuValidDigitBargesInDuringPrompt: a valid option pressed WHILE the menu
+// prompt is still playing must stop the prompt and advance immediately, not wait
+// for the prompt to finish. With a still-playing prompt fake, the flow only
+// completes if the driver interrupts playback on the digit.
+func TestMenuValidDigitBargesInDuringPrompt(t *testing.T) {
+	b := newBlockingPrompts()
+	d := ivrdrive.New(ivrdrive.Config{Prompts: b})
+	pathCh := make(chan []ivr.Step, 1)
+	go func() {
+		p, _ := ivr.Walk(context.Background(), bargeMenuFlow(), "s", d)
+		pathCh <- p
+	}()
+
+	select {
+	case f := <-b.started:
+		if f != "menu.ogg" {
+			t.Fatalf("started %q, want menu.ogg", f)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("menu prompt never started playing")
+	}
+
+	d.DTMF("1") // valid option pressed mid-prompt
+
+	select {
+	case p := <-pathCh:
+		if want := []string{"s", "m", "h"}; !eq(ids(p), want) {
+			t.Fatalf("path = %v, want %v", ids(p), want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("barge-in did not interrupt the prompt: flow hung until prompt end")
+	}
+	if b.stopCount() < 1 {
+		t.Fatal("Stop() never called — prompt was not interrupted on the digit")
+	}
+}
+
+// TestMenuInvalidDigitDoesNotInterruptPrompt locks in the chosen semantics: an
+// invalid digit pressed during the prompt is ignored (prompt keeps playing); only
+// a valid option barges in. If an invalid digit wrongly interrupted, the menu
+// would treat it as a bad choice and replay the prompt (menu.ogg twice) or fall
+// to timeout — so a single play + the digit:1 path proves invalid was ignored.
+func TestMenuInvalidDigitDoesNotInterruptPrompt(t *testing.T) {
+	b := newBlockingPrompts()
+	d := ivrdrive.New(ivrdrive.Config{Prompts: b})
+	pathCh := make(chan []ivr.Step, 1)
+	go func() {
+		p, _ := ivr.Walk(context.Background(), bargeMenuFlow(), "s", d)
+		pathCh <- p
+	}()
+
+	select {
+	case <-b.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("menu prompt never started playing")
+	}
+
+	d.DTMF("9") // invalid — must NOT interrupt the prompt
+	d.DTMF("1") // valid — should barge in
+
+	select {
+	case p := <-pathCh:
+		if want := []string{"s", "m", "h"}; !eq(ids(p), want) {
+			t.Fatalf("path = %v, want %v (invalid digit must not cause retry/timeout)", ids(p), want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("flow hung")
+	}
+	if got := d.Played(); len(got) != 1 || got[0] != "menu.ogg" {
+		t.Fatalf("played = %v, want exactly one menu.ogg (invalid digit triggered a replay)", got)
 	}
 }
 
