@@ -1,14 +1,14 @@
-// Package main: Tring call-plane server (pion media + brain, served on /rtc).
+// Package main: Tring call-plane gateway (pion media + brain, served on /rtc).
 //
 // The web-calling plane. Browsers join as rooms on /rtc (WebSocket signaling);
-// the SFU fans media between participants. The server runs the web plug with the
+// the SFU fans media between participants. The gateway runs the web plug with the
 // brain embedded in-process — IVR and team routing happen here, not over a remote
 // control channel. FreeSWITCH / PSTN adapters are not wired here.
 //
 // Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL, and either
 //
 //	TRING_TURN_USERNAME/_PASSWORD (static creds) or TRING_TURN_SECRET (the
-//	server mints its own ephemeral coturn creds, lifetime TRING_TURN_TTL_SECONDS),
+//	gateway mints its own ephemeral coturn creds, lifetime TRING_TURN_TTL_SECONDS),
 //	TRING_TURN_RELAY_ONLY, TRING_PUBLIC_IP, TRING_GATEWAY_UDP_MIN/_MAX.
 package main
 
@@ -140,7 +140,7 @@ func main() {
 	sigHandler := sig.Handler()
 
 	// One listener serves the pion media plane only: /rtc (WebSocket signaling).
-	// The legacy bridge endpoints are not wired in this binary — server
+	// The legacy bridge endpoints are not wired in this binary — the gateway
 	// implements only the web plug (pion-based N-party calls on /rtc).
 	root := http.NewServeMux()
 	root.Handle("/rtc", sigHandler)
@@ -151,9 +151,9 @@ func main() {
 		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	logger.Info("server listening", "addr", addr)
+	logger.Info("gateway listening", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil {
-		logger.Error("server serve failed", "err", err)
+		logger.Error("gateway serve failed", "err", err)
 		os.Exit(1)
 	}
 }

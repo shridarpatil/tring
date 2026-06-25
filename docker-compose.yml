@@ -4,7 +4,7 @@ services:
     # freeswitch/Dockerfile). Built here so dev runs the EXACT image shipped to
     # production. Trade-off: editing freeswitch/conf now needs a rebuild
     # (`make images` or `docker compose build freeswitch`) + recreate, not just
-    # a restart. Only the dynamic trunk dir + sounds/recordings stay as volumes.
+    # a restart. Only the dynamic trunk dir + FS built-in sounds stay as volumes.
     image: shridh0r/tring-freeswitch:${TRING_TAG:-develop}
     build:
       context: ./freeswitch
@@ -42,11 +42,9 @@ services:
       - SOUND_TYPES=music:en-us-callie
     volumes:
       - freeswitch-sounds:/usr/share/freeswitch/sounds
-      # Tenant sound library — the api writes uploaded audio here; FS plays it.
-      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
-      # Call recordings — FS writes (uuid_record on bridge); the api serves from
-      # the same named volume when S3 is off. Survives restarts.
-      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
+      # No tenant-sound or recording mounts: FreeSWITCH no longer plays IVR
+      # prompts or records calls — the gateway (pion plane + internal/callcdr)
+      # owns both. FS is the PSTN trunk edge only.
       # Dynamic trunk gateways — RUNTIME only (NOT baked into the image): Tring
       # writes t_<uuid>.xml here and rescans the external profile; the api shares
       # the same host path. Static config is baked into the image above.
@@ -103,7 +101,7 @@ services:
 
   # ---- Tring Go services ------------------------------------------------
   # Both are built from the same Dockerfile via build args (CMD=api or
-  # CMD=server). Distroless final image, statically linked binary,
+  # CMD=gateway). Distroless final image, statically linked binary,
   # ~15 MB. Use host networking so they can speak to FreeSWITCH on the
   # standard 127.0.0.1:8021 ESL port and the host-mapped Postgres on :5434
   # without bridge-DNS gymnastics.
@@ -144,27 +142,27 @@ services:
       # Same host path mounted at the same container path so the Go code
       # can write to /etc/freeswitch/... by default.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
-      # Tenant sound library — the api writes uploaded audio here; FreeSWITCH
-      # reads it (same host path + container path as the freeswitch service, so
-      # audio_dir == audio_fs_dir == /usr/share/freeswitch/sounds/tring).
-      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:rw
-      # Call recordings — read-only here; FreeSWITCH writes them, the api serves
-      # them (GET /v1/calls/{id}/recording). Same named volume as the fs service.
-      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring:ro
+      # Tenant sound library — the api writes uploaded audio + synthesized TTS
+      # here; the gateway reads + plays it on the media plane. Shared host dir
+      # mounted at audio_dir (/var/lib/tring/sounds) in both containers.
+      - ./freeswitch/sounds:/var/lib/tring/sounds:rw
+      # Call recordings — read-only here; the gateway writes them, the api serves
+      # them (GET /v1/calls/{id}/recording). Same named volume as the gateway.
+      - tring-recordings:/var/lib/tring/recordings:ro
     restart: unless-stopped
 
-  # Call-plane server (web plug): pion media SFU + brain, served on /rtc.
+  # Call-plane gateway (web plug): pion media SFU + brain, served on /rtc.
   # Browsers peer with this over raw WebRTC (WebSocket signaling on :8087);
   # the SFU fans media between participants. FreeSWITCH / PSTN adapters are
   # not wired here — this binary is the pure web plug. host networking so
   # the UDP RTP range exchanges media with browsers without NAT hairpinning.
-  server:
-    image: shridh0r/tring-server:${TRING_TAG:-develop}
+  gateway:
+    image: shridh0r/tring-gateway:${TRING_TAG:-develop}
     build:
       context: .
       args:
-        CMD: server
-    container_name: tring-server
+        CMD: gateway
+    container_name: tring-gateway
     network_mode: host
     depends_on:
       freeswitch:
@@ -177,12 +175,12 @@ services:
         required: false
     volumes:
       # Tenant sound library — the api writes uploaded prompts here; the gateway
-      # reads + plays them on the web (pion) plane. Same shared dir as api +
-      # FreeSWITCH (audio_dir == /usr/share/freeswitch/sounds/tring), read-only.
-      - ./freeswitch/sounds:/usr/share/freeswitch/sounds/tring:ro
+      # reads + plays them on the web (pion) plane. Same shared dir as the api
+      # (audio_dir == /var/lib/tring/sounds), read-only.
+      - ./freeswitch/sounds:/var/lib/tring/sounds:ro
       # Call recordings — rw: the gateway records media-plane calls (web + phone
       # plug) into the same spool the api serves (and uploads to S3 when set).
-      - freeswitch-recordings:/usr/share/freeswitch/recordings/tring
+      - tring-recordings:/var/lib/tring/recordings
     restart: unless-stopped
 
   # Local SIP trunk simulator — stands in for the Tata SBC during dev.
@@ -204,5 +202,5 @@ services:
 
 volumes:
   freeswitch-sounds:
-  freeswitch-recordings:
+  tring-recordings:
   tring-db-data:

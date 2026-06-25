@@ -106,20 +106,18 @@ var defaults = map[string]any{
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
 	"redis_addr": "",
-	// Tenant audio library (sound uploads for IVR prompts + hold music).
-	// audio_dir is where the API writes uploaded bytes; audio_fs_dir is the
-	// path prefix FreeSWITCH plays them from. They default equal because the
-	// standard docker deploy bind-mounts one host dir into both the api and
-	// freeswitch containers at the same path (mirrors TRING_GATEWAY_DIR). For
-	// host-run `make api` against a containerised FS, override audio_dir to a
-	// local path while leaving audio_fs_dir at the FS-visible path.
-	"audio_dir":    "/usr/share/freeswitch/sounds/tring",
-	"audio_fs_dir": "/usr/share/freeswitch/sounds/tring",
-	// recordings_dir: where FreeSWITCH writes call recordings and the API reads
-	// them back to serve. Same container path in both (a shared mount), like
-	// audio_dir, so the path the orchestrator hands uuid_record is exactly what
-	// the API serves from.
-	"recordings_dir": "/usr/share/freeswitch/recordings/tring",
+	// audio_dir is the tenant audio library (IVR prompt uploads + synthesized
+	// TTS + hold music). The API writes bytes here; the gateway reads + plays
+	// them on the pion media plane. A shared mount in the standard docker deploy
+	// (one host dir into both the api and gateway containers at the same path).
+	// FreeSWITCH no longer plays these — the gateway does — so the path is no
+	// longer FS-specific.
+	"audio_dir": "/var/lib/tring/sounds",
+	// recordings_dir: where the gateway (internal/callcdr) writes call
+	// recordings and the API reads them back to serve (GET /v1/calls/{id}/
+	// recording). A shared mount, like audio_dir; FreeSWITCH no longer writes
+	// recordings.
+	"recordings_dir": "/var/lib/tring/recordings",
 	// record_sample_rate: the recording sample rate (Hz). The gateway leg is
 	// Opus@48k, so without this FreeSWITCH records at the session-native 48kHz —
 	// a stereo 16-bit WAV is then ~192KB/s (~31MB for under 3 min). 8000
