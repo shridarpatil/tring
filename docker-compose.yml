@@ -147,8 +147,8 @@ services:
       # mounted at audio_dir (/var/lib/tring/sounds) in both containers.
       - ./freeswitch/sounds:/var/lib/tring/sounds:rw
       # Call recordings — read-only here; the gateway writes them, the api serves
-      # them (GET /v1/calls/{id}/recording). Same named volume as the gateway.
-      - tring-recordings:/var/lib/tring/recordings:ro
+      # them (GET /v1/calls/{id}/recording). Same host bind-mount as the gateway.
+      - ./recordings:/var/lib/tring/recordings:ro
     restart: unless-stopped
 
   # Call-plane gateway (web plug): pion media SFU + brain, served on /rtc.
@@ -164,6 +164,10 @@ services:
         CMD: gateway
     container_name: tring-gateway
     network_mode: host
+    # Run as the host user (like the api) so the bind-mounted recordings spool
+    # below is writable — the gateway, not FreeSWITCH, writes recordings now, so
+    # they no longer need a root-owned volume. Override TRING_API_UID/GID to match.
+    user: "${TRING_API_UID:-1000}:${TRING_API_GID:-1000}"
     depends_on:
       freeswitch:
         condition: service_started
@@ -179,8 +183,10 @@ services:
       # (audio_dir == /var/lib/tring/sounds), read-only.
       - ./freeswitch/sounds:/var/lib/tring/sounds:ro
       # Call recordings — rw: the gateway records media-plane calls (web + phone
-      # plug) into the same spool the api serves (and uploads to S3 when set).
-      - tring-recordings:/var/lib/tring/recordings
+      # plug) into the same spool the api serves (and uploads to S3 when set). A
+      # host bind-mount (owned by the host user, like sounds), NOT a root-owned
+      # volume — FreeSWITCH no longer writes recordings, the nonroot gateway does.
+      - ./recordings:/var/lib/tring/recordings
     restart: unless-stopped
 
   # Local SIP trunk simulator — stands in for the Tata SBC during dev.
@@ -202,5 +208,4 @@ services:
 
 volumes:
   freeswitch-sounds:
-  tring-recordings:
   tring-db-data:
