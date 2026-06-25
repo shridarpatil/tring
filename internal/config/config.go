@@ -61,8 +61,7 @@ var defaults = map[string]any{
 	// (the API uses the tenant's max_call_seconds instead). Must outlive the
 	// longest call; 4h05m = 4h call + setup buffer.
 	"turn_ttl_seconds": 14700,
-	"api_addr":         ":8085",
-	"ivr_addr":         ":8086",
+	"api_addr": ":8085",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).
@@ -103,9 +102,6 @@ var defaults = map[string]any{
 	// heard as breaks in the agent's voice at the other end. "min:max" adaptive
 	// ms; "" disables (fine for agents on the same LAN as the gateway).
 	"agent_jitter_msec": "60:200",
-	// How long (seconds) an inbound agent leg rings at the gateway before it
-	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
-	"gateway_agent_ring_timeout": 45,
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
