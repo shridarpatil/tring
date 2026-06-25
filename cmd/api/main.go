@@ -132,7 +132,6 @@ func main() {
 			AgentJitter:      k.String("agent_jitter_msec"),
 			GatewayPublicURL: k.String("gateway_public_url"),
 			AudioDir:         k.String("audio_dir"),
-			AudioFSDir:       k.String("audio_fs_dir"),
 			RecordingsDir:    k.String("recordings_dir"),
 			RecordingsFormat: k.String("record_format"),
 			Blob:             blob,
