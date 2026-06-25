@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
@@ -17,20 +16,6 @@ import (
 	"github.com/whatomate/tring/internal/media/prompt"
 	"github.com/whatomate/tring/internal/media/room"
 )
-
-// ivrSession is a running IVR for one room: the prompt player injected as the
-// IVR participant, the driver the walker drives, and a cancel to stop it when
-// the caller leaves. done is closed once the walk goroutine has unwound and
-// stored its path, so stopIVR can stamp the journey (incl. a transfer step the
-// caller abandoned during) BEFORE the caller-left path settles the CDR.
-type ivrSession struct {
-	pid    room.ParticipantID
-	player *prompt.Player
-	driver *ivrdrive.Driver
-	cancel context.CancelFunc
-	done   chan struct{} // closed when the walk finished and path is set
-	path   []ivr.Step    // the walked journey; read only after <-done
-}
 
 // devFlowID is the magic flow id that, with dev tokens on, runs the built-in
 // dev transfer flow (no DB needed) so the example clients demo a call→agent ring.
@@ -52,34 +37,29 @@ func devTransferFlow() *ivr.Flow {
 }
 
 // startIVR loads the pinned flow and runs it as a participant in the room. Once
-// per room — a second flow-pinned join is a no-op. The IVR's prompt player is
-// injected via the SFU so the caller hears it; the caller's DTMF (routeDTMF)
-// drives menus. callerRef is what a transfer ring shows the agent (a phone
-// caller's number / a trusted client_ref; "" → generic). When the flow ends (or
-// the caller leaves) the IVR is torn down.
+// per room — a second flow-pinned join is a no-op (brain.Runner enforces this).
+// The IVR's prompt player is injected via the SFU so the caller hears it; the
+// caller's DTMF (routeDTMF) drives menus. callerRef is what a transfer ring shows
+// the agent (a phone caller's number / a trusted client_ref; "" → generic). When
+// the flow ends (or the caller leaves) the IVR is torn down.
 func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
-	s.mu.Lock()
-	if s.ivr[roomID] != nil {
-		s.mu.Unlock()
-		return // already running for this room
+	if s.brain.Running(roomID) {
+		return // an IVR is already running for this room
 	}
+
 	pid := room.ParticipantID("ivr-" + uuid.NewString())
 	player := prompt.NewPlayer(pid, 0)
-	ctx, cancel := context.WithCancel(context.Background())
 	driver := ivrdrive.New(ivrdrive.Config{
 		Prompts: &filePrompts{
 			dir:       s.cfg.AudioDir,
 			player:    player,
 			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
 		},
-		Agents:    s, // Server implements ivrdrive.Agents (rings agents into the room)
+		Agents:    s.agentRouter, // brain.AgentRouter drives team-resolution + routing loop
 		Room:      string(roomID),
 		ClientRef: callerRef,
 		Logger:    s.log,
 	})
-	sess := &ivrSession{pid: pid, player: player, driver: driver, cancel: cancel, done: make(chan struct{})}
-	s.ivr[roomID] = sess
-	s.mu.Unlock()
 
 	var (
 		flow *ivr.Flow
@@ -89,78 +69,59 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 	case flowID == devFlowID && s.cfg.DevTokens:
 		flow = devTransferFlow() // built-in: ring an agent, no DB needed
 	case s.cfg.Flows != nil:
-		flow, err = s.cfg.Flows.Load(ctx, flowID)
+		flow, err = s.cfg.Flows.Load(context.Background(), flowID)
 	default:
 		err = errNoFlowLoader
 	}
 	if err != nil || flow == nil {
 		s.log.Warn("ivr: flow load failed", "room", roomID, "flow", flowID, "err", err)
-		close(sess.done) // no walk will run — unblock stopIVR's wait
-		s.stopIVR(roomID)
+		_ = player.Close()
 		return
 	}
 
-	// Inject the IVR's voice into the room (existing peers subscribe to it).
-	if err := s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-	}); err != nil {
-		s.log.Error("ivr: inject source failed", "room", roomID, "err", err)
-		close(sess.done) // no walk will run — unblock stopIVR's wait
-		s.stopIVR(roomID)
-		return
+	onJourney := func(path []ivr.Step) {
+		if s.cfg.Calls != nil {
+			s.cfg.Calls.Journey(string(roomID), path)
+		}
+	}
+	onDone := func() {
+		s.sfu.RemoveSource(roomID, pid)
+		_ = player.Close()
+		s.clearCaller(roomID) // drop caller/handoff tracking (handoff.go)
+		s.log.Info("ivr stopped", "room", roomID)
+		// Flow ended with no agent → end the caller's call (else they're stranded in
+		// an empty room). Web caller: terminal `ended` + remove. Phone caller: hang
+		// up the leg. Both no-ops if an agent is present / the room is already empty.
+		s.endIfAlone(roomID)
+		s.hangupPstnIfAbandoned(roomID)
 	}
 
+	// Inject the IVR's voice into the room as the setup step. By passing this
+	// inside setup, brain.Runner claims the room slot first — so a concurrent
+	// startIVR that also races past the Running() check above will lose the slot
+	// race and never inject, preventing a leaked orphaned player/source.
+	setup := func() error {
+		return s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
+			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+		})
+	}
 	s.log.Info("ivr started", "room", roomID, "flow", flowID, "entry", flow.EntryNode)
-	go func() {
-		path, walkErr := ivr.Walk(ctx, flow, flow.EntryNode, driver)
-		s.log.Info("ivr flow ended", "room", roomID, "steps", len(path), "err", walkErr)
-		sess.path = path
-		close(sess.done)  // publish the path (happens-before stopIVR's read)
-		s.stopIVR(roomID) // teardown: stamp the journey, remove the participant, close the player
-	}()
+	if !s.brain.Start(context.Background(), roomID, flow, driver, setup, onJourney, onDone) {
+		_ = player.Close() // lost the race or setup failed — nothing injected for us to remove
+		return
+	}
 }
 
 // routeDTMF delivers a caller keypress to the room's IVR, if one is running.
 func (s *Server) routeDTMF(roomID room.RoomID, digit string) {
-	s.mu.Lock()
-	sess := s.ivr[roomID]
-	s.mu.Unlock()
-	if sess != nil && digit != "" {
-		sess.driver.DTMF(digit)
-	}
+	s.brain.DTMF(roomID, digit)
 }
 
-// stopIVR tears down a room's IVR: cancels the walk, removes the injected
-// participant, and closes the player. Idempotent.
+// stopIVR tears down a room's IVR. Delegates to brain.Runner which cancels the
+// walk, waits for the path (stamps the journey BEFORE onDone fires), then runs
+// teardown. Idempotent.
 func (s *Server) stopIVR(roomID room.RoomID) {
-	s.mu.Lock()
-	sess := s.ivr[roomID]
-	delete(s.ivr, roomID)
-	s.mu.Unlock()
-	if sess == nil {
-		return
-	}
-	sess.cancel()
-	// Wait for the walk to unwind so its journey is captured BEFORE the caller-left
-	// path settles the CDR (which drops the active-call tracking Journey needs). The
-	// walk returns near-instantly once ctx is cancelled; the cap just bounds a stuck
-	// node. Only the goroutine that won the map delete reaches here, so Journey runs
-	// once. This is what makes an abandoned call's transfer step persist.
-	select {
-	case <-sess.done:
-	case <-time.After(2 * time.Second):
-	}
-	if s.cfg.Calls != nil {
-		s.cfg.Calls.Journey(string(roomID), sess.path) // stamp the walk on the CDR
-	}
-	s.sfu.RemoveSource(roomID, sess.pid)
-	_ = sess.player.Close()
-	s.log.Info("ivr stopped", "room", roomID)
-	// Flow ended with no agent → end the caller's call (else they're stranded in
-	// an empty room). Web caller: terminal `ended` + remove. Phone caller: hang
-	// up the leg. Both no-ops if an agent is present / the room is already empty.
-	s.endIfAlone(roomID)
-	s.hangupPstnIfAbandoned(roomID)
+	s.brain.Stop(roomID)
 }
 
 // filePrompts plays Ogg/Opus prompt files (from AudioDir) through the IVR's

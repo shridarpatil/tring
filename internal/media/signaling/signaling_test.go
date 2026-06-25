@@ -19,7 +19,6 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/media/signaling"
@@ -429,40 +428,6 @@ func TestDevFlowRingsAgentWithoutDB(t *testing.T) {
 	}
 }
 
-// fakeControl is a connected controlChannel stand-in (its Send is a no-op).
-type fakeControl struct{}
-
-func (fakeControl) Send(control.Message) error { return nil }
-func (fakeControl) Connected() bool            { return true }
-
-// TestEdgeRingCommandRingsAgent checks Phase 2c's edge side: the brain already
-// resolved WHICH agent, so a `ring` command with a specific sip just pushes the
-// `incoming` ring to that agent's socket — no routing on the edge.
-func TestEdgeRingCommandRingsAgent(t *testing.T) {
-	s, err := sfu.New(sfu.Config{})
-	if err != nil {
-		t.Fatalf("sfu: %v", err)
-	}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret})
-	ts := httptest.NewServer(sig.Handler())
-	t.Cleanup(ts.Close)
-	sig.SetControl(fakeControl{})
-
-	tenant := uuid.New()
-	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
-	agent.send(map[string]any{"type": "register"})
-	agent.readUntil("ready")
-
-	// Brain-resolved targeted ring → edge pushes incoming to alice (non-blocking).
-	sig.HandleControlCommand(control.Message{
-		Type: control.CmdRing, Room: tenant.String() + "/call", Sip: "alice", From: "Caller",
-	})
-
-	if inc := agent.readUntil("incoming"); inc["room"] != "call" {
-		t.Fatalf("incoming room = %v, want call", inc["room"])
-	}
-}
-
 // ── Phase 4c: inbound phone call via the PSTN plug ──────────────────
 
 // blockingSource is a ParticipantSource that yields nothing until closed (a
@@ -506,8 +471,8 @@ func newFakePstn() *fakePstn {
 }
 
 func (f *fakePstn) OnInbound(fn func(room.InboundCall)) { f.inbound = fn }
-func (f *fakePstn) Answer(room.CallID) (*room.PstnLeg, error) {
-	return &room.PstnLeg{
+func (f *fakePstn) Answer(room.CallID) (*room.Leg, error) {
+	return &room.Leg{
 		Source: f.src,
 		Write:  func(*rtp.Packet) error { return nil },
 		DTMF:   f.dtmf,

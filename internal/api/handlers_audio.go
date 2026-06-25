@@ -61,11 +61,12 @@ type Audio struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// diskPathFor maps an asset's playback file_path back to where the API can read
-// it on its own filesystem. They're equal in the standard docker deploy; for
-// host-run dev (audio_dir != audio_fs_dir) it swaps the prefix.
+// diskPathFor maps an asset's playback file_path to where the API reads it on
+// disk. The playback path and the disk path are the same dir (audio_dir) — the
+// gateway plays prompts from the same shared mount the API writes them to — so
+// this is identity; kept as a seam in case the two ever diverge again.
 func (s *Server) diskPathFor(filePath string) string {
-	rel := strings.TrimPrefix(filePath, s.audioFSDir)
+	rel := strings.TrimPrefix(filePath, s.audioDir)
 	return filepath.Join(s.audioDir, rel)
 }
 
@@ -144,7 +145,7 @@ func (s *Server) handleUploadAudio(w http.ResponseWriter, r *http.Request) {
 	} else {
 		format = "ogg"
 	}
-	filePath := s.audioFSDir + "/" + t.ID.String() + "/" + fileID.String() + storedExt
+	filePath := s.audioDir + "/" + t.ID.String() + "/" + fileID.String() + storedExt
 
 	var a Audio
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAudio,
@@ -219,7 +220,7 @@ func (s *Server) previewDiskPath(filePath string) (string, bool) {
 	if filePath == "" || s.audioDir == "" || strings.Contains(filePath, "://") {
 		return "", false
 	}
-	rel := strings.TrimPrefix(filePath, s.audioFSDir)
+	rel := strings.TrimPrefix(filePath, s.audioDir)
 	disk := filepath.Join(s.audioDir, filepath.Clean("/"+rel))
 	return disk, true
 }

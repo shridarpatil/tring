@@ -7,7 +7,7 @@ import (
 )
 
 func TestPreviewDiskPathConfinement(t *testing.T) {
-	s := &Server{audioDir: "/disk", audioFSDir: "/fs"}
+	s := &Server{audioDir: "/disk"}
 	root := filepath.Clean("/disk")
 
 	cases := []struct {
@@ -16,9 +16,9 @@ func TestPreviewDiskPathConfinement(t *testing.T) {
 		wantOK bool
 		want   string // exact disk path when relevant
 	}{
-		{"asset", "/fs/tenant/x.ogg", true, "/disk/tenant/x.ogg"},
-		{"tts", "/fs/tts/abc.ogg", true, "/disk/tts/abc.ogg"},
-		{"traversal-dropped", "/fs/../../../etc/passwd", true, "/disk/etc/passwd"},
+		{"asset", "/disk/tenant/x.ogg", true, "/disk/tenant/x.ogg"},
+		{"tts", "/disk/tts/abc.ogg", true, "/disk/tts/abc.ogg"},
+		{"traversal-dropped", "/disk/../../../etc/passwd", true, "/disk/etc/passwd"},
 		{"abs-escape", "/etc/passwd", true, "/disk/etc/passwd"},
 		{"stream-url", "local_stream://moh", false, ""},
 		{"http-url", "http://evil/x.ogg", false, ""},

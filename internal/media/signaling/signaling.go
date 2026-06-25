@@ -23,9 +23,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/whatomate/tring/internal/brain"
 	"github.com/whatomate/tring/internal/cache"
 	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/control"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/media/sfu"
 	"github.com/whatomate/tring/internal/presence"
@@ -112,33 +112,35 @@ type Server struct {
 	rooms *room.Manager
 	log   *slog.Logger
 
-	// control is the brain↔edge channel (Phase 2). When set + connected, the
-	// orchestrator runs the IVR remotely: this edge sends call.started/dtmf/
-	// call.ended UP and executes play/ring/ivr.stop commands DOWN instead of
-	// walking the flow locally. nil/disconnected → local IVR fallback.
-	control controlChannel
+	// brain drives IVR sessions in-process — the brain is embedded in this server.
+	// One Runner shared across all rooms; state per-room inside the Runner.
+	brain *brain.Runner
 
-	// pstnGW is the phone plug (room.PstnGateway — FS today, swappable); nil
+	// pstnGW is the phone plug (room.Plug — FS today, swappable); nil
 	// when no phone side is configured. pstnDID resolves a dialed DID to its
 	// tenant + flow. See pstn.go.
-	pstnGW  room.PstnGateway
+	pstnGW  room.Plug
 	pstnDID DIDResolver
 
 	mu        sync.Mutex
 	conns     map[room.ParticipantID]*conn
-	ivr       map[room.RoomID]*ivrSession   // local IVR per room (fallback / control off)
-	edge      map[room.RoomID]*edgeVoice    // brain-driven IVR voice per room (control on)
-	holds     map[room.RoomID]*edgeVoice    // brain-driven hold music per room
 	agents    map[string]map[string]*conn   // online agents: tenant → sip → presence socket
 	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
 	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
 	onCall    map[string]int                // "tenant|sip" → active call legs (drives on_call presence)
+	callers   map[room.RoomID]room.ParticipantID // the IVR caller per room (flow-pinned joiner) — see handoff.go
+	handoffs  map[room.RoomID]*handoff           // rooms waiting for a transfer handoff to end (handoff.go)
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
 	// max_wait, reservations and queue depth identically. The pion plane supplies
 	// the transport via a pionRing Effects adapter (see agents.go).
 	router *routing.Router
+
+	// agentRouter is the brain-owned ivrdrive.Agents implementation: it drives
+	// team-resolution → RouteConfig → routing.Router.Run, delegating back to
+	// Server.Prepare for the pion-specific transport pieces.
+	agentRouter *brain.AgentRouter
 }
 
 // New builds a signaling Server. The room Manager's emitter routes membership
@@ -151,14 +153,14 @@ func New(cfg Config) *Server {
 		cfg:       cfg,
 		sfu:       cfg.SFU,
 		log:       cfg.Logger.With("component", "signaling"),
+		brain:     brain.NewRunner(cfg.Logger),
 		conns:     make(map[room.ParticipantID]*conn),
-		ivr:       make(map[room.RoomID]*ivrSession),
-		edge:      make(map[room.RoomID]*edgeVoice),
-		holds:     make(map[room.RoomID]*edgeVoice),
 		agents:    make(map[string]map[string]*conn),
 		rings:     make(map[room.RoomID]chan struct{}),
 		pstnCalls: make(map[room.RoomID]room.CallID),
 		onCall:    make(map[string]int),
+		callers:   make(map[room.RoomID]room.ParticipantID),
+		handoffs:  make(map[room.RoomID]*handoff),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -171,6 +173,7 @@ func New(cfg Config) *Server {
 		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
 	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, s.log)
+	s.agentRouter = brain.NewAgentRouter(cfg.Teams, s.router, s, s.log)
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
 }
@@ -310,20 +313,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Flow-pinned room → run the IVR as a participant (once per room). The dev
 	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
 	if flowID != "" {
-		if s.controlUp() {
-			// Brain runs the IVR: announce the call; the orchestrator drives prompts
-			// and the ring back over the control channel (Phase 2b).
-			_ = s.control.Send(control.Message{
-				Type:        control.EvCallStarted,
-				Tenant:      tenant,
-				Room:        string(roomID),
-				Participant: string(p.ID()),
-				FlowID:      flowID,
-				ClientRef:   princ.clientRef,
-				Name:        first.Name,
-			})
-		} else if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
-			s.startIVR(roomID, flowID, princ.clientRef) // local fallback (control down)
+		if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
+			// Record the caller so a later transfer handoff can tell the caller apart
+			// from the answering agent (post-call IVR runs to the caller). See handoff.go.
+			s.setCaller(roomID, p.ID())
+			s.startIVR(roomID, flowID, princ.clientRef) // brain runs the IVR in-process
 		}
 	}
 	// A flow-pinned FRESH join is a web CALL — open its CDR (and attach the
@@ -368,16 +362,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		defer s.setAgentOnCall(tenant, princ.sip, false)
 	}
 
-	// If a transfer is ringing for this room, this join is the agent answering.
-	// Local fallback resolves it via signalRing; with control up, tell the brain
-	// (it owns the pending ring) via participant.joined.
+	// If a transfer is ringing for this room, this join is the agent answering:
+	// signalRing resolves the pending ring.
 	s.signalRing(roomID)
-	if s.controlUp() {
-		_ = s.control.Send(control.Message{
-			Type: control.EvParticipantJoined, Room: string(roomID),
-			Participant: string(p.ID()), Name: first.Name,
-		})
-	}
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
 	s.readLoop(c, p)
@@ -431,30 +418,10 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 		case msgUnpublish:
 			s.sfu.Unpublish(p.Room().ID(), p.ID(), codecKind(m.Kind))
 		case msgDTMF:
-			if s.controlUp() {
-				_ = s.control.Send(control.Message{
-					Type: control.EvDTMF, Room: string(p.Room().ID()),
-					Participant: string(p.ID()), Digit: m.Digit,
-				})
-			} else {
-				s.routeDTMF(p.Room().ID(), m.Digit)
-			}
+			s.routeDTMF(p.Room().ID(), m.Digit)
 		case msgHold, msgResume, msgTransfer:
-			// Agent call control — forward to the brain, which actuates on the room.
-			if s.controlUp() {
-				ev := control.Message{Room: string(p.Room().ID()), Participant: string(p.ID())}
-				switch m.Type {
-				case msgHold:
-					ev.Type = control.EvHold
-				case msgResume:
-					ev.Type = control.EvResume
-				case msgTransfer:
-					ev.Type, ev.Team, ev.Sip = control.EvTransfer, m.ToTeam, m.ToSip
-				}
-				_ = s.control.Send(ev)
-			} else {
-				s.log.Warn("call control needs the control channel", "type", m.Type)
-			}
+			// Agent call control — not yet wired on the embedded-brain plane.
+			s.log.Warn("call control not yet implemented", "type", m.Type)
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
@@ -474,19 +441,23 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
-		// If no human participants remain, end the call: tell the brain (it cancels
-		// its walk) and drop the edge voice; also stop any local IVR — and if a
+		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
-			if s.controlUp() {
-				_ = s.control.Send(control.Message{Type: control.EvCallEnded, Room: string(e.Room)})
-				s.edgeStopVoice(e.Room)
-			}
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
 			if s.cfg.Calls != nil {
 				s.cfg.Calls.Ended(string(e.Room), "ended")
 			}
+		} else if s.resumeHandoffIfAgentLeft(e.Room, e.Participant) {
+			// A transfer's answered agent just left with the caller still on the line:
+			// resume the IVR so a node wired to the transfer's "completed" edge runs
+			// to the caller (post-call survey). Do NOT end the caller — and do NOT
+			// fan out peer-left to the caller: the visitor SDK treats "the only peer
+			// left" as call-over (sends Bye), which would tear the caller down before
+			// the post-call flow can play. The SFU already removed the agent's track
+			// (renegotiation), so the caller simply hears the IVR again.
+			return
 		} else {
 			// A 1:1 call whose OTHER party just left: end the lone remaining leg now
 			// rather than wait for it to notice and tear down. That teardown closes

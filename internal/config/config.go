@@ -61,8 +61,7 @@ var defaults = map[string]any{
 	// (the API uses the tenant's max_call_seconds instead). Must outlive the
 	// longest call; 4h05m = 4h call + setup buffer.
 	"turn_ttl_seconds": 14700,
-	"api_addr":         ":8085",
-	"ivr_addr":         ":8086",
+	"api_addr": ":8085",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).
@@ -78,21 +77,6 @@ var defaults = map[string]any{
 	// so the local test client (examples/rtc-test.html) works with `make gateway`
 	// alone. Dev only — never enable in production.
 	"rtc_dev_tokens": false,
-	// Brain↔edge control channel (Phase 2, docs/ARCHITECTURE.md). The
-	// orchestrator (BRAIN) serves control_addr; the gateway (EDGE) dials
-	// control_url; both gated by control_secret. All empty = disabled (the gateway
-	// keeps running its own IVR until 2b/2c) — existing deploys are unaffected.
-	"control_addr":   "", // orchestrator: control WS listen addr, e.g. ":8089"
-	"control_url":    "", // gateway: orchestrator control URL to dial, e.g. "ws://127.0.0.1:8089/control"
-	"control_secret": "", // shared secret for the control channel
-	// Gateway → FreeSWITCH bridge (the gateway SIP-dials a private FS).
-	"gateway_advert_ip": "127.0.0.1", // IP advertised to FS for SIP+RTP
-	"gateway_sip_port":  5090,
-	"fs_sip_addr":       "127.0.0.1:5060",
-	"fs_auth_user":      "1000",
-	"fs_auth_pass":      "1234",
-	"fs_target":         "9999", // fallback dialplan extension (echo) when no flow is pinned
-	"fs_flow_id":        "",     // pin a WebRTC call to this IVR flow (no DID); empty → fs_target
 	// Require a valid agent token on the /webrtc/offer (visitor) endpoint.
 	// Default ON: /webrtc/offer requires a (backend-minted) gateway call token,
 	// so token-less floods are rejected before any port/FS is allocated — the
@@ -118,27 +102,22 @@ var defaults = map[string]any{
 	// heard as breaks in the agent's voice at the other end. "min:max" adaptive
 	// ms; "" disables (fine for agents on the same LAN as the gateway).
 	"agent_jitter_msec": "60:200",
-	// How long (seconds) an inbound agent leg rings at the gateway before it
-	// gives FreeSWITCH a timeout (the browser never accepted). ADR-001 M4b.
-	"gateway_agent_ring_timeout": 45,
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
 	"redis_addr": "",
-	// Tenant audio library (sound uploads for IVR prompts + hold music).
-	// audio_dir is where the API writes uploaded bytes; audio_fs_dir is the
-	// path prefix FreeSWITCH plays them from. They default equal because the
-	// standard docker deploy bind-mounts one host dir into both the api and
-	// freeswitch containers at the same path (mirrors TRING_GATEWAY_DIR). For
-	// host-run `make api` against a containerised FS, override audio_dir to a
-	// local path while leaving audio_fs_dir at the FS-visible path.
-	"audio_dir":    "/usr/share/freeswitch/sounds/tring",
-	"audio_fs_dir": "/usr/share/freeswitch/sounds/tring",
-	// recordings_dir: where FreeSWITCH writes call recordings and the API reads
-	// them back to serve. Same container path in both (a shared mount), like
-	// audio_dir, so the path the orchestrator hands uuid_record is exactly what
-	// the API serves from.
-	"recordings_dir": "/usr/share/freeswitch/recordings/tring",
+	// audio_dir is the tenant audio library (IVR prompt uploads + synthesized
+	// TTS + hold music). The API writes bytes here; the gateway reads + plays
+	// them on the pion media plane. A shared mount in the standard docker deploy
+	// (one host dir into both the api and gateway containers at the same path).
+	// FreeSWITCH no longer plays these — the gateway does — so the path is no
+	// longer FS-specific.
+	"audio_dir": "/var/lib/tring/sounds",
+	// recordings_dir: where the gateway (internal/callcdr) writes call
+	// recordings and the API reads them back to serve (GET /v1/calls/{id}/
+	// recording). A shared mount, like audio_dir; FreeSWITCH no longer writes
+	// recordings.
+	"recordings_dir": "/var/lib/tring/recordings",
 	// record_sample_rate: the recording sample rate (Hz). The gateway leg is
 	// Opus@48k, so without this FreeSWITCH records at the session-native 48kHz —
 	// a stereo 16-bit WAV is then ~192KB/s (~31MB for under 3 min). 8000

@@ -5,13 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/whatomate/tring/internal/media/control"
+	"github.com/whatomate/tring/internal/brain"
 	"github.com/whatomate/tring/internal/media/ivrdrive"
 	"github.com/whatomate/tring/internal/media/room"
 	"github.com/whatomate/tring/internal/presence"
-	"github.com/whatomate/tring/internal/queuekeys"
 	"github.com/whatomate/tring/internal/routing"
 )
 
@@ -64,10 +61,6 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	s.mu.Unlock()
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
-	// Tell the brain (it owns routing/presence in 2c).
-	if s.controlUp() {
-		_ = s.control.Send(control.Message{Type: control.EvAgentOnline, Tenant: tenant, Sip: sip})
-	}
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
@@ -105,9 +98,6 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		s.mu.Unlock()
 		_ = c.Close()
 		s.log.Info("agent offline", "tenant", tenant, "sip", sip)
-		if s.controlUp() {
-			_ = s.control.Send(control.Message{Type: control.EvAgentOffline, Tenant: tenant, Sip: sip})
-		}
 	}()
 
 	for {
@@ -119,44 +109,13 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	}
 }
 
-// Ring implements ivrdrive.Agents by running the SHARED routing.Router
-// queue/ring loop with a pion Effects adapter (pionRing). Agents are rung by
-// pushing msgIncoming over their presence sockets; an agent joining the room
-// closes the pending-ring channel (signalRing) → answered. For a team it honors
-// the team's strategy / ring_seconds / max_wait identically to the FreeSWITCH
-// plane; ring-all and direct-agent transfers use the routing defaults. `room` is
-// the tenant-namespaced id ("<tenant>/<name>").
-func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
-	tenant, name, ok := strings.Cut(roomID, "/")
-	if !ok {
-		return "no_answer", nil
-	}
+// Prepare satisfies brain.RingTransport: it wires the pion ring transport for
+// one transfer — candidates from the live socket registry + the pionRing Effects
+// + a cleanup that withdraws popups and deregisters the pending-ring channel.
+// team resolution + the routing.Router queue/ring loop live in brain.AgentRouter.
+func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy string) (func(context.Context) []string, routing.Effects, func()) {
+	tenant, name, _ := strings.Cut(roomID, "/")
 
-	// Resolve the target → candidate SIPs (DB lookup outside the registry lock):
-	// a specific agent_sip → just that agent; a team → its members; neither →
-	// every online agent of the tenant (ring-all).
-	var sips []string
-	ringAll := true
-	if t.AgentSIP != "" {
-		sips, ringAll = []string{t.AgentSIP}, false
-	} else if t.Team != "" && s.cfg.Teams != nil {
-		ringAll = false
-		if tid, err := uuid.Parse(tenant); err == nil {
-			if m, err := s.cfg.Teams.TeamSIPs(ctx, tid, t.Team); err == nil {
-				sips = m
-			} else {
-				s.log.Warn("transfer: team resolve failed", "team", t.Team, "err", err)
-			}
-		}
-	}
-	// A targeted transfer with no resolvable members can never ring anyone.
-	if !ringAll && len(sips) == 0 {
-		return "no_answer", nil
-	}
-
-	// candidates: current online agents not on a LOCAL web call (the registry's
-	// instant busy view). routing.FilterAvailable then drops agents the shared
-	// presence marks on_call and any the phone side has reserved.
 	candidates := func(context.Context) []string {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -177,44 +136,22 @@ func (s *Server) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (st
 		return out
 	}
 
-	// Pending-ring channel: signalRing closes it when an agent joins the room.
 	rid := room.RoomID(roomID)
 	ring := make(chan struct{})
 	s.mu.Lock()
 	s.rings[rid] = ring
 	s.mu.Unlock()
-	defer func() {
+
+	eff := &pionRing{s: s, tenant: tenant, roomName: name, label: t.Label, strategy: strategy, ring: ring, rung: map[string]bool{}}
+	cleanup := func() {
+		eff.cancelRung()
 		s.mu.Lock()
 		if s.rings[rid] == ring {
 			delete(s.rings, rid)
 		}
 		s.mu.Unlock()
-	}()
-
-	// Per-team queue config (strategy / ring_seconds / max_wait) + depth source —
-	// only for a genuinely resolved team (!ringAll implies a non-nil Teams
-	// resolver and resolved members); ring-all / direct-agent use the defaults.
-	rc := routing.RouteConfig{TenantID: tenant}
-	if !ringAll && t.Team != "" {
-		rc.Team, rc.Source = t.Team, queuekeys.SourceWeb
-		if tid, err := uuid.Parse(tenant); err == nil {
-			if tc, ok, _ := s.cfg.Teams.TeamConfig(ctx, tid, t.Team); ok {
-				rc.Strategy = tc.Strategy
-				rc.RingSeconds = time.Duration(tc.RingSeconds) * time.Second
-				rc.MaxWait = time.Duration(tc.MaxWait) * time.Second
-			}
-		}
 	}
-
-	eff := &pionRing{s: s, tenant: tenant, roomName: name, label: t.Label, strategy: rc.Strategy, ring: ring, rung: map[string]bool{}}
-	outcome, _, _ := s.router.Run(ctx, rc, candidates, eff)
-	// Catch-all: withdraw any popups still showing however the run ended (answered
-	// elsewhere via the async backstop, queue timeout, or caller hangup).
-	eff.cancelRung()
-	if outcome == routing.OutcomeCompleted {
-		return "completed", nil
-	}
-	return "no_answer", nil
+	return candidates, eff, cleanup
 }
 
 // pionRing is the pion-plane routing.Effects adapter: it rings agents by pushing
@@ -373,5 +310,6 @@ func (s *Server) signalRing(roomID room.RoomID) {
 	}
 }
 
-// ensure the server satisfies the IVR's agent-ring seam.
-var _ ivrdrive.Agents = (*Server)(nil)
+// ensure the server satisfies the brain's ring-transport + handoff-wait seams.
+var _ brain.RingTransport = (*Server)(nil)
+var _ brain.HandoffWaiter = (*Server)(nil)
