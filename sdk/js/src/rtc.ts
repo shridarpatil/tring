@@ -64,6 +64,15 @@ export interface RtcCallOpts {
    * then skips its own getUserMedia. Omit to let join() capture the mic.
    */
   mic?: MediaStream;
+  /**
+   * Keep the mic alive when this call tears down. Set by a caller that owns a
+   * long-lived mic shared across calls (the agent, whose mic is captured once at
+   * go-online and reused for every call). Default false: a per-call mic — the
+   * visitor's, captured fresh in the gesture — is stopped on teardown so the
+   * device's in-use indicator clears. Without this, an agent's second call would
+   * publish a dead track (the first call's teardown stopped the shared mic).
+   */
+  keepMic?: boolean;
   /** Reconnect attempts on an unexpected socket drop (default 3; 0 disables). */
   reconnectAttempts?: number;
 }
@@ -314,7 +323,10 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private teardown(): void {
     this.pc?.close();
     this.pc = null;
-    this.mic?.getTracks().forEach((t) => t.stop());
+    // Only stop a mic we own. A borrowed shared mic (keepMic — the agent's
+    // go-online stream) is stopped by its owner (RtcAgent.goOffline), not here;
+    // stopping it would leave the next call publishing a dead track.
+    if (!this.opts.keepMic) this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
     this.stopScreenSilently();
     this.audioEls.forEach((el) => {
@@ -469,6 +481,20 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     if (!this.incoming) return null;
     const room = this.incoming.room;
     this.incoming = null;
+    // The go-online mic is reused across calls. If it died while the agent waited
+    // (device reclaimed, OS sleep, another app grabbed it), drop it so we don't
+    // publish a dead track — re-acquire now, inside the Accept gesture.
+    if (this.mic && !this.mic.getAudioTracks().some((t) => t.readyState === "live")) {
+      this.mic.getTracks().forEach((t) => t.stop());
+      this.mic = null;
+    }
+    if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+      try {
+        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        /* RtcCall.join() will surface the mic error */
+      }
+    }
     const call = new RtcCall({
       gatewayUrl: this.opts.gatewayUrl,
       room,
@@ -476,6 +502,7 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
       name: this.opts.name,
       iceServers: this.opts.iceServers,
       mic: this.mic ?? undefined, // reuse the go-online mic (gesture-safe)
+      keepMic: true, // RtcAgent owns this shared mic; goOffline() stops it
     });
     await call.join();
     return call;
