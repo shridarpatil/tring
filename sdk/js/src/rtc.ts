@@ -87,6 +87,11 @@ export type RtcCallEvent =
   | { type: "ended"; reason?: string }
   | { type: "error"; error: Error };
 
+// The gateway arms a ~90s read deadline on the call socket each read and drops it
+// if no frame arrives. A connected call's media rides RTP, not this socket, so we
+// send a no-op `ping` well inside that window to keep the socket (and the call) up.
+const CALL_KEEPALIVE_MS = 25_000;
+
 export class RtcCall extends Emitter<RtcCallEvent> {
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
@@ -101,6 +106,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private audioEls: HTMLAudioElement[] = []; // auto-played remote audio elements
   private attemptsLeft: number;
   private closedByUser = false;
+  private keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly opts: RtcCallOpts) {
     super();
@@ -128,7 +134,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.emit({ type: "connecting" });
     const ws = new WebSocket(wsURL(this.opts.gatewayUrl, this.opts.token));
     this.ws = ws;
-    ws.onopen = () =>
+    ws.onopen = () => {
       this.send({
         type: ClientMsgType.Join,
         room: this.opts.room,
@@ -136,8 +142,13 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         flow_id: this.opts.flowId,
         session_token: this.sessionToken || undefined,
       });
+      this.startKeepalive();
+    };
     ws.onmessage = (ev) => this.onMessage(JSON.parse(ev.data) as RtcMessage);
-    ws.onclose = () => this.onSocketClose();
+    ws.onclose = () => {
+      this.stopKeepalive();
+      this.onSocketClose();
+    };
     ws.onerror = () => this.emit({ type: "error", error: new Error("signaling socket error") });
   }
 
@@ -320,7 +331,22 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.emit({ type: "ended", reason: "disconnected" });
   }
 
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) this.send({ type: ClientMsgType.Ping });
+    }, CALL_KEEPALIVE_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = undefined;
+    }
+  }
+
   private teardown(): void {
+    this.stopKeepalive();
     this.pc?.close();
     this.pc = null;
     // Only stop a mic we own. A borrowed shared mic (keepMic — the agent's
