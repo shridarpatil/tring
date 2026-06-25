@@ -419,6 +419,10 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 			s.sfu.Unpublish(p.Room().ID(), p.ID(), codecKind(m.Kind))
 		case msgDTMF:
 			s.routeDTMF(p.Room().ID(), m.Digit)
+		case msgPing:
+			// Keepalive — the read above already reset the deadline; nothing to do.
+			// A quiet call (media rides RTP, not this socket) would otherwise hit the
+			// 90s read deadline and get dropped mid-call.
 		case msgHold, msgResume, msgTransfer:
 			// Agent call control — not yet wired on the embedded-brain plane.
 			s.log.Warn("call control not yet implemented", "type", m.Type)

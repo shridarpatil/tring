@@ -24,6 +24,7 @@ export const ClientMsgType = {
   Hold: "hold",
   Resume: "resume",
   Transfer: "transfer",
+  Ping: "ping",
   Bye: "bye",
 } as const;
 
