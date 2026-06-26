@@ -5,7 +5,7 @@
 
 **Open-source, API-first voice calling for any CRM.** Drop a `<script>` tag and a `<button>` into your app — your agents make and take real phone calls in minutes, not weeks. Multi-tenant. India-primary. Self-host or hosted, same binaries.
 
-> v0.1 (working call button demo) is the current milestone. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the 10-day plan that got us here. Phase 2 work tracked in CLAUDE.md.
+> The system has converged on **one pion media plane** with FreeSWITCH demoted to a pluggable PSTN trunk edge. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the architectural source of truth; [`docs/STATE_AND_HA.md`](docs/STATE_AND_HA.md) covers what survives a restart and how the plane scales.
 
 ## Why Tring
 
@@ -17,7 +17,8 @@ The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, K
 | Self-host | No | No | **Yes** |
 | India trunk swap (Airtel ↔ Jio ↔ Tata) | n/a | locked-in | **Config-only, no code change** |
 | 1600 transactional series | n/a | Yes | Yes — via any licensed carrier (Tata, Airtel, Jio) |
-| Browser SDK | Yes | Limited | Yes (raw WebRTC, no SIP in the browser) |
+| Browser SDK | Yes | Limited | Yes (raw WebRTC, **no SIP in the browser**) |
+| Visual IVR builder | Limited | Yes | **Yes (node-graph editor + live simulator)** |
 | Per-tenant trunks | Yes | n/a | Planned (Phase 2) |
 
 ## Quickstart (no clone)
@@ -25,50 +26,50 @@ The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, K
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shridarpatil/tring/main/install.sh | sh
 cd tring
-docker compose up -d                  # API + orchestrator + FreeSWITCH + Postgres
+cp .env.example .env                  # edit IPs, secrets, admin password (see below)
+docker compose pull && docker compose up -d
 ```
 
-The install script drops `docker-compose.yml`, `.env.example`, and the FreeSWITCH config files into a `tring/` directory. Override the dir with `TRING_DIR=/srv/tring` if you don't want it under the current path.
+The install script drops `docker-compose.yml` and `.env.example` into a `tring/` directory (override with `TRING_DIR=/srv/tring`). The FreeSWITCH config is baked into the `tring-freeswitch` image — nothing to bind-mount.
 
 That brings up:
-- `tring-api` — REST API + admin console (`:8085`, console at `/admin/`)
-- `tring-orchestrator` — ESL event subscriber (writes CDRs, fires webhooks)
-- `tring-gateway` — WebRTC media gateway (`:8087`); browsers peer here over raw WebRTC
-- `tring-fs` — FreeSWITCH (`:5060` SIP, `:8021` ESL) — **private**, never internet-exposed
+- `tring-api` — REST API + admin console + served SDK bundles (`:8085`, console at `/admin/`)
+- `tring-gateway` — **pion media plane + in-process brain** (`:8087`); browsers (visitors *and* agents) peer here over raw WebRTC on `/rtc`. Runs the IVR, agent routing, recording, and CDR. **No FreeSWITCH in web calls.**
+- `tring-fs` — FreeSWITCH (`:5060` SIP, `:8021` ESL) — **private**, the **outbound PSTN trunk edge only**, never internet-exposed
 - `tring-db` — Postgres on `:5434` (moved off `:5432` to coexist with other local DBs)
-- `tring-redis` — cache + agent presence (`:6379`)
+- `tring-redis` — agent presence + single-use call-token store (`:6379`). **Hard dependency for the gateway** when `TRING_GATEWAY_REQUIRE_AUTH=true` (the default) — the gateway refuses to boot without it.
 
 `docker compose logs -f` to tail everything. `docker compose down` to stop.
 
-If you want the source tree (to hack on the Go services or the Vue console), clone normally:
+The first `docker compose up` auto-seeds a tenant + an admin console user from `TRING_BOOTSTRAP_TENANT` / `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` in `.env` (defaults: `admin@tring.local` / `tring_dev_change_me`). Open `http://localhost:8085/admin/` and sign in.
+
+For a real server (not localhost) the network IPs are what people get wrong — see section 5 of `.env.example`:
+
+```bash
+TRING_GATEWAY_PUBLIC_URL=https://gw.your-domain   # browser-reachable, must hit /rtc
+TRING_PUBLIC_IP=<public/elastic ip>               # rewrites the gateway's ICE candidate
+TRING_REDIS_ADDR=127.0.0.1:6379                   # gateway hard-dep when auth is on
+```
+
+### Hack on the source
 
 ```bash
 git clone https://github.com/shridarpatil/tring && cd tring
 docker compose up -d
 ```
 
-For local dev with hot-reload on the Go services, `docker compose stop api orchestrator` then `make api` / `make orchestrator` (host `go run`).
-
-The first `docker compose up` auto-seeds a tenant + an admin console user from `TRING_BOOTSTRAP_TENANT` / `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` in `.env` (defaults: `admin@tring.local` / `tring_dev_change_me`). Open `http://localhost:8085/admin/` and sign in.
-
-You'll get a `Call` row back with `status=ringing`. Once the agent's browser registers (see SDK below), the call actually rings.
-
-### Connect two phone numbers (click-to-call / callback)
-
-When the agent is on a **phone** rather than a browser, `POST /v1/calls/connect` rings the agent's number first and, on answer, bridges the client — both legs over the tenant's trunk, both presenting the trunk's DID as caller ID. No softphone required on either end.
+For hot-reload on the Go services, run them on the host against the same Postgres/FreeSWITCH/Redis:
 
 ```bash
-curl -sS -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"agent_number":"+919876543210","client_number":"+919812345678"}' \
-  http://localhost:8085/v1/calls/connect | jq
+make api        # cmd/api      — REST API + admin console on :8085
+make gateway    # cmd/gateway  — pion media plane + brain on :8087
 ```
 
-This is the Exotel-style flow: your CRM hits this endpoint, the agent's phone rings, they answer, the customer is dialed and bridged. Needs a live outbound trunk (in dev with no trunk it falls back to the loopback path).
+Run `make help` for the full target list (`make sdk`, `make images`, `make test`, …). After changing Go code **or `freeswitch/conf/*`**, `make images` rebuilds the container images so `docker compose up` picks up the changes.
 
 ## Drop-in browser widget
 
-The agent widget is a **WebSocket-only media client** — it rings/answers calls but
-**cannot place them** (no Tring API access). Drop one tag in your agent app:
+The agent widget is a **WebSocket-only media client** — it rings/answers calls but **cannot place them** (no Tring API access). Drop one tag in your agent app:
 
 ```html
 <!-- Load once, near </body> -->
@@ -76,12 +77,9 @@ The agent widget is a **WebSocket-only media client** — it rings/answers calls
         data-token-url="/tring/token"></script>
 ```
 
-`/tring/token` is **your** server-side endpoint that mints a fresh 5-min agent JWT
-(`GET /v1/agents/{id}/token`) with your tenant API key and passes its response
-through — `{ token, gateway_url, ice_servers }`. The browser never holds the API key.
+`/tring/token` is **your** server-side endpoint that mints a fresh 5-min agent JWT (`GET /v1/agents/{id}/token`) with your tenant API key and passes its response through — `{ token, gateway_url, ice_servers }`. The browser never holds the API key, and connects to the gateway over **raw WebRTC** (the pion SFU) — no SIP, ever.
 
-To **place** an outbound call, your own button hits **your** backend, which
-originates via the Tring API — so the agent never sees the dialed number:
+To **place** an outbound call, your own button hits **your** backend, which originates via the Tring API — so the agent never sees the dialed number:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -89,9 +87,7 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
      https://api.tring.io/v1/calls
 ```
 
-FreeSWITCH then rings the agent's leg (auto-answered, showing `agent_label`), and
-audio flows over WebRTC. Visitor "call us" calling uses `voice.js` the same way —
-a `data-credentials-url` that mints a token server-side.
+Visitor "call us" calling uses `voice.js` the same way — a `data-credentials-url` that mints a short-lived, **single-use** gateway call token server-side (`POST /v1/guest-credentials`), pinning the IVR flow server-side.
 
 See [`examples/demo-portal/`](examples/demo-portal/) for a runnable end-to-end demo (anonymous "call us", logged-in support, and the agent CRM in one app), and [`sdk/js/README.md`](sdk/js/README.md) for the full SDK reference.
 
@@ -101,7 +97,7 @@ Four Indian trunks ship pre-baked. Switching is **one API call**, no code edits:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-     -d '{"e164":"+918001234567","type":"outbound","provider":"airtel","provider_did_id":"<id>"}' \
+     -d '{"e164":"+918001234567","type":"outbound","provider":"airtel"}' \
      http://localhost:8085/v1/numbers
 ```
 
@@ -110,63 +106,68 @@ The next outbound call routes through the new trunk and stamps the new DID as ca
 ## Architecture
 
 ```
-Browser (CRM)  ──raw WebRTC──►  Gateway (:8087)  ──SIP/RTP──►  FreeSWITCH  ──SIP──►  Trunk  ──PSTN──►  Customer
-       │                          (public edge)      (private)      ▲
-       │                                                            │ ESL
-       ▼                                                            ▼
-   Tring API (:8085)  ◄──────────────────────────────►  Orchestrator (:8021)  ◄────►  Postgres (:5434)
-       (call origination,                                   (channel events,
-        webhook fan-out)                                     CDR updates, webhook fan-out)
+                      ┌──────────────────── cmd/gateway (:8087) ─────────────────────┐
+ Browser (visitor) ─raw WebRTC /rtc─►  pion SFU ─┐                                    │
+ Browser (agent)   ─raw WebRTC /rtc─►  one room  ┼─► brain: IVR + agent routing + CDR │
+                                                 └─► recording (stereo Ogg) ─► spool/S3│
+                      └──────────────────────────────────────────────────────────────┘
+                            ▲   shared Postgres (:5434) + Redis (:6379)   │
+                            │                                             ▼
+   CRM backend ──REST──► cmd/api (:8085) ──ESL originate──► FreeSWITCH ──SIP──► Trunk ──► PSTN
+                         REST + admin console + /sdk + webhooks   (outbound PSTN edge, private)
 ```
 
-Three Go services share one Postgres. The API is stateless and horizontally scalable. The gateway bridges browser WebRTC into the **private** FreeSWITCH (browsers never touch SIP). The orchestrator holds a persistent ESL connection and processes FreeSWITCH events into CDR rows + webhook deliveries. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+**Two Go binaries, one Postgres, one Redis, one private FreeSWITCH.** Every call — browser today, phone/WhatsApp later — converges on one pion media plane: a call is a `room` with N participants, so a visitor, the IVR, and an agent are all just participants, and "route to a human" is a membership change, not a re-bridge. The **brain** (IVR + agent routing + CDR) runs **in-process** in the gateway — there is no separate orchestrator service. FreeSWITCH is a swappable PSTN plug behind a Go interface, reached by the API over ESL for **outbound** originate. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 | Path | What it is |
 |------|-----------|
-| `cmd/api/` | Public REST API + admin console. Tenant/agent/number CRUD, JWT minting, originate, webhook CRUD. |
-| `cmd/gateway/` | Browser-facing WebRTC media gateway (ADR-001). Bridges browser DTLS-SRTP ↔ private FreeSWITCH as a SIP B2BUA. |
-| `cmd/orchestrator/` | FreeSWITCH-facing ESL subscriber. Settles calls, emits answered/ended webhooks. |
-| `internal/api/` | HTTP handlers, auth (API key + JWT + Basic), the public surface. |
-| `internal/freeswitch/` | ESL wrapper (originate, …). |
+| `cmd/api/` | Public REST API + admin console + served SDK bundles. Tenant/agent/number/flow CRUD, JWT minting, originate over ESL, webhook CRUD. Stateless, horizontally scalable. |
+| `cmd/gateway/` | The call plane: pion media plane (`/rtc`) + the in-process brain. State-aware; scale by adding instances. |
+| `internal/media/` | The pion media plane — `room` (transport-agnostic core + the `Plug` PSTN seam), `sfu` (the only pion importer), `signaling` (the `/rtc` WebSocket), `ivrdrive`, `prompt`, `record`. |
+| `internal/brain/` | Transport-neutral IVR session runner + agent router, embedded in the gateway. |
+| `internal/ivr/` | Transport-agnostic IVR flow model + walker (drives the runtime and the simulator). |
+| `internal/routing/` | Shared agent queue/ring engine (strategies, reservations, presence filter, queue depth). |
+| `internal/callcdr/` | Records media-plane calls into the same `calls` table / recording pipeline the PSTN path uses. |
 | `internal/provider/` | Trunk abstraction. Exotel, Airtel, Jio, Tata, Loopback. |
+| `internal/freeswitch/` | ESL wrapper for outbound originate. |
 | `internal/webhook/` | Notifier — signs, delivers, retries with backoff. |
-| `internal/orchestrator/` | Event loop + CDR settlement. |
+| `internal/tts/` | Piper + ffmpeg → cached Opus-Ogg synthesis of IVR prompt text at flow-save. |
 | `internal/dial/` | E.164 normalization (India-aware). |
-| `sdk/js/` | Browser SDK + drop-in `voice.js` widget. |
-| `freeswitch/conf/` | Dialplan, sip_profiles, autoload_configs. |
-| `db/` | Schema + dev seed. |
-| `examples/` | Demo CRM page. |
-| `docs/` | Architecture, Day-9 trunk go-live, demo script. |
+| `sdk/js/` | Browser SDK + drop-in `voice.js` (visitor) / `agent.js` (agent) widgets. |
+| `web/` | Admin console (Vue 3), embedded into the API binary. |
+| `freeswitch/conf/` | Dialplan, sip_profiles, autoload_configs (baked into the image). |
+| `internal/migrate/migrations/` | Postgres schema (source of truth; applied on API startup). |
+| `examples/` | Runnable demos (`demo-portal/`, sample CRM pages). |
 
-See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo gotchas, FreeSWITCH config landmines, and Phase 2 roadmap.
+See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo gotchas, FreeSWITCH config landmines, and roadmap.
 
-## What's in v0.1
+## What's working
 
 | | |
 |---|---|
-| **REST API** | tenants, agents, numbers, calls, webhooks. API key auth + JWT auth. 20+ endpoints. |
-| **Originate** | `POST /v1/calls` and `POST /v1/sdk/calls`. Pre-allocated channel UUID, bgapi result captured for failed-originate handling. |
-| **CDR settlement** | Orchestrator subscribes to FreeSWITCH events. `CHANNEL_ANSWER`, `CHANNEL_HANGUP_COMPLETE`, and `BACKGROUND_JOB` (for originates that fail before a channel exists) all flow back into `calls` rows. |
-| **Webhooks** | `call.ringing`, `call.answered`, `call.ended`. HMAC-SHA256 signed (Stripe pattern). 6 attempts with 1+2+4+8+16s backoff. Delivery log with `last_error`. |
-| **Browser SDK** | Tring class over raw WebRTC to the media gateway (ADR-001) — **no SIP in the browser**, FreeSWITCH stays private. DTMF, hangup, event emitter. ~22KB unminified (no runtime deps; sip.js removed). |
-| **Drop-in widgets** | `agent.js` — WS-only media client; rings/answers in a floating panel (no call buttons — origination is backend via `POST /v1/calls`). `voice.js` — visitor "call us" widget (floating launcher or your own `<button data-tring-call>`), token minted via `data-credentials-url`. |
-| **Trunk providers** | Exotel, Airtel, Jio, Tata pre-baked. Loopback for dev. India E.164 normalization + validation. Config-only swap. |
-| **Multi-tenant** | Per-tenant SIP domain, API keys (SHA-256 hashed + 12-char display prefix), tenant scoping on every query, `mod_xml_curl` dynamic directory. |
+| **Web calling** | Visitors and agents peer with the gateway over raw WebRTC on `/rtc` (pion SFU). No SIP, no FreeSWITCH in the path. Single-use, flow-pinned call tokens; page-refresh grace window. |
+| **REST API** | Tenants, agents, numbers, flows, calls, webhooks. API key + JWT + console auth. |
+| **Visual IVR** | Node-graph builder in the console (greeting/menu/gather/http_callback/transfer/goto/timing/hangup), a runtime driver on the pion plane, and a wall-clock-free **simulator** powering a live Test panel. Prompt text auto-synthesized to audio at flow-save (Piper). |
+| **Agent routing** | Shared queue/ring engine: `ring_all` / `round_robin` / `sequential` / `longest_wait`, Redis-backed presence + reservations, live queue depth (phone + web summed). |
+| **Call control** | Hold / resume / blind transfer (to an agent or a team) from the agent SDK or the CRM backend. |
+| **Recording** | Opt-in per tenant (`record_calls`). Stereo (agent **left**, customer **right**), captured on the media plane and merged on hangup. Starts at agent answer. Served by the API; optional S3 upload. |
+| **CDR + webhooks** | One `calls` table for every source. `call.ringing` (API on originate), `call.answered` / `call.ended` (gateway on media events). HMAC-SHA256 signed (Stripe pattern), 6 retries with backoff, delivery log. |
+| **Trunk providers** | Exotel, Airtel, Jio, Tata pre-baked + Loopback for dev. Multi-trunk failover / round-robin / manual strategies. Config-only swap. |
+| **Browser SDK** | `voice.js` (visitor), `agent.js` (agent), bare `tring.js` + ESM. Served by the API at `/sdk/*` — no CDN needed. |
+| **Multi-tenant** | Per-tenant SIP domain, API keys (SHA-256 hashed), tenant scoping on every query, `mod_xml_curl` dynamic directory, admin console. |
 
-## What's *not* in v0.1 (Phase 2 work)
+## Not yet (roadmap)
 
-- IVR builder (Vue UI port from the upstream Whatomate Frappe app).
-- Call recording.
+- **Inbound over FreeSWITCH** — the outbound trunk path is live; an inbound FreeSWITCH plug behind the `room.Plug` seam (and outbound-trunk CDR settlement) returns with the first live SIP trunk.
 - Inbound masked-DID flows (the masking pool exists but isn't exposed via API yet).
-- Multi-region FreeSWITCH clustering.
-- Billing / per-minute rating.
-- DLT/TRAI consent list enforcement, time-of-day gating.
-- Admin UI.
+- Per-tenant trunks, multi-region clustering, live-call HA migration.
+- Billing / per-minute rating; DLT/TRAI consent-list enforcement.
+- Attended transfer + conference; AI voice agent (plugs in as another media leg).
 
 ## License
 
-[Apache-2.0](LICENSE) — both `tring/` (orchestration) and `sdk/js/` (browser SDK).
+[Apache-2.0](LICENSE) — both the orchestration services and `sdk/js/` (browser SDK).
 
 ## Status
 
-Pre-alpha. v0.1 works end-to-end locally and is suitable for proof-of-concept. Production hardening (TLS termination, secret management, multi-region) is Phase 2.
+Alpha. Works end-to-end locally and on a single server; suitable for proof-of-concept and pilot. Production hardening (multi-region, live-call HA, billing) is ongoing — see [`docs/STATE_AND_HA.md`](docs/STATE_AND_HA.md).
