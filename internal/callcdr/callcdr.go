@@ -84,10 +84,12 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger) *Log 
 
 // Started opens the CDR for a call (status ringing) and, when the tenant records
 // calls, returns the recorder as a TrackSink to attach to the CALLER's
-// publication (nil → not recording). callerPID is labeled "customer". source is
-// the call's channel ('web' | 'phone'), recorded for direct channel reporting.
-// Best-effort: a DB failure logs and returns nil — the call proceeds unrecorded
-// rather than failing.
+// publication (nil → not recording). callerPID is labeled "customer". The
+// recorder is created DISARMED, so the caller's pre-answer audio (IVR menus,
+// ringing, queue hold) is dropped — capture actually starts when an agent
+// answers (Answered → rec.Arm). source is the call's channel ('web' | 'phone'),
+// recorded for direct channel reporting. Best-effort: a DB failure logs and
+// returns nil — the call proceeds unrecorded rather than failing.
 func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, source, clientRef string, callerPID room.ParticipantID) room.TrackSink {
 	if from == "" {
 		from = "Unknown" // never log a blank caller (e.g. a phone leg with no caller-ID)
@@ -156,6 +158,11 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 		return nil
 	}
 	ac.rec.Label(agentPID, "agent")
+	// Recording begins HERE, at answer — not at call start. The caller's leg was
+	// attached as a sink on Started but the recorder dropped its packets until now
+	// (Arm), so the IVR/ringing/queue phase is excluded and both legs (caller +
+	// this agent) start on one timeline.
+	ac.rec.Arm()
 	return ac.rec
 }
 
