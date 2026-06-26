@@ -45,19 +45,22 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	if sink == nil {
 		t.Fatal("expected a recording sink (tenant records)")
 	}
+	// Pre-answer caller audio (IVR/ringing) is DROPPED — capture starts at answer.
 	for i := range 20 {
 		_ = sink.WriteRTP("caller-pid", opusPkt(uint32(i*960)))
 	}
 
-	agentSink := l.Answered(roomID, "agent-pid", "alice")
+	agentSink := l.Answered(roomID, "agent-pid", "alice") // arms the recorder
 	if agentSink == nil {
 		t.Fatal("expected the agent recording sink")
 	}
 	if l.Answered(roomID, "caller-pid", "alice") != nil {
 		t.Fatal("the caller's own join must not mark answered")
 	}
+	// Post-answer: both legs speak — these are what land in the recording.
 	for i := range 20 {
-		_ = agentSink.WriteRTP("agent-pid", opusPkt(uint32(i*960)))
+		_ = sink.WriteRTP("caller-pid", opusPkt(uint32((20+i)*960)))
+		_ = agentSink.WriteRTP("agent-pid", opusPkt(uint32((20+i)*960)))
 	}
 
 	l.Journey(roomID, []ivr.Step{{NodeID: "g", NodeType: "greeting", Action: "play_audio", Outcome: "default"}})
