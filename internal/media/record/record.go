@@ -48,6 +48,7 @@ type Recorder struct {
 	roles   map[room.ParticipantID]string
 	writers map[room.ParticipantID]*oggwriter.OggWriter
 	paths   map[room.ParticipantID]string
+	armed   bool
 	closed  bool
 }
 
@@ -70,12 +71,24 @@ func (r *Recorder) Label(pid room.ParticipantID, role string) {
 	r.mu.Unlock()
 }
 
+// Arm starts capture. Until it's called, WriteRTP drops every packet, so a
+// recorder attached to the caller's leg at call start records NOTHING during the
+// pre-answer phase (IVR menus, ringing, queue hold). callcdr arms the recorder
+// when an agent answers — so the recording begins at answer, and both legs share
+// one timeline. Idempotent.
+func (r *Recorder) Arm() {
+	r.mu.Lock()
+	r.armed = true
+	r.mu.Unlock()
+}
+
 // WriteRTP implements room.TrackSink: it lazily opens the participant's Ogg
-// writer and appends the packet. Writes after Close are dropped.
+// writer and appends the packet. Packets before Arm (pre-answer) and after Close
+// are dropped.
 func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed {
+	if r.closed || !r.armed {
 		return nil
 	}
 	w := r.writers[pid]

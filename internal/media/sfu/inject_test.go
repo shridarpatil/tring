@@ -110,6 +110,7 @@ func TestRecorderCapturesInjectedSource(t *testing.T) {
 	src := &fakeSource{id: "agent-leg", total: total}
 	rec := record.New(t.TempDir(), "call-rec")
 	rec.Label("agent-leg", "agent")
+	rec.Arm() // capture is gated until answer; arm so the injected source is recorded
 	counter := &countingSink{}
 
 	s.AddSink("call", "agent-leg", rec)     // teed first

@@ -23,11 +23,15 @@ func MergeStereo(ctx context.Context, out, left, right string) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return ErrFFmpegMissing
 	}
-	// join maps input 0's channel → FL and input 1's → FR (deterministic L/R,
-	// unlike amerge which just interleaves).
+	// Map input 0's FIRST channel → FL and input 1's first channel → FR. The
+	// explicit map is REQUIRED: each per-leg file carries a 2-channel Opus header
+	// (record.opusChannels) though it holds one mono mic, and join WITHOUT a map
+	// fills the stereo output entirely from input 0 — silently dropping input 1
+	// (the customer), so both channels come out as the agent. `0.0`/`1.0` take
+	// channel 0 of each leg regardless of its declared channel count.
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
 		"-i", left, "-i", right,
-		"-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo[a]",
+		"-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[a]",
 		"-map", "[a]", "-c:a", "libopus", out,
 	)
 	if b, err := cmd.CombinedOutput(); err != nil {
