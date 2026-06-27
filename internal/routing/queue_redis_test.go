@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/cache"
 )
 
 // testRedis returns a cache pointing at a real Redis (TRING_TEST_REDIS or the

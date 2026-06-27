@@ -23,8 +23,8 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/turn"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/turn"
 )
 
 // ICEServer is a STUN/TURN entry handed to pion for the SFU's own candidate

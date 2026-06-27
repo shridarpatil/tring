@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whatomate/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 // blockingDriver walks start→transfer; Transfer blocks until ctx is cancelled,

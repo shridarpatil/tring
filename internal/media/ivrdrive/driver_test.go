@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/ivrdrive"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 )
 
 // fakePrompts records played files and notifies a channel so the test can feed

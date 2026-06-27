@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // ─── test doubles ────────────────────────────────────────────────────

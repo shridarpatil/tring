@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/whatomate/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 // Prompts plays a prompt audio file into the room, blocking until it finishes

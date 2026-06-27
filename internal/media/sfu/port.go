@@ -6,7 +6,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // A port is a BIDIRECTIONAL non-WebRTC leg in a room — the seam every external

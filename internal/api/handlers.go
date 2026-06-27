@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/whatomate/tring/internal/freeswitch"
-	"github.com/whatomate/tring/internal/presence"
-	"github.com/whatomate/tring/internal/webhook"
+	"github.com/shridarpatil/tring/internal/freeswitch"
+	"github.com/shridarpatil/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 // Ensure pgx errors are reachable in PATCH endpoints below.

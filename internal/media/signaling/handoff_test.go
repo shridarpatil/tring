@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 func newHandoffServer(t *testing.T) *Server {

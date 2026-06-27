@@ -3,7 +3,7 @@ package api
 import (
 	"time"
 
-	"github.com/whatomate/tring/internal/turn"
+	"github.com/shridarpatil/tring/internal/turn"
 )
 
 // turnCredential returns ephemeral coturn REST-API credentials. Thin wrapper

@@ -10,8 +10,8 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 // clientAPI builds a pion API for the test clients with mDNS disabled (real host

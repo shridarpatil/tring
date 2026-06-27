@@ -22,8 +22,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/queries"
 )
 
 // Config is everything the seed needs. All three fields are required

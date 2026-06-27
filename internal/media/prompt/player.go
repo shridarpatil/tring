@@ -14,7 +14,7 @@ import (
 
 	"github.com/pion/rtp"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // opusFrameSamples is the RTP timestamp increment per 20ms Opus frame at 48kHz.

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whatomate/tring/internal/media/prompt"
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/prompt"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // compile-time: the player is a ParticipantSource (injectable into a room).

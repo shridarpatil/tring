@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whatomate/tring/internal/tts"
+	"github.com/shridarpatil/tring/internal/tts"
 )
 
 // stubPiperEngine builds a tts.Engine backed by a fake piper (ffmpeg-generated

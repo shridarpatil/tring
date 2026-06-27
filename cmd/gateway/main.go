@@ -19,16 +19,16 @@ import (
 	"os"
 	"time"
 
-	"github.com/whatomate/tring/internal/blobstore"
-	"github.com/whatomate/tring/internal/cache"
-	"github.com/whatomate/tring/internal/callcdr"
-	"github.com/whatomate/tring/internal/config"
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/flowstore"
-	"github.com/whatomate/tring/internal/logging"
-	"github.com/whatomate/tring/internal/media/sfu"
-	"github.com/whatomate/tring/internal/media/signaling"
-	"github.com/whatomate/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/callcdr"
+	"github.com/shridarpatil/tring/internal/config"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/flowstore"
+	"github.com/shridarpatil/tring/internal/logging"
+	"github.com/shridarpatil/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/media/signaling"
+	"github.com/shridarpatil/tring/internal/presence"
 )
 
 func main() {

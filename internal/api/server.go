@@ -15,17 +15,17 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/blobstore"
-	"github.com/whatomate/tring/internal/cache"
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/freeswitch"
-	"github.com/whatomate/tring/internal/orchestrator"
-	"github.com/whatomate/tring/internal/presence"
-	"github.com/whatomate/tring/internal/queries"
-	"github.com/whatomate/tring/internal/tts"
-	"github.com/whatomate/tring/internal/webhook"
-	"github.com/whatomate/tring/internal/webui"
-	"github.com/whatomate/tring/internal/widget"
+	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/freeswitch"
+	"github.com/shridarpatil/tring/internal/brain"
+	"github.com/shridarpatil/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/tts"
+	"github.com/shridarpatil/tring/internal/webhook"
+	"github.com/shridarpatil/tring/internal/webui"
+	"github.com/shridarpatil/tring/internal/widget"
 )
 
 // Config bundles the dependencies an api.Server needs at construction time.
@@ -85,8 +85,8 @@ type Config struct {
 	Blob *blobstore.Store
 
 	// Cache is the shared Redis cache. The API uses it only to invalidate
-	// flow definitions the orchestrator caches (handlers_flows.go). May be
-	// nil — invalidation becomes a no-op (the orchestrator then relies on
+	// flow definitions the brain caches (handlers_flows.go). May be
+	// nil — invalidation becomes a no-op (the brain then relies on
 	// the TTL, or is itself uncached).
 	Cache *cache.Cache
 
@@ -145,8 +145,8 @@ type Server struct {
 
 	// Interactive IVR simulator sessions. In-memory, process-local,
 	// TTL'd on idle — they're a developer convenience, not durable
-	// state. See internal/orchestrator/sim_session.go.
-	simManager *orchestrator.SimManager
+	// state. See internal/brain/sim_session.go.
+	simManager *brain.SimManager
 
 	log *slog.Logger
 }
@@ -189,7 +189,7 @@ func NewServer(cfg Config) *Server {
 		iceServers:       buildICEServers(cfg),
 		turnURL:          cfg.TURNURL,
 		turnSecret:       cfg.TURNSecret,
-		simManager:       orchestrator.NewSimManager(),
+		simManager:       brain.NewSimManager(),
 		log:              logger,
 	}
 }

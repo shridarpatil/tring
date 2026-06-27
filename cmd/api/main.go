@@ -13,16 +13,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/whatomate/tring/internal/api"
-	"github.com/whatomate/tring/internal/blobstore"
-	"github.com/whatomate/tring/internal/bootstrap"
-	"github.com/whatomate/tring/internal/cache"
-	"github.com/whatomate/tring/internal/config"
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/logging"
-	tringmigrate "github.com/whatomate/tring/internal/migrate"
-	"github.com/whatomate/tring/internal/queries"
-	"github.com/whatomate/tring/internal/tts"
+	"github.com/shridarpatil/tring/internal/api"
+	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/bootstrap"
+	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/config"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/logging"
+	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
+	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/tts"
 )
 
 // migrateRun is a tiny shim so the call site reads `migrateRun(...)`

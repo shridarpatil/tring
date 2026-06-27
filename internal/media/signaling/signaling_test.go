@@ -18,11 +18,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/rtp"
 
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/media/sfu"
-	"github.com/whatomate/tring/internal/media/signaling"
-	"github.com/whatomate/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/media/signaling"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 // This exercises the signaling protocol wiring — auth, join, room creation, the

@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/whatomate/tring/internal/brain"
-	"github.com/whatomate/tring/internal/media/ivrdrive"
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/presence"
-	"github.com/whatomate/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/brain"
+	"github.com/shridarpatil/tring/internal/media/ivrdrive"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 // handleAgentPresence runs an agent's presence socket: it registers the agent as

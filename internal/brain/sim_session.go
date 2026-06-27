@@ -4,7 +4,7 @@
 // lives in process memory (sync.Map keyed by session UUID); fine for
 // a developer tool, no need to survive restarts.
 
-package orchestrator
+package brain
 
 import (
 	"encoding/json"
@@ -54,7 +54,7 @@ type SimSnapshot struct {
 
 // session is the in-memory record. Not exported — clients see only
 // the SimSnapshot view.
-type session struct {
+type simSession struct {
 	id          uuid.UUID
 	flow        *ivrFlowData
 	currentNode string // where to resume; "" once ended
@@ -74,7 +74,7 @@ type session struct {
 // SimManager owns the live sessions. One instance per api process —
 // constructed in server.go and held on *Server.
 type SimManager struct {
-	sessions sync.Map // map[uuid.UUID]*session
+	sessions sync.Map // map[uuid.UUID]*simSession
 }
 
 func NewSimManager() *SimManager { return &SimManager{} }
@@ -92,7 +92,7 @@ func (m *SimManager) Start(flowJSON []byte, in SimInput) (*SimSnapshot, error) {
 	if in.Now.IsZero() {
 		in.Now = time.Now() // no fixture clock → wall clock (same default as the batch simulator)
 	}
-	s := &session{
+	s := &simSession{
 		id:          uuid.New(),
 		flow:        flow,
 		currentNode: flow.EntryNode,
@@ -119,7 +119,7 @@ func (m *SimManager) Input(sessionID string, dtmf string) (*SimSnapshot, error) 
 	if !ok {
 		return nil, fmt.Errorf("session not found")
 	}
-	s := v.(*session)
+	s := v.(*simSession)
 	s.lastTouched = time.Now()
 	if s.ended {
 		return snapshot(s), nil
@@ -131,7 +131,7 @@ func (m *SimManager) Input(sessionID string, dtmf string) (*SimSnapshot, error) 
 // runUntilPause walks the flow from s.currentNode, applying `input`
 // to the first paused-on node (if any), then keeps going until the
 // next pause point or the flow ends.
-func (m *SimManager) runUntilPause(s *session, input string) {
+func (m *SimManager) runUntilPause(s *simSession, input string) {
 	// Reset pause state before each run.
 	s.awaiting = nil
 
@@ -304,7 +304,7 @@ func promptFor(node *ivrNode) string {
 func (m *SimManager) gcExpired() {
 	cutoff := time.Now().Add(-sessionTTL)
 	m.sessions.Range(func(k, v interface{}) bool {
-		s := v.(*session)
+		s := v.(*simSession)
 		if s.lastTouched.Before(cutoff) {
 			m.sessions.Delete(k)
 		}
@@ -314,7 +314,7 @@ func (m *SimManager) gcExpired() {
 
 // snapshot is the in-memory→wire-shape projection. Keeps internal
 // fields (depth, lastTouched, flow pointer) off the response.
-func snapshot(s *session) *SimSnapshot {
+func snapshot(s *simSession) *SimSnapshot {
 	out := &SimSnapshot{
 		SessionID: s.id.String(),
 		Steps:     s.steps,

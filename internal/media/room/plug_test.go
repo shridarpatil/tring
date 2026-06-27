@@ -3,7 +3,7 @@ package room_test
 import (
 	"github.com/pion/rtp"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // genericPlug is a channel-agnostic plug (no phone/SIP concept) — its mere

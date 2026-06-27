@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whatomate/tring/internal/dbtest"
+	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
 // numberRow returns the (id, active) of the inserted number so the test

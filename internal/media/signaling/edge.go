@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // errTokenReused is returned when a visitor token's jti was already consumed.

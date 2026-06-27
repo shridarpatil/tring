@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // Journey receives the walked path once, before the call settles.

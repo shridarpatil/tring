@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/whatomate/tring/internal/agentleg"
+	"github.com/shridarpatil/tring/internal/agentleg"
 )
 
 // Call control (hold/resume; later transfer/conference). Two entry points reach
