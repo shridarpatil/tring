@@ -7,7 +7,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // Signaler is how a Peer sends SDP/ICE to its client. The /rtc WS layer (M2b)

@@ -3,7 +3,7 @@ package routing
 import (
 	"context"
 
-	"github.com/whatomate/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/presence"
 )
 
 // FilterAvailable keeps only agents that are present-available (online, not

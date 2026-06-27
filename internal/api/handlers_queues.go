@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/whatomate/tring/internal/queuekeys"
+	"github.com/shridarpatil/tring/internal/queuekeys"
 )
 
 // ---- Queues -------------------------------------------------------------

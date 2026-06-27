@@ -16,7 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // DIDResolver maps an inbound dialed number to its tenant + attached flow

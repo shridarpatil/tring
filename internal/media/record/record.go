@@ -20,7 +20,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // opusRate / opusChannels are the WebRTC Opus parameters the SFU forwards. They

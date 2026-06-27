@@ -1,12 +1,12 @@
-package orchestrator
+package brain
 
 import (
 	"github.com/google/uuid"
-	"github.com/whatomate/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 // The IVR flow model + pure helpers live in internal/ivr (transport-agnostic).
-// These aliases keep the orchestrator's flow simulator working under its existing
+// These aliases keep the brain's flow simulator working under its existing
 // local names — only the definitions moved. See docs/ARCHITECTURE.md (M7).
 
 type (

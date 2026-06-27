@@ -1,4 +1,4 @@
-package orchestrator
+package brain
 
 import (
 	"testing"

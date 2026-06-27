@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/whatomate/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/cache"
 )
 
 // TTL is how long an online marker survives without a refresh. The gateway

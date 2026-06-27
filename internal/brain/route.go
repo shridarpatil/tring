@@ -8,9 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/media/ivrdrive"
-	"github.com/whatomate/tring/internal/queuekeys"
-	"github.com/whatomate/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/media/ivrdrive"
+	"github.com/shridarpatil/tring/internal/queuekeys"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 // Teams resolves team membership + queue config (flowstore.Teams satisfies it).

@@ -3,7 +3,7 @@ package signaling
 import (
 	"context"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // handoff tracks a room where an agent has answered a transfer and the IVR is

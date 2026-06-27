@@ -31,8 +31,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/queries"
 )
 
 // Event names accepted by webhook subscribers. Kept as constants so handler

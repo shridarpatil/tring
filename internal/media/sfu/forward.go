@@ -7,7 +7,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // sourcePub is a snapshot of one other participant's publication, used to wire

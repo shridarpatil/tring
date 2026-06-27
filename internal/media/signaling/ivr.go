@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/ivrdrive"
-	"github.com/whatomate/tring/internal/media/prompt"
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/media/ivrdrive"
+	"github.com/shridarpatil/tring/internal/media/prompt"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // devFlowID is the magic flow id that, with dev tokens on, runs the built-in

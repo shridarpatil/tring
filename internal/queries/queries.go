@@ -13,7 +13,7 @@ import (
 	"reflect"
 	"strings"
 
-	tring "github.com/whatomate/tring"
+	tring "github.com/shridarpatil/tring"
 )
 
 // sqlFile is the raw catalog, embedded at the repo root (go:embed can't reach

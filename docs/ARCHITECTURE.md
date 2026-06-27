@@ -187,10 +187,11 @@ per-tenant in `flows.definition` (JSONB: `{nodes, edges, entry_node}`).
 One **unified walker** (`internal/ivr.Walk`) has two consumers:
 - **`media/ivrdrive`** — the one runtime driver; runs the flow on the pion plane
   (web today, any future plug — phone/WhatsApp — for free).
-- **`orchestrator/simulator.go`** — a deterministic, wall-clock-free walker that
+- **`brain/simulator.go`** — a deterministic, wall-clock-free walker that
   powers the console's Test panel (pure, fast tests). Interactive stepping pauses
-  at `menu`/`gather` and resumes on a PATCHed digit. (`internal/orchestrator` is
-  now *only* the simulator — the ESL executor was deleted.)
+  at `menu`/`gather` and resumes on a PATCHed digit. (The simulator lives in
+  `internal/brain` — the standalone `internal/orchestrator` package was folded in
+  and the ESL executor deleted.)
 
 When adding a node type, update the walker, both consumers **and** the matching
 Vue node component, or the editor and runtime diverge.
@@ -343,7 +344,7 @@ Scale by adding **gateway** instances (horizontal); FS scales vertically.
 | The brain (IVR + routing, in-process) | `internal/brain/` (`ivr.go` `Runner`, `route.go` `AgentRouter`) |
 | Plug seam (THE PLUG) | `internal/media/room/interfaces.go` (`room.Plug`/`Leg`); wiring `media/signaling/pstn.go` (`AttachPstn`); FS adapter = future (§5b) |
 | CDR + recording (web; phone when plug lands) | `internal/callcdr/` + `media/record` |
-| IVR walker (shared) | `internal/ivr/` ; consumers: `media/ivrdrive` (runtime), `orchestrator/simulator.go` (Test panel) |
+| IVR walker (shared) | `internal/ivr/` ; consumers: `media/ivrdrive` (runtime), `brain/simulator.go` (Test panel) |
 | Agent bridge dial-string | `internal/agentleg/` |
 | Masking pool | `internal/masking/pool.go` |
 | Trunk providers | `internal/provider/` |
