@@ -4,8 +4,8 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/whatomate/tring/internal/cache"
-	"github.com/whatomate/tring/internal/queuekeys"
+	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/queuekeys"
 )
 
 // PublishDepth writes a source's queue depth for a team to Redis so the API can

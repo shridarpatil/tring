@@ -3,7 +3,7 @@ package provider
 import (
 	"fmt"
 
-	"github.com/whatomate/tring/internal/dial"
+	"github.com/shridarpatil/tring/internal/dial"
 )
 
 // Loopback is the dev provider — it dials back into FreeSWITCH's own

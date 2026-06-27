@@ -11,7 +11,7 @@
 // pass SimInput.Now to drive Timing nodes. DTMF inputs are a queue; one
 // digit is consumed per menu/gather. Empty queue → timeout branch.
 
-package orchestrator
+package brain
 
 import (
 	"encoding/json"

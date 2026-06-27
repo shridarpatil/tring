@@ -11,9 +11,9 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/media/record"
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/media/record"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 // fakeSource is a room.ParticipantSource that emits `total` Opus packets then

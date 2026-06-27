@@ -13,8 +13,8 @@ import (
 
 	"github.com/pion/rtp"
 
-	"github.com/whatomate/tring/internal/media/record"
-	"github.com/whatomate/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/record"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 // opusPkt builds a minimal valid Opus RTP packet (any non-empty payload is a

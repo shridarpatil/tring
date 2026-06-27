@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/whatomate/tring/internal/cache"
-	"github.com/whatomate/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/presence"
 )
 
 // Router owns the transport-agnostic queue/ring discipline both planes share:

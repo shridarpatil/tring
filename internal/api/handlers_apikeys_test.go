@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/whatomate/tring/internal/dbtest"
+	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
 // createKey issues an API key via the authed endpoint and returns the parsed

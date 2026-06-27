@@ -1,4 +1,4 @@
-module github.com/whatomate/tring
+module github.com/shridarpatil/tring
 
 go 1.25.0
 

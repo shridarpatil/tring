@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/whatomate/tring/internal/media/ivrdrive"
-	"github.com/whatomate/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/media/ivrdrive"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 type fakeTeams struct{ sips []string }

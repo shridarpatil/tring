@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/whatomate/tring/internal/orchestrator"
+	"github.com/shridarpatil/tring/internal/brain"
 )
 
 // flowListCacheTTL bounds staleness of the cached per-tenant flow list if an
@@ -316,10 +316,10 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return
 	}
-	// Invalidate the orchestrator's cached definition (read on the call
+	// Invalidate the brain's cached definition (read on the call
 	// path) and the tenant's cached list so the edit takes effect on the
 	// next call/list instead of after the TTL. Best-effort.
-	if err := s.cache.Delete(r.Context(), orchestrator.FlowCacheKey(id)); err != nil {
+	if err := s.cache.Delete(r.Context(), brain.FlowCacheKey(id)); err != nil {
 		s.log.Warn("flow definition cache invalidate failed", "flow", id, "err", err)
 	}
 	s.invalidateFlowList(r.Context(), t.ID)
@@ -342,7 +342,7 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "flow not found")
 		return
 	}
-	if err := s.cache.Delete(r.Context(), orchestrator.FlowCacheKey(id)); err != nil {
+	if err := s.cache.Delete(r.Context(), brain.FlowCacheKey(id)); err != nil {
 		s.log.Warn("flow definition cache invalidate failed", "flow", id, "err", err)
 	}
 	s.invalidateFlowList(r.Context(), t.ID)
@@ -351,7 +351,7 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 
 // handleSimulateFlow runs the flow through the pure-Go simulator and
 // returns a step trace. Nothing actually plays / dials / posts — see
-// internal/orchestrator/simulator.go for the recorded-vs-executed split.
+// internal/brain/simulator.go for the recorded-vs-executed split.
 //
 // Operator can pre-stage DTMF, caller ID, vars, and a fake clock so the
 // trace is deterministic. Useful as a "Test flow" button in the editor.
@@ -363,7 +363,7 @@ func (s *Server) handleSimulateFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var input orchestrator.SimInput
+	var input brain.SimInput
 	// Empty body is fine — default caller, no DTMF, etc. Only fail on
 	// a malformed body so a `POST /simulate` with no JSON Just Works.
 	if r.ContentLength > 0 {
@@ -386,7 +386,7 @@ func (s *Server) handleSimulateFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := orchestrator.SimulateFlow(defJSON, input)
+	result, err := brain.SimulateFlow(defJSON, input)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -404,7 +404,7 @@ func (s *Server) handleSimulateStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	var input orchestrator.SimInput
+	var input brain.SimInput
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")

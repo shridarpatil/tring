@@ -10,10 +10,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/queries"
-	"github.com/whatomate/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 // Store loads active flows by id. Read-only: it never mutates the DB.

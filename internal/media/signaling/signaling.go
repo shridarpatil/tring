@@ -23,14 +23,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/brain"
-	"github.com/whatomate/tring/internal/cache"
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/media/sfu"
-	"github.com/whatomate/tring/internal/presence"
-	"github.com/whatomate/tring/internal/routing"
-	"github.com/whatomate/tring/internal/turn"
+	"github.com/shridarpatil/tring/internal/brain"
+	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/turn"
 )
 
 // Config wires the signaling server to its dependencies. The room Manager is

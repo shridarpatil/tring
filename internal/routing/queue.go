@@ -16,7 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/cache"
 )
 
 // QueueKey scopes a team's waiting line to a tenant; ResKey scopes an agent's
