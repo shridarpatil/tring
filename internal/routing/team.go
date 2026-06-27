@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/queries"
 )
 
 // TeamConfig is the queue-relevant settings of a team.

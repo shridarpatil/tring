@@ -17,10 +17,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/whatomate/tring/internal/agentleg"
-	"github.com/whatomate/tring/internal/freeswitch"
-	"github.com/whatomate/tring/internal/provider"
-	"github.com/whatomate/tring/internal/webhook"
+	"github.com/shridarpatil/tring/internal/agentleg"
+	"github.com/shridarpatil/tring/internal/freeswitch"
+	"github.com/shridarpatil/tring/internal/provider"
+	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 type Call struct {
@@ -44,7 +44,7 @@ type Call struct {
 	// IVRPath is the recorded IVR journey for inbound/IVR calls — an ordered
 	// JSON array of steps (node, DTMF pressed, transfer target, outcome).
 	// Passed through verbatim from the calls.ivr_path JSONB column; empty
-	// array for outbound calls. Shape: see orchestrator.SimStep / the
+	// array for outbound calls. Shape: see brain.SimStep / the
 	// console's IvrStep type.
 	IVRPath json.RawMessage `json:"ivr_path,omitempty"`
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/whatomate/tring/internal/freeswitch"
+	"github.com/shridarpatil/tring/internal/freeswitch"
 )
 
 // Trunk is the API/DB shape for a tenant-scoped SIP trunk. Authored from

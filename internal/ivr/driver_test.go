@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/whatomate/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 // scriptDriver is a fake CallDriver: each node-effect returns a scripted outcome

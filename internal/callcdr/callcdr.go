@@ -24,12 +24,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/blobstore"
-	"github.com/whatomate/tring/internal/db"
-	"github.com/whatomate/tring/internal/ivr"
-	"github.com/whatomate/tring/internal/media/record"
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/media/record"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/queries"
 )
 
 // Log is the media-plane call logger. One instance per gateway; safe for

@@ -10,9 +10,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/rtp"
 
-	"github.com/whatomate/tring/internal/callcdr"
-	"github.com/whatomate/tring/internal/dbtest"
-	"github.com/whatomate/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/callcdr"
+	"github.com/shridarpatil/tring/internal/dbtest"
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 func opusPkt(ts uint32) *rtp.Packet {

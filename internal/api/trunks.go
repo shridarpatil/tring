@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/freeswitch"
+	"github.com/shridarpatil/tring/internal/freeswitch"
 )
 
 // trunk is the bare info originate needs about an outbound number — the

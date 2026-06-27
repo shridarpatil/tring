@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/whatomate/tring/internal/dbtest"
-	"github.com/whatomate/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/dbtest"
+	"github.com/shridarpatil/tring/internal/queries"
 )
 
 // insertOutbound creates a trunk + an outbound number bound to it. Tests

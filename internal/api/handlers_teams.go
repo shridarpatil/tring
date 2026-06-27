@@ -17,7 +17,7 @@ import (
 // A team is a tenant-scoped group of agents the IVR transfer node rings as a
 // unit, with a strategy and queue settings. It is identified by NAME (no
 // surrogate id): the name is what a flow carries to target the team, so the
-// path param is the team name. See internal/orchestrator/ivr_executor.go for
+// path param is the team name. See internal/routing (Router.Run) for
 // the consumer (strategy-ordered ringing + queue overflow).
 
 // teamStrategies is the allowed strategy set, validated in Go (the

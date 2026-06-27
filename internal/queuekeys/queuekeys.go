@@ -9,7 +9,7 @@ import "time"
 
 // Producers of queue depth. Each writes its OWN source key; the API sums them.
 const (
-	SourcePhone = "phone" // FreeSWITCH/ESL team queue (internal/orchestrator)
+	SourcePhone = "phone" // FreeSWITCH/ESL team queue (future PSTN plug)
 	SourceWeb   = "web"   // pion media plane team queue (internal/media/signaling)
 )
 

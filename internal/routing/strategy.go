@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/whatomate/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/presence"
 )
 
 // RRCounter yields a rotating start offset per key for the round_robin strategy.

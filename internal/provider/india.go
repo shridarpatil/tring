@@ -3,7 +3,7 @@ package provider
 import (
 	"fmt"
 
-	"github.com/whatomate/tring/internal/dial"
+	"github.com/shridarpatil/tring/internal/dial"
 )
 
 // indianSIPTrunk is the shared shape for any Indian-domestic SIP trunk

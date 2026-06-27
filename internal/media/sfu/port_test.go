@@ -8,8 +8,8 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
-	"github.com/whatomate/tring/internal/media/room"
-	"github.com/whatomate/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 func opusCap() webrtc.RTPCodecCapability {

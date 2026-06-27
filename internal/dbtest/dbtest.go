@@ -25,8 +25,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/whatomate/tring/internal/db"
-	tringmigrate "github.com/whatomate/tring/internal/migrate"
+	"github.com/shridarpatil/tring/internal/db"
+	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
 )
 
 // databaseName extracts the database name from a postgres DSN
