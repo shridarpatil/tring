@@ -90,43 +90,33 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, a)
 }
 
-func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	t := tenantFromCtx(r.Context())
-	rows, err := s.db.Pool.Query(r.Context(), s.q.ListAgents, t.ID)
+// agentsList returns a tenant's agents enriched with live presence status. The
+// list endpoint and the SSE snapshot share it. Needs the Tenant (SipDomain) for
+// the legacy SIP-registration fallback.
+func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListAgents, t.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed")
-		return
+		return nil, err
 	}
 	defer rows.Close()
-
 	agents := []Agent{}
 	for rows.Next() {
 		var a Agent
 		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "scan failed")
-			return
+			return nil, err
 		}
 		agents = append(agents, a)
 	}
-
-	// Enrich with live online status. With the gateway transport (ADR-001)
-	// agents connect over the gateway WebSocket, not SIP registration, so
-	// presence comes from Redis (published by the gateway). Fall back to the
-	// SIP-registration lookup for the legacy transport or when Redis is off.
 	if s.agentTransport == "gateway" && s.presence.Enabled() {
-		// Presence gives "online"/"on_call"/"offline"; fold in the backend
-		// availability flag so a connected-but-unavailable agent reads "away".
 		for i := range agents {
-			st := s.presence.Status(r.Context(), t.ID.String(), agents[i].SipUsername)
+			st := s.presence.Status(ctx, t.ID.String(), agents[i].SipUsername)
 			if st == presence.StatusOnline && !agents[i].AvailableForCalls {
 				st = "away"
 			}
 			agents[i].Status = st
 		}
 	} else {
-		// Live registration status (one ESL call). Fail-soft: if FreeSWITCH is
-		// unreachable, mark "unknown" rather than erroring the list.
-		regs, regErr := s.fs.RegisteredUsers(r.Context())
+		regs, regErr := s.fs.RegisteredUsers(ctx)
 		for i := range agents {
 			switch {
 			case regErr != nil:
@@ -138,7 +128,16 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	return agents, nil
+}
 
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	agents, err := s.agentsList(r.Context(), t)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, agents)
 }
 
