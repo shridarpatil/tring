@@ -38,7 +38,7 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 		t.Fatalf("seed agent: %v", err)
 	}
 	dir := t.TempDir()
-	l := callcdr.New(fx.DB, nil, dir, nil)
+	l := callcdr.New(fx.DB, nil, dir, nil, nil)
 
 	roomID := fx.TenantID.String() + "/pstn-test"
 	sink := l.Started(ctx, fx.TenantID, roomID, "+919900112233", "16001122", "phone", "", "caller-pid")
@@ -140,7 +140,7 @@ func TestNoMediaLeavesNoRecordingURL(t *testing.T) {
 		t.Fatalf("enable recording: %v", err)
 	}
 	dir := t.TempDir()
-	l := callcdr.New(fx.DB, nil, dir, nil)
+	l := callcdr.New(fx.DB, nil, dir, nil, nil)
 
 	roomID := fx.TenantID.String() + "/silent"
 	if sink := l.Started(ctx, fx.TenantID, roomID, "+9199", "16001122", "phone", "", "caller-pid"); sink == nil {
@@ -173,7 +173,7 @@ func TestNoRecordingWhenTenantOff(t *testing.T) {
 		t.Fatalf("disable recording: %v", err)
 	}
 	dir := t.TempDir()
-	l := callcdr.New(fx.DB, nil, dir, nil)
+	l := callcdr.New(fx.DB, nil, dir, nil, nil)
 
 	roomID := fx.TenantID.String() + "/web-x"
 	if sink := l.Started(ctx, fx.TenantID, roomID, "visitor", "Support", "web", "cust_42", "p1"); sink != nil {
