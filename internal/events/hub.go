@@ -148,8 +148,44 @@ func (h *Hub) handle(tenant string, evt Event) {
 	}
 }
 
-// schedule is implemented in Task 3.
-func (h *Hub) schedule(tenant string, rc *recomputer) {}
+// Recompute registers a derived-frame builder triggered by the given event
+// types. Concurrent triggers for the same (tenant, out) are coalesced into one
+// build after debounce. Call before Run.
+func (h *Hub) Recompute(triggers []string, out string, debounce time.Duration, build func(ctx context.Context, tenantID string) ([]byte, error)) {
+	if h == nil {
+		return
+	}
+	rc := &recomputer{out: out, debounce: debounce, build: build}
+	for _, t := range triggers {
+		h.recomp[t] = append(h.recomp[t], rc)
+	}
+}
+
+func (h *Hub) schedule(tenant string, rc *recomputer) {
+	key := tenant + "|" + rc.out
+	h.mu.Lock()
+	if h.pending[key] {
+		h.mu.Unlock()
+		return
+	}
+	h.pending[key] = true
+	h.mu.Unlock()
+
+	h.after(rc.debounce, func() {
+		h.mu.Lock()
+		delete(h.pending, key)
+		h.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		data, err := rc.build(ctx, tenant)
+		if err != nil {
+			h.log.Warn("events: recompute failed", "out", rc.out, "tenant", tenant, "err", err)
+			return
+		}
+		h.dispatch(tenant, Frame(rc.out, data))
+	})
+}
 
 // Run subscribes to the bus and dispatches until ctx is done. No-op on nil hub.
 func (h *Hub) Run(ctx context.Context) {

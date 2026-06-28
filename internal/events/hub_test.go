@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
@@ -16,7 +17,7 @@ func newTestHub() *Hub {
 		forward: map[string]bool{},
 		recomp:  map[string][]*recomputer{},
 		pending: map[string]bool{},
-		after:   func(_ time.Duration, _ func()) {}, // unused in this test file path
+		after:   func(_ time.Duration, _ func()) {},
 	}
 }
 
@@ -88,5 +89,59 @@ func TestNotForwardedTypeIgnored(t *testing.T) {
 	h.handle("t1", Event{Type: TypeQueueDepth, Data: json.RawMessage(`{}`)})
 	if len(sub.Frames()) != 0 {
 		t.Fatal("non-forwarded event should not reach subscribers")
+	}
+}
+
+func TestRecomputeCoalesces(t *testing.T) {
+	h := newTestHub()
+	var fired []func()
+	h.after = func(_ time.Duration, f func()) { fired = append(fired, f) }
+
+	builds := 0
+	h.Recompute([]string{TypeCallEnded, TypeCallRinging}, TypeStats, time.Second,
+		func(_ context.Context, tenant string) ([]byte, error) {
+			builds++
+			return []byte(`{"calls_today":3}`), nil
+		})
+
+	sub := h.Subscribe("t1")
+
+	// Three triggers before the debounce fires → ONE scheduled recompute.
+	h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+	h.handle("t1", Event{Type: TypeCallRinging, Data: json.RawMessage(`{}`)})
+	h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+
+	if len(fired) != 1 {
+		t.Fatalf("scheduled %d recomputes, want 1 (coalesced)", len(fired))
+	}
+	fired[0]() // simulate the debounce firing
+
+	if builds != 1 {
+		t.Fatalf("build called %d times, want 1", builds)
+	}
+	select {
+	case frame := <-sub.Frames():
+		want := "event: stats\ndata: {\"calls_today\":3}\n\n"
+		if string(frame) != want {
+			t.Fatalf("frame = %q", frame)
+		}
+	default:
+		t.Fatal("expected a stats frame")
+	}
+}
+
+func TestRecomputeRearmsAfterFire(t *testing.T) {
+	h := newTestHub()
+	var fired []func()
+	h.after = func(_ time.Duration, f func()) { fired = append(fired, f) }
+	h.Recompute([]string{TypeCallEnded}, TypeStats, time.Second,
+		func(_ context.Context, _ string) ([]byte, error) { return []byte(`{}`), nil })
+	h.Subscribe("t1")
+
+	h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+	fired[0]() // first window fires and clears pending
+	h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+	if len(fired) != 2 {
+		t.Fatalf("scheduled %d, want 2 (re-armed after fire)", len(fired))
 	}
 }
