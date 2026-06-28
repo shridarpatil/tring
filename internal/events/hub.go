@@ -187,6 +187,21 @@ func (h *Hub) schedule(tenant string, rc *recomputer) {
 	})
 }
 
+// NewTestHub builds a Redis-less Hub for tests (no Run; dispatch/handle work).
+func NewTestHub() *Hub {
+	return &Hub{
+		log:     slog.Default(),
+		subs:    map[string]map[*Subscriber]struct{}{},
+		forward: map[string]bool{},
+		recomp:  map[string][]*recomputer{},
+		pending: map[string]bool{},
+		after:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+	}
+}
+
+// DispatchForTest pushes a pre-rendered frame to a tenant's subscribers.
+func (h *Hub) DispatchForTest(tenant string, frame []byte) { h.dispatch(tenant, frame) }
+
 // Run subscribes to the bus and dispatches until ctx is done. No-op on nil hub.
 func (h *Hub) Run(ctx context.Context) {
 	if h == nil {
