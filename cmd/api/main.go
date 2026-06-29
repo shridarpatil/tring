@@ -165,7 +165,14 @@ func main() {
 		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded},
 		events.TypeStats, 1500*time.Millisecond, apiSrv.StatsData,
 	)
-	hub.Recompute([]string{events.TypeQueueDepth}, events.TypeQueues, 800*time.Millisecond, apiSrv.QueuesData)
+	// Queues carries on_call (answered calls with an agent), which changes on the
+	// call lifecycle — so call.* must trigger this recompute too, not just
+	// queue.depth. Without the call.* triggers, on_call goes stale after a call
+	// ends (nothing recomputes it until the next queueing activity).
+	hub.Recompute(
+		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded, events.TypeQueueDepth},
+		events.TypeQueues, 800*time.Millisecond, apiSrv.QueuesData,
+	)
 	go hub.Run(ctx)
 
 	srv := &http.Server{
