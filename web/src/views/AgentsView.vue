@@ -97,7 +97,13 @@ async function setAvailability(a: Agent, available: boolean) {
     </div>
 
     <Panel>
-      <DataTable :columns="cols" :rows="agents" :loading="loading" empty-text="No agents yet">
+      <DataTable
+        :columns="cols"
+        :rows="agents"
+        :loading="loading"
+        empty-text="No agents yet"
+        max-height="calc(100vh-16rem)"
+      >
         <template #cell-status="{ row }">
           <SignalDot :state="agentSignalState(row.status)" />
         </template>
