@@ -292,7 +292,7 @@ func (s *Server) Router() http.Handler {
 		// Public console-auth endpoint: takes email+password, returns a
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
-		r.Post("/console/login", s.handleConsoleLogin)
+		r.With(middleware.Timeout(30 * time.Second)).Post("/console/login", s.handleConsoleLogin)
 		// NOTE: the public guest mint (/sdk/guest-credentials) was removed —
 		// all visitor tokens are minted server-side via POST /v1/guest-credentials
 		// (tenant API key, below), so there's no unauthenticated mint surface.

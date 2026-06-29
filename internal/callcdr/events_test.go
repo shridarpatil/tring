@@ -25,12 +25,15 @@ func TestRingingEvent(t *testing.T) {
 func TestAnsweredEvent(t *testing.T) {
 	cid := uuid.New()
 	aid := uuid.New()
-	m := answeredEvent(cid, &aid, time.Unix(1700000001, 0))
+	m := answeredEvent(cid, &aid, "Alice Support", time.Unix(1700000001, 0))
 	if m["call_id"] != cid {
 		t.Fatalf("bad call_id: %+v", m)
 	}
 	if m["agent_id"].(*uuid.UUID) == nil || *m["agent_id"].(*uuid.UUID) != aid {
 		t.Fatalf("bad agent_id: %+v", m)
+	}
+	if m["agent_name"] != "Alice Support" {
+		t.Fatalf("bad agent_name: %+v", m)
 	}
 }
 

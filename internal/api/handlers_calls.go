@@ -466,7 +466,8 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("active") == "true" {
 		out, err := s.activeCallsList(r.Context(), t.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+			s.log.Error("list active calls failed", "err", err)
+			writeError(w, http.StatusInternalServerError, "query failed")
 			return
 		}
 		writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: len(out), Limit: len(out), Offset: 0})

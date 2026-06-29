@@ -48,9 +48,9 @@ function onEvent(type: string, data: unknown) {
       break;
     }
     case "call.answered": {
-      const d = data as { call_id: string; agent_id?: string; answered_at?: string };
+      const d = data as { call_id: string; agent_id?: string; agent_name?: string; answered_at?: string };
       calls.value = calls.value.map((c) =>
-        c.id === d.call_id ? { ...c, status: "answered", agent_id: d.agent_id, answered_at: d.answered_at } : c,
+        c.id === d.call_id ? { ...c, status: "answered", agent_id: d.agent_id, agent_name: d.agent_name, answered_at: d.answered_at } : c,
       );
       break;
     }

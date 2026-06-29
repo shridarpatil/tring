@@ -153,6 +153,7 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	// Attribute the answering agent: resolve their DB id from the SIP username the
 	// JWT carried, then stamp it on the call log (so "who handled it" isn't blank).
 	var answeredAgentID *uuid.UUID
+	var answeredAgentName string
 	if agentSip != "" {
 		var agentID uuid.UUID
 		var label string
@@ -162,10 +163,11 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 			l.log.Warn("cdr: stamp agent failed", "err", err)
 		} else {
 			answeredAgentID = &agentID
+			answeredAgentName = label
 		}
 	}
 	if l.events != nil {
-		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, time.Now()))
+		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, answeredAgentName, time.Now()))
 	}
 	if ac.rec == nil {
 		return nil
@@ -233,10 +235,11 @@ func ringingEvent(callID uuid.UUID, from, to, source string, startedAt time.Time
 	}
 }
 
-func answeredEvent(callID uuid.UUID, agentID *uuid.UUID, at time.Time) map[string]any {
+func answeredEvent(callID uuid.UUID, agentID *uuid.UUID, agentName string, at time.Time) map[string]any {
 	return map[string]any{
 		"call_id":     callID,
 		"agent_id":    agentID,
+		"agent_name":  agentName,
 		"answered_at": at,
 	}
 }
