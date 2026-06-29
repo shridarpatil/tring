@@ -41,7 +41,7 @@ func (f *fakeEffects) Hold(_ context.Context, _ time.Duration, _ func() bool) { 
 
 func newRouter() *Router {
 	// No presence (passthrough filter), mem queue/reservations, mem RR.
-	return NewRouter(NewMemQueue(), NewMemReservations(), NewMemRR(), nil, nil, nil)
+	return NewRouter(NewMemQueue(), NewMemReservations(), NewMemRR(), nil, nil, nil, nil)
 }
 
 func TestRouterCompletesWhenAgentAnswers(t *testing.T) {

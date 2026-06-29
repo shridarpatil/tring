@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/presence"
 )
 
@@ -20,15 +21,16 @@ type Router struct {
 	rr      RRCounter
 	pres    *presence.Store
 	cache   *cache.Cache
+	events  events.Sink
 	log     *slog.Logger
 }
 
 // NewRouter builds a Router from the shared backends (Redis or in-memory).
-func NewRouter(q Queue, res Reservations, rr RRCounter, pres *presence.Store, c *cache.Cache, log *slog.Logger) *Router {
+func NewRouter(q Queue, res Reservations, rr RRCounter, pres *presence.Store, c *cache.Cache, pub events.Sink, log *slog.Logger) *Router {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Router{queue: q, reserve: res, rr: rr, pres: pres, cache: c, log: log.With("component", "routing")}
+	return &Router{queue: q, reserve: res, rr: rr, pres: pres, cache: c, events: pub, log: log.With("component", "routing")}
 }
 
 // RouteConfig is the per-call routing parameters (from the team config + node).
@@ -165,5 +167,13 @@ func (r *Router) publishDepth(ctx context.Context, cfg RouteConfig) {
 	if cfg.Team == "" || cfg.Source == "" {
 		return
 	}
-	PublishDepth(ctx, r.cache, cfg.TenantID, cfg.Team, cfg.Source, r.queue.Depth(ctx, QueueKey(cfg.TenantID, cfg.Team)))
+	depth := r.queue.Depth(ctx, QueueKey(cfg.TenantID, cfg.Team))
+	PublishDepth(ctx, r.cache, cfg.TenantID, cfg.Team, cfg.Source, depth)
+	if r.events != nil {
+		r.events.Publish(ctx, cfg.TenantID, events.TypeQueueDepth, map[string]any{
+			"team":   cfg.Team,
+			"source": cfg.Source,
+			"depth":  depth,
+		})
+	}
 }

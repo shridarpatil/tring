@@ -26,6 +26,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/blobstore"
 	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/record"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -35,11 +36,12 @@ import (
 // Log is the media-plane call logger. One instance per gateway; safe for
 // concurrent calls.
 type Log struct {
-	db   *db.DB
-	q    *queries.Queries
-	blob *blobstore.Store // nil/disabled → recordings stay on local disk
-	dir  string           // local recordings spool (shared with the API's serve)
-	log  *slog.Logger
+	db     *db.DB
+	q      *queries.Queries
+	blob   *blobstore.Store // nil/disabled → recordings stay on local disk
+	dir    string           // local recordings spool (shared with the API's serve)
+	log    *slog.Logger
+	events events.Sink // nil = events disabled (no-op)
 
 	mu    sync.Mutex
 	calls map[string]*activeCall // by room id
@@ -54,8 +56,9 @@ type activeCall struct {
 	rec       *record.Recorder // nil = tenant doesn't record
 }
 
-// New builds a Log. blob may be nil (S3 off); dir is the recordings spool.
-func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger) *Log {
+// New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
+// pub may be nil (events disabled).
+func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub events.Sink) *Log {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -73,12 +76,13 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger) *Log 
 		_ = os.Remove(probe.Name())
 	}
 	return &Log{
-		db:    d,
-		q:     queries.MustLoad(),
-		blob:  blob,
-		dir:   dir,
-		log:   logger.With("component", "callcdr"),
-		calls: map[string]*activeCall{},
+		db:     d,
+		q:      queries.MustLoad(),
+		blob:   blob,
+		dir:    dir,
+		log:    logger.With("component", "callcdr"),
+		events: pub,
+		calls:  map[string]*activeCall{},
 	}
 }
 
@@ -120,6 +124,9 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, s
 	l.calls[roomID] = ac
 	l.mu.Unlock()
 	l.log.Info("cdr: call started", "room", roomID, "call", callID, "recording", recordOn)
+	if l.events != nil {
+		l.events.Publish(ctx, tenant.String(), events.TypeCallRinging, ringingEvent(callID, from, to, source, ac.startedAt))
+	}
 	if ac.rec == nil {
 		return nil
 	}
@@ -145,6 +152,8 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	}
 	// Attribute the answering agent: resolve their DB id from the SIP username the
 	// JWT carried, then stamp it on the call log (so "who handled it" isn't blank).
+	var answeredAgentID *uuid.UUID
+	var answeredAgentName string
 	if agentSip != "" {
 		var agentID uuid.UUID
 		var label string
@@ -152,7 +161,13 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 			l.log.Warn("cdr: agent lookup failed", "sip", agentSip, "err", err)
 		} else if _, err := l.db.Pool.Exec(ctx, l.q.SetCallAgentID, ac.legID, agentID); err != nil {
 			l.log.Warn("cdr: stamp agent failed", "err", err)
+		} else {
+			answeredAgentID = &agentID
+			answeredAgentName = label
 		}
+	}
+	if l.events != nil {
+		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, answeredAgentName, time.Now()))
 	}
 	if ac.rec == nil {
 		return nil
@@ -200,8 +215,41 @@ func (l *Log) Ended(roomID, cause string) {
 		l.log.Warn("cdr: settle failed", "room", roomID, "err", err)
 	}
 	l.log.Info("cdr: call ended", "room", roomID, "call", ac.id, "duration_s", duration)
+	if l.events != nil {
+		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallEnded, endedEvent(ac.id, duration, cause, time.Now()))
+	}
 	if ac.rec != nil {
 		go l.finalizeRecording(ac)
+	}
+}
+
+func ringingEvent(callID uuid.UUID, from, to, source string, startedAt time.Time) map[string]any {
+	return map[string]any{
+		"id":          callID,
+		"status":      "ringing",
+		"direction":   "inbound",
+		"from_number": from,
+		"to_number":   to,
+		"source":      source,
+		"started_at":  startedAt,
+	}
+}
+
+func answeredEvent(callID uuid.UUID, agentID *uuid.UUID, agentName string, at time.Time) map[string]any {
+	return map[string]any{
+		"call_id":     callID,
+		"agent_id":    agentID,
+		"agent_name":  agentName,
+		"answered_at": at,
+	}
+}
+
+func endedEvent(callID uuid.UUID, duration int, cause string, at time.Time) map[string]any {
+	return map[string]any{
+		"call_id":          callID,
+		"ended_at":         at,
+		"duration_seconds": duration,
+		"hangup_cause":     cause,
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/media/sfu"
@@ -73,7 +74,10 @@ type Config struct {
 	// Cache publishes this edge's web team-queue depth to the shared Redis store
 	// the API/dashboard sums (alongside the orchestrator's phone depth). nil →
 	// web queue waiters won't show on the dashboard (queueing still works).
-	Cache  *cache.Cache
+	Cache *cache.Cache
+	// Events publishes dashboard live-update events (presence, queue depth) to
+	// the shared Redis bus the api Hub subscribes to. nil = events disabled.
+	Events events.Sink
 	Logger *slog.Logger
 }
 
@@ -172,7 +176,7 @@ func New(cfg Config) *Server {
 	} else {
 		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
-	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, s.log)
+	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, cfg.Events, s.log)
 	s.agentRouter = brain.NewAgentRouter(cfg.Teams, s.router, s, s.log)
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s

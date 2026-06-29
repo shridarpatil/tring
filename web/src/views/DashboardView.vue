@@ -1,23 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
-import { errMessage } from "../lib/errors";
+import { ref, computed } from "vue";
 import { usePoll } from "../composables/usePoll";
-import { useQueues } from "../composables/useQueues";
-import { api } from "../api/client";
-import type { Call, Agent, StatsOverview, Paginated } from "../api/types";
+import { useDashboardStream } from "../composables/useDashboardStream";
+import type { Call, Agent } from "../api/types";
 import { Panel, SignalDot, LevelMeter } from "../components/ui";
 import MiniBarChart from "../components/MiniBarChart.vue";
 import QueuePressureBar from "../components/QueuePressureBar.vue";
 
-const calls = ref<Call[]>([]);
-const agents = ref<Agent[]>([]);
-// Shared with the shell's LiveStatusStrip — one poller for /v1/queues, not two.
-const queues = useQueues();
-const stats = ref<StatsOverview | null>(null);
-const loading = ref(true);
-const error = ref("");
+// One SSE stream backs all four panels (live calls, agents, queues, stats).
+const { calls, agents, queues, stats, ready } = useDashboardStream();
 
-// Ticking clock: drives live call/agent durations between the 5s polls. Durations
+// Ticking clock: drives live call/agent durations between server updates. Durations
 // are derived from started_at/answered_at + this clock, so they tick every second
 // AND stay exactly correct — no drift, no waiting on the server to see them move.
 const now = ref(Date.now());
@@ -76,46 +69,14 @@ function destLabel(c: Call): string {
   return c.agent_name || c.to_number || "—";
 }
 
-// ── data loads (each best-effort: one failing poll won't blank the page) ──
-async function loadLive() {
-  try {
-    const c = await api.get<Paginated<Call>>("/v1/calls?active=true");
-    calls.value = c.items;
-  } catch {
-    /* keep last value */
-  }
-  try {
-    agents.value = await api.get<Agent[]>("/v1/agents");
-  } catch {
-    /* keep last value */
-  }
-  // queues come from the shared useQueues poller (see above) — not fetched here.
-  try {
-    stats.value = await api.get<StatsOverview>("/v1/stats/overview");
-  } catch {
-    /* keep last value */
-  }
-}
-
-onMounted(async () => {
-  try {
-    await loadLive();
-  } catch (e) {
-    error.value = errMessage(e, "failed to load");
-  } finally {
-    loading.value = false;
-  }
-});
-
-usePoll(loadLive, 5000, { immediate: false });
+// Clock tick for live call/agent durations — pure local UI, no network.
 usePoll(() => (now.value = Date.now()), 1000);
 </script>
 
 <template>
   <div class="space-y-4">
     <h1 class="text-xl font-semibold tracking-tight">Dashboard</h1>
-    <p v-if="error" class="text-sm text-danger">{{ error }}</p>
-    <div v-if="loading" class="text-ink-faint text-sm">Loading…</div>
+    <div v-if="!ready" class="text-ink-faint text-sm">Loading…</div>
 
     <template v-else>
       <!-- Trend strip: today so far -->

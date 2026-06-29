@@ -16,10 +16,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/freeswitch"
-	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/queries"
 	"github.com/shridarpatil/tring/internal/tts"
@@ -90,6 +91,12 @@ type Config struct {
 	// the TTL, or is itself uncached).
 	Cache *cache.Cache
 
+	// Hub fans gateway events to connected SSE dashboards (nil = live streaming
+	// off; the snapshot still serves). Events publishes api-originated events
+	// (agent.status) onto the same bus.
+	Hub    *events.Hub
+	Events *events.Publisher
+
 	// Logger is the structured logger; nil falls back to slog.Default().
 	Logger *slog.Logger
 }
@@ -148,6 +155,9 @@ type Server struct {
 	// state. See internal/brain/sim_session.go.
 	simManager *brain.SimManager
 
+	hub    *events.Hub
+	events *events.Publisher
+
 	log *slog.Logger
 }
 
@@ -190,6 +200,8 @@ func NewServer(cfg Config) *Server {
 		turnURL:          cfg.TURNURL,
 		turnSecret:       cfg.TURNSecret,
 		simManager:       brain.NewSimManager(),
+		hub:              cfg.Hub,
+		events:           cfg.Events,
 		log:              logger,
 	}
 }
@@ -261,7 +273,6 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
 	// CORS must come BEFORE the auth wall — preflight OPTIONS requests
 	// from browsers don't carry `Authorization`, so they'd otherwise 401.
 	r.Use(corsMiddleware)
@@ -271,6 +282,7 @@ func (s *Server) Router() http.Handler {
 	// FreeSWITCH-facing endpoints. Basic Auth shared with mod_xml_curl;
 	// not behind the tenant API-key wall.
 	r.Route("/fs", func(r chi.Router) {
+		r.Use(middleware.Timeout(30 * time.Second))
 		r.Use(s.FSBasicAuth)
 		r.Post("/directory", s.handleFSDirectory)
 	})
@@ -280,84 +292,91 @@ func (s *Server) Router() http.Handler {
 		// Public console-auth endpoint: takes email+password, returns a
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
-		r.Post("/console/login", s.handleConsoleLogin)
+		r.With(middleware.Timeout(30 * time.Second)).Post("/console/login", s.handleConsoleLogin)
 		// NOTE: the public guest mint (/sdk/guest-credentials) was removed —
 		// all visitor tokens are minted server-side via POST /v1/guest-credentials
 		// (tenant API key, below), so there's no unauthenticated mint surface.
 
 		r.Group(func(r chi.Router) {
 			r.Use(s.AuthRequired)
-			r.Get("/tenants/me", s.handleGetMyTenant)
-			r.Patch("/tenants/me", s.handlePatchMyTenant)
-			r.Get("/guest-config", s.handleGetGuestConfig)
-			r.Patch("/guest-config", s.handlePatchGuestConfig)
-			// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
-			// manages these with the console JWT; the issued keys then auth
-			// server-to-server callers via AuthRequired.
-			r.Post("/api-keys", s.handleCreateAPIKey)
-			r.Get("/api-keys", s.handleListAPIKeys)
-			r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
-			// API-key mint: integrator backend mints guest creds with a
-			// trusted client_ref (the verified logged-in caller). The public
-			// /sdk/guest-credentials never accepts client_ref.
-			r.Post("/guest-credentials", s.handleAuthGuestCredentials)
-			r.Post("/agents", s.handleCreateAgent)
-			r.Get("/agents", s.handleListAgents)
-			r.Get("/agents/{id}", s.handleGetAgent)
-			r.Post("/agents/{id}/availability", s.handleSetAgentAvailability)
-			r.Get("/agents/{id}/token", s.handleAgentToken)
-			// Teams — agent groups the IVR transfer node rings as a unit.
-			// Identified by name, so the path param is the team name.
-			r.Post("/teams", s.handleCreateTeam)
-			r.Get("/teams", s.handleListTeams)
-			r.Get("/teams/{name}", s.handleGetTeam)
-			r.Patch("/teams/{name}", s.handlePatchTeam)
-			r.Delete("/teams/{name}", s.handleDeleteTeam)
-			r.Post("/teams/{name}/agents", s.handleAddTeamAgent)
-			r.Delete("/teams/{name}/agents/{agentID}", s.handleRemoveTeamAgent)
-			// Live queue depth per team (orchestrator publishes → Redis → here).
-			r.Get("/queues", s.handleListQueues)
-			// "Today so far" aggregates for the dashboard trend strip.
-			r.Get("/stats/overview", s.handleStatsOverview)
-			// Sound library — uploaded audio reused for IVR prompts + hold music.
-			r.Get("/audio", s.handleListAudio)
-			r.Post("/audio", s.handleUploadAudio)
-			r.Get("/audio/{id}/file", s.handleGetAudioFile)
-			r.Get("/audio/preview", s.handlePreviewAudio) // play by file_path (assets + TTS prompts)
-			r.Delete("/audio/{id}", s.handleDeleteAudio)
-			r.Post("/numbers", s.handleCreateNumber)
-			r.Get("/numbers", s.handleListNumbers)
-			r.Patch("/numbers/{id}", s.handlePatchNumber)
 
-			r.Post("/calls", s.handleCreateCall)
-			r.Post("/calls/connect", s.handleConnectCall)
-			r.Get("/calls", s.handleListCalls)
-			r.Get("/calls/{id}", s.handleGetCall)
-			r.Get("/calls/{id}/recording", s.handleGetCallRecording)
-			// Backend-mediated call control (CRM backend, API key). ADR-001.
-			r.Post("/calls/{id}/hold", s.handleHoldCall)
-			r.Post("/calls/{id}/resume", s.handleResumeCall)
+			// Long-lived SSE: must NOT inherit the 30s request timeout.
+			r.Get("/stream/dashboard", s.handleDashboardStream)
 
-			r.Post("/webhooks", s.handleCreateWebhook)
-			r.Get("/webhooks", s.handleListWebhooks)
-			r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
-			r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
+			r.Group(func(r chi.Router) {
+				r.Use(middleware.Timeout(30 * time.Second))
+				r.Get("/tenants/me", s.handleGetMyTenant)
+				r.Patch("/tenants/me", s.handlePatchMyTenant)
+				r.Get("/guest-config", s.handleGetGuestConfig)
+				r.Patch("/guest-config", s.handlePatchGuestConfig)
+				// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
+				// manages these with the console JWT; the issued keys then auth
+				// server-to-server callers via AuthRequired.
+				r.Post("/api-keys", s.handleCreateAPIKey)
+				r.Get("/api-keys", s.handleListAPIKeys)
+				r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+				// API-key mint: integrator backend mints guest creds with a
+				// trusted client_ref (the verified logged-in caller). The public
+				// /sdk/guest-credentials never accepts client_ref.
+				r.Post("/guest-credentials", s.handleAuthGuestCredentials)
+				r.Post("/agents", s.handleCreateAgent)
+				r.Get("/agents", s.handleListAgents)
+				r.Get("/agents/{id}", s.handleGetAgent)
+				r.Post("/agents/{id}/availability", s.handleSetAgentAvailability)
+				r.Get("/agents/{id}/token", s.handleAgentToken)
+				// Teams — agent groups the IVR transfer node rings as a unit.
+				// Identified by name, so the path param is the team name.
+				r.Post("/teams", s.handleCreateTeam)
+				r.Get("/teams", s.handleListTeams)
+				r.Get("/teams/{name}", s.handleGetTeam)
+				r.Patch("/teams/{name}", s.handlePatchTeam)
+				r.Delete("/teams/{name}", s.handleDeleteTeam)
+				r.Post("/teams/{name}/agents", s.handleAddTeamAgent)
+				r.Delete("/teams/{name}/agents/{agentID}", s.handleRemoveTeamAgent)
+				// Live queue depth per team (orchestrator publishes → Redis → here).
+				r.Get("/queues", s.handleListQueues)
+				// "Today so far" aggregates for the dashboard trend strip.
+				r.Get("/stats/overview", s.handleStatsOverview)
+				// Sound library — uploaded audio reused for IVR prompts + hold music.
+				r.Get("/audio", s.handleListAudio)
+				r.Post("/audio", s.handleUploadAudio)
+				r.Get("/audio/{id}/file", s.handleGetAudioFile)
+				r.Get("/audio/preview", s.handlePreviewAudio) // play by file_path (assets + TTS prompts)
+				r.Delete("/audio/{id}", s.handleDeleteAudio)
+				r.Post("/numbers", s.handleCreateNumber)
+				r.Get("/numbers", s.handleListNumbers)
+				r.Patch("/numbers/{id}", s.handlePatchNumber)
 
-			r.Post("/flows", s.handleCreateFlow)
-			r.Get("/flows", s.handleListFlows)
-			r.Get("/flows/{id}", s.handleGetFlow)
-			r.Patch("/flows/{id}", s.handlePatchFlow)
-			r.Delete("/flows/{id}", s.handleDeleteFlow)
-			r.Post("/flows/{id}/simulate", s.handleSimulateFlow)
-			r.Post("/flows/{id}/simulate/start", s.handleSimulateStart)
-			r.Post("/flows/simulate/sessions/{sid}/input", s.handleSimulateInput)
+				r.Post("/calls", s.handleCreateCall)
+				r.Post("/calls/connect", s.handleConnectCall)
+				r.Get("/calls", s.handleListCalls)
+				r.Get("/calls/{id}", s.handleGetCall)
+				r.Get("/calls/{id}/recording", s.handleGetCallRecording)
+				// Backend-mediated call control (CRM backend, API key). ADR-001.
+				r.Post("/calls/{id}/hold", s.handleHoldCall)
+				r.Post("/calls/{id}/resume", s.handleResumeCall)
 
-			r.Post("/trunks", s.handleCreateTrunk)
-			r.Get("/trunks", s.handleListTrunks)
-			r.Get("/trunks/{id}", s.handleGetTrunk)
-			r.Patch("/trunks/{id}", s.handlePatchTrunk)
-			r.Delete("/trunks/{id}", s.handleDeleteTrunk)
-			r.Post("/trunks/reload", s.handleReloadTrunks)
+				r.Post("/webhooks", s.handleCreateWebhook)
+				r.Get("/webhooks", s.handleListWebhooks)
+				r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
+				r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
+
+				r.Post("/flows", s.handleCreateFlow)
+				r.Get("/flows", s.handleListFlows)
+				r.Get("/flows/{id}", s.handleGetFlow)
+				r.Patch("/flows/{id}", s.handlePatchFlow)
+				r.Delete("/flows/{id}", s.handleDeleteFlow)
+				r.Post("/flows/{id}/simulate", s.handleSimulateFlow)
+				r.Post("/flows/{id}/simulate/start", s.handleSimulateStart)
+				r.Post("/flows/simulate/sessions/{sid}/input", s.handleSimulateInput)
+
+				r.Post("/trunks", s.handleCreateTrunk)
+				r.Get("/trunks", s.handleListTrunks)
+				r.Get("/trunks/{id}", s.handleGetTrunk)
+				r.Patch("/trunks/{id}", s.handlePatchTrunk)
+				r.Delete("/trunks/{id}", s.handleDeleteTrunk)
+				r.Post("/trunks/reload", s.handleReloadTrunks)
+			})
 		})
 
 		// Agent-JWT scoped SDK routes. ADR-001 keeps origination backend-only,
@@ -366,6 +385,7 @@ func (s *Server) Router() http.Handler {
 		// drives it directly with the token it already holds (no CRM proxy).
 		r.Group(func(r chi.Router) {
 			r.Use(s.AgentAuthRequired)
+			r.Use(middleware.Timeout(30 * time.Second))
 			r.Post("/sdk/calls/hold", s.handleSdkHold)
 			r.Post("/sdk/calls/resume", s.handleSdkResume)
 			r.Get("/sdk/transfer-targets", s.handleSdkTransferTargets)
