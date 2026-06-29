@@ -102,7 +102,7 @@ async function setAvailability(a: Agent, available: boolean) {
         :rows="agents"
         :loading="loading"
         empty-text="No agents yet"
-        max-height="calc(100vh-16rem)"
+        max-height="calc(100vh - 16rem)"
       >
         <template #cell-status="{ row }">
           <SignalDot :state="agentSignalState(row.status)" />
