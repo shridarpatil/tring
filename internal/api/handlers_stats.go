@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"math"
 	"net/http"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ---- Dashboard stats ----------------------------------------------------
@@ -27,9 +30,9 @@ type statsOverview struct {
 	Hourly         []statsHourBucket `json:"hourly"`           // always 12 buckets, oldest→newest
 }
 
-func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
-	t := tenantFromCtx(r.Context())
-
+// statsOverview computes the dashboard "today so far" aggregates. The endpoint
+// and the SSE recompute share it.
+func (s *Server) statsOverview(ctx context.Context, tenantID uuid.UUID) (statsOverview, error) {
 	var (
 		total     int
 		answered  int
@@ -38,11 +41,9 @@ func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
 		avgWait   float64
 		avgTalk   float64
 	)
-	if err := s.db.Pool.QueryRow(r.Context(), s.q.StatsToday, t.ID).Scan(&total, &answered, &abandoned, &failed, &avgWait, &avgTalk); err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
-		return
+	if err := s.db.Pool.QueryRow(ctx, s.q.StatsToday, tenantID).Scan(&total, &answered, &abandoned, &failed, &avgWait, &avgTalk); err != nil {
+		return statsOverview{}, err
 	}
-
 	out := statsOverview{
 		CallsToday:     total,
 		AbandonedToday: abandoned,
@@ -54,23 +55,28 @@ func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
 	if total > 0 {
 		out.AnsweredPct = int(math.Round(float64(answered) / float64(total) * 100))
 	}
-
-	// The query already returns exactly 12 gap-filled buckets, bucketed in the DB
-	// session timezone — no timezone math here, so nothing can mismatch.
-	rows, err := s.db.Pool.Query(r.Context(), s.q.StatsHourly, t.ID)
+	rows, err := s.db.Pool.Query(ctx, s.q.StatsHourly, tenantID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
-		return
+		return statsOverview{}, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var b statsHourBucket
 		if err := rows.Scan(&b.Hour, &b.Count); err != nil {
-			writeError(w, http.StatusInternalServerError, "scan failed")
-			return
+			return statsOverview{}, err
 		}
 		out.Hourly = append(out.Hourly, b)
 	}
+	return out, nil
+}
 
+func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	out, err := s.statsOverview(r.Context(), t.ID)
+	if err != nil {
+		s.log.Error("stats overview failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
 }

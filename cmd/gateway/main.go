@@ -24,6 +24,7 @@ import (
 	"github.com/shridarpatil/tring/internal/callcdr"
 	"github.com/shridarpatil/tring/internal/config"
 	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/sfu"
@@ -59,6 +60,14 @@ func main() {
 			"needs it), or set TRING_GATEWAY_REQUIRE_AUTH=false for an open gateway")
 		os.Exit(1)
 	}
+
+	// Dashboard live-update publisher (shares the Redis the api Hub subscribes
+	// to). Best-effort: nil when Redis is off → events simply don't fire.
+	eventsPub, err := events.NewPublisher(k.String("redis_addr"), logger)
+	if err != nil {
+		logger.Warn("redis unavailable, dashboard events disabled", "err", err)
+	}
+	defer eventsPub.Close()
 
 	// Pion SFU media plane (internal/media) — the N-party web-calling path,
 	// served on /rtc. Same ICE/TURN/public-IP config as the legacy bridge;
@@ -114,7 +123,7 @@ func main() {
 		if berr != nil {
 			logger.Warn("S3 recording storage disabled (config error)", "err", berr)
 		}
-		calls = callcdr.New(database, blob, k.String("recordings_dir"), logger)
+		calls = callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub)
 	}
 
 	sig := signaling.New(signaling.Config{
@@ -133,6 +142,7 @@ func main() {
 		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard
 		Calls:      calls,                    // CDRs + recordings (one path for web + phone)
 		Cache:      redisCache,               // publish web team-queue depth for the dashboard
+		Events:     eventsPub,
 		Logger:     logger,
 	})
 

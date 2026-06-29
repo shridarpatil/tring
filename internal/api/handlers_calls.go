@@ -437,6 +437,25 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 	http.ServeFile(w, r, path)
 }
 
+// activeCallsList returns in-progress calls (ringing/answered) for a tenant,
+// oldest first — the cockpit "Live calls" panel and the SSE snapshot share it.
+func (s *Server) activeCallsList(ctx context.Context, tenantID uuid.UUID) ([]Call, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListActiveCalls, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Call{}
+	for rows.Next() {
+		c, err := scanCall(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
 func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	status := r.URL.Query().Get("status")
@@ -445,20 +464,11 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	// (ended_at IS NULL, ringing/answered), oldest first, unpaginated. Bypasses
 	// the page/status machinery below — it's its own bounded query.
 	if r.URL.Query().Get("active") == "true" {
-		rows, err := s.db.Pool.Query(r.Context(), s.q.ListActiveCalls, t.ID)
+		out, err := s.activeCallsList(r.Context(), t.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+			s.log.Error("list active calls failed", "err", err)
+			writeError(w, http.StatusInternalServerError, "query failed")
 			return
-		}
-		defer rows.Close()
-		out := []Call{}
-		for rows.Next() {
-			c, err := scanCall(rows)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "scan failed")
-				return
-			}
-			out = append(out, c)
 		}
 		writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: len(out), Limit: len(out), Offset: 0})
 		return

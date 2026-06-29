@@ -19,6 +19,7 @@ import (
 	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/config"
 	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/logging"
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
 	"github.com/shridarpatil/tring/internal/queries"
@@ -113,31 +114,63 @@ func main() {
 		Logger:   logger,
 	})
 
+	// Dashboard live-update bus (shares the same Redis as the gateway). Both
+	// best-effort: if Redis is down, the dashboard still serves the connect-time
+	// snapshot, just no live deltas.
+	hub, err := events.NewHub(k.String("redis_addr"), logger)
+	if err != nil {
+		logger.Warn("redis unavailable, dashboard live stream disabled", "err", err)
+	}
+	defer hub.Close()
+	eventsPub, err := events.NewPublisher(k.String("redis_addr"), logger)
+	if err != nil {
+		logger.Warn("redis unavailable, event publishing disabled", "err", err)
+	}
+	defer eventsPub.Close()
+
+	apiSrv := api.NewServer(api.Config{
+		DB:               database,
+		TTS:              ttsEngine,
+		JWTSecret:        k.String("jwt_secret"),
+		FSBasicAuth:      k.String("fs_basic_auth"),
+		ESLAddr:          k.String("esl_addr"),
+		ESLPassword:      k.String("esl_password"),
+		STUNURL:          k.String("stun_url"),
+		TURNURL:          k.String("turn_url"),
+		TURNUsername:     k.String("turn_username"),
+		TURNPassword:     k.String("turn_password"),
+		TURNSecret:       k.String("turn_secret"),
+		AgentTransport:   k.String("agent_transport"),
+		AgentGateway:     k.String("agent_gateway"),
+		AgentJitter:      k.String("agent_jitter_msec"),
+		GatewayPublicURL: k.String("gateway_public_url"),
+		AudioDir:         k.String("audio_dir"),
+		RecordingsDir:    k.String("recordings_dir"),
+		RecordingsFormat: k.String("record_format"),
+		Blob:             blob,
+		Cache:            flowCache,
+		Hub:              hub,
+		Events:           eventsPub,
+		Logger:           logger,
+	})
+
+	// Register live forwards + coalesced recomputers, then start the subscriber.
+	// Forward/Recompute write hub maps lock-free and MUST complete before Run
+	// starts reading them.
+	hub.Forward(
+		events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded,
+		events.TypeAgentPresence, events.TypeAgentStatus,
+	)
+	hub.Recompute(
+		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded},
+		events.TypeStats, 1500*time.Millisecond, apiSrv.StatsData,
+	)
+	hub.Recompute([]string{events.TypeQueueDepth}, events.TypeQueues, 800*time.Millisecond, apiSrv.QueuesData)
+	go hub.Run(ctx)
+
 	srv := &http.Server{
-		Addr: *addr,
-		Handler: api.NewServer(api.Config{
-			DB:               database,
-			TTS:              ttsEngine,
-			JWTSecret:        k.String("jwt_secret"),
-			FSBasicAuth:      k.String("fs_basic_auth"),
-			ESLAddr:          k.String("esl_addr"),
-			ESLPassword:      k.String("esl_password"),
-			STUNURL:          k.String("stun_url"),
-			TURNURL:          k.String("turn_url"),
-			TURNUsername:     k.String("turn_username"),
-			TURNPassword:     k.String("turn_password"),
-			TURNSecret:       k.String("turn_secret"),
-			AgentTransport:   k.String("agent_transport"),
-			AgentGateway:     k.String("agent_gateway"),
-			AgentJitter:      k.String("agent_jitter_msec"),
-			GatewayPublicURL: k.String("gateway_public_url"),
-			AudioDir:         k.String("audio_dir"),
-			RecordingsDir:    k.String("recordings_dir"),
-			RecordingsFormat: k.String("record_format"),
-			Blob:             blob,
-			Cache:            flowCache,
-			Logger:           logger,
-		}).Router(),
+		Addr:              *addr,
+		Handler:           apiSrv.Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

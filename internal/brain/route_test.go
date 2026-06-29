@@ -50,7 +50,7 @@ func (h *handoffTransport) AwaitHandoffEnd(context.Context, string) bool {
 func newRouter(tport RingTransport) *AgentRouter {
 	return NewAgentRouter(
 		fakeTeams{sips: []string{"alice", "bob"}},
-		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil),
+		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil),
 		tport, nil,
 	)
 }
@@ -89,7 +89,7 @@ func TestAgentRouterRoutesTeamTransfer(t *testing.T) {
 	eff := &answerEffects{}
 	ar := NewAgentRouter(
 		fakeTeams{sips: []string{"alice", "bob"}},
-		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil),
+		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil),
 		&fakeTransport{eff: eff},
 		nil,
 	)
