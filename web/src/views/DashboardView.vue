@@ -10,7 +10,7 @@ import QueuePressureBar from "../components/QueuePressureBar.vue";
 // One SSE stream backs all four panels (live calls, agents, queues, stats).
 const { calls, agents, queues, stats, ready } = useDashboardStream();
 
-// Ticking clock: drives live call/agent durations between the 5s polls. Durations
+// Ticking clock: drives live call/agent durations between server updates. Durations
 // are derived from started_at/answered_at + this clock, so they tick every second
 // AND stay exactly correct — no drift, no waiting on the server to see them move.
 const now = ref(Date.now());

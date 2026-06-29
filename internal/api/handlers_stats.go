@@ -74,7 +74,8 @@ func (s *Server) handleStatsOverview(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	out, err := s.statsOverview(r.Context(), t.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+		s.log.Error("stats overview failed", "err", err)
+		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
