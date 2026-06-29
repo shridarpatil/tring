@@ -117,9 +117,12 @@ function fmt(d?: string) {
     </div>
 
     <div class="rounded-xl bg-surface border border-border">
-      <div class="overflow-x-auto">
+      <!-- Cap the log to the viewport so the table scrolls inside its own area
+           (sticky header) instead of growing the whole page; the filter above
+           and pagination below stay put. -->
+      <div class="overflow-auto max-h-[calc(100vh-16rem)]">
         <table class="w-full text-sm">
-        <thead>
+        <thead class="sticky top-0 z-10 bg-surface">
           <tr class="border-b border-border text-left">
             <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">From</th>
             <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">To</th>

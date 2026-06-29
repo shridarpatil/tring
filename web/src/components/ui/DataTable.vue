@@ -16,6 +16,10 @@ withDefaults(
     rowKey?: string;
     loading?: boolean;
     emptyText?: string;
+    // When set (e.g. "calc(100vh-16rem)"), the body scrolls within this height
+    // with a sticky header instead of growing the page. Omit for the default
+    // (page-height, horizontal-scroll-only) behaviour.
+    maxHeight?: string;
   }>(),
   { rowKey: "id", emptyText: "Nothing here yet" },
 );
@@ -32,9 +36,9 @@ function alignCls(a?: string) {
 </script>
 
 <template>
-  <div class="overflow-x-auto">
+  <div :class="maxHeight ? 'overflow-auto' : 'overflow-x-auto'" :style="maxHeight ? { maxHeight } : undefined">
     <table class="w-full text-sm">
-      <thead>
+      <thead :class="maxHeight ? 'sticky top-0 z-10 bg-surface' : ''">
         <tr class="border-b border-border">
           <th
             v-for="c in columns"
