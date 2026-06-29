@@ -24,8 +24,9 @@ let consumers = 0;
 // Gateway publishes raw presence (online/on_call/offline); fold in the backend
 // availability flag so connected-but-unavailable reads "away".
 function deriveStatus(a: Agent): Agent["status"] {
-  if (a.status === "online" && a.available_for_calls === false) return "away";
-  return a.status;
+  const raw = a.status === "away" ? "online" : a.status;
+  if (raw === "online" && a.available_for_calls === false) return "away";
+  return raw;
 }
 
 function onEvent(type: string, data: unknown) {
@@ -102,6 +103,7 @@ export function useDashboardStream() {
       stop();
       stop = null;
       ready.value = false;
+      connected.value = false;
     }
   });
   return { calls, agents, queues, stats, ready, connected };

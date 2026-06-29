@@ -40,7 +40,11 @@ export function streamEvents(path: string, h: SSEHandlers): () => void {
         signal: ctrl.signal,
       });
       if (!res.ok || !res.body) {
-        if (res.status === 401) auth.logout();
+        if (res.status === 401) {
+          auth.logout();
+          stopped = true;
+          return;
+        }
         throw new Error(`stream ${res.status}`);
       }
       h.onOpen?.();
@@ -48,15 +52,19 @@ export function streamEvents(path: string, h: SSEHandlers): () => void {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          parseFrame(buf.slice(0, idx));
-          buf = buf.slice(idx + 2);
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            parseFrame(buf.slice(0, idx));
+            buf = buf.slice(idx + 2);
+          }
         }
+      } finally {
+        reader.releaseLock();
       }
     } catch {
       /* fall through to reconnect */
