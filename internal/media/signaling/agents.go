@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/shridarpatil/tring/internal/brain"
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/presence"
@@ -42,6 +43,24 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 			pres.MarkOnline(context.Background(), tenant, sip)
 		}
 	}
+	if n > 0 {
+		s.publishPresence(tenant, sip, presence.StatusOnCall)
+	} else {
+		s.publishPresence(tenant, sip, presence.StatusOnline)
+	}
+}
+
+// publishPresence emits an agent.presence event for the dashboard live feed.
+// Called only on actual transitions (connect / on_call flip / disconnect), never
+// on the TTL refresh tick. Frontend matches agents by sip_username.
+func (s *Server) publishPresence(tenant, sip, status string) {
+	if s.cfg.Events == nil || sip == "" {
+		return
+	}
+	s.cfg.Events.Publish(context.Background(), tenant, events.TypeAgentPresence, map[string]any{
+		"sip_username": sip,
+		"status":       status,
+	})
 }
 
 // agentOnCall reports whether the agent has any active call leg (used by the
@@ -65,6 +84,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
 		pres.MarkOnline(context.Background(), tenant, sip)
+		s.publishPresence(tenant, sip, presence.StatusOnline)
 		stopRefresh := make(chan struct{})
 		go func() {
 			t := time.NewTicker(presence.RefreshInterval)
@@ -87,6 +107,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		defer func() {
 			close(stopRefresh)
 			pres.Offline(context.Background(), tenant, sip)
+			s.publishPresence(tenant, sip, presence.StatusOffline)
 		}()
 	}
 
