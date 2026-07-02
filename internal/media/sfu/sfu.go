@@ -86,6 +86,10 @@ type sfuRoom struct {
 	// ports are bidirectional non-WebRTC legs (phone/WhatsApp adapters): they
 	// publish into the room AND hear it (see port.go). Lazily allocated.
 	ports map[room.ParticipantID]*roomPort
+	// audience gates who may hear a given publisher. A nil/absent entry means
+	// "everyone" (the default for ordinary participants); a supervisor's entry is
+	// set by SetAudience to none/agent-only/all for monitor/whisper/barge.
+	audience map[room.ParticipantID]*audience
 }
 
 // publication is one participant's fan-out tracks, one per codec kind. The
@@ -96,6 +100,27 @@ type sfuRoom struct {
 type publication struct {
 	tracks map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP
 	sinks  atomic.Pointer[[]room.TrackSink]
+}
+
+// audience controls which subscribers may hear one publisher. A nil *audience,
+// or all=true, means "everyone hears" (ordinary participants). Otherwise exactly
+// the pids in allowed hear the publisher — the mechanism behind supervisor
+// monitor (allowed empty), whisper (allowed = the agent legs) and barge (all).
+type audience struct {
+	all     bool
+	allowed map[room.ParticipantID]bool
+}
+
+func (a *audience) hears(sub room.ParticipantID) bool {
+	if a == nil || a.all {
+		return true
+	}
+	return a.allowed[sub]
+}
+
+// audienceHears reports whether sub may hear pub in this room (nil-safe).
+func (r *sfuRoom) audienceHears(pub, sub room.ParticipantID) bool {
+	return r.audience[pub].hears(sub)
 }
 
 // New builds an SFU. It validates the media config by building one API up front

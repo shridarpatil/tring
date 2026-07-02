@@ -85,8 +85,9 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 	r := s.rooms[roomID]
 	if r == nil {
 		r = &sfuRoom{
-			peers: make(map[room.ParticipantID]*Peer),
-			pubs:  make(map[room.ParticipantID]*publication),
+			peers:    make(map[room.ParticipantID]*Peer),
+			pubs:     make(map[room.ParticipantID]*publication),
+			audience: make(map[room.ParticipantID]*audience),
 		}
 		s.rooms[roomID] = r
 	}
@@ -136,6 +137,9 @@ func (s *SFU) publicationsExcept(roomID room.RoomID, pid room.ParticipantID) []s
 		if opid == pid {
 			continue
 		}
+		if !r.audienceHears(opid, pid) {
+			continue // supervisor gating: this subscriber isn't in the publisher's audience
+		}
 		tracks := make([]*webrtc.TrackLocalStaticRTP, 0, len(pub.tracks))
 		for _, t := range pub.tracks {
 			tracks = append(tracks, t)
@@ -145,6 +149,41 @@ func (s *SFU) publicationsExcept(roomID room.RoomID, pid room.ParticipantID) []s
 		}
 	}
 	return out
+}
+
+// audienceDecision is one existing peer and whether it should now hear pid.
+type audienceDecision struct {
+	q    *Peer
+	hear bool
+}
+
+// setAudienceState records pid's audience for the room and returns, for every
+// OTHER live peer, whether it should now hear pid — plus whether pid currently
+// has a publication to wire. Pure w.r.t. media: it only mutates the audience map
+// and snapshots peers. SetAudience (Task 2) turns the decisions into add/remove.
+func (s *SFU) setAudienceState(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) (decisions []audienceDecision, hasPub bool) {
+	aud := &audience{all: all}
+	if !all {
+		aud.allowed = make(map[room.ParticipantID]bool, len(allowed))
+		for _, a := range allowed {
+			aud.allowed[a] = true
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil {
+		return nil, false
+	}
+	r.audience[pid] = aud
+	_, hasPub = r.pubs[pid]
+	for opid, q := range r.peers {
+		if opid == pid {
+			continue
+		}
+		decisions = append(decisions, audienceDecision{q: q, hear: aud.hears(opid)})
+	}
+	return decisions, hasPub
 }
 
 // onPublish copies a publisher's remote RTP into its room-owned fan-out track,
