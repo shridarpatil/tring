@@ -95,6 +95,9 @@ export type TringEvent =
   | { type: "call:ended"; call: Call; cause?: string }
   // The remote party's screen-share track arrived (stream) or ended (null).
   | { type: "call:remote-video"; call: Call; stream: MediaStream | null }
+  // A supervisor (console operator) is monitoring/whispering/barging on this
+  // call, or has stopped. The customer is never notified — this is agent-only.
+  | { type: "call:supervisor"; call: Call; present: boolean; mode: string; name: string }
   | { type: "error"; error: Error };
 
 // ---- Guest (web-to-web customer) calling --------------------------------

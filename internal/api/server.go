@@ -379,6 +379,14 @@ func (s *Server) Router() http.Handler {
 			})
 		})
 
+		// Console-only: supervise a live web call. Separate from AuthRequired
+		// because the supervise permission is per-user and an API key has no
+		// user identity to check it against.
+		r.Group(func(r chi.Router) {
+			r.Use(s.ConsoleAuthRequired)
+			r.Post("/calls/{id}/supervise", s.handleSupervise)
+		})
+
 		// Agent-JWT scoped SDK routes. ADR-001 keeps origination backend-only,
 		// but SELF call-control (hold/transfer of the agent's OWN active call) is
 		// a safe agent capability — the JWT scopes it to that agent, so the widget

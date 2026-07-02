@@ -6,6 +6,10 @@ import type { Call, Agent } from "../api/types";
 import { Panel, SignalDot, LevelMeter } from "../components/ui";
 import MiniBarChart from "../components/MiniBarChart.vue";
 import QueuePressureBar from "../components/QueuePressureBar.vue";
+import { api } from "../api/client";
+import { SupervisorSession, type SuperviseMode } from "../lib/supervisor";
+import { errMessage } from "../lib/errors";
+import { toast } from "../lib/toast";
 
 // One SSE stream backs all four panels (live calls, agents, queues, stats).
 const { calls, agents, queues, stats, ready } = useDashboardStream();
@@ -67,6 +71,43 @@ function callerLabel(c: Call): string {
 }
 function destLabel(c: Call): string {
   return c.agent_name || c.to_number || "—";
+}
+
+// ── supervisor (Listen/Whisper/Barge) ─────────────────────────────────
+// v1 simplification: only ONE supervise session at a time across the whole
+// dashboard (a single `active` ref, not one per row).
+const active = ref<{ callId: string; mode: SuperviseMode; session: SupervisorSession } | null>(null);
+
+async function startSupervise(c: Call): Promise<void> {
+  // Switching targets mid-session must hang up the previous one — otherwise
+  // its WebSocket/PeerConnection stay open and, in whisper/barge, the
+  // operator keeps transmitting into the old call's room.
+  if (active.value) {
+    active.value.session.hangup();
+    active.value = null;
+  }
+  try {
+    const creds = await api.supervise(c.id);
+    const session = new SupervisorSession(creds.gateway_url, creds.room, creds.token, creds.ice_servers || []);
+    session.onClose = (reason) => {
+      // Only clear if this is still the active session (guard against races).
+      if (active.value?.session === session) active.value = null;
+      if (reason) toast.error(reason);
+    };
+    await session.connect("monitor");
+    active.value = { callId: c.id, mode: "monitor", session };
+  } catch (e) {
+    toast.error(errMessage(e, "Could not start supervising this call"));
+  }
+}
+function setMode(mode: SuperviseMode): void {
+  if (!active.value) return;
+  active.value.session.setMode(mode);
+  active.value.mode = mode;
+}
+function stopSupervise(): void {
+  active.value?.session.hangup();
+  active.value = null;
 }
 
 // Clock tick for live call/agent durations — pure local UI, no network.
@@ -165,6 +206,37 @@ usePoll(() => (now.value = Date.now()), 1000);
             <span class="tabular-nums text-sm text-ink-muted shrink-0 w-12 text-right">{{
               fmtDur(callSeconds(c))
             }}</span>
+            <!-- Supervisor controls: web calls only. Only ONE supervise session
+                 is supported at a time (the `active` ref, not per-row state). -->
+            <div v-if="c.source === 'web'" class="shrink-0 flex items-center gap-1">
+              <span v-if="c.supervised && active?.callId !== c.id" class="text-[10.5px] text-ink-faint" :title="'Supervised by ' + c.supervised"
+                >🎧 {{ c.supervised }}</span
+              >
+              <button
+                v-if="active?.callId !== c.id"
+                class="text-[11px] px-2 py-0.5 rounded-md bg-surface-2 hover:bg-surface transition-colors"
+                @click="startSupervise(c)"
+              >
+                Listen
+              </button>
+              <template v-else>
+                <button
+                  v-for="m in (['monitor', 'whisper', 'barge'] as const)"
+                  :key="m"
+                  class="text-[11px] px-2 py-0.5 rounded-md capitalize transition-colors"
+                  :class="active.mode === m ? 'bg-accent text-white' : 'bg-surface-2 hover:bg-surface'"
+                  @click="setMode(m)"
+                >
+                  {{ m }}
+                </button>
+                <button
+                  class="text-[11px] px-2 py-0.5 rounded-md bg-danger-soft text-danger transition-colors"
+                  @click="stopSupervise()"
+                >
+                  Stop
+                </button>
+              </template>
+            </div>
           </div>
           </div>
         </Panel>

@@ -70,21 +70,25 @@ type Queries struct {
 	StatsHourly           string `query:"stats-hourly"`
 
 	// ---- api: calls ----
-	GetAgentSipUsername   string `query:"get-agent-sip-username"`
-	CreateCallOutbound    string `query:"create-call-outbound"`
-	CreateCallBridge      string `query:"create-call-bridge"`
-	CreateCallInbound     string `query:"create-call-inbound"`
-	SetCallIVRPath        string `query:"set-call-ivr-path"`
-	SetCallAgent          string `query:"set-call-agent"`
-	SetCallAgentID        string `query:"set-call-agent-id"`
-	GetCallControlLeg     string `query:"get-call-control-leg"`
-	GetAgentActiveCallLeg string `query:"get-agent-active-call-leg"`
-	SetCallCustomerLeg    string `query:"set-call-customer-leg"`
-	SetCallRecording      string `query:"set-call-recording"`
-	GetCallRecording      string `query:"get-call-recording"`
-	GetCallForRecording   string `query:"get-call-for-recording"`
-	SetCallRecordingS3    string `query:"set-call-recording-s3"`
-	GetAgentBySIP         string `query:"get-agent-by-sip"`
+	GetAgentSipUsername     string `query:"get-agent-sip-username"`
+	CreateCallOutbound      string `query:"create-call-outbound"`
+	CreateCallBridge        string `query:"create-call-bridge"`
+	CreateCallInbound       string `query:"create-call-inbound"`
+	SetCallIVRPath          string `query:"set-call-ivr-path"`
+	SetCallAgent            string `query:"set-call-agent"`
+	SetCallAgentID          string `query:"set-call-agent-id"`
+	GetCallControlLeg       string `query:"get-call-control-leg"`
+	GetAgentActiveCallLeg   string `query:"get-agent-active-call-leg"`
+	SetCallCustomerLeg      string `query:"set-call-customer-leg"`
+	SetCallRecording        string `query:"set-call-recording"`
+	GetCallRecording        string `query:"get-call-recording"`
+	GetCallForRecording     string `query:"get-call-for-recording"`
+	SetCallRecordingS3      string `query:"set-call-recording-s3"`
+	GetAgentBySIP           string `query:"get-agent-by-sip"`
+	GetSuperviseTarget      string `query:"get-supervise-target"`
+	GetUserSupervise        string `query:"get-user-supervise"`
+	CreateSupervisorSession string `query:"create-supervisor-session"`
+	EndSupervisorSession    string `query:"end-supervisor-session"`
 
 	CreateAPIKey        string `query:"create-api-key"`
 	ListAPIKeys         string `query:"list-api-keys"`

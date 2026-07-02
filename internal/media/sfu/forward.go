@@ -85,8 +85,9 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 	r := s.rooms[roomID]
 	if r == nil {
 		r = &sfuRoom{
-			peers: make(map[room.ParticipantID]*Peer),
-			pubs:  make(map[room.ParticipantID]*publication),
+			peers:    make(map[room.ParticipantID]*Peer),
+			pubs:     make(map[room.ParticipantID]*publication),
+			audience: make(map[room.ParticipantID]*audience),
 		}
 		s.rooms[roomID] = r
 	}
@@ -136,6 +137,9 @@ func (s *SFU) publicationsExcept(roomID room.RoomID, pid room.ParticipantID) []s
 		if opid == pid {
 			continue
 		}
+		if !r.audienceHears(opid, pid) {
+			continue // supervisor gating: this subscriber isn't in the publisher's audience
+		}
 		tracks := make([]*webrtc.TrackLocalStaticRTP, 0, len(pub.tracks))
 		for _, t := range pub.tracks {
 			tracks = append(tracks, t)
@@ -145,6 +149,87 @@ func (s *SFU) publicationsExcept(roomID room.RoomID, pid room.ParticipantID) []s
 		}
 	}
 	return out
+}
+
+// audienceDecision is one existing peer and whether it should now hear pid.
+type audienceDecision struct {
+	q    *Peer
+	hear bool
+}
+
+// setAudienceState records pid's audience for the room and returns, for every
+// OTHER live peer, whether it should now hear pid — plus whether pid currently
+// has a publication to wire. Pure w.r.t. media: it only mutates the audience map
+// and snapshots peers. SetAudience (Task 2) turns the decisions into add/remove.
+func (s *SFU) setAudienceState(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) (decisions []audienceDecision, hasPub bool) {
+	aud := &audience{all: all}
+	if !all {
+		aud.allowed = make(map[room.ParticipantID]bool, len(allowed))
+		for _, a := range allowed {
+			aud.allowed[a] = true
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil {
+		return nil, false
+	}
+	r.audience[pid] = aud
+	_, hasPub = r.pubs[pid]
+	for opid, q := range r.peers {
+		if opid == pid {
+			continue
+		}
+		decisions = append(decisions, audienceDecision{q: q, hear: aud.hears(opid)})
+	}
+	return decisions, hasPub
+}
+
+// SetAudience sets who may hear pid and re-wires live subscribers to match:
+// peers that should now hear pid but don't get Negotiate()d (publicationsExcept
+// now includes pid); peers that must no longer hear pid have pid's tracks
+// removed. Safe to call before pid has published — it just records the audience,
+// which the eventual publish honors via publicationsExcept. This is the single
+// entry point for monitor (all=false, allowed=nil), whisper (all=false,
+// allowed=agent pids) and barge (all=true).
+func (s *SFU) SetAudience(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) {
+	decisions, hasPub := s.setAudienceState(roomID, pid, all, allowed)
+	if !hasPub {
+		return // nothing wired yet; publish-time Negotiate will honor the audience
+	}
+	for _, d := range decisions {
+		if d.hear {
+			d.q.Negotiate() // subscribe: publicationsExcept now yields pid
+		} else {
+			s.unsubscribe(d.q, pid) // drop pid's tracks from this subscriber
+		}
+	}
+}
+
+// unsubscribe removes every track of source pid from subscriber q and
+// renegotiates q. No-op if q wasn't subscribed. Mirrors the per-subscriber
+// teardown in Unpublish/Leave.
+func (s *SFU) unsubscribe(q *Peer, pid room.ParticipantID) {
+	q.mu.Lock()
+	byTrack := q.subs[pid]
+	if len(byTrack) == 0 {
+		q.mu.Unlock()
+		return
+	}
+	senders := make([]*webrtc.RTPSender, 0, len(byTrack))
+	for _, sender := range byTrack {
+		senders = append(senders, sender)
+	}
+	delete(q.subs, pid)
+	q.dirty = true
+	q.mu.Unlock()
+	for _, sender := range senders {
+		if err := q.pc.RemoveTrack(sender); err != nil {
+			q.log.Debug("remove track on audience change", "err", err)
+		}
+	}
+	q.Negotiate()
 }
 
 // onPublish copies a publisher's remote RTP into its room-owned fan-out track,

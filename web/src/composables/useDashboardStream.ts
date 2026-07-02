@@ -59,6 +59,18 @@ function onEvent(type: string, data: unknown) {
       calls.value = calls.value.filter((c) => c.id !== d.call_id);
       break;
     }
+    case "call.supervised": {
+      const d = data as { room: string; mode?: string; present: boolean; supervisor?: string };
+      const i = calls.value.findIndex((c) => c.room_id === d.room);
+      if (i >= 0) {
+        calls.value[i] = {
+          ...calls.value[i],
+          supervised: d.present ? d.mode : "",
+          supervisor: d.present ? d.supervisor : "",
+        };
+      }
+      break;
+    }
     case "agent.presence": {
       const d = data as { sip_username: string; status: Agent["status"] };
       agents.value = agents.value.map((a) =>
