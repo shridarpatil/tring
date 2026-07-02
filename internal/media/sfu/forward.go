@@ -218,14 +218,14 @@ func (s *SFU) unsubscribe(q *Peer, pid room.ParticipantID) {
 		return
 	}
 	senders := make([]*webrtc.RTPSender, 0, len(byTrack))
-	for _, snd := range byTrack {
-		senders = append(senders, snd)
+	for _, sender := range byTrack {
+		senders = append(senders, sender)
 	}
 	delete(q.subs, pid)
 	q.dirty = true
 	q.mu.Unlock()
-	for _, snd := range senders {
-		if err := q.pc.RemoveTrack(snd); err != nil {
+	for _, sender := range senders {
+		if err := q.pc.RemoveTrack(sender); err != nil {
 			q.log.Debug("remove track on audience change", "err", err)
 		}
 	}

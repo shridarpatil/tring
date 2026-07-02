@@ -131,3 +131,28 @@ func TestSetAudienceUpdatesGating(t *testing.T) {
 		t.Fatal("after whisper SetAudience, agent must see sup")
 	}
 }
+
+func TestSetAudienceBeforePublishIsHonored(t *testing.T) {
+	s, err := New(Config{IncludeLoopback: true})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	const rid = room.RoomID("t3/room")
+	// Room exists (via agent's publication), but "sup" has not published yet.
+	s.putPub(t, rid, "agent")
+
+	// SetAudience before pid has a publication must hit the hasPub==false
+	// early return in SetAudience, and still record the audience.
+	s.SetAudience(rid, "sup", false, nil)
+
+	// Now sup publishes.
+	s.putPub(t, rid, "sup")
+
+	// The recorded audience must be honored at publish time.
+	if hasSource(s.publicationsExcept(rid, "agent"), "sup") {
+		t.Fatal("monitor set before publish must hide sup from agent")
+	}
+	if !hasSource(s.publicationsExcept(rid, "sup"), "agent") {
+		t.Fatal("sup must still hear the agent")
+	}
+}
