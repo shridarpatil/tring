@@ -27,6 +27,16 @@ export class SupervisorSession {
   private pc?: RTCPeerConnection;
   private mic?: MediaStream;
   private audioEl = new Audio();
+  // Guards teardown+notify so it happens at most once, whether triggered by
+  // the user (hangup()) or the server (ended/error frame, socket close).
+  private disposed = false;
+
+  // Set by the caller (DashboardView) to learn when a session dies for a
+  // reason OTHER than the caller itself calling hangup() — e.g. the server
+  // closes the socket because the call ended, or rejects the token. Never
+  // called from hangup() itself (the caller already knows and will clear
+  // its own state).
+  onClose?: (reason?: string) => void;
 
   constructor(
     private gatewayURL: string,
@@ -48,6 +58,7 @@ export class SupervisorSession {
     this.ws = new WebSocket(url);
     this.ws.onopen = () => this.send({ type: "join", room: this.room });
     this.ws.onmessage = (ev) => this.onMessage(JSON.parse(ev.data) as RtcFrame);
+    this.ws.onclose = () => this.handleRemoteClose();
   }
 
   private onMessage(m: RtcFrame): void {
@@ -76,7 +87,7 @@ export class SupervisorSession {
         break;
       case "ended":
       case "error":
-        this.hangup();
+        this.handleRemoteClose(m.reason);
         break;
     }
   }
@@ -105,8 +116,33 @@ export class SupervisorSession {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
   }
 
+  // hangup is the USER-initiated stop (operator clicks Stop, or switches to
+  // another call). It tells the server, tears down, and does NOT call
+  // onClose — the caller initiated this and will clear its own state.
   hangup(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.send({ type: "bye" });
+    this.teardown();
+  }
+
+  // handleRemoteClose handles the SERVER/unexpected side of teardown: an
+  // "ended"/"error" frame, or the socket just closing on its own. It DOES
+  // notify via onClose so the Vue layer can clear controls and surface the
+  // reason. Guarded by `disposed` so it can't double-fire (including after
+  // our own hangup()'s ws.close() triggers this same onclose handler).
+  private handleRemoteClose(reason?: string): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.teardown();
+    this.onClose?.(reason);
+  }
+
+  // teardown is the single idempotent path that stops the pc/ws/mic and
+  // clears the audio element. Both hangup() and handleRemoteClose() funnel
+  // through it; neither sends `bye` here (hangup sends it itself before
+  // calling teardown; a remote close means the socket is already going away).
+  private teardown(): void {
     this.pc?.close();
     this.pc = undefined;
     this.ws?.close();

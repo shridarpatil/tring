@@ -79,9 +79,21 @@ function destLabel(c: Call): string {
 const active = ref<{ callId: string; mode: SuperviseMode; session: SupervisorSession } | null>(null);
 
 async function startSupervise(c: Call): Promise<void> {
+  // Switching targets mid-session must hang up the previous one — otherwise
+  // its WebSocket/PeerConnection stay open and, in whisper/barge, the
+  // operator keeps transmitting into the old call's room.
+  if (active.value) {
+    active.value.session.hangup();
+    active.value = null;
+  }
   try {
     const creds = await api.supervise(c.id);
     const session = new SupervisorSession(creds.gateway_url, creds.room, creds.token, creds.ice_servers || []);
+    session.onClose = (reason) => {
+      // Only clear if this is still the active session (guard against races).
+      if (active.value?.session === session) active.value = null;
+      if (reason) toast.error(reason);
+    };
     await session.connect("monitor");
     active.value = { callId: c.id, mode: "monitor", session };
   } catch (e) {
