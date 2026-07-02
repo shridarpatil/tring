@@ -13,31 +13,33 @@ import "encoding/json"
 // stores session_token from `joined` and re-sends it in a later `join`.
 const (
 	// client → server
-	msgJoin      = "join"      // {room, name, session_token?, flow_id?}
-	msgRegister  = "register"  // agent presence: this socket is an available agent
-	msgAnswer    = "answer"    // {sdp} — answer to a server offer
-	msgICE       = "ice"       // {candidate}
-	msgPublish   = "publish"   // {kind} — ask the server to invite an extra track (screen-share video)
-	msgUnpublish = "unpublish" // {kind} — stop publishing that track
-	msgDTMF      = "dtmf"      // {digit} — a caller keypress, routed to the room's IVR
-	msgHold      = "hold"      // agent: put the other party on hold (they hear MOH)
-	msgResume    = "resume"    // agent: take the other party off hold
-	msgTransfer  = "transfer"  // agent: re-route the call — {to_team | to_sip}
-	msgDecline   = "decline"   // agent: reject a ring so the router advances to the next agent NOW — {room}
-	msgPing      = "ping"      // keepalive: a no-op frame that resets the socket read deadline
+	msgJoin      = "join"           // {room, name, session_token?, flow_id?}
+	msgRegister  = "register"       // agent presence: this socket is an available agent
+	msgAnswer    = "answer"         // {sdp} — answer to a server offer
+	msgICE       = "ice"            // {candidate}
+	msgPublish   = "publish"        // {kind} — ask the server to invite an extra track (screen-share video)
+	msgUnpublish = "unpublish"      // {kind} — stop publishing that track
+	msgDTMF      = "dtmf"           // {digit} — a caller keypress, routed to the room's IVR
+	msgHold      = "hold"           // agent: put the other party on hold (they hear MOH)
+	msgResume    = "resume"         // agent: take the other party off hold
+	msgTransfer  = "transfer"       // agent: re-route the call — {to_team | to_sip}
+	msgDecline   = "decline"        // agent: reject a ring so the router advances to the next agent NOW — {room}
+	msgSupervise = "supervise-mode" // supervisor → server: switch mode — {mode: monitor|whisper|barge}
+	msgPing      = "ping"           // keepalive: a no-op frame that resets the socket read deadline
 	msgBye       = "bye"
 
 	// server → client
-	msgJoined     = "joined"      // {participant_id, session_token, ice_servers}
-	msgOffer      = "offer"       // {sdp}
-	msgPeerJoined = "peer-joined" // {participant_id, name}
-	msgPeerState  = "peer-state"  // {participant_id, state}
-	msgPeerLeft   = "peer-left"   // {participant_id}
+	msgJoined     = "joined"          // {participant_id, session_token, ice_servers}
+	msgOffer      = "offer"           // {sdp}
+	msgPeerJoined = "peer-joined"     // {participant_id, name}
+	msgPeerState  = "peer-state"      // {participant_id, state}
+	msgPeerLeft   = "peer-left"       // {participant_id}
 	msgIncoming   = "incoming"        // s→agent: a call is ringing — {room, from}
 	msgCancelRing = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
 	msgReady      = "ready"           // s→agent: presence registered
-	msgEnded      = "ended"       // s→client: the call is over (terminal — don't reconnect)
-	msgError      = "error"       // {reason}
+	msgEnded      = "ended"           // s→client: the call is over (terminal — don't reconnect)
+	msgError      = "error"           // {reason}
+	msgSupervisor = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
 )
 
 // msg is the single envelope for every /rtc message.
@@ -76,6 +78,10 @@ type msg struct {
 
 	// error / bye
 	Reason string `json:"reason,omitempty"`
+
+	// supervisor
+	Mode    string `json:"mode,omitempty"`
+	Present bool   `json:"present,omitempty"`
 }
 
 // ICEServer is the browser-facing STUN/TURN entry sent in `joined` (ephemeral
