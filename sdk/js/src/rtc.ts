@@ -534,9 +534,15 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     return call;
   }
 
-  /** decline drops the current ring (the edge ring times out → no_answer). */
+  /** decline rejects the current ring: it tells the edge so the router advances to
+   *  the next agent immediately (rather than waiting out the ring timeout), then
+   *  drops the local ringing state. */
   decline(): void {
+    const room = this.incoming?.room;
     this.incoming = null;
+    if (room && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: ClientMsgType.Decline, room }));
+    }
   }
 
   /** hasIncoming reports whether a call is currently ringing (for auto-answer). */

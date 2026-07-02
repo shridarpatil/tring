@@ -134,6 +134,7 @@ type Server struct {
 	conns     map[room.ParticipantID]*conn
 	agents    map[string]map[string]*conn        // online agents: tenant → sip → presence socket
 	rings     map[room.RoomID]chan struct{}      // pending transfer rings → closed when an agent joins
+	declines  map[room.RoomID]func(sip string)   // registered per active ring → an agent rejecting advances the router now
 	pstnCalls map[room.RoomID]room.CallID        // live phone legs by room (pstn.go)
 	onCall    map[string]int                     // "tenant|sip" → active call legs (drives on_call presence)
 	callers   map[room.RoomID]room.ParticipantID // the IVR caller per room (flow-pinned joiner) — see handoff.go
@@ -166,6 +167,7 @@ func New(cfg Config) *Server {
 		conns:     make(map[room.ParticipantID]*conn),
 		agents:    make(map[string]map[string]*conn),
 		rings:     make(map[room.RoomID]chan struct{}),
+		declines:  make(map[room.RoomID]func(sip string)),
 		pstnCalls: make(map[room.RoomID]room.CallID),
 		onCall:    make(map[string]int),
 		callers:   make(map[room.RoomID]room.ParticipantID),
