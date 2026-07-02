@@ -1,0 +1,160 @@
+package signaling
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/google/uuid"
+	"github.com/pion/webrtc/v4"
+
+	"github.com/shridarpatil/tring/internal/media/prompt"
+	"github.com/shridarpatil/tring/internal/media/room"
+)
+
+// HoldMusicResolver resolves a tenant's configured system hold music
+// (tenants.hold_music), "" when none is set (internal/flowstore implements it).
+// Used by the agent-initiated hold path (msgHold); nil → agent hold plays
+// silence. The queue/ring path gets its hold music from the team config instead.
+type HoldMusicResolver interface {
+	TenantHoldMusic(ctx context.Context, tenantID uuid.UUID) (string, error)
+}
+
+// holdFile returns the local Ogg/Opus file to play for a resolved hold-music
+// value, or "" when nothing plays on the pion plane. The default MOH is the
+// FreeSWITCH-only "local_stream://moh" stream sentinel (and a per-team override
+// may be any URL) — pion has no stream player, only a file player, so any value
+// carrying a scheme maps to silence. Empty (no hold music configured) is silence
+// too. Net effect: visitors hear hold music only when a real file is configured.
+func holdFile(moh string) string {
+	if moh == "" || strings.Contains(moh, "://") {
+		return ""
+	}
+	return moh
+}
+
+// playHold injects the tenant's hold music into the room as a looping,
+// gapless-enough source and returns an idempotent stop func. moh is a resolved
+// hold-music value (team MOH or tenant hold_music); when it isn't a playable
+// local file (see holdFile) or fails to load, nothing is injected and stop is a
+// no-op — the caller hears silence, exactly as before this existed.
+//
+// The injected source is an ordinary room publication, so every browser in the
+// room (the waiting visitor, or the held party) hears it just like any other
+// participant's audio — the same seam the IVR prompt player rides.
+func (s *Server) playHold(roomID room.RoomID, moh string) func() {
+	file := holdFile(moh)
+	if file == "" {
+		return func() {}
+	}
+	frames, err := loadOggFile(s.cfg.AudioDir, file)
+	if err != nil {
+		s.log.Warn("hold: load hold music failed", "room", roomID, "file", file, "err", err)
+		return func() {}
+	}
+
+	pid := room.ParticipantID("hold-" + uuid.NewString())
+	player := prompt.NewPlayer(pid, 0)
+	if err := s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
+	}); err != nil {
+		s.log.Warn("hold: inject hold music failed", "room", roomID, "err", err)
+		_ = player.Close()
+		return func() {}
+	}
+	s.log.Info("hold music started", "room", roomID, "file", file)
+
+	stopCh := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+			}
+			done := player.Play(frames) // re-queue the whole clip each pass = loop
+			select {
+			case <-stopCh:
+				return
+			case <-done:
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stopCh)
+			s.sfu.RemoveSource(roomID, pid)
+			_ = player.Close()
+			s.log.Info("hold music stopped", "room", roomID)
+		})
+	}
+}
+
+// tenantHoldMusic resolves the tenant (from the "<tenant>/<name>" room id) and
+// returns its configured system hold music, "" when unresolvable/unset/disabled.
+func (s *Server) tenantHoldMusic(roomID room.RoomID) string {
+	if s.cfg.HoldMusic == nil {
+		return ""
+	}
+	tenant, _, _ := strings.Cut(string(roomID), "/")
+	tid, err := uuid.Parse(tenant)
+	if err != nil {
+		return ""
+	}
+	moh, err := s.cfg.HoldMusic.TenantHoldMusic(context.Background(), tid)
+	if err != nil {
+		s.log.Warn("hold: resolve tenant hold music failed", "room", roomID, "err", err)
+		return ""
+	}
+	return moh
+}
+
+// holdParty starts hold music for a room on an agent's msgHold (the agent mutes
+// its own mic client-side, so the held party then hears only the music). A
+// second hold while already held is a no-op.
+func (s *Server) holdParty(roomID room.RoomID) {
+	moh := s.tenantHoldMusic(roomID)
+	stop := s.playHold(roomID, moh)
+
+	s.mu.Lock()
+	if _, held := s.holds[roomID]; held {
+		s.mu.Unlock()
+		stop() // lost the race — tear down the one we just started
+		return
+	}
+	s.holds[roomID] = stop
+	s.mu.Unlock()
+}
+
+// resumeParty stops a room's hold music on msgResume (idempotent).
+func (s *Server) resumeParty(roomID room.RoomID) { s.clearHold(roomID) }
+
+// clearHold stops and forgets a room's hold music if any is playing. Called on
+// resume and on room teardown so a hold source never outlives its call.
+func (s *Server) clearHold(roomID room.RoomID) {
+	s.mu.Lock()
+	stop := s.holds[roomID]
+	delete(s.holds, roomID)
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
+// loadOggFile opens an Ogg/Opus file under dir and decodes it to per-frame Opus
+// packets. file may be an absolute sound-library path (<dir>/<tenant>/<uuid>.ogg)
+// or a relative custom path; either way the open is confined to dir (no
+// traversal out). Shared by the IVR prompt loader and hold music.
+func loadOggFile(dir, file string) ([][]byte, error) {
+	rel := strings.TrimPrefix(file, dir)
+	f, err := os.Open(filepath.Join(dir, filepath.Clean("/"+rel)))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return prompt.LoadOggOpus(f)
+}

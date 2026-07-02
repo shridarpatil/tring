@@ -95,3 +95,14 @@ func (s *Store) TeamSIPs(ctx context.Context, tenantID uuid.UUID, team string) (
 func (s *Store) TeamConfig(ctx context.Context, tenantID uuid.UUID, team string) (routing.TeamConfig, bool, error) {
 	return routing.LoadTeamConfig(ctx, s.db, s.q, tenantID, team)
 }
+
+// TenantHoldMusic returns the tenant's configured system hold music
+// (tenants.hold_music), "" when unset. Used by the gateway's agent-initiated
+// hold path to play music into the room. Read-only.
+func (s *Store) TenantHoldMusic(ctx context.Context, tenantID uuid.UUID) (string, error) {
+	var moh string
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetTenantHoldMusic, tenantID).Scan(&moh); err != nil {
+		return "", err
+	}
+	return moh, nil
+}

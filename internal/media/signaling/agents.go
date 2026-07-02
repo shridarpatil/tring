@@ -3,6 +3,7 @@ package signaling
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shridarpatil/tring/internal/brain"
@@ -134,7 +135,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 // one transfer — candidates from the live socket registry + the pionRing Effects
 // + a cleanup that withdraws popups and deregisters the pending-ring channel.
 // team resolution + the routing.Router queue/ring loop live in brain.AgentRouter.
-func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy string) (func(context.Context) []string, routing.Effects, func()) {
+func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy, moh string) (func(context.Context) []string, routing.Effects, func()) {
 	tenant, name, _ := strings.Cut(roomID, "/")
 
 	candidates := func(context.Context) []string {
@@ -163,8 +164,9 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	s.rings[rid] = ring
 	s.mu.Unlock()
 
-	eff := &pionRing{s: s, tenant: tenant, roomName: name, label: t.Label, strategy: strategy, ring: ring, rung: map[string]bool{}}
+	eff := &pionRing{s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label, strategy: strategy, moh: moh, ring: ring, rung: map[string]bool{}}
 	cleanup := func() {
+		eff.stopHold() // stop the queue/ring hold music (no-op if it never started)
 		eff.cancelRung()
 		s.mu.Lock()
 		if s.rings[rid] == ring {
@@ -181,11 +183,31 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 type pionRing struct {
 	s        *Server
 	tenant   string
+	roomID   room.RoomID     // full "<tenant>/<name>" — where hold music is injected
 	roomName string          // un-namespaced name agents join
 	label    string          // caller label shown to the agent
 	strategy string          // team strategy; "" / ring_all → all at once, else one at a time
+	moh      string          // resolved team hold music played to the caller while waiting
 	ring     <-chan struct{} // closed on a room join
 	rung     map[string]bool // sips popped (and not yet withdrawn) this transfer
+
+	holdOnce sync.Once // starts hold music at most once per transfer
+	holdStop func()    // stops it; set by ensureHold, called by stopHold/cleanup
+}
+
+// ensureHold starts the caller's hold music the first time the caller is rung or
+// held, and keeps it playing for the rest of the transfer (across ring/hold
+// iterations). Idempotent — safe to call every Ring/Hold pass.
+func (p *pionRing) ensureHold() {
+	p.holdOnce.Do(func() { p.holdStop = p.s.playHold(p.roomID, p.moh) })
+}
+
+// stopHold ends the caller's hold music (once an agent answers, the wait times
+// out, or the transfer is torn down). Safe if hold never started.
+func (p *pionRing) stopHold() {
+	if p.holdStop != nil {
+		p.holdStop()
+	}
 }
 
 // Answered backstops the async case: an agent joined mid-hold (outside a Ring).
@@ -210,6 +232,7 @@ func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == n
 // single rung agent's popup is withdrawn so only one agent ever rings at a time;
 // the Router's next iteration re-orders and Ring advances to the next.
 func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.Duration) (routing.RingOutcome, error) {
+	p.ensureHold() // caller hears hold music from the first ring, not just once queued
 	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
 
 	p.s.mu.Lock()
@@ -297,8 +320,10 @@ func (p *pionRing) cancelRung() {
 }
 
 // Hold waits up to maxDur, returning early when ready() goes true or an agent
-// joins. No hold audio on the web plane yet — the caller stays connected.
+// joins. The caller hears the team's hold music (started here / on the first
+// Ring, stopped when the transfer tears down) for the whole wait.
 func (p *pionRing) Hold(ctx context.Context, maxDur time.Duration, ready func() bool) {
+	p.ensureHold()
 	tk := time.NewTicker(250 * time.Millisecond)
 	defer tk.Stop()
 	timeout := time.After(maxDur)
