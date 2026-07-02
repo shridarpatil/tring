@@ -105,6 +105,7 @@ func main() {
 	var teams signaling.TeamResolver
 	var holdMusic signaling.HoldMusicResolver
 	var calls signaling.CallLog
+	var supervisors signaling.SupervisorLog
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
@@ -124,28 +125,35 @@ func main() {
 		if berr != nil {
 			logger.Warn("S3 recording storage disabled (config error)", "err", berr)
 		}
-		calls = callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub)
+		// One *callcdr.Log satisfies both CallLog and SupervisorLog; assign it into
+		// each interface-typed var from its concrete type so a nil DB leaves BOTH
+		// unset (a typed-nil stored in an interface would compare != nil and break
+		// the "Calls != nil"/"Supervisors != nil" best-effort checks downstream).
+		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub)
+		calls = cdrLog
+		supervisors = cdrLog
 	}
 
 	sig := signaling.New(signaling.Config{
-		SFU:        mediaSFU,
-		JWTSecret:  []byte(k.String("jwt_secret")),
-		STUNURL:    k.String("stun_url"),
-		TURNURL:    turnURL,
-		TURNSecret: turnSecret,
-		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
-		Grace:      time.Duration(k.Int("media_grace_seconds")) * time.Second,
-		DevTokens:  k.Bool("rtc_dev_tokens"),
-		Flows:      flows,
-		Teams:      teams,
-		HoldMusic:  holdMusic, // tenant hold music for agent-initiated hold (msgHold)
-		AudioDir:   k.String("audio_dir"),
-		Tokens:     redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
-		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard
-		Calls:      calls,                    // CDRs + recordings (one path for web + phone)
-		Cache:      redisCache,               // publish web team-queue depth for the dashboard
-		Events:     eventsPub,
-		Logger:     logger,
+		SFU:         mediaSFU,
+		JWTSecret:   []byte(k.String("jwt_secret")),
+		STUNURL:     k.String("stun_url"),
+		TURNURL:     turnURL,
+		TURNSecret:  turnSecret,
+		TURNTTL:     time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Grace:       time.Duration(k.Int("media_grace_seconds")) * time.Second,
+		DevTokens:   k.Bool("rtc_dev_tokens"),
+		Flows:       flows,
+		Teams:       teams,
+		HoldMusic:   holdMusic, // tenant hold music for agent-initiated hold (msgHold)
+		AudioDir:    k.String("audio_dir"),
+		Tokens:      redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
+		Presence:    presence.New(redisCache), // publish agent online/offline for the dashboard
+		Calls:       calls,                    // CDRs + recordings (one path for web + phone)
+		Cache:       redisCache,               // publish web team-queue depth for the dashboard
+		Events:      eventsPub,
+		Supervisors: supervisors, // supervisor session audit (nil DB → nil, no audit)
+		Logger:      logger,
 	})
 
 	addr := k.String("gateway_addr")

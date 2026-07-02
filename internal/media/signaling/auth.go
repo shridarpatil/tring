@@ -50,6 +50,7 @@ type principal struct {
 	isSupervisor bool      // supervisor: joins a live call read/whisper/barge
 	room         string    // supervisor: the token-pinned room name (un-namespaced)
 	name         string    // supervisor: display name for the agent indicator
+	userID       string    // supervisor: the audited console user id (JWT subject)
 }
 
 // supervisorClaims are carried in a tring.supervisor RTC token (minted by the
@@ -98,7 +99,7 @@ func validatePrincipal(raw string, secret []byte) (*principal, error) {
 		jwt.WithAudience(supervisorAudience),
 		jwt.WithValidMethods([]string{"HS256"}),
 	); err == nil {
-		p := &principal{tenant: sc.TenantID, isSupervisor: true, room: sc.Room, name: sc.Name, jti: sc.ID}
+		p := &principal{tenant: sc.TenantID, isSupervisor: true, room: sc.Room, name: sc.Name, jti: sc.ID, userID: sc.Subject}
 		if sc.ExpiresAt != nil {
 			p.exp = sc.ExpiresAt.Time
 		}

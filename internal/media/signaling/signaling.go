@@ -82,7 +82,10 @@ type Config struct {
 	// Events publishes dashboard live-update events (presence, queue depth) to
 	// the shared Redis bus the api Hub subscribes to. nil = events disabled.
 	Events events.Sink
-	Logger *slog.Logger
+	// Supervisors records supervisor session audit (internal/callcdr implements
+	// it). nil → no audit. Best-effort.
+	Supervisors SupervisorLog
+	Logger      *slog.Logger
 }
 
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
@@ -132,14 +135,16 @@ type Server struct {
 
 	mu        sync.Mutex
 	conns     map[room.ParticipantID]*conn
-	agents    map[string]map[string]*conn        // online agents: tenant → sip → presence socket
-	rings     map[room.RoomID]chan struct{}      // pending transfer rings → closed when an agent joins
-	declines  map[room.RoomID]func(sip string)   // registered per active ring → an agent rejecting advances the router now
-	pstnCalls map[room.RoomID]room.CallID        // live phone legs by room (pstn.go)
-	onCall    map[string]int                     // "tenant|sip" → active call legs (drives on_call presence)
-	callers   map[room.RoomID]room.ParticipantID // the IVR caller per room (flow-pinned joiner) — see handoff.go
-	handoffs  map[room.RoomID]*handoff           // rooms waiting for a transfer handoff to end (handoff.go)
-	holds     map[room.RoomID]func()             // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
+	agents    map[string]map[string]*conn                  // online agents: tenant → sip → presence socket
+	rings     map[room.RoomID]chan struct{}                // pending transfer rings → closed when an agent joins
+	declines  map[room.RoomID]func(sip string)             // registered per active ring → an agent rejecting advances the router now
+	pstnCalls map[room.RoomID]room.CallID                  // live phone legs by room (pstn.go)
+	onCall    map[string]int                               // "tenant|sip" → active call legs (drives on_call presence)
+	callers   map[room.RoomID]room.ParticipantID           // the IVR caller per room (flow-pinned joiner) — see handoff.go
+	handoffs  map[room.RoomID]*handoff                     // rooms waiting for a transfer handoff to end (handoff.go)
+	holds     map[room.RoomID]func()                       // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
+	roles     map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
+	supers    map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -234,6 +239,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		_ = netConn.Close()
 		return
 	}
+	if princ.isSupervisor {
+		// A supervisor never registers as an agent or joins as a room.Manager
+		// participant — it's an SFU-only observer. Handled entirely separately.
+		s.handleSupervisor(c, princ, first, tenant)
+		return
+	}
 	if first.Type == msgRegister {
 		if princ.isVisitor {
 			_ = c.send(msg{Type: msgError, Reason: "visitor token cannot register as agent"})
@@ -287,6 +298,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c.pid = p.ID()
+
+	role := roleAgent
+	if princ.isVisitor {
+		role = roleVisitor
+	}
+	s.setRole(p.ID(), role)
 
 	s.mu.Lock()
 	s.conns[p.ID()] = c
@@ -416,9 +433,8 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 			}
 		case msgICE:
 			if c.peer != nil && len(m.Candidate) > 0 {
-				var init webrtc.ICECandidateInit
-				if json.Unmarshal(m.Candidate, &init) == nil {
-					if err := c.peer.HandleCandidate(init); err != nil {
+				if init := webrtcICE(m.Candidate); init != nil {
+					if err := c.peer.HandleCandidate(*init); err != nil {
 						s.log.Warn("handle candidate", "err", err, "participant", p.ID())
 					}
 				}
@@ -463,6 +479,7 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
+		s.clearRole(e.Participant)
 		// A held call is a 1:1 state between the two live parties: if either leaves,
 		// stop any agent-initiated hold music so its source never outlives the call.
 		s.clearHold(e.Room)
@@ -471,6 +488,7 @@ func (s *Server) routeEvent(e room.Event) {
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
+			s.closeSupervisors(e.Room) // end any supervisor sessions with the call
 			if s.cfg.Calls != nil {
 				s.cfg.Calls.Ended(string(e.Room), "ended")
 			}
@@ -612,6 +630,15 @@ func cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// webrtcICE decodes a trickle-ICE candidate payload, or nil if malformed.
+func webrtcICE(raw json.RawMessage) *webrtc.ICECandidateInit {
+	var init webrtc.ICECandidateInit
+	if json.Unmarshal(raw, &init) != nil {
+		return nil
+	}
+	return &init
 }
 
 // codecKind maps a publish/unpublish kind string to a pion codec type
