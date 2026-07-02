@@ -190,7 +190,8 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   });
   tring.on("call:answered", ({ call }) => panel.setActive(call, "connected"));
   tring.on("call:remote-video", ({ stream }) => panel.setRemoteVideo(stream));
-  tring.on("call:ended", () => panel.hide());
+  tring.on("call:supervisor", ({ present, mode, name }) => panel.setSupervisor(present, mode, name));
+  tring.on("call:ended", () => panel.hide()); // hide() resets the supervisor badge too
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
 
   return tring;
@@ -252,6 +253,7 @@ interface Panel {
   setActive(call: Call, status: string): void;
   setStatus(state: string, text: string): void;
   setRemoteVideo(stream: MediaStream | null): void;
+  setSupervisor(present: boolean, mode: string, name: string): void;
   hide(): void;
 }
 
@@ -277,6 +279,7 @@ function createPanel(control?: CallControl): Panel {
       <div class="tring-panel-to"></div>
       <div class="tring-panel-sub"></div>
     </div>
+    <div class="tring-panel-row tring-panel-supervisor"></div>
     <div class="tring-panel-row tring-panel-video"><video class="tring-remote-video" autoplay playsinline></video></div>
     <div class="tring-panel-row tring-panel-dialed"></div>
     <div class="tring-panel-row tring-panel-picker"></div>
@@ -297,6 +300,7 @@ function createPanel(control?: CallControl): Panel {
 
   const toEl = root.querySelector<HTMLElement>(".tring-panel-to")!;
   const subEl = root.querySelector<HTMLElement>(".tring-panel-sub")!;
+  const supervisorEl = root.querySelector<HTMLElement>(".tring-panel-supervisor")!;
   const dialedEl = root.querySelector<HTMLElement>(".tring-panel-dialed")!;
   const hangupBtn = root.querySelector<HTMLButtonElement>(".tring-hangup")!;
   const muteBtn = root.querySelector<HTMLButtonElement>(".tring-mute")!;
@@ -356,6 +360,8 @@ function createPanel(control?: CallControl): Panel {
     root.classList.remove("tring-picker-open");
     dialedEl.textContent = "";
     dialed = "";
+    supervisorEl.style.display = "none";
+    supervisorEl.textContent = "";
   }
 
   const ringer = new Ringer();
@@ -527,6 +533,15 @@ function createPanel(control?: CallControl): Panel {
       remoteVideo.srcObject = stream;
       root.classList.toggle("tring-has-video", stream !== null);
     },
+    setSupervisor(present, mode, name) {
+      if (!present) {
+        supervisorEl.style.display = "none";
+        supervisorEl.textContent = "";
+        return;
+      }
+      supervisorEl.textContent = mode === "whisper" ? `Whisper: ${name}` : "🎧 Supervising";
+      supervisorEl.style.display = "block";
+    },
     hide() {
       ringer.stop();
       stopTimer();
@@ -616,6 +631,14 @@ function injectStyles(): void {
     #${PANEL_ID} .tring-panel-to { font-weight: 600; font-size: 16px; }
     #${PANEL_ID} .tring-panel-sub {
       color: #9ca3af; font-size: 13px; font-variant-numeric: tabular-nums;
+    }
+    /* Supervisor indicator — a console operator is monitoring/whispering/barging.
+       Hidden by default; shown/hidden via panel.setSupervisor(). */
+    #${PANEL_ID} .tring-panel-supervisor {
+      display: none; width: fit-content; margin: 0 auto;
+      background: #f59e0b; color: #111827;
+      font-size: 12px; font-weight: 600;
+      padding: .2rem .6rem; border-radius: 999px;
     }
     #${PANEL_ID}[data-state="ringing"] .tring-panel-sub { color: #fbbf24; }
     #${PANEL_ID}[data-state="incoming"] .tring-panel-sub,
