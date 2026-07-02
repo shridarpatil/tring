@@ -33,8 +33,9 @@ func (s *SFU) InjectSource(roomID room.RoomID, src room.ParticipantSource, cap w
 	r := s.rooms[roomID]
 	if r == nil {
 		r = &sfuRoom{
-			peers: make(map[room.ParticipantID]*Peer),
-			pubs:  make(map[room.ParticipantID]*publication),
+			peers:    make(map[room.ParticipantID]*Peer),
+			pubs:     make(map[room.ParticipantID]*publication),
+			audience: make(map[room.ParticipantID]*audience),
 		}
 		s.rooms[roomID] = r
 	}
@@ -95,8 +96,9 @@ func (s *SFU) AddSink(roomID room.RoomID, pid room.ParticipantID, sink room.Trac
 	r := s.rooms[roomID]
 	if r == nil {
 		r = &sfuRoom{
-			peers: make(map[room.ParticipantID]*Peer),
-			pubs:  make(map[room.ParticipantID]*publication),
+			peers:    make(map[room.ParticipantID]*Peer),
+			pubs:     make(map[room.ParticipantID]*publication),
+			audience: make(map[room.ParticipantID]*audience),
 		}
 		s.rooms[roomID] = r
 	}

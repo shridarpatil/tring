@@ -111,8 +111,9 @@ func (s *SFU) AttachPort(roomID room.RoomID, src room.ParticipantSource, out fun
 	r := s.rooms[roomID]
 	if r == nil {
 		r = &sfuRoom{
-			peers: make(map[room.ParticipantID]*Peer),
-			pubs:  make(map[room.ParticipantID]*publication),
+			peers:    make(map[room.ParticipantID]*Peer),
+			pubs:     make(map[room.ParticipantID]*publication),
+			audience: make(map[room.ParticipantID]*audience),
 		}
 		s.rooms[roomID] = r
 	}
