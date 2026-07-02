@@ -124,10 +124,32 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 
 	for {
 		_ = c.SetReadDeadline(time.Now().Add(90 * time.Second))
-		if _, err := c.read(); err != nil {
+		m, err := c.read()
+		if err != nil {
 			return
 		}
-		// Presence socket only takes keepalives; calls happen on a join socket.
+		// The presence socket carries keepalives and one call-control message: a
+		// decline, which advances the router to the next agent immediately (the
+		// answer happens on a separate join socket).
+		if m.Type == msgDecline {
+			s.handleDecline(tenant, sip, m.Room)
+		}
+	}
+}
+
+// handleDecline delivers an agent's rejection of a ringing call to that room's
+// active ring (registered by Prepare), which advances the router to the next
+// agent without waiting out the ring timeout. No-op if the ring already ended.
+func (s *Server) handleDecline(tenant, sip, roomName string) {
+	if roomName == "" {
+		return
+	}
+	rid := room.RoomID(tenant + "/" + roomName)
+	s.mu.Lock()
+	dec := s.declines[rid]
+	s.mu.Unlock()
+	if dec != nil {
+		dec(sip)
 	}
 }
 
@@ -137,20 +159,31 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 // team resolution + the routing.Router queue/ring loop live in brain.AgentRouter.
 func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy, moh string) (func(context.Context) []string, routing.Effects, func()) {
 	tenant, name, _ := strings.Cut(roomID, "/")
+	rid := room.RoomID(roomID)
+	ring := make(chan struct{})
+	eff := &pionRing{
+		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label,
+		strategy: strategy, moh: moh, ring: ring,
+		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{},
+		declineCh: make(chan struct{}, 1),
+	}
 
+	// candidates excludes agents who declined this call (as well as busy/offline
+	// ones) so the router never re-rings a decliner and the queue/hold logic sees
+	// the true remaining pool.
 	candidates := func(context.Context) []string {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		var out []string
 		if ringAll {
 			for sip := range s.agents[tenant] {
-				if s.onCall[tenant+"|"+sip] == 0 {
+				if s.onCall[tenant+"|"+sip] == 0 && !eff.declined[sip] {
 					out = append(out, sip)
 				}
 			}
 		} else {
 			for _, sip := range sips {
-				if c := s.agents[tenant][sip]; c != nil && s.onCall[tenant+"|"+sip] == 0 {
+				if c := s.agents[tenant][sip]; c != nil && s.onCall[tenant+"|"+sip] == 0 && !eff.declined[sip] {
 					out = append(out, sip)
 				}
 			}
@@ -158,13 +191,11 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 		return out
 	}
 
-	rid := room.RoomID(roomID)
-	ring := make(chan struct{})
 	s.mu.Lock()
 	s.rings[rid] = ring
+	s.declines[rid] = eff.decline
 	s.mu.Unlock()
 
-	eff := &pionRing{s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label, strategy: strategy, moh: moh, ring: ring, rung: map[string]bool{}}
 	cleanup := func() {
 		eff.stopHold() // stop the queue/ring hold music (no-op if it never started)
 		eff.cancelRung()
@@ -172,6 +203,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 		if s.rings[rid] == ring {
 			delete(s.rings, rid)
 		}
+		delete(s.declines, rid)
 		s.mu.Unlock()
 	}
 	return candidates, eff, cleanup
@@ -189,7 +221,11 @@ type pionRing struct {
 	strategy string          // team strategy; "" / ring_all → all at once, else one at a time
 	moh      string          // resolved team hold music played to the caller while waiting
 	ring     <-chan struct{} // closed on a room join
-	rung     map[string]bool // sips popped (and not yet withdrawn) this transfer
+	rung     map[string]bool // sips popped at least once this transfer (suppresses re-pop within a round)
+	active   map[string]bool // sips whose popup is currently showing (guarded by s.mu)
+	declined map[string]bool // sips that rejected this call — excluded from candidates (guarded by s.mu)
+
+	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
 	holdOnce sync.Once // starts hold music at most once per transfer
 	holdStop func()    // stops it; set by ensureHold, called by stopHold/cleanup
@@ -250,6 +286,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
 			p.rung[sip] = true
+			p.active[sip] = true
 		}
 	}
 
@@ -279,29 +316,67 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	}
 	p.s.mu.Unlock()
 
-	select {
-	case <-p.ring:
-		return routing.RingOutcome{Answered: true}, nil
-	case <-time.After(perAttempt):
-		// One-at-a-time: withdraw this agent's popup before the Router advances, so
-		// only ever one agent is ringing. (ring_all keeps everyone popped.)
-		if oneAtATime && rungNow != "" {
-			p.cancelSips([]string{rungNow})
+	timer := time.NewTimer(perAttempt)
+	defer timer.Stop()
+	for {
+		select {
+		case <-p.ring:
+			return routing.RingOutcome{Answered: true}, nil
+		case <-timer.C:
+			// One-at-a-time: withdraw this agent's popup before the Router advances, so
+			// only ever one agent is ringing. (ring_all keeps everyone popped.)
+			if oneAtATime && rungNow != "" {
+				p.cancelSips([]string{rungNow})
+			}
+			return routing.RingOutcome{}, nil
+		case <-p.declineCh:
+			// An agent rejected. decline() already withdrew that popup and dropped it
+			// from `active` (+ marked it declined so it won't be re-rung). If nobody
+			// we rang is still ringing, advance to the next agent NOW; otherwise
+			// (ring_all with others still ringing) keep waiting out the window.
+			p.s.mu.Lock()
+			stillRinging := len(p.active)
+			p.s.mu.Unlock()
+			if stillRinging == 0 {
+				return routing.RingOutcome{}, nil
+			}
+		case <-ctx.Done():
+			return routing.RingOutcome{}, ctx.Err()
 		}
-		return routing.RingOutcome{}, nil
-	case <-ctx.Done():
-		return routing.RingOutcome{}, ctx.Err()
 	}
 }
 
-// cancelSips withdraws the incoming-call UI on the given agents (best-effort).
+// cancelSips withdraws the incoming-call UI on the given agents (best-effort) and
+// clears their active-popup flag.
 func (p *pionRing) cancelSips(sips []string) {
 	p.s.mu.Lock()
 	defer p.s.mu.Unlock()
 	for _, sip := range sips {
+		delete(p.active, sip)
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
 		}
+	}
+}
+
+// decline records an agent's rejection of the current ring: it withdraws that
+// agent's popup, marks the agent as declined for this call (so candidates drops
+// it and the router won't re-ring it), and wakes Ring so it advances to the next
+// agent immediately instead of waiting out the ring window. Registered per active
+// ring as s.declines[roomID] by Prepare.
+func (p *pionRing) decline(sip string) {
+	p.s.mu.Lock()
+	p.declined[sip] = true
+	wasActive := p.active[sip]
+	delete(p.active, sip)
+	p.s.mu.Unlock()
+	if wasActive {
+		p.cancelSips([]string{sip}) // withdraw the ringing popup on the decliner
+	}
+	// Nudge Ring to re-evaluate (buffered(1) → coalesces concurrent declines).
+	select {
+	case p.declineCh <- struct{}{}:
+	default:
 	}
 }
 
