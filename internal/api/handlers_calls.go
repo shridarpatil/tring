@@ -47,6 +47,10 @@ type Call struct {
 	// array for outbound calls. Shape: see brain.SimStep / the
 	// console's IvrStep type.
 	IVRPath json.RawMessage `json:"ivr_path,omitempty"`
+	// RoomID is the pion room id ("<tenant>/<name>") for media-plane calls —
+	// lets the dashboard match a call.supervised event to its row. Empty for
+	// FreeSWITCH-only calls.
+	RoomID string `json:"room_id,omitempty"`
 }
 
 type createCallRequest struct {
@@ -340,6 +344,7 @@ func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
 		&c.AgentID, &c.LegID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
 		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef, &c.Source,
+		&c.RoomID,
 	)
 	if len(ivrPath) > 0 {
 		c.IVRPath = ivrPath

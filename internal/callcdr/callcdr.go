@@ -100,7 +100,7 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, s
 	}
 	legID := uuid.NewString()
 	var callID uuid.UUID
-	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef, source).Scan(&callID)
+	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef, source, roomID).Scan(&callID)
 	if err != nil {
 		l.log.Error("cdr: create call failed", "room", roomID, "err", err)
 		return nil
@@ -220,6 +220,41 @@ func (l *Log) Ended(roomID, cause string) {
 	}
 	if ac.rec != nil {
 		go l.finalizeRecording(ac)
+	}
+}
+
+// SuperviseStart records a supervisor session start and returns its id ("" on
+// failure — the caller treats "" as "no audit row"). userID is the console
+// user's id (the JWT subject) — a FK into users(id) — not a token jti.
+func (l *Log) SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, userID, mode string) string {
+	var uid *uuid.UUID
+	if u, err := uuid.Parse(userID); err == nil {
+		uid = &u
+	}
+	var callID *uuid.UUID
+	l.mu.Lock()
+	if ac := l.calls[callRoomID]; ac != nil {
+		callID = &ac.id
+	}
+	l.mu.Unlock()
+	var sessionID uuid.UUID
+	if err := l.db.Pool.QueryRow(ctx, l.q.CreateSupervisorSession, tenant, callID, uid, []string{mode}).Scan(&sessionID); err != nil {
+		l.log.Warn("supervise: start audit failed", "err", err)
+		return ""
+	}
+	return sessionID.String()
+}
+
+// SuperviseEnd stamps the end + the full mode list on a supervisor session.
+func (l *Log) SuperviseEnd(sessionID string, modes []string) {
+	id, err := uuid.Parse(sessionID)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := l.db.Pool.Exec(ctx, l.q.EndSupervisorSession, id, modes); err != nil {
+		l.log.Warn("supervise: end audit failed", "err", err)
 	}
 }
 

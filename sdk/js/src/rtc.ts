@@ -85,6 +85,7 @@ export type RtcCallEvent =
   | { type: "peer-left"; participantId: string }
   | { type: "reconnecting" }
   | { type: "ended"; reason?: string }
+  | { type: "supervisor"; present: boolean; mode: string; name: string }
   | { type: "error"; error: Error };
 
 // The gateway arms a ~90s read deadline on the call socket each read and drops it
@@ -200,6 +201,14 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         break;
       case ServerMsgType.Error:
         this.emit({ type: "error", error: new Error(m.reason ?? "edge error") });
+        break;
+      case ServerMsgType.Supervisor:
+        this.emit({
+          type: "supervisor",
+          present: m.present ?? false,
+          mode: m.mode ?? "",
+          name: m.name ?? "",
+        });
         break;
     }
   }

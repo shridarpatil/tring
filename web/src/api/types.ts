@@ -144,6 +144,9 @@ export interface Call {
   hangup_cause?: string;
   recording_url?: string;
   ivr_path?: IvrStep[];
+  room_id?: string;
+  supervised?: string;
+  supervisor?: string;
 }
 
 export interface Webhook {

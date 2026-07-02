@@ -48,6 +48,39 @@ func TestDashboardStreamSnapshotThenEvent(t *testing.T) {
 	}
 }
 
+// Regression test for the missed hub.Forward(...) entry in cmd/api/main.go:
+// the gateway publishes events.TypeCallSupervised and the frontend consumes
+// it, but it must also be in the Hub's forward allowlist or the SSE stream
+// silently drops it before it reaches the dashboard.
+func TestDashboardStreamForwardsCallSupervised(t *testing.T) {
+	hub := events.NewTestHub()
+	hub.Forward(events.TypeCallSupervised)
+	srv := &Server{hub: hub, log: slog.Default()}
+
+	tenantID := uuid.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest("GET", "/v1/stream/dashboard", nil)
+	r = r.WithContext(withTenantForTest(ctx, tenantID))
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		srv.handleDashboardStream(w, r)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	hub.DispatchForTest(tenantID.String(), events.Frame(events.TypeCallSupervised, []byte(`{"call_id":"c1","supervisor":"ops@tring.dev"}`)))
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	body := w.Body.String()
+	if !strings.Contains(body, "event: call.supervised") {
+		t.Fatalf("missing forwarded call.supervised event:\n%s", body)
+	}
+}
+
 // withTenantForTest injects a Tenant into the request context using the same key
 // tenantFromCtx reads.
 func withTenantForTest(ctx context.Context, id uuid.UUID) context.Context {
