@@ -159,7 +159,7 @@ func main() {
 	// starts reading them.
 	hub.Forward(
 		events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded,
-		events.TypeAgentPresence, events.TypeAgentStatus,
+		events.TypeAgentPresence, events.TypeAgentStatus, events.TypeCallSupervised,
 	)
 	hub.Recompute(
 		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded},

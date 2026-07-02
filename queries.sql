@@ -694,7 +694,7 @@ RETURNING id;
 
 -- name: insert-user
 INSERT INTO users (tenant_id, email, password_hash, can_supervise)
-VALUES ($1, $2, $3, true);
+VALUES ($1, $2, $3, $4);
 
 -- ===========================================================================
 -- webhook notifier (shared: api + orchestrator)

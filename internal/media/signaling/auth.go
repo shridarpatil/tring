@@ -10,9 +10,11 @@ import (
 
 // Mirrors the API/gateway token scheme (internal/api/jwt.go, internal/gateway/
 // auth.go): the same HS256 tokens authenticate the /rtc socket, so no DB lookup
-// is needed — tenant + identity ride in the claims. /rtc accepts TWO audiences:
-//   - tring.sdk     — an agent (presence + accepting calls); carries sip_user.
-//   - tring.gateway — a visitor (web caller); carries a server-pinned flow_id,
+// is needed — tenant + identity ride in the claims. /rtc accepts THREE audiences:
+//   - tring.sdk        — an agent (presence + accepting calls); carries sip_user.
+//   - tring.supervisor — a console operator joining a live call read/whisper/
+//     barge; carries a server-pinned room and a jti burned single-use.
+//   - tring.gateway     — a visitor (web caller); carries a server-pinned flow_id,
 //     an optional client_ref, and a jti the edge burns single-use (anti-replay).
 const (
 	jwtIssuer          = "tring"
