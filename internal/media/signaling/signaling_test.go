@@ -842,5 +842,46 @@ func TestRoundRobinRingsOneAgentAtATime(t *testing.T) {
 	}
 }
 
+// TestDeclineAdvancesToNextAgent guards the reject-advances-immediately fix: when
+// the rung agent declines, the router must ring the next agent NOW, not wait out
+// the ring timeout. sequential strategy → alice (first member) rings first; she
+// declines; bob must be rung well before ringSeconds. Pre-fix, decline was a
+// client-only no-op so bob only rang after the full ring window.
+func TestDeclineAdvancesToNextAgent(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: transferFlows{},
+		Teams: fakeTeams{
+			members:     map[string][]string{"sales": {"alice", "bob"}},
+			strategy:    "sequential",
+			ringSeconds: 20, // long: pre-fix bob only rings after this elapses
+			maxWait:     40,
+		},
+	})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+	bob := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	bob.send(map[string]any{"type": "register"})
+	bob.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	// sequential → alice (first member) rings first.
+	if inc := alice.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("alice incoming room = %v, want call", inc["room"])
+	}
+
+	// alice rejects → the router must advance to bob IMMEDIATELY, not after ringSeconds.
+	alice.send(map[string]any{"type": "decline", "room": "call"})
+
+	if !sawIncoming(bob, 3*time.Second) {
+		t.Fatal("bob was not rung promptly after alice declined (still waiting on the ring timeout)")
+	}
+}
+
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()
