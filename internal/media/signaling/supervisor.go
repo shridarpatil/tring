@@ -127,6 +127,13 @@ func (s *Server) unregisterSupervisor(roomID room.RoomID, pid room.ParticipantID
 	s.mu.Unlock()
 }
 
+// supervisorsRemain reports whether any supervisor is still watching roomID.
+func (s *Server) supervisorsRemain(roomID room.RoomID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.supers[roomID]) > 0
+}
+
 // closeSupervisors ends every supervisor watching a room (called when the call
 // itself ends). Each closed socket runs supervisorReadLoop's teardown.
 func (s *Server) closeSupervisors(roomID room.RoomID) {
@@ -165,13 +172,9 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 		return
 	}
 
-	// The call must be live on THIS gateway (media is process-bound).
-	r, ok := s.rooms.Get(roomID)
-	if !ok || len(r.Participants()) == 0 {
-		_ = c.send(msg{Type: msgError, Reason: "call not active"})
-		return
-	}
-
+	// Register BEFORE the liveness check (not after) so closeSupervisors can
+	// find and close us if the room empties in the gap between the check and
+	// registration — otherwise a call ending right here would never kick us.
 	pid := room.ParticipantID("sup-" + uuid.NewString())
 	c.pid = pid
 	s.setRole(pid, roleSupervisor)
@@ -179,6 +182,16 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 	s.conns[pid] = c
 	s.mu.Unlock()
 	s.registerSupervisor(roomID, pid, c)
+
+	// The call must be live on THIS gateway (media is process-bound). Checked
+	// AFTER registration: if the room was already empty, closeSupervisors never
+	// ran (nothing was registered yet) so we catch it here instead.
+	r, ok := s.rooms.Get(roomID)
+	if !ok || len(r.Participants()) == 0 {
+		_ = c.send(msg{Type: msgError, Reason: "call not active"})
+		s.teardownSupervisor(roomID, pid)
+		return
+	}
 
 	peer, err := s.sfu.Join(roomID, pid, c)
 	if err != nil {
@@ -211,7 +224,9 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 	var sessionID string
 	modes := []string{"monitor"}
 	if s.cfg.Supervisors != nil {
-		sessionID = s.cfg.Supervisors.SuperviseStart(context.Background(), princ.tenant, string(roomID), princ.userID, "monitor")
+		startCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		sessionID = s.cfg.Supervisors.SuperviseStart(startCtx, princ.tenant, string(roomID), princ.userID, "monitor")
+		cancel()
 	}
 
 	s.log.Info("supervisor joined", "room", roomID, "participant", pid, "name", princ.name)
@@ -221,8 +236,11 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 	if s.cfg.Supervisors != nil && sessionID != "" {
 		s.cfg.Supervisors.SuperviseEnd(sessionID, modes)
 	}
-	s.notifyAgentsSupervisor(roomID, false, "", princ.name)
-	s.publishSupervised(tenant, roomID, "", princ.name) // present=false via empty mode
+	// Only clear the indicator if no OTHER supervisor is still watching this room.
+	if !s.supervisorsRemain(roomID) {
+		s.notifyAgentsSupervisor(roomID, false, "", princ.name)
+		s.publishSupervised(tenant, roomID, "", princ.name) // present=false via empty mode
+	}
 }
 
 // supervisorReadLoop handles a supervisor socket: SDP/ICE plus live mode
