@@ -110,3 +110,24 @@ func TestPublicationsExceptHonorsAudience(t *testing.T) {
 		t.Fatal("barge must expose sup to customer")
 	}
 }
+
+func TestSetAudienceUpdatesGating(t *testing.T) {
+	s, err := New(Config{IncludeLoopback: true})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	const rid = room.RoomID("t2/room")
+	s.putPub(t, rid, "sup")
+	s.putPub(t, rid, "agent")
+
+	// SetAudience with no live peers must still record the audience so a later
+	// publish/negotiate honors it (monitor default set before the sup mic flows).
+	s.SetAudience(rid, "sup", false, nil)
+	if hasSource(s.publicationsExcept(rid, "agent"), "sup") {
+		t.Fatal("after monitor SetAudience, agent must not see sup")
+	}
+	s.SetAudience(rid, "sup", false, []room.ParticipantID{"agent"})
+	if !hasSource(s.publicationsExcept(rid, "agent"), "sup") {
+		t.Fatal("after whisper SetAudience, agent must see sup")
+	}
+}

@@ -186,6 +186,52 @@ func (s *SFU) setAudienceState(roomID room.RoomID, pid room.ParticipantID, all b
 	return decisions, hasPub
 }
 
+// SetAudience sets who may hear pid and re-wires live subscribers to match:
+// peers that should now hear pid but don't get Negotiate()d (publicationsExcept
+// now includes pid); peers that must no longer hear pid have pid's tracks
+// removed. Safe to call before pid has published — it just records the audience,
+// which the eventual publish honors via publicationsExcept. This is the single
+// entry point for monitor (all=false, allowed=nil), whisper (all=false,
+// allowed=agent pids) and barge (all=true).
+func (s *SFU) SetAudience(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) {
+	decisions, hasPub := s.setAudienceState(roomID, pid, all, allowed)
+	if !hasPub {
+		return // nothing wired yet; publish-time Negotiate will honor the audience
+	}
+	for _, d := range decisions {
+		if d.hear {
+			d.q.Negotiate() // subscribe: publicationsExcept now yields pid
+		} else {
+			s.unsubscribe(d.q, pid) // drop pid's tracks from this subscriber
+		}
+	}
+}
+
+// unsubscribe removes every track of source pid from subscriber q and
+// renegotiates q. No-op if q wasn't subscribed. Mirrors the per-subscriber
+// teardown in Unpublish/Leave.
+func (s *SFU) unsubscribe(q *Peer, pid room.ParticipantID) {
+	q.mu.Lock()
+	byTrack := q.subs[pid]
+	if len(byTrack) == 0 {
+		q.mu.Unlock()
+		return
+	}
+	senders := make([]*webrtc.RTPSender, 0, len(byTrack))
+	for _, snd := range byTrack {
+		senders = append(senders, snd)
+	}
+	delete(q.subs, pid)
+	q.dirty = true
+	q.mu.Unlock()
+	for _, snd := range senders {
+		if err := q.pc.RemoveTrack(snd); err != nil {
+			q.log.Debug("remove track on audience change", "err", err)
+		}
+	}
+	q.Negotiate()
+}
+
 // onPublish copies a publisher's remote RTP into its room-owned fan-out track,
 // creating the track on first publish (and then notifying other peers to
 // subscribe) or REUSING it on a reconnect republish (subscribers stay bound —
