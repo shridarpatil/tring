@@ -17,6 +17,10 @@ const (
 	// propagates to the call's CDR. Distinct audience from the agent SDK token
 	// so the two can't be used interchangeably.
 	gatewayAudience = "tring.gateway"
+	// supervisorAudience scopes a short-lived RTC token for a console operator to
+	// join a live web call in monitor/whisper/barge. Single-use jti (burned by the
+	// gateway), room-pinned server-side. Distinct audience from every other token.
+	supervisorAudience = "tring.supervisor"
 )
 
 // GatewayCallClaims are carried in a visitor's gateway call token. The token
@@ -49,6 +53,43 @@ func (s *Server) IssueGatewayCallToken(tenantID uuid.UUID, flowID, clientRef str
 			ExpiresAt: jwt.NewNumericDate(exp),
 			Issuer:    jwtIssuer,
 			Audience:  []string{gatewayAudience},
+		},
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := tok.SignedString(s.jwtSecret)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return signed, exp, nil
+}
+
+// SupervisorClaims are carried in a supervisor RTC token. Room is the pinned
+// pion room NAME (un-namespaced; the gateway prefixes the tenant). Name is the
+// operator's display name, shown to the supervised agent.
+type SupervisorClaims struct {
+	TenantID uuid.UUID `json:"tenant"`
+	Room     string    `json:"room"`
+	Name     string    `json:"name"`
+	jwt.RegisteredClaims
+}
+
+// IssueSupervisorToken mints a short-lived, single-use token a console
+// supervisor's browser presents to the media gateway to join a specific live
+// room. userID becomes the JWT subject (audit); ttl should be short (~2m).
+func (s *Server) IssueSupervisorToken(tenantID uuid.UUID, roomName, userID, name string, ttl time.Duration) (string, time.Time, error) {
+	now := time.Now()
+	exp := now.Add(ttl)
+	claims := SupervisorClaims{
+		TenantID: tenantID,
+		Room:     roomName,
+		Name:     name,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ID:        uuid.NewString(),
+			Subject:   userID,
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(exp),
+			Issuer:    jwtIssuer,
+			Audience:  []string{supervisorAudience},
 		},
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
