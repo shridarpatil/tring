@@ -81,7 +81,7 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 		return fmt.Errorf("bootstrap: insert tenant: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash)); err != nil {
+	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash), true); err != nil {
 		return fmt.Errorf("bootstrap: insert user: %w", err)
 	}
 
