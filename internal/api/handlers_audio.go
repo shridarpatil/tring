@@ -34,6 +34,13 @@ const maxAudioBytes = 10 << 20 // 10 MiB
 // only — so an uploaded prompt works on BOTH the web plane and FreeSWITCH.
 var audioInputExts = map[string]bool{".wav": true, ".mp3": true, ".ogg": true, ".m4a": true}
 
+// holdFadeSeconds is the fade-in/out applied on transcode. An uploaded asset can
+// be a tenant's hold music, which the pion plane LOOPS — and a raw clip's ends
+// don't meet, so every loop seam (plus Opus encoder pre-roll/flush padding)
+// clicks. Fading both ends to silence makes any clip loop seamlessly. At 30ms
+// it's imperceptible on one-shot prompts (which already have edge silence).
+const holdFadeSeconds = "0.03"
+
 // transcodeToOpusOgg converts any accepted upload to 48 kHz mono Opus-in-Ogg via
 // ffmpeg — the format the pion prompt player decodes. Returns ErrNoFFmpeg if
 // ffmpeg isn't installed, so the caller can fall back to storing the original.
@@ -41,8 +48,13 @@ func transcodeToOpusOgg(ctx context.Context, src, dst string) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return errNoFFmpeg
 	}
+	// Fade both ends via the duration-independent double-reverse idiom (afade
+	// needs a start time for fade-out; areverse avoids probing the length). The
+	// clips are short and size-capped, so buffering for areverse is fine.
+	fade := "afade=t=in:st=0:d=" + holdFadeSeconds +
+		",areverse,afade=t=in:st=0:d=" + holdFadeSeconds + ",areverse"
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", src,
-		"-ac", "1", "-ar", "48000", "-c:a", "libopus", dst)
+		"-af", fade, "-ac", "1", "-ar", "48000", "-c:a", "libopus", dst)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg transcode: %w: %s", err, b)
 	}
