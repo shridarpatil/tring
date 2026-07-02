@@ -100,7 +100,7 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, s
 	}
 	legID := uuid.NewString()
 	var callID uuid.UUID
-	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef, source).Scan(&callID)
+	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallInbound, tenant, from, to, legID, clientRef, source, roomID).Scan(&callID)
 	if err != nil {
 		l.log.Error("cdr: create call failed", "room", roomID, "err", err)
 		return nil
