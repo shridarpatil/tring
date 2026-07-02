@@ -26,7 +26,7 @@ type Teams interface {
 // strategy is the resolved team strategy (e.g. "round_robin") so the transport
 // can drive one-at-a-time vs ring-all behaviour inside its Effects adapter.
 type RingTransport interface {
-	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
+	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy, moh string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
 }
 
 // HandoffWaiter is an OPTIONAL transport capability. After an agent answers a
@@ -84,6 +84,7 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 	}
 
 	rc := routing.RouteConfig{TenantID: tenant}
+	var moh string // resolved team hold music, played to the caller while queued/ringing
 	if !ringAll && t.Team != "" && a.teams != nil {
 		// TODO(plug): make per-plug when a 2nd plug lands
 		rc.Team, rc.Source = t.Team, queuekeys.SourceWeb
@@ -92,11 +93,12 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 				rc.Strategy = tc.Strategy
 				rc.RingSeconds = time.Duration(tc.RingSeconds) * time.Second
 				rc.MaxWait = time.Duration(tc.MaxWait) * time.Second
+				moh = tc.MOH
 			}
 		}
 	}
 
-	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, sips, rc.Strategy)
+	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, sips, rc.Strategy, moh)
 	outcome, _, _ := a.router.Run(ctx, rc, candidates, eff)
 	if cleanup != nil {
 		cleanup()
