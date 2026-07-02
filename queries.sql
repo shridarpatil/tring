@@ -368,7 +368,8 @@ WHERE c.leg_id = $1;
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, '')
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
@@ -376,7 +377,8 @@ WHERE c.id = $1 AND c.tenant_id = $2;
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, '')
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1
 ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
@@ -385,7 +387,8 @@ ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, '')
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1 AND c.status = $3::call_status
 ORDER BY c.started_at DESC LIMIT $2 OFFSET $4;
@@ -397,7 +400,8 @@ ORDER BY c.started_at DESC LIMIT $2 OFFSET $4;
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, '')
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1 AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
 ORDER BY c.started_at ASC LIMIT 100;
