@@ -3,9 +3,6 @@ package signaling
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -175,15 +172,8 @@ func (p *filePrompts) load(file string) ([][]byte, error) {
 
 	// audio_file may be an absolute file_path from the sound library
 	// (<AudioDir>/<tenant>/<uuid>.ogg) or a relative path (the custom-path
-	// escape hatch). Strip the AudioDir prefix so both resolve, and Clean("/"+…)
-	// confines the open to AudioDir (no traversal out).
-	rel := strings.TrimPrefix(file, p.dir)
-	f, err := os.Open(filepath.Join(p.dir, filepath.Clean("/"+rel)))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	frames, err := prompt.LoadOggOpus(f)
+	// escape hatch); loadOggFile handles both and confines the open to AudioDir.
+	frames, err := loadOggFile(p.dir, file)
 	if err != nil {
 		return nil, err
 	}
