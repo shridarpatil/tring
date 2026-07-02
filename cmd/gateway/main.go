@@ -103,12 +103,13 @@ func main() {
 	// (no IVR) rather than failing the gateway.
 	var flows signaling.FlowLoader
 	var teams signaling.TeamResolver
+	var holdMusic signaling.HoldMusicResolver
 	var calls signaling.CallLog
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
 		store := flowstore.New(database)
-		flows, teams = store, store
+		flows, teams, holdMusic = store, store, store
 		// CDRs + recordings for media-plane calls (web + phone): same calls table,
 		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
 		blob, berr := blobstore.New(blobstore.Config{
@@ -137,6 +138,7 @@ func main() {
 		DevTokens:  k.Bool("rtc_dev_tokens"),
 		Flows:      flows,
 		Teams:      teams,
+		HoldMusic:  holdMusic, // tenant hold music for agent-initiated hold (msgHold)
 		AudioDir:   k.String("audio_dir"),
 		Tokens:     redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
 		Presence:   presence.New(redisCache), // publish agent online/offline for the dashboard

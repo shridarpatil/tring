@@ -58,6 +58,10 @@ type Config struct {
 	// Teams resolves a team's member SIPs so a transfer rings the team's agents
 	// (not all online agents). nil → a team target rings all online agents.
 	Teams TeamResolver
+	// HoldMusic resolves a tenant's system hold music for the agent-initiated
+	// hold path (msgHold). nil → agent hold plays silence. The queue/ring wait
+	// gets its hold music from the team config, not this.
+	HoldMusic HoldMusicResolver
 	// AudioDir is where IVR prompt files (Ogg/Opus) are read from.
 	AudioDir string
 	// Tokens burns visitor gateway-call-token jtis single-use (anti-replay),
@@ -128,12 +132,13 @@ type Server struct {
 
 	mu        sync.Mutex
 	conns     map[room.ParticipantID]*conn
-	agents    map[string]map[string]*conn   // online agents: tenant → sip → presence socket
-	rings     map[room.RoomID]chan struct{} // pending transfer rings → closed when an agent joins
-	pstnCalls map[room.RoomID]room.CallID   // live phone legs by room (pstn.go)
-	onCall    map[string]int                // "tenant|sip" → active call legs (drives on_call presence)
+	agents    map[string]map[string]*conn        // online agents: tenant → sip → presence socket
+	rings     map[room.RoomID]chan struct{}      // pending transfer rings → closed when an agent joins
+	pstnCalls map[room.RoomID]room.CallID        // live phone legs by room (pstn.go)
+	onCall    map[string]int                     // "tenant|sip" → active call legs (drives on_call presence)
 	callers   map[room.RoomID]room.ParticipantID // the IVR caller per room (flow-pinned joiner) — see handoff.go
 	handoffs  map[room.RoomID]*handoff           // rooms waiting for a transfer handoff to end (handoff.go)
+	holds     map[room.RoomID]func()             // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -165,6 +170,7 @@ func New(cfg Config) *Server {
 		onCall:    make(map[string]int),
 		callers:   make(map[room.RoomID]room.ParticipantID),
 		handoffs:  make(map[room.RoomID]*handoff),
+		holds:     make(map[room.RoomID]func()),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -427,8 +433,14 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 			// Keepalive — the read above already reset the deadline; nothing to do.
 			// A quiet call (media rides RTP, not this socket) would otherwise hit the
 			// 90s read deadline and get dropped mid-call.
-		case msgHold, msgResume, msgTransfer:
-			// Agent call control — not yet wired on the embedded-brain plane.
+		case msgHold:
+			// The agent muted its own mic client-side; play the tenant's hold music
+			// into the room so the held party hears music, not dead air.
+			s.holdParty(p.Room().ID())
+		case msgResume:
+			s.resumeParty(p.Room().ID())
+		case msgTransfer:
+			// Agent-initiated transfer — not yet wired on the embedded-brain plane.
 			s.log.Warn("call control not yet implemented", "type", m.Type)
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
@@ -449,6 +461,9 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
+		// A held call is a 1:1 state between the two live parties: if either leaves,
+		// stop any agent-initiated hold music so its source never outlives the call.
+		s.clearHold(e.Room)
 		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
