@@ -9,7 +9,7 @@
 // The SFU is the sole offerer, so the directions are:
 //   client → server:  join | register | answer | ice | publish | unpublish | dtmf | bye
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
-//                     | incoming | incoming-cancel | ready | error
+//                     | incoming | incoming-cancel | ready | error | supervisor
 // Trickle ICE rides `ice` both ways. Resumption: the client stores
 // `session_token` from `joined` and re-sends it in a later `join`.
 
@@ -41,6 +41,7 @@ export const ServerMsgType = {
   Ready: "ready",
   Ended: "ended",
   Error: "error",
+  Supervisor: "supervisor",
 } as const;
 
 /** Browser-facing STUN/TURN entry sent in `joined` (shape matches RTCIceServer). */
@@ -89,4 +90,8 @@ export interface RtcMessage {
 
   // error
   reason?: string;
+
+  // supervisor (server → agent legs only)
+  present?: boolean;
+  mode?: string;
 }

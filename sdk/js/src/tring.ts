@@ -113,6 +113,9 @@ export class Tring extends Emitter<TringEvent> {
           this.emit({ type: "call:ended", call });
         });
         rtc.on("error", ({ error }) => this.emit({ type: "error", error }));
+        rtc.on("supervisor", ({ present, mode, name }) =>
+          this.emit({ type: "call:supervisor", call, present, mode, name }),
+        );
         // The remote party's screen-share arrives as a video track; surface it,
         // and clear it when that track ends (they stopped sharing).
         rtc.on("track", ({ kind, stream, track }) => {
