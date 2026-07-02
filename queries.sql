@@ -278,13 +278,30 @@ VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULL
 RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, leg_id, started_at, source::text;
 
 -- name: create-call-inbound
--- Inbound/IVR call (incl. guest web calls). The orchestrator (phone) and the
--- media plane (web) both insert this; the global event loop then settles it
--- (answered/ended/duration/webhooks) by leg_id, same as outbound. $6 is the
--- channel source ('web' | 'phone'), so callers must pass it.
-INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, client_ref, source)
-VALUES ($1, 'inbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5, ''), $6::call_source)
+-- Inbound/IVR call (incl. guest web calls). $6 is the channel source
+-- ('web' | 'phone'); $7 is the pion room id (media plane) so a supervisor can be
+-- routed to the live room. The global event loop settles it by leg_id.
+INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, client_ref, source, room_id)
+VALUES ($1, 'inbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5, ''), $6::call_source, NULLIF($7, ''))
 RETURNING id;
+
+-- name: get-supervise-target
+-- Resolve a call's pion room + status + source for a supervisor join. Scoped to
+-- the tenant. room_id is NULL for non-media-plane calls (nothing to supervise).
+SELECT COALESCE(room_id, ''), status::text, source::text
+FROM calls WHERE id = $1 AND tenant_id = $2;
+
+-- name: get-user-supervise
+-- The supervise permission for a console user, scoped to the tenant.
+SELECT can_supervise FROM users WHERE id = $1 AND tenant_id = $2;
+
+-- name: create-supervisor-session
+INSERT INTO supervisor_sessions (tenant_id, call_id, supervisor_user_id, started_at, modes_used)
+VALUES ($1, $2, $3, now(), $4)
+RETURNING id;
+
+-- name: end-supervisor-session
+UPDATE supervisor_sessions SET ended_at = now(), modes_used = $2 WHERE id = $1;
 
 -- name: set-call-ivr-path
 -- Persist the IVR journey (node path + DTMF + transfer outcomes) for a call,
@@ -672,8 +689,8 @@ VALUES ($1, $2, $3, $4)
 RETURNING id;
 
 -- name: insert-user
-INSERT INTO users (tenant_id, email, password_hash)
-VALUES ($1, $2, $3);
+INSERT INTO users (tenant_id, email, password_hash, can_supervise)
+VALUES ($1, $2, $3, true);
 
 -- ===========================================================================
 -- webhook notifier (shared: api + orchestrator)
