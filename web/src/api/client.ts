@@ -67,6 +67,15 @@ async function uploadFile<T>(path: string, file: File, fields?: Record<string, s
   return (await res.json()) as T;
 }
 
+// Credentials minted for a console operator to join a live call's room as a
+// supervisor leg (monitor/whisper/barge). Mirrors POST /v1/calls/{id}/supervise.
+export interface SuperviseCreds {
+  gateway_url: string;
+  room: string;
+  token: string;
+  ice_servers: RTCIceServer[];
+}
+
 export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body),
@@ -74,4 +83,5 @@ export const api = {
   del: <T>(path: string) => request<T>("DELETE", path),
   upload: <T>(path: string, file: File, fields?: Record<string, string>) =>
     uploadFile<T>(path, file, fields),
+  supervise: (id: string) => api.post<SuperviseCreds>("/v1/calls/" + id + "/supervise", {}),
 };
