@@ -89,7 +89,7 @@ func (m *mediaSession) readLoop() {
 		case m.opusPT:
 			select {
 			case m.in <- pkt:
-			default: // queue full → drop oldest-policy is fine for RTP
+			default: // queue full → drop this packet (newest); fine for RTP
 			}
 		}
 	}
@@ -98,11 +98,12 @@ func (m *mediaSession) readLoop() {
 // ReadRTP yields the next inbound Opus packet. It blocks until one is available
 // or the session closes.
 func (m *mediaSession) ReadRTP() (*rtp.Packet, error) {
-	pkt, ok := <-m.in
-	if !ok {
+	select {
+	case pkt := <-m.in:
+		return pkt, nil
+	case <-m.doneC:
 		return nil, errors.New("fsplug: media session closed")
 	}
-	return pkt, nil
 }
 
 // write re-stamps a room packet onto this session's clean outbound stream and
@@ -118,14 +119,18 @@ func (m *mediaSession) write(pkt *rtp.Packet) error {
 		Header:  rtp.Header{Version: 2, PayloadType: m.opusPT, SequenceNumber: m.outSeq, Timestamp: m.outTS, SSRC: m.outSSRC},
 		Payload: pkt.Payload,
 	}
-	m.outSeq++
-	m.outTS += 960 // 20 ms @ 48 kHz
 	m.mu.Unlock()
 
 	raw, err := out.Marshal()
 	if err != nil {
 		return err
 	}
+
+	m.mu.Lock()
+	m.outSeq++
+	m.outTS += 960 // 20 ms @ 48 kHz
+	m.mu.Unlock()
+
 	_, err = m.conn.WriteToUDP(raw, remote)
 	return err
 }
@@ -139,6 +144,5 @@ func (m *mediaSession) Close() error {
 	m.closed = true
 	m.mu.Unlock()
 	close(m.doneC)
-	close(m.in)
 	return m.conn.Close()
 }

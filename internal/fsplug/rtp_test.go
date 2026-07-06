@@ -2,6 +2,7 @@ package fsplug
 
 import (
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,4 +88,78 @@ func TestMediaSessionWriteReStampsToRemote(t *testing.T) {
 	if first.SSRC != second.SSRC {
 		t.Fatalf("ssrc not stable: %d vs %d", first.SSRC, second.SSRC)
 	}
+}
+
+// TestMediaSessionCloseDuringTrafficNoPanic drives readLoop's
+// `case m.in <- pkt` send hard against a concurrent Close() to catch the
+// send-on-closed-channel panic race: Close() must never close m.in itself
+// (only doneC), otherwise a send racing the close can panic and take down
+// the whole gateway process.
+func TestMediaSessionCloseDuringTrafficNoPanic(t *testing.T) {
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fs := dialUDP(t, m.localPort())
+	defer fs.Close()
+
+	stop := make(chan struct{})
+	sendDone := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(sendDone)
+		opus := &rtp.Packet{
+			Header:  rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: 1, Timestamp: 960, SSRC: 0x1234},
+			Payload: []byte{0xfc, 0x01, 0x02},
+		}
+		raw, _ := opus.Marshal()
+		for i := 0; i < 500; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := fs.Write(raw); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Let a few packets flow before closing, so the race window is live.
+	time.Sleep(2 * time.Millisecond)
+	if err := m.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// select doesn't prefer doneC over a still-buffered m.in, so a packet
+	// queued right before Close can legitimately win one more race. Drain
+	// until the buffer (capacity 256) is exhausted and doneC is the only
+	// ready case; if that never happens within a bounded time, the closed
+	// path is broken.
+	readErr := make(chan error, 1)
+	go func() {
+		for i := 0; i < 10000; i++ {
+			if _, err := m.ReadRTP(); err != nil {
+				readErr <- err
+				return
+			}
+		}
+		readErr <- nil
+	}()
+
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("ReadRTP never returned an error after Close (drained 10000 reads)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadRTP did not return after Close (possible hang)")
+	}
+
+	close(stop)
+	<-sendDone
+	wg.Wait()
 }
