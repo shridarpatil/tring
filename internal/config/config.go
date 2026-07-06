@@ -159,8 +159,13 @@ var defaults = map[string]any{
 	// for inbound PSTN calls over FreeSWITCH. OFF by default — nothing changes
 	// until a live trunk exists. fsplug_fs_sip is declared now for the later
 	// outbound-leg work; unused today.
+	// fsplug_sip_listen must NOT be :5080 — that's FreeSWITCH's own external
+	// profile SIP port (vars.xml external_sip_port). The gateway's SIP UAS
+	// convention is :5090 (vars.xml tring_gateway_sip / TRING_GATEWAY_SIP_PORT,
+	// and freeswitch/conf/sip_profiles/external/tring-gw.xml proxies there) —
+	// keep this in sync with TRING_GATEWAY_SIP_PORT.
 	"fsplug_enabled":       false,
-	"fsplug_sip_listen":    ":5080",
+	"fsplug_sip_listen":    ":5090",
 	"fsplug_sip_advertise": "127.0.0.1",
 	"fsplug_rtp_min":       12000,
 	"fsplug_rtp_max":       12100,

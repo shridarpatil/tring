@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tring 'public' dialplan context.
+
+    Bound to the EXTERNAL sip profile (sip_profiles/external.xml sets
+    context=public), which listens on $${external_sip_port} (5080) — carrier
+    trunk INVITEs (Tata/Exotel/Airtel/Jio) land here, never authenticated
+    agents (those go to 'internal' → 'default').
+
+    This context did not exist in the repo before the SIP plug (THE PLUG,
+    internal/media/room.Plug) landed; FreeSWITCH's external profile pointed at
+    a context we never defined, so inbound carrier calls had nowhere to go.
+    The safarov base image ships its own stock vanilla dialplan/public.xml
+    (demo extensions dialing internal 100x/35xx numbers) — this file replaces
+    it (see freeswitch/Dockerfile, which now COPYs this into the vanilla
+    template dir, same pattern as dialplan/default.xml).
+
+    Every inbound carrier DID is bridged straight to the Tring media gateway's
+    SIP UAS via the existing 'tring-gw' gateway (sip_profiles/external/tring-gw.xml,
+    proxies to $${tring_gateway_sip} = TRING_GATEWAY_ADVERT_IP:TRING_GATEWAY_SIP_PORT,
+    default 127.0.0.1:5090 — co-located dev). The gateway's SIP plug
+    (internal/fsplug, fsplug_sip_listen, default :5090) answers, resolves the
+    dialed DID to a flow via room.Plug, and the call runs on the pion media
+    plane exactly like a web call. absolute_codec_string=opus forces FreeSWITCH
+    to transcode the carrier's G.711 leg to Opus (the plug/pion side speaks
+    Opus only); rtp_secure_media=false because this is a plain-RTP loopback/LAN
+    hop to the gateway, not a public-facing SRTP leg.
+-->
+<!-- http://wiki.freeswitch.org/wiki/Dialplan_XML -->
+<include>
+  <context name="public">
+
+    <!-- Loop guard: deflect a call that SIP-looped back to us. -->
+    <extension name="unloop">
+      <condition field="${unroll_loops}" expression="^true$"/>
+      <condition field="${sip_looped_call}" expression="^true$">
+	<action application="deflect" data="${destination_number}"/>
+      </condition>
+    </extension>
+
+    <!-- Tag calls arriving here as outside_call so nothing downstream treats
+         them as an authenticated/internal leg. -->
+    <extension name="outside_call" continue="true">
+      <condition>
+	<action application="set" data="outside_call=true"/>
+	<action application="export" data="RFC2822_DATE=${strftime(%a, %d %b %Y %T %z)}"/>
+      </condition>
+    </extension>
+
+    <!-- Carrier-inbound to the gateway plug: any numeric (optionally
+         +-prefixed) destination_number is bridged into the media plane via
+         the tring-gw gateway, forcing Opus for the plug leg. -->
+    <extension name="tring_inbound_to_gateway">
+      <condition field="destination_number" expression="^(\+?\d+)$">
+        <action application="set" data="absolute_codec_string=opus"/>
+        <action application="set" data="rtp_secure_media=false"/>
+        <action application="bridge" data="sofia/gateway/tring-gw/${destination_number}"/>
+      </condition>
+    </extension>
+
+  </context>
+</include>

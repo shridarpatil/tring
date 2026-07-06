@@ -19,6 +19,7 @@ FROM safarov/freeswitch:latest
 # Static config → vanilla templates (mirrors the docker-compose :ro mounts).
 COPY conf/vars.xml                               /usr/share/freeswitch/conf/vanilla/vars.xml
 COPY conf/dialplan/default.xml                   /usr/share/freeswitch/conf/vanilla/dialplan/default.xml
+COPY conf/dialplan/public.xml                     /usr/share/freeswitch/conf/vanilla/dialplan/public.xml
 COPY conf/directory/default.xml                  /usr/share/freeswitch/conf/vanilla/directory/default.xml
 COPY conf/autoload_configs/modules.conf.xml      /usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml
 COPY conf/autoload_configs/acl.conf.xml          /usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml
