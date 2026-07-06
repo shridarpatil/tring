@@ -23,6 +23,9 @@ func parseOffer(body []byte) (string, int, error) {
 		if md.ConnectionInformation != nil && md.ConnectionInformation.Address != nil {
 			ip = md.ConnectionInformation.Address.Address // media-level c= wins
 		}
+		if ip == "" {
+			return "", 0, fmt.Errorf("fsplug: no connection address for audio media")
+		}
 		return ip, md.MediaName.Port.Value, nil
 	}
 	return "", 0, fmt.Errorf("fsplug: no audio media in offer")
