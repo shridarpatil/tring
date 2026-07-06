@@ -171,7 +171,9 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 		return nil, err
 	}
 	m.setRemote(c.offerIP, c.offerPt)
+	p.mu.Lock()
 	c.media = m
+	p.mu.Unlock()
 
 	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT)
 
@@ -189,6 +191,13 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 		res.AppendHeader(&p.contact)
 	}
 	c.sess.InviteResponse = res
+
+	// Register the dialog state channel BEFORE transmitting the 200, mirroring
+	// sipgo's own DialogServerSession.WriteResponse (dialog_server.go): if a BYE
+	// races the response and lands before we subscribe, StateRead() would only
+	// ever see future transitions and watchDialog would range forever, leaking
+	// the goroutine + mediaSession.
+	stateCh := c.sess.StateRead()
 	err = c.tx.Respond(res)
 	c.markResponded() // unblock onInvite's wait regardless of outcome
 	if err != nil {
@@ -197,7 +206,7 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	}
 
 	// Watch the SIP dialog for a remote BYE and fire the leg's Done.
-	go p.watchDialog(id, c, m)
+	go p.watchDialog(id, c, m, stateCh)
 
 	return &room.Leg{
 		Source: m,
@@ -208,9 +217,10 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 }
 
 // watchDialog closes the media session (firing Leg.Done) when the SIP dialog
-// ends (remote BYE).
-func (p *Plug) watchDialog(id room.CallID, c *call, m *mediaSession) {
-	for state := range c.sess.StateRead() {
+// ends (remote BYE). stateCh must be obtained via c.sess.StateRead() BEFORE
+// the 200 was sent (see Answer) so an immediate BYE can't be missed.
+func (p *Plug) watchDialog(id room.CallID, c *call, m *mediaSession, stateCh <-chan sip.DialogState) {
+	for state := range stateCh {
 		if state == sip.DialogStateEnded {
 			break
 		}
@@ -231,14 +241,28 @@ func (p *Plug) Reject(id room.CallID) error {
 }
 
 func (p *Plug) Hangup(id room.CallID) error {
-	c := p.get(id)
-	if c == nil {
+	p.mu.Lock()
+	c, ok := p.calls[id]
+	var media *mediaSession
+	if ok {
+		media = c.media
+	}
+	p.mu.Unlock()
+	if !ok {
 		return nil // already gone
 	}
-	err := c.sess.Bye(context.Background())
-	if c.media != nil {
-		c.media.Close()
+
+	// Never answered: c.sess.InviteResponse is nil (only set in Answer), and
+	// sipgo's WriteBye unconditionally calls res.IsSuccess() on it, which
+	// nil-pointer-panics. media is set only in Answer, so its absence is our
+	// reliable "was this answered?" signal — skip Bye entirely in that case.
+	if media == nil {
+		p.forget(id)
+		return nil
 	}
+
+	err := c.sess.Bye(context.Background())
+	media.Close()
 	p.forget(id)
 	return err
 }
