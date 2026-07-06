@@ -26,6 +26,7 @@ import (
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
+	"github.com/shridarpatil/tring/internal/fsplug"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/media/signaling"
@@ -106,11 +107,12 @@ func main() {
 	var holdMusic signaling.HoldMusicResolver
 	var calls signaling.CallLog
 	var supervisors signaling.SupervisorLog
+	var didResolver signaling.DIDResolver
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
 		store := flowstore.New(database)
-		flows, teams, holdMusic = store, store, store
+		flows, teams, holdMusic, didResolver = store, store, store, store
 		// CDRs + recordings for media-plane calls (web + phone): same calls table,
 		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
 		blob, berr := blobstore.New(blobstore.Config{
@@ -155,6 +157,35 @@ func main() {
 		Supervisors: supervisors, // supervisor session audit (nil DB → nil, no audit)
 		Logger:      logger,
 	})
+
+	// FreeSWITCH SIP plug (internal/fsplug) — inbound PSTN calls over
+	// FreeSWITCH, routed through the room.Plug seam. OFF by default; needs
+	// the flowstore DID resolver, so it's also a no-op without a reachable DB.
+	if k.Bool("fsplug_enabled") {
+		if didResolver == nil {
+			logger.Warn("fsplug enabled but DB/flowstore unavailable — inbound phone calls disabled")
+		} else {
+			plug, perr := fsplug.New(fsplug.Config{
+				SIPListen:    k.String("fsplug_sip_listen"),
+				SIPAdvertise: k.String("fsplug_sip_advertise"),
+				RTPMin:       k.Int("fsplug_rtp_min"),
+				RTPMax:       k.Int("fsplug_rtp_max"),
+				OpusPT:       111,
+				DTMFPT:       101,
+			}, logger)
+			if perr != nil {
+				logger.Error("fsplug init failed", "err", perr)
+				os.Exit(1)
+			}
+			sig.AttachPstn(plug, didResolver)
+			go func() {
+				if rerr := plug.Run(context.Background()); rerr != nil {
+					logger.Error("fsplug SIP server stopped", "err", rerr)
+				}
+			}()
+			logger.Info("fsplug enabled", "sip", k.String("fsplug_sip_listen"))
+		}
+	}
 
 	addr := k.String("gateway_addr")
 	sigHandler := sig.Handler()
