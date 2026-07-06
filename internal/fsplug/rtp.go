@@ -68,8 +68,8 @@ func (m *mediaSession) setRemote(ip string, port int) {
 
 func (m *mediaSession) readLoop() {
 	dec := &dtmfDecoder{}
-	buf := make([]byte, 1500)
 	for {
+		buf := make([]byte, 1500)
 		n, err := m.conn.Read(buf)
 		if err != nil {
 			return // socket closed → Close() already fired doneC

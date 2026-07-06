@@ -1,6 +1,7 @@
 package fsplug
 
 import (
+	"bytes"
 	"net"
 	"sync"
 	"testing"
@@ -87,6 +88,59 @@ func TestMediaSessionWriteReStampsToRemote(t *testing.T) {
 	}
 	if first.SSRC != second.SSRC {
 		t.Fatalf("ssrc not stable: %d vs %d", first.SSRC, second.SSRC)
+	}
+}
+
+// TestMediaSessionNoPayloadAliasingUnderQueueDepth guards against the read
+// buffer in readLoop being reused across iterations: pion/rtp's Unmarshal
+// sets pkt.Payload as a slice INTO the read buffer, not a copy. If that
+// buffer is allocated once outside the loop and reused, a packet still
+// sitting in m.in (queue depth > 0) has its payload silently overwritten by
+// the next socket read. This sends two packets back-to-back before draining
+// so both are queued, then asserts each ReadRTP() call still has its own
+// distinct payload bytes.
+func TestMediaSessionNoPayloadAliasingUnderQueueDepth(t *testing.T) {
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	fs := dialUDP(t, m.localPort())
+	defer fs.Close()
+
+	pktA := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: 1, Timestamp: 960, SSRC: 0x1234}, Payload: []byte{0xAA, 0xAA, 0xAA}}
+	pktB := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: 2, Timestamp: 1920, SSRC: 0x1234}, Payload: []byte{0xBB, 0xBB, 0xBB}}
+
+	rawA, _ := pktA.Marshal()
+	rawB, _ := pktB.Marshal()
+	fs.Write(rawA)
+	fs.Write(rawB)
+
+	// Poll until both packets have been queued into m.in before reading any
+	// of them, so the aliasing window (queue depth > 0) is actually hit.
+	deadline := time.Now().Add(time.Second)
+	for len(m.in) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for both packets to queue, got depth %d", len(m.in))
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	first, err := m.ReadRTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.ReadRTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(first.Payload, []byte{0xAA, 0xAA, 0xAA}) {
+		t.Fatalf("first packet payload = % x, want AA AA AA (aliased by second read)", first.Payload)
+	}
+	if !bytes.Equal(second.Payload, []byte{0xBB, 0xBB, 0xBB}) {
+		t.Fatalf("second packet payload = % x, want BB BB BB", second.Payload)
 	}
 }
 
