@@ -13,28 +13,46 @@ func teEvent(event byte, end bool) []byte {
 
 func TestDTMFDecoderEmitsOncePerEvent(t *testing.T) {
 	d := &dtmfDecoder{}
-	// Three repeat packets for digit '5' (event 5), no End bit → nothing yet.
+	const ts = uint32(1000)
+	// Three repeat packets for digit '5' (event 5), same timestamp, no End bit → nothing yet.
 	for i := 0; i < 3; i++ {
-		if _, ok := d.push(teEvent(5, false)); ok {
+		if _, ok := d.push(ts, teEvent(5, false)); ok {
 			t.Fatalf("emitted before End bit")
 		}
 	}
-	// Final packet with End bit → emit once.
-	digit, ok := d.push(teEvent(5, true))
+	// Final packet with End bit, same timestamp → emit once.
+	digit, ok := d.push(ts, teEvent(5, true))
 	if !ok || digit != "5" {
 		t.Fatalf("got (%q,%v), want (\"5\", true)", digit, ok)
 	}
-	// A duplicate End packet for the same event must NOT re-emit.
-	if _, ok := d.push(teEvent(5, true)); ok {
+	// A duplicate End packet for the same event (same timestamp) must NOT re-emit.
+	if _, ok := d.push(ts, teEvent(5, true)); ok {
 		t.Fatalf("re-emitted on duplicate End packet")
 	}
 }
 
+// TestDTMFDecoderConsecutiveSameDigit is the regression test for the finding:
+// two consecutive presses of the SAME digit are two distinct RFC 4733 events,
+// each with its own RTP timestamp, and both must be emitted.
+func TestDTMFDecoderConsecutiveSameDigit(t *testing.T) {
+	d := &dtmfDecoder{}
+	// First "5" event completes at timestamp 1000.
+	digit, ok := d.push(1000, teEvent(5, true))
+	if !ok || digit != "5" {
+		t.Fatalf("first event: got (%q,%v), want (\"5\", true)", digit, ok)
+	}
+	// A fresh "5" event at a new timestamp (2000) must also emit.
+	digit, ok = d.push(2000, teEvent(5, true))
+	if !ok || digit != "5" {
+		t.Fatalf("second event: got (%q,%v), want (\"5\", true)", digit, ok)
+	}
+}
+
 func TestDTMFDecoderSymbols(t *testing.T) {
-	cases := map[byte]string{0: "0", 9: "9", 10: "*", 11: "#", 12: "A", 15: "D"}
-	for event, want := range cases {
+	for event := byte(0); event < byte(len(dtmfSymbols)); event++ {
+		want := dtmfSymbols[event]
 		d := &dtmfDecoder{}
-		if digit, ok := d.push(teEvent(event, true)); !ok || digit != want {
+		if digit, ok := d.push(uint32(event)+1, teEvent(event, true)); !ok || digit != want {
 			t.Fatalf("event %d: got (%q,%v), want %q", event, digit, ok, want)
 		}
 	}
