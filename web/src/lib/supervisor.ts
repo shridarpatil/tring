@@ -26,7 +26,14 @@ export class SupervisorSession {
   private ws?: WebSocket;
   private pc?: RTCPeerConnection;
   private mic?: MediaStream;
-  private audioEl = new Audio();
+  // One <audio> element PER incoming track. The SFU delivers each room
+  // participant as a SEPARATE stream (streamID = participant id), so a
+  // supervisor receives the agent and the visitor as two distinct tracks and
+  // ontrack fires once each. A single reused element would only ever play the
+  // last track to arrive (order-dependent → intermittent), so we keep one
+  // element per track — the same pattern the visitor/agent SDK uses
+  // (sdk/js/src/rtc.ts).
+  private audioEls: HTMLAudioElement[] = [];
   // Guards teardown+notify so it happens at most once, whether triggered by
   // the user (hangup()) or the server (ended/error frame, socket close).
   private disposed = false;
@@ -68,10 +75,15 @@ export class SupervisorSession {
         const pc = new RTCPeerConnection({ iceServers: servers });
         this.mic?.getTracks().forEach((t) => pc.addTrack(t, this.mic!));
         pc.ontrack = (e) => {
-          this.audioEl.srcObject = e.streams[0] ?? new MediaStream([e.track]);
-          void this.audioEl.play().catch(() => {
+          if (e.track.kind !== "audio") return; // supervisor hears audio only
+          const el = new Audio();
+          el.autoplay = true;
+          el.srcObject = e.streams[0] ?? new MediaStream([e.track]);
+          this.audioEls.push(el);
+          void el.play().catch(() => {
             /* autoplay may need a gesture; the Listen click usually satisfies it */
           });
+          e.track.onended = () => this.removeAudioEl(el);
         };
         pc.onicecandidate = (e) => {
           if (e.candidate) this.send({ type: "ice", candidate: e.candidate.toJSON() });
@@ -149,6 +161,14 @@ export class SupervisorSession {
     this.ws = undefined;
     this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = undefined;
-    this.audioEl.srcObject = null;
+    for (const el of this.audioEls) el.srcObject = null;
+    this.audioEls = [];
+  }
+
+  // removeAudioEl detaches one remote-audio element when its track ends (a
+  // party left / republished); teardown() clears the rest.
+  private removeAudioEl(el: HTMLAudioElement): void {
+    el.srcObject = null;
+    this.audioEls = this.audioEls.filter((e) => e !== el);
   }
 }
