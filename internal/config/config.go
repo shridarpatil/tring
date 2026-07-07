@@ -154,6 +154,22 @@ var defaults = map[string]any{
 	"s3_secret_key": "",
 	"s3_prefix":     "recordings",
 	"s3_use_ssl":    true,
+
+	// fsplug: the FreeSWITCH SIP plug (internal/fsplug), a room.Plug adapter
+	// for inbound PSTN calls over FreeSWITCH. OFF by default — nothing changes
+	// until a live trunk exists. fsplug_fs_sip is declared now for the later
+	// outbound-leg work; unused today.
+	// fsplug_sip_listen must NOT be :5080 — that's FreeSWITCH's own external
+	// profile SIP port (vars.xml external_sip_port). The gateway's SIP UAS
+	// convention is :5090 (vars.xml tring_gateway_sip / TRING_GATEWAY_SIP_PORT,
+	// and freeswitch/conf/sip_profiles/external/tring-gw.xml proxies there) —
+	// keep this in sync with TRING_GATEWAY_SIP_PORT.
+	"fsplug_enabled":       false,
+	"fsplug_sip_listen":    ":5090",
+	"fsplug_sip_advertise": "127.0.0.1",
+	"fsplug_rtp_min":       12000,
+	"fsplug_rtp_max":       12100,
+	"fsplug_fs_sip":        "127.0.0.1:5060",
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid
