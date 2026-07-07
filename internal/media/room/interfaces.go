@@ -74,9 +74,6 @@ type Leg struct {
 // adapter package that nothing in internal/media imports. Web and WhatsApp
 // implement the same contract. Adding a channel = writing a sibling adapter,
 // never touching the core.
-//
-// Outbound origination grows the contract later (Originator, Phase 3) — inbound
-// lands first.
 type Plug interface {
 	// OnInbound registers the single consumer for incoming calls. The consumer
 	// must Answer or Reject promptly (the plug times the call out otherwise).
