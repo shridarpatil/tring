@@ -1,6 +1,8 @@
 package room
 
 import (
+	"context"
+
 	"github.com/pion/rtp"
 )
 
@@ -82,4 +84,27 @@ type Plug interface {
 	Answer(id CallID) (*Leg, error)
 	Reject(id CallID) error
 	Hangup(id CallID) error
+}
+
+// OriginateRequest describes an outbound call the media plane asks a channel to
+// place. Trunks is an ordered preference list (the plug/edge tries them in
+// order or hands the whole set to the edge for failover).
+type OriginateRequest struct {
+	To       string   // E.164 destination
+	CallerID string   // presented caller line (an allocated DID)
+	Trunks   []string // ordered provider/gateway names
+}
+
+// Progress is an outbound call's pre-answer state, reported on the Originate
+// callback so the caller (an agent) hears ringback.
+type Progress struct {
+	State string // "ringing" | "early_media"
+}
+
+// Originator is the outbound half of a voice channel — optional; a channel may
+// implement Plug (inbound), Originator (outbound), or both. The FreeSWITCH plug
+// implements both. Originate blocks until the call is answered (returns a Leg),
+// fails, or ctx is cancelled; ring/early-media progress arrives on onProgress.
+type Originator interface {
+	Originate(ctx context.Context, req OriginateRequest, onProgress func(Progress)) (*Leg, error)
 }
