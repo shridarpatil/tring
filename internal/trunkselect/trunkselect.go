@@ -1,7 +1,8 @@
-// Package trunkselect is the shared outbound-trunk selection discipline used by
-// both the FreeSWITCH ESL path (internal/api) and the pion plane (the gateway's
-// fsplug Originator). The strategy logic lives here once. Input trunks are
-// assumed already priority-ordered (lowest first); this package does not sort.
+// Package trunkselect is the shared outbound-trunk selection discipline.
+// Used by the FreeSWITCH ESL path (internal/api) today; the pion plane
+// (gateway fsplug Originator) will reuse it once outbound wiring lands.
+// The strategy logic lives here once. Input trunks are assumed already
+// priority-ordered (lowest first); this package does not sort.
 package trunkselect
 
 import "fmt"

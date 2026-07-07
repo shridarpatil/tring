@@ -63,6 +63,15 @@ func TestSelectIndicesRoundRobinUsesRRIndexModN(t *testing.T) {
 	if len(got) != 1 || got[0] != 0 {
 		t.Fatalf("rrIndex=2,n=2: got %v, want [0]", got)
 	}
+
+	// Negative rrIndex: -1 % 2 == -1, then -1 + 2 == 1
+	got, err = SelectIndices(2, RoundRobin, -1)
+	if err != nil {
+		t.Fatalf("SelectIndices: %v", err)
+	}
+	if len(got) != 1 || got[0] != 1 {
+		t.Fatalf("rrIndex=-1,n=2: got %v, want [1]", got)
+	}
 }
 
 func TestSelectIndicesEmptyReturnsNilNil(t *testing.T) {
