@@ -116,7 +116,11 @@ func (p *Plug) Run(ctx context.Context) error {
 	return p.srv.ListenAndServe(ctx, "udp", p.cfg.SIPListen)
 }
 
-func (p *Plug) OnInbound(fn func(room.InboundCall)) { p.onInbound = fn }
+func (p *Plug) OnInbound(fn func(room.InboundCall)) {
+	p.mu.Lock()
+	p.onInbound = fn
+	p.mu.Unlock()
+}
 
 // onInvite maps an incoming INVITE to an InboundCall notification. It does NOT
 // answer — the signaling server decides (Answer/Reject) after resolving the DID.
@@ -136,11 +140,12 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, responded: make(chan struct{})}
 	p.mu.Lock()
 	p.calls[id] = c
+	cb := p.onInbound
 	p.mu.Unlock()
 
 	ic := room.InboundCall{CallID: id, From: req.From().Address.User, To: req.To().Address.User}
-	if p.onInbound != nil {
-		p.onInbound(ic)
+	if cb != nil {
+		cb(ic)
 	}
 
 	// Block until Answer/Reject responds, or time the call out — see
