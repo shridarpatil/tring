@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -69,7 +68,7 @@ func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
 	}
 
 	rrIdx := 0
-	if strings.EqualFold(strategy, "round_robin") {
+	if strategy == "round_robin" {
 		rrIdx = s.nextRoundRobin(t.ID, len(all))
 	}
 	idxs, err := trunkselect.SelectIndices(len(all), trunkselect.Strategy(strategy), rrIdx)
