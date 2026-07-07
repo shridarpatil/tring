@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!--
+  SIPp UAC (client) scenario impersonating an Indian carrier SBC (Tata/
+  Exotel/Airtel/Jio) placing an inbound call to Tring's FreeSWITCH
+  EXTERNAL profile (vars.xml: external_sip_port=5080).
+
+  Unlike sim/sipp-uas.xml (a UAS that answers), THIS scenario ORIGINATES
+  the INVITE — it is the caller, not the callee.
+
+  Offer is plain G.711 (PCMU/8000) + RFC 2833 telephone-event, exactly
+  what a real Indian carrier trunk sends. FreeSWITCH's public context
+  (freeswitch/conf/dialplan/public.xml) forces absolute_codec_string=opus
+  and bridges to sofia/gateway/tring-gw/${destination_number}, which
+  proxies to the gateway's fsplug SIP UAS on :5090 (Opus only). Proving
+  that FreeSWITCH transcodes this PCMU offer down to Opus toward the plug
+  is the unique thing this test can show that the loopback smoke-test
+  (sim/sipp-uas.xml, raw L16 legs) cannot.
+
+  Run standalone:
+    sipp -sf invite.xml -m 1 -s <DID> <fs-external-ip>:5080
+
+  See sim/inbound/e2e_test.go for the gated Go harness and
+  sim/inbound/README.md for full manual run instructions.
+-->
+<scenario name="tring inbound carrier call (PCMU offer)">
+
+  <send retrans="500">
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "Carrier" <sip:+919111111111@[local_ip]>;tag=[call_number]
+      To: <sip:[service]@[remote_ip]>
+      Call-ID: [call_id]
+      CSeq: 1 INVITE
+      Contact: <sip:carrier@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=carrier 1 1 IN IP4 [local_ip]
+      s=call
+      c=IN IP4 [local_ip]
+      t=0 0
+      m=audio [auto_media_port] RTP/AVP 0 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-16
+      a=sendrecv
+    ]]>
+  </send>
+
+  <recv response="100" optional="true"/>
+  <recv response="180" optional="true"/>
+  <recv response="200" rtd="true"/>
+
+  <send>
+    <![CDATA[
+      ACK sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "Carrier" <sip:+919111111111@[local_ip]>;tag=[call_number]
+      To: <sip:[service]@[remote_ip]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 1 ACK
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <!-- Optional short PCMU RTP burst so the plug sees real inbound audio
+       (and, on the plug side, real transcoded Opus). Left commented out
+       because it requires a .pcap fixture (e.g. pcap/pcmu-1s.pcap) that
+       isn't checked in; uncomment and supply one for an audio-bearing run.
+  <nop>
+    <action>
+      <exec play_pcap_audio="pcap/pcmu-1s.pcap"/>
+    </action>
+  </nop>
+  -->
+
+  <pause milliseconds="2000"/>
+
+  <send retrans="500">
+    <![CDATA[
+      BYE sip:[service]@[remote_ip]:[remote_port] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: "Carrier" <sip:+919111111111@[local_ip]>;tag=[call_number]
+      To: <sip:[service]@[remote_ip]>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 2 BYE
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+
+  <recv response="200"/>
+
+  <!-- Per-scenario stats partitions (kept simple, matches sim/sipp-uas.xml). -->
+  <ResponseTimeRepartition value="10, 20, 30, 50, 100"/>
+  <CallLengthRepartition value="500, 1000, 5000, 10000"/>
+
+</scenario>

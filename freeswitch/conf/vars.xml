@@ -70,15 +70,14 @@
   <X-PRE-PROCESS cmd="set" data="domain_name=$${domain}"/>
   <X-PRE-PROCESS cmd="set" data="hold_music=local_stream://moh"/>
   <X-PRE-PROCESS cmd="set" data="use_profile=external"/>
-  <!-- Tring media gateway SIP endpoint (ADR-001 M4b). Where FS sends agent
-       legs when agent_transport=gateway (see external/tring-gw.xml). Derived from
-       the SAME env the gateway uses for its own SIP bind (TRING_GATEWAY_ADVERT_IP
-       + TRING_GATEWAY_SIP_PORT), so FS and the gateway stay in sync from one
-       source of truth. Defaults to loopback:5090 (gateway co-located with FS). -->
+  <!-- Tring media gateway SIP endpoint. Where FS bridges inbound carrier DIDs
+       (dialplan/public.xml -> the SIP plug) and agent legs (ADR-001 M4b, see
+       external/tring-gw.xml). This is the gateway's SIP UAS (internal/fsplug).
+       Keep this host:port in sync with the gateway's own bind:
+       TRING_GATEWAY_ADVERT_IP must equal TRING_FSPLUG_SIP_ADVERTISE, and
+       TRING_GATEWAY_SIP_PORT must equal the port in TRING_FSPLUG_SIP_LISTEN.
+       Defaults to loopback:5090 (gateway co-located with FS). -->
   <X-PRE-PROCESS cmd="exec-set" data="tring_gateway_sip=sh -c 'echo ${TRING_GATEWAY_ADVERT_IP:-127.0.0.1}:${TRING_GATEWAY_SIP_PORT:-5090}'"/>
-  <!-- Phase 4 plug: route inbound DIDs to the media plane (pion) instead of the
-       orchestrator's ESL IVR. Set TRING_PSTN_VIA_GATEWAY=true to enable. -->
-  <X-PRE-PROCESS cmd="exec-set" data="tring_pstn_via_gateway=sh -c 'echo ${TRING_PSTN_VIA_GATEWAY:-false}'"/>
   <!-- Tring orchestrator IVR socket (cmd/orchestrator's outbound-ESL listener).
        The dialplan hands inbound calls here (see dialplan/default.xml). Defaults
        to loopback because the orchestrator is co-located with FreeSWITCH (one per
