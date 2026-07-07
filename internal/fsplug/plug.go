@@ -113,7 +113,29 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 
 // Run serves SIP until ctx is cancelled.
 func (p *Plug) Run(ctx context.Context) error {
-	return p.srv.ListenAndServe(ctx, "udp", p.cfg.SIPListen)
+	laddr, err := net.ResolveUDPAddr("udp", p.cfg.SIPListen)
+	if err != nil {
+		return fmt.Errorf("fsplug: resolve sip listen %q: %w", p.cfg.SIPListen, err)
+	}
+	conn, err := net.ListenUDP("udp", laddr)
+	if err != nil {
+		return fmt.Errorf("fsplug: listen udp %q: %w", p.cfg.SIPListen, err)
+	}
+	// We own the listener lifecycle: closing conn on ctx cancel unblocks
+	// ServeUDP. We deliberately do NOT use srv.ListenAndServe — its ctx-cancel
+	// path reads an unsynchronized connCloser var (sipgo v1.4.0 data race under
+	// -race), and srv.Close() is a no-op. conn is captured after assignment
+	// (happens-before via goroutine start); *net.UDPConn is safe for concurrent
+	// Close/Read, so this is race-free.
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
+	err = p.srv.ServeUDP(conn)
+	if ctx.Err() != nil {
+		return nil // graceful shutdown (conn closed by our goroutine)
+	}
+	return err
 }
 
 func (p *Plug) OnInbound(fn func(room.InboundCall)) {
