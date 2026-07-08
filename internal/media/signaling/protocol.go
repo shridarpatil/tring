@@ -27,6 +27,7 @@ const (
 	msgSupervise = "supervise-mode" // supervisor → server: switch mode — {mode: monitor|whisper|barge}
 	msgPing      = "ping"           // keepalive: a no-op frame that resets the socket read deadline
 	msgBye       = "bye"
+	msgDial      = "dial" // agent: originate an outbound PSTN call into this room — {to}
 
 	// server → client
 	msgJoined     = "joined"          // {participant_id, session_token, ice_servers}
@@ -40,6 +41,7 @@ const (
 	msgEnded      = "ended"           // s→client: the call is over (terminal — don't reconnect)
 	msgError      = "error"           // {reason}
 	msgSupervisor = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
+	msgRinging    = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
 )
 
 // msg is the single envelope for every /rtc message.
@@ -54,6 +56,9 @@ type msg struct {
 
 	// dtmf
 	Digit string `json:"digit,omitempty"`
+
+	// dial (agent → server): the outbound destination
+	To string `json:"to,omitempty"`
 
 	// offer / answer
 	SDP string `json:"sdp,omitempty"`

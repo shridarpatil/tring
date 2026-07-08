@@ -164,6 +164,49 @@ func TestNoMediaLeavesNoRecordingURL(t *testing.T) {
 	}
 }
 
+// TestStartedOutboundRecordsOutboundDirection is the regression guard for the
+// agent-initiated-outbound mislabeling bug: StartedOutbound (unlike Started,
+// which always writes 'inbound') must land a `calls` row with
+// direction='outbound' and source='phone', and the live-dashboard ringingEvent
+// it publishes must say "outbound" too — not the "inbound"/"phone" tuple every
+// call used to get regardless of who initiated it. It also guards the
+// supervisor-routing regression (Task 4d): the row's room_id must be
+// persisted — get-supervise-target reads room_id, so a NULL here silently
+// made agent-initiated outbound calls unsupervisable.
+func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = false WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("disable recording: %v", err)
+	}
+	dir := t.TempDir()
+	l := callcdr.New(fx.DB, nil, dir, nil, nil)
+
+	roomID := fx.TenantID.String() + "/agent-dial"
+	sink := l.StartedOutbound(ctx, fx.TenantID, roomID, "16001122", "+919900112233", "", "caller-pid")
+	if sink != nil {
+		t.Fatal("tenant has record_calls off — no sink expected")
+	}
+	l.Ended(roomID, "caller_hangup")
+
+	var direction, source, gotRoomID string
+	err := fx.DB.Pool.QueryRow(ctx,
+		`SELECT direction::text, source::text, COALESCE(room_id, '') FROM calls WHERE tenant_id = $1`, fx.TenantID).
+		Scan(&direction, &source, &gotRoomID)
+	if err != nil {
+		t.Fatalf("read call row: %v", err)
+	}
+	if direction != "outbound" {
+		t.Fatalf("direction = %q, want outbound", direction)
+	}
+	if source != "phone" {
+		t.Fatalf("source = %q, want phone", source)
+	}
+	if gotRoomID != roomID {
+		t.Fatalf("room_id = %q, want %q (supervisor routing needs this persisted)", gotRoomID, roomID)
+	}
+}
+
 // TestNoRecordingWhenTenantOff: CDR still written, but no sink and no file.
 // (record_calls defaults to true in the schema, so disable it explicitly.)
 func TestNoRecordingWhenTenantOff(t *testing.T) {

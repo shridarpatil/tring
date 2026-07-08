@@ -34,6 +34,17 @@ func (s *Server) AttachPstn(gw room.Plug, resolve DIDResolver) {
 	s.log.Info("pstn plug attached")
 }
 
+// AttachOriginator wires agent-initiated OUTBOUND dialing (msgDial,
+// outbound.go) into the server: o places/hangs up the carrier leg, t resolves
+// which trunk(s) a tenant dials through. Call once at startup (cmd/gateway)
+// alongside AttachPstn, before the server serves — both nil until this is
+// called, so outbound dialing stays disabled until wired.
+func (s *Server) AttachOriginator(o Originator, t TrunkResolver) {
+	s.cfg.Originator = o
+	s.cfg.Trunks = t
+	s.log.Info("originator attached")
+}
+
 // handleInboundPhone runs one phone call: resolve → answer → port → IVR → end.
 func (s *Server) handleInboundPhone(ic room.InboundCall) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

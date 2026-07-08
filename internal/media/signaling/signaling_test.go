@@ -576,6 +576,12 @@ func (f *fakeCallLog) Started(_ context.Context, _ uuid.UUID, roomID, from, to, 
 	f.mu.Unlock()
 	return nil
 }
+func (f *fakeCallLog) StartedOutbound(_ context.Context, _ uuid.UUID, roomID, from, to, _ string, _ room.ParticipantID) room.TrackSink {
+	f.mu.Lock()
+	f.started = append(f.started, roomID+"|"+from+"|"+to+"|outbound")
+	f.mu.Unlock()
+	return nil
+}
 func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID, agentSip string) room.TrackSink {
 	f.mu.Lock()
 	f.answered = append(f.answered, roomID+"|"+string(pid)+"|"+agentSip)
@@ -692,6 +698,9 @@ type orderedCallLog struct {
 }
 
 func (o *orderedCallLog) Started(context.Context, uuid.UUID, string, string, string, string, string, room.ParticipantID) room.TrackSink {
+	return nil
+}
+func (o *orderedCallLog) StartedOutbound(context.Context, uuid.UUID, string, string, string, string, room.ParticipantID) room.TrackSink {
 	return nil
 }
 func (o *orderedCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
