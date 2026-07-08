@@ -113,8 +113,8 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 	contact := sip.ContactHeader{Address: sip.Uri{User: "tring", Host: cfg.SIPAdvertise, Port: port}}
 	p := &Plug{
 		cfg: cfg, log: log, ua: ua, srv: srv, client: client,
-		ds:      sipgo.NewDialogServerCache(client, contact),
-		dc:      sipgo.NewDialogClientCache(client, contact),
+		ds:       sipgo.NewDialogServerCache(client, contact),
+		dc:       sipgo.NewDialogClientCache(client, contact),
 		contact:  contact,
 		calls:    map[room.CallID]*call{},
 		outbound: map[room.ParticipantID]*outboundCall{},
@@ -347,8 +347,15 @@ func (p *Plug) HangupOutbound(pid room.ParticipantID) error {
 	return err
 }
 
-func (p *Plug) forgetOutbound(pid room.ParticipantID) {
+// forgetOutbound removes pid's map entry only if it still points at oc —
+// the specific *outboundCall the caller registered. This guards against a
+// stale/duplicate teardown path deleting a DIFFERENT live call that has
+// since taken the same pid (defense in depth; Originate's pid is already
+// call-unique, so this should never actually trigger in practice).
+func (p *Plug) forgetOutbound(pid room.ParticipantID, oc *outboundCall) {
 	p.mu.Lock()
-	delete(p.outbound, pid)
+	if cur, ok := p.outbound[pid]; ok && cur == oc {
+		delete(p.outbound, pid)
+	}
 	p.mu.Unlock()
 }

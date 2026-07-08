@@ -8,6 +8,7 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	"github.com/google/uuid"
 	"github.com/pion/rtp"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
@@ -36,14 +37,21 @@ func splitHostPort(addr string) (string, int) {
 // reached 200 OK (state Established) but failed before Originate could
 // hand back a leg — the carrier believes the call is up, so returning
 // without cleanup would strand a live channel. Bye requires a Confirmed
-// (acked) dialog, so Ack first: harmless if Ack already succeeded
-// elsewhere (sipgo only transitions Established→Confirmed once), and
-// gives an Ack-failure caller a second chance before the Bye attempt.
+// (acked) dialog, so Ack first, but only if the dialog isn't already
+// Confirmed: sipgo's WriteAck chains a NEW OnRetransmission handler on
+// every call (dialog_client.go), so an unconditional second Ack after one
+// that already succeeded would mean two ACKs go out if the carrier
+// retransmits the 200. Deliberately uses context.Background() rather than
+// the ctx Originate was called with: that ctx is plausibly the very
+// reason we're in this cleanup path (near-expired/cancelled), and
+// HangupOutbound's cleanup is background-context for the same reason.
 // Errors are ignored throughout — this runs only on an already-failing
 // path, as cleanup.
-func terminateEstablished(ctx context.Context, dlg *sipgo.DialogClientSession) {
-	_ = dlg.Ack(ctx)
-	_ = dlg.Bye(ctx)
+func terminateEstablished(dlg *sipgo.DialogClientSession) {
+	if dlg.LoadState() != sip.DialogStateConfirmed {
+		_ = dlg.Ack(context.Background())
+	}
+	_ = dlg.Bye(context.Background())
 }
 
 // Originate places an outbound call via FreeSWITCH and returns the answered leg.
@@ -54,7 +62,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	if len(req.Trunks) == 0 {
 		return nil, fmt.Errorf("fsplug: originate with no trunk")
 	}
-	m, err := newMediaSession(room.ParticipantID("out-"+req.To), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT)
+	m, err := newMediaSession(room.ParticipantID("out-"+uuid.NewString()), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +113,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 		// The 200 was already received (dialog Established) — the carrier
 		// believes the call is up even though we're about to fail out.
 		// Best-effort tear it down rather than stranding a live channel.
-		terminateEstablished(ctx, dlg)
+		terminateEstablished(dlg)
 		m.Close()
 		return nil, fmt.Errorf("fsplug: bad answer sdp: %w", err)
 	}
@@ -113,7 +121,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	if err := dlg.Ack(ctx); err != nil {
 		// Same as above: Established, so best-effort terminate before
 		// surfacing the error, even though the Ack we just tried failed.
-		terminateEstablished(ctx, dlg)
+		terminateEstablished(dlg)
 		m.Close()
 		return nil, fmt.Errorf("fsplug: ack: %w", err)
 	}
@@ -121,10 +129,14 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	// Register the dialog (keyed by the leg's ParticipantID) so
 	// HangupOutbound can find it when the room hangs up first. Must happen
 	// after Ack succeeds — this map only ever holds calls Originate is
-	// about to hand back as a live leg.
+	// about to hand back as a live leg. pid is call-unique (out-<uuid>), not
+	// out-<To>: two concurrent Originate calls to the SAME number must not
+	// share a map key, or one call's teardown could delete the OTHER's
+	// still-live entry and strand it un-hangup-able.
 	pid := m.ID()
+	oc := &outboundCall{dlg: dlg, m: m}
 	p.mu.Lock()
-	p.outbound[pid] = &outboundCall{dlg: dlg, m: m}
+	p.outbound[pid] = oc
 	p.mu.Unlock()
 
 	go func() { // teardown when the far side (carrier) hangs up
@@ -133,7 +145,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 				break
 			}
 		}
-		p.forgetOutbound(pid)
+		p.forgetOutbound(pid, oc)
 		m.Close()
 	}()
 	// Residual guard: StateRead()'s callback only fires for transitions that
@@ -146,7 +158,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	// is a no-op if the teardown goroutine (or a racing HangupOutbound)
 	// already removed the entry.
 	if dlg.LoadState() == sip.DialogStateEnded {
-		p.forgetOutbound(pid)
+		p.forgetOutbound(pid, oc)
 		m.Close()
 	}
 	return &room.Leg{

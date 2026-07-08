@@ -301,3 +301,88 @@ func TestHangupOutboundSendsBye(t *testing.T) {
 		t.Fatalf("HangupOutbound(unknown) = %v, want nil", err)
 	}
 }
+
+// TestHangupOutboundRacesCarrierBye exercises the room-hangs-up and
+// carrier-hangs-up teardown paths concurrently: p.HangupOutbound and a
+// carrier-initiated BYE fire at (as close to) the same instant. Neither the
+// map's check-and-delete (HangupOutbound / forgetOutbound) nor the
+// mediaSession's Close should panic or double-fire, and exactly one
+// teardown should "win" — the map entry ends up gone either way, so a
+// second HangupOutbound call is always a no-op. Must pass under -race.
+func TestHangupOutboundRacesCarrierBye(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// --- fake FS UAS on :15490, answers then sends a BYE the instant its
+	// ACK lands (same technique as TestOriginateTeardownOnCarrierBye) ---
+	ua, _ := sipgo.NewUA()
+	fsSrv, _ := sipgo.NewServer(ua)
+	fsClient, _ := sipgo.NewClient(ua)
+	ds := sipgo.NewDialogServerCache(fsClient, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15490}})
+	sessCh := make(chan *sipgo.DialogServerSession, 1)
+	fsSrv.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+		sess, err := ds.ReadInvite(req, tx)
+		if err != nil {
+			return
+		}
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16003, 111, 101))
+		sessCh <- sess
+	})
+	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
+		_ = ds.ReadAck(req, tx)
+		sess := <-sessCh
+		go func() {
+			bye := sip.NewRequest(sip.BYE, sip.Uri{User: "tring", Host: "127.0.0.1", Port: 15491})
+			_ = sess.WriteBye(context.Background(), bye)
+		}()
+	})
+	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadBye(req, tx) })
+	serveFakeFS(t, fsSrv, "127.0.0.1:15490")
+
+	// --- the plug as UAC (and UAS for the carrier's inbound BYE) ---
+	p, err := New(Config{SIPListen: "127.0.0.1:15491", SIPAdvertise: "127.0.0.1", RTPMin: 13000, RTPMax: 13100, OpusPT: 111, DTMFPT: 101, FSSIP: "127.0.0.1:15490"}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	go p.Run(runCtx)
+	time.Sleep(100 * time.Millisecond) // let the plug's UAS bind (test-only)
+
+	leg, err := p.Originate(ctx, room.OriginateRequest{To: "919000000005", CallerID: "911600123456", Trunks: []string{"tata"}}, func(room.Progress) {})
+	if err != nil {
+		t.Fatalf("Originate: %v", err)
+	}
+	if leg == nil || leg.Source == nil {
+		t.Fatal("no leg returned")
+	}
+	pid := leg.Source.ID()
+
+	// Race HangupOutbound (room-initiated) against the carrier's BYE (fired
+	// from the OnAck handler above) by calling it right away, from its own
+	// goroutine, with no synchronization — exactly the check-and-delete race
+	// forgetOutbound/HangupOutbound must survive.
+	done := make(chan struct{})
+	go func() {
+		_ = p.HangupOutbound(pid)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HangupOutbound never returned")
+	}
+
+	select {
+	case <-leg.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leg.Done never fired (teardown leaked)")
+	}
+
+	// Terminal state must be consistent: the map entry is gone either way,
+	// so a second HangupOutbound is always a no-op, not an error or panic.
+	if err := p.HangupOutbound(pid); err != nil {
+		t.Fatalf("second HangupOutbound = %v, want nil", err)
+	}
+}
