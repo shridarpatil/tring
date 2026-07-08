@@ -139,17 +139,19 @@ ORDER BY type, priority ASC, created_at DESC;
 
 -- name: update-tenant
 UPDATE tenants
-SET outbound_strategy = COALESCE($1, outbound_strategy),
-    failover_causes   = COALESCE($2::TEXT[], failover_causes),
-    hold_music        = COALESCE($4, hold_music),
-    record_calls      = COALESCE($5, record_calls),
-    max_call_seconds  = COALESCE($6, max_call_seconds)
+SET outbound_strategy       = COALESCE($1, outbound_strategy),
+    failover_causes         = COALESCE($2::TEXT[], failover_causes),
+    hold_music              = COALESCE($4, hold_music),
+    record_calls            = COALESCE($5, record_calls),
+    max_call_seconds        = COALESCE($6, max_call_seconds),
+    transfer_failed_message = COALESCE($7, transfer_failed_message),
+    transfer_failed_audio   = COALESCE($8, transfer_failed_audio)
 WHERE id = $3
-RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds;
+RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message;
 
 -- name: get-tenant-settings
 -- Tenant-level settings the Settings page reads (not carried in the auth context).
-SELECT hold_music, record_calls, max_call_seconds FROM tenants WHERE id = $1;
+SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message FROM tenants WHERE id = $1;
 
 -- name: get-tenant-max-call-seconds
 -- Tenant's max call duration — the ephemeral TURN credential lifetime basis.
@@ -182,6 +184,11 @@ UPDATE calls SET recording_s3_key = $2 WHERE leg_id = $1;
 
 -- name: get-tenant-hold-music
 SELECT hold_music FROM tenants WHERE id = $1;
+
+-- name: get-tenant-transfer-audio
+-- The synthesized "no one answered" prompt path (played on a failed blind transfer),
+-- "" when unset (TTS disabled at save). Read by the gateway on the pion plane.
+SELECT COALESCE(transfer_failed_audio, '') FROM tenants WHERE id = $1;
 
 -- ===========================================================================
 -- audio assets (tenant sound library)
