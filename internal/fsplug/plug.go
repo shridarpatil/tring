@@ -72,8 +72,18 @@ type Plug struct {
 
 	onInbound func(room.InboundCall)
 
-	mu    sync.Mutex
-	calls map[room.CallID]*call
+	mu       sync.Mutex
+	calls    map[room.CallID]*call
+	outbound map[room.ParticipantID]*outboundCall
+}
+
+// outboundCall pairs a room-initiated outbound dialog with its media
+// session so HangupOutbound can BYE the carrier and free the RTP socket
+// together, keyed by the leg's ParticipantID (what the room/signaling
+// layer knows the leg by — leg.Source.ID()).
+type outboundCall struct {
+	dlg *sipgo.DialogClientSession
+	m   *mediaSession
 }
 
 func New(cfg Config, log *slog.Logger) (*Plug, error) {
@@ -105,8 +115,9 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 		cfg: cfg, log: log, ua: ua, srv: srv, client: client,
 		ds:      sipgo.NewDialogServerCache(client, contact),
 		dc:      sipgo.NewDialogClientCache(client, contact),
-		contact: contact,
-		calls:   map[room.CallID]*call{},
+		contact:  contact,
+		calls:    map[room.CallID]*call{},
+		outbound: map[room.ParticipantID]*outboundCall{},
 	}
 	srv.OnInvite(p.onInvite)
 	srv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = p.ds.ReadAck(req, tx) })
@@ -309,5 +320,35 @@ func (p *Plug) Hangup(id room.CallID) error {
 func (p *Plug) forget(id room.CallID) {
 	p.mu.Lock()
 	delete(p.calls, id)
+	p.mu.Unlock()
+}
+
+// HangupOutbound BYEs the carrier for a room-initiated outbound call,
+// identified by its leg's ParticipantID (leg.Source.ID(), which is what
+// Originate registered it under). This is the room-hangs-up-first
+// direction: Originate's own teardown goroutine already handles the
+// carrier-hangs-up-first direction by firing Leg.Done, and that goroutine
+// (or its residual-guard sibling) is exactly what unregisters this map
+// entry on that path — so a pid that's already gone here means the
+// carrier beat us to it, not an error. Idempotent by design.
+func (p *Plug) HangupOutbound(pid room.ParticipantID) error {
+	p.mu.Lock()
+	oc, ok := p.outbound[pid]
+	delete(p.outbound, pid)
+	p.mu.Unlock()
+	if !ok {
+		return nil // already torn down (carrier hung up first, or double-call)
+	}
+
+	// Bye and Close happen outside the lock: both can block/take time
+	// (network round-trip, socket teardown) and neither touches p's state.
+	err := oc.dlg.Bye(context.Background())
+	oc.m.Close()
+	return err
+}
+
+func (p *Plug) forgetOutbound(pid room.ParticipantID) {
+	p.mu.Lock()
+	delete(p.outbound, pid)
 	p.mu.Unlock()
 }

@@ -230,3 +230,74 @@ func TestOriginateTeardownOnCarrierBye(t *testing.T) {
 		t.Fatal("leg.Done never fired after carrier BYE (teardown goroutine leaked)")
 	}
 }
+
+// TestHangupOutboundSendsBye asserts the room-hangs-up-first direction: when
+// the room calls p.HangupOutbound with the leg's ParticipantID, the plug
+// sends a BYE to the carrier (fake FS) and closes the leg's media session
+// (observed via leg.Done, since mediaSession.Close fires it). It also
+// asserts HangupOutbound on an unknown ParticipantID is a no-op, not a panic
+// or an error — the carrier may have already hung up first, which
+// Originate's own teardown goroutine handles.
+func TestHangupOutboundSendsBye(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// --- fake FS UAS on :15390, answers and records any BYE it receives ---
+	ua, _ := sipgo.NewUA()
+	fsSrv, _ := sipgo.NewServer(ua)
+	fsClient, _ := sipgo.NewClient(ua)
+	ds := sipgo.NewDialogServerCache(fsClient, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15390}})
+	gotBye := make(chan struct{}, 1)
+	fsSrv.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+		sess, err := ds.ReadInvite(req, tx)
+		if err != nil {
+			return
+		}
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16002, 111, 101))
+	})
+	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadAck(req, tx) })
+	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		_ = ds.ReadBye(req, tx)
+		select {
+		case gotBye <- struct{}{}:
+		default:
+		}
+	})
+	serveFakeFS(t, fsSrv, "127.0.0.1:15390")
+
+	// --- the plug as UAC ---
+	p, err := New(Config{SIPListen: "127.0.0.1:15391", SIPAdvertise: "127.0.0.1", RTPMin: 12900, RTPMax: 13000, OpusPT: 111, DTMFPT: 101, FSSIP: "127.0.0.1:15390"}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leg, err := p.Originate(ctx, room.OriginateRequest{To: "919000000004", CallerID: "911600123456", Trunks: []string{"tata"}}, func(room.Progress) {})
+	if err != nil {
+		t.Fatalf("Originate: %v", err)
+	}
+	if leg == nil || leg.Source == nil {
+		t.Fatal("no leg returned")
+	}
+
+	if err := p.HangupOutbound(leg.Source.ID()); err != nil {
+		t.Fatalf("HangupOutbound: %v", err)
+	}
+
+	select {
+	case <-gotBye:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fake FS never received a BYE from HangupOutbound")
+	}
+
+	select {
+	case <-leg.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leg.Done never fired after HangupOutbound")
+	}
+
+	// Unknown ParticipantID: idempotent no-op (e.g. the carrier already hung
+	// up, or a duplicate hangup request), not a panic or an error.
+	if err := p.HangupOutbound(room.ParticipantID("does-not-exist")); err != nil {
+		t.Fatalf("HangupOutbound(unknown) = %v, want nil", err)
+	}
+}
