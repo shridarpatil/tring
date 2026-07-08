@@ -84,6 +84,33 @@ func TestAgentRouterHandoffCallerGoneIsTerminal(t *testing.T) {
 	}
 }
 
+// RingNoHandoff reports "completed" on an answer WITHOUT invoking the handoff wait,
+// even when the transport implements HandoffWaiter (used by agent-initiated transfer,
+// which must not resume any IVR flow).
+func TestRingNoHandoffSkipsHandoffWait(t *testing.T) {
+	tp := &handoffTransport{fakeTransport: fakeTransport{eff: &answerEffects{}}, resumeToCaller: true}
+	got, err := newRouter(tp).RingNoHandoff(context.Background(), "11111111-1111-1111-1111-111111111111/room", ivrdrive.Target{Team: "sales"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "completed" {
+		t.Fatalf("outcome = %q, want completed", got)
+	}
+	if tp.waited {
+		t.Fatal("RingNoHandoff must not call AwaitHandoffEnd")
+	}
+}
+
+// A target with no resolvable candidates is "no_answer".
+func TestRingNoHandoffNoCandidates(t *testing.T) {
+	tp := &fakeTransport{eff: &answerEffects{}}
+	r := NewAgentRouter(fakeTeams{sips: nil}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil)
+	got, _ := r.RingNoHandoff(context.Background(), "11111111-1111-1111-1111-111111111111/room", ivrdrive.Target{Team: "sales"})
+	if got != "no_answer" {
+		t.Fatalf("outcome = %q, want no_answer", got)
+	}
+}
+
 func TestAgentRouterRoutesTeamTransfer(t *testing.T) {
 	tenant := uuid.New()
 	eff := &answerEffects{}
