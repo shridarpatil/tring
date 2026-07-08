@@ -164,6 +164,43 @@ func TestNoMediaLeavesNoRecordingURL(t *testing.T) {
 	}
 }
 
+// TestStartedOutboundRecordsOutboundDirection is the regression guard for the
+// agent-initiated-outbound mislabeling bug: StartedOutbound (unlike Started,
+// which always writes 'inbound') must land a `calls` row with
+// direction='outbound' and source='phone', and the live-dashboard ringingEvent
+// it publishes must say "outbound" too — not the "inbound"/"phone" tuple every
+// call used to get regardless of who initiated it.
+func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = false WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("disable recording: %v", err)
+	}
+	dir := t.TempDir()
+	l := callcdr.New(fx.DB, nil, dir, nil, nil)
+
+	roomID := fx.TenantID.String() + "/agent-dial"
+	sink := l.StartedOutbound(ctx, fx.TenantID, roomID, "16001122", "+919900112233", "", "caller-pid")
+	if sink != nil {
+		t.Fatal("tenant has record_calls off — no sink expected")
+	}
+	l.Ended(roomID, "caller_hangup")
+
+	var direction, source string
+	err := fx.DB.Pool.QueryRow(ctx,
+		`SELECT direction::text, source::text FROM calls WHERE tenant_id = $1`, fx.TenantID).
+		Scan(&direction, &source)
+	if err != nil {
+		t.Fatalf("read call row: %v", err)
+	}
+	if direction != "outbound" {
+		t.Fatalf("direction = %q, want outbound", direction)
+	}
+	if source != "phone" {
+		t.Fatalf("source = %q, want phone", source)
+	}
+}
+
 // TestNoRecordingWhenTenantOff: CDR still written, but no sink and no file.
 // (record_calls defaults to true in the schema, so disable it explicitly.)
 func TestNoRecordingWhenTenantOff(t *testing.T) {
