@@ -350,7 +350,7 @@ func TestDialRejectedForVisitor(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		s.readLoop(c, visitor, uuid.New(), false /* isAgent */)
+		s.readLoop(c, visitor, uuid.New(), false /* isAgent */, "")
 		close(done)
 	}()
 
