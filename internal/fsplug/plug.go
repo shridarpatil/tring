@@ -33,8 +33,9 @@ type Config struct {
 	SIPAdvertise string // IP put in SDP/Contact, e.g. "127.0.0.1"
 	RTPMin       int
 	RTPMax       int
-	OpusPT       uint8 // e.g. 111
-	DTMFPT       uint8 // e.g. 101
+	OpusPT       uint8  // e.g. 111
+	DTMFPT       uint8  // e.g. 101
+	FSSIP        string // FreeSWITCH SIP addr for outbound INVITEs, e.g. "127.0.0.1:5060"
 }
 
 // call is one in-flight inbound dialog + its media.
@@ -63,6 +64,7 @@ type Plug struct {
 	srv    *sipgo.Server
 	client *sipgo.Client
 	ds     *sipgo.DialogServerCache
+	dc     *sipgo.DialogClientCache
 
 	// contact is stamped onto our 2xx response when we bypass
 	// DialogServerSession.RespondSDP (see Answer's doc comment).
@@ -102,12 +104,22 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 	p := &Plug{
 		cfg: cfg, log: log, ua: ua, srv: srv, client: client,
 		ds:      sipgo.NewDialogServerCache(client, contact),
+		dc:      sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "tring", Host: cfg.SIPAdvertise}}),
 		contact: contact,
 		calls:   map[room.CallID]*call{},
 	}
 	srv.OnInvite(p.onInvite)
 	srv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = p.ds.ReadAck(req, tx) })
-	srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = p.ds.ReadBye(req, tx) })
+	// A BYE can belong to either cache: an inbound (FS-originated) dialog is
+	// ours as a server, an outbound (Tring-originated) dialog is ours as a
+	// client. Try the server cache first; if it doesn't recognize the dialog,
+	// fall through to the client cache. Without this, an outbound call's
+	// carrier-hangup BYE is silently dropped and Leg.Done never fires.
+	srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		if err := p.ds.ReadBye(req, tx); err != nil {
+			_ = p.dc.ReadBye(req, tx)
+		}
+	})
 	return p, nil
 }
 
