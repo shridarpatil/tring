@@ -511,6 +511,97 @@ func TestDialOriginateError(t *testing.T) {
 	}
 }
 
+// TestDialNormalizesDestination asserts handleAgentDial runs the dialed
+// number through dial.India before Originate ever sees it (Fix 1): a bare
+// 10-digit Indian mobile number must arrive at Originate as +91-prefixed
+// E.164 — matching the ESL/API originate path's behavior, which already
+// normalizes. An invalid destination must be rejected with a msgError BEFORE
+// any trunk resolution or Originate call.
+func TestDialNormalizesDestination(t *testing.T) {
+	t.Run("valid 10-digit number is normalized to E.164", func(t *testing.T) {
+		done := make(chan struct{})
+		src := &fakeOutboundSource{id: "out-norm", stop: make(chan struct{})}
+		leg := &room.Leg{
+			Source: src,
+			Write:  func(*rtp.Packet) error { return nil },
+			DTMF:   make(chan string),
+			Done:   done,
+		}
+		orig := newFakeOriginator(leg)
+		trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+911600000000", Name: "tata"}}}
+		s := newOutboundServer(t, orig, trunks)
+
+		rid := room.RoomID("t/call-normalize")
+		agent, err := s.rooms.Join(rid, "agent")
+		if err != nil {
+			t.Fatalf("join agent: %v", err)
+		}
+
+		finished := make(chan struct{})
+		go func() {
+			s.handleAgentDial(rid, uuid.New(), agent.ID(), "9900001111")
+			close(finished)
+		}()
+
+		var req room.OriginateRequest
+		select {
+		case req = <-orig.calls:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Originate was never called")
+		}
+		if req.To != "+919900001111" {
+			t.Fatalf("To = %q, want normalized E.164 +919900001111", req.To)
+		}
+
+		src.Close()
+		close(done)
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handleAgentDial did not return after leg.Done closed")
+		}
+	})
+
+	t.Run("invalid number errors without dialing", func(t *testing.T) {
+		orig := newFakeOriginator(nil)
+		trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+911600000000", Name: "tata"}}}
+		s := newOutboundServer(t, orig, trunks)
+
+		rid := room.RoomID("t/call-badnumber")
+		agent, err := s.rooms.Join(rid, "agent")
+		if err != nil {
+			t.Fatalf("join agent: %v", err)
+		}
+
+		serverConn, clientConn := net.Pipe()
+		t.Cleanup(func() { _ = clientConn.Close() })
+		s.mu.Lock()
+		s.conns[agent.ID()] = &conn{Conn: serverConn, pid: agent.ID()}
+		s.mu.Unlock()
+
+		go s.handleAgentDial(rid, uuid.New(), agent.ID(), "12345")
+
+		_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		data, err := wsutil.ReadServerText(clientConn)
+		if err != nil {
+			t.Fatalf("reading error message: %v", err)
+		}
+		var m msg
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m.Type != msgError {
+			t.Fatalf("type = %q, want %q", m.Type, msgError)
+		}
+
+		select {
+		case <-orig.calls:
+			t.Fatal("Originate should not have been called for an invalid destination number")
+		default:
+		}
+	})
+}
+
 // NOTE: an AttachPort-failure test (Fix scope item "TestDialAttachPortError")
 // was left out — sfu.AttachPort/InjectSource has no reachable failure seam
 // from this package's fakes (webrtc.NewTrackLocalStaticRTP essentially never

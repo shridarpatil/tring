@@ -187,12 +187,9 @@ func TestOriginateTeardownOnCarrierBye(t *testing.T) {
 		//
 		// Built by hand (Recipient pointed straight at the plug's known
 		// listen address) rather than via sess.Bye(), which resolves its
-		// target from the INVITE's Contact header — that Contact is built
-		// from p.dc's ContactHDR (plug.go), which carries no port, an
-		// unrelated pre-existing gap that would misroute this test's BYE
-		// off-box. sess.WriteBye fills in From/To/Call-ID/CSeq from the
-		// dialog for us (dialog_server.go:buildReq), so only Method +
-		// Recipient are needed here.
+		// target from the INVITE's Contact header. sess.WriteBye fills in
+		// From/To/Call-ID/CSeq from the dialog for us (dialog_server.go:
+		// buildReq), so only Method + Recipient are needed here.
 		sess := <-sessCh
 		go func() {
 			bye := sip.NewRequest(sip.BYE, sip.Uri{User: "tring", Host: "127.0.0.1", Port: 15291})
