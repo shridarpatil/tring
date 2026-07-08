@@ -169,7 +169,10 @@ func TestNoMediaLeavesNoRecordingURL(t *testing.T) {
 // which always writes 'inbound') must land a `calls` row with
 // direction='outbound' and source='phone', and the live-dashboard ringingEvent
 // it publishes must say "outbound" too — not the "inbound"/"phone" tuple every
-// call used to get regardless of who initiated it.
+// call used to get regardless of who initiated it. It also guards the
+// supervisor-routing regression (Task 4d): the row's room_id must be
+// persisted — get-supervise-target reads room_id, so a NULL here silently
+// made agent-initiated outbound calls unsupervisable.
 func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
@@ -186,10 +189,10 @@ func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
 	}
 	l.Ended(roomID, "caller_hangup")
 
-	var direction, source string
+	var direction, source, gotRoomID string
 	err := fx.DB.Pool.QueryRow(ctx,
-		`SELECT direction::text, source::text FROM calls WHERE tenant_id = $1`, fx.TenantID).
-		Scan(&direction, &source)
+		`SELECT direction::text, source::text, COALESCE(room_id, '') FROM calls WHERE tenant_id = $1`, fx.TenantID).
+		Scan(&direction, &source, &gotRoomID)
 	if err != nil {
 		t.Fatalf("read call row: %v", err)
 	}
@@ -198,6 +201,9 @@ func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
 	}
 	if source != "phone" {
 		t.Fatalf("source = %q, want phone", source)
+	}
+	if gotRoomID != roomID {
+		t.Fatalf("room_id = %q, want %q (supervisor routing needs this persisted)", gotRoomID, roomID)
 	}
 }
 
