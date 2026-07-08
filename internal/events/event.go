@@ -12,13 +12,14 @@ import (
 
 // Event types. Keep in sync with the frontend dispatcher (useDashboardStream.ts).
 const (
-	TypeCallRinging    = "call.ringing"
-	TypeCallAnswered   = "call.answered"
-	TypeCallEnded      = "call.ended"
-	TypeAgentPresence  = "agent.presence"
-	TypeAgentStatus    = "agent.status"
-	TypeQueueDepth     = "queue.depth"
-	TypeCallSupervised = "call.supervised"
+	TypeCallRinging     = "call.ringing"
+	TypeCallAnswered    = "call.answered"
+	TypeCallEnded       = "call.ended"
+	TypeAgentPresence   = "agent.presence"
+	TypeAgentStatus     = "agent.status"
+	TypeQueueDepth      = "queue.depth"
+	TypeCallSupervised  = "call.supervised"
+	TypeCallTransferred = "call.transferred"
 
 	// Derived frame types produced by the api Hub (never published to Redis).
 	TypeStats    = "stats"
