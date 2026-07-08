@@ -104,7 +104,7 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 	p := &Plug{
 		cfg: cfg, log: log, ua: ua, srv: srv, client: client,
 		ds:      sipgo.NewDialogServerCache(client, contact),
-		dc:      sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "tring", Host: cfg.SIPAdvertise}}),
+		dc:      sipgo.NewDialogClientCache(client, contact),
 		contact: contact,
 		calls:   map[room.CallID]*call{},
 	}
