@@ -118,6 +118,11 @@ type TeamResolver interface {
 // best-effort and idempotent; a nil CallLog disables CDRs entirely.
 type CallLog interface {
 	Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, source, clientRef string, callerPID room.ParticipantID) room.TrackSink
+	// StartedOutbound is Started's sibling for agent-initiated outbound calls
+	// (internal/media/signaling/outbound.go) — it records direction='outbound'
+	// (source is always 'phone' for this path, so there's no source param),
+	// instead of Started's hardcoded 'inbound'.
+	StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink
 	Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)

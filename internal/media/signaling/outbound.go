@@ -105,7 +105,7 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 	// the outbound-trunk convention in internal/api's originate path.
 	if s.cfg.Calls != nil {
 		cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if sink := s.cfg.Calls.Started(cctx, tenant, string(roomID), callerID, to, "phone", "", leg.Source.ID()); sink != nil {
+		if sink := s.cfg.Calls.StartedOutbound(cctx, tenant, string(roomID), callerID, to, "", leg.Source.ID()); sink != nil {
 			s.sfu.AddSink(roomID, leg.Source.ID(), sink)
 		}
 		ccancel()
