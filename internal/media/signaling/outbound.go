@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/trunkselect"
 )
@@ -46,6 +47,24 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 		return
 	}
 
+	// India-primary normalization, matching the ESL/API originate path
+	// (internal/provider's Exotel dial-string uses the same dial.India).
+	// Without this, a bare 10-digit or 0-/91-prefixed number sails straight
+	// into room.OriginateRequest.To and gets rejected downstream instead of
+	// here, with a much less useful error.
+	//
+	// FOLLOW-UP (not built here): this is India-specific. TrunkResolver
+	// already surfaces provider_type per trunk, which is where a future
+	// per-provider normalizer selection would hook in for international
+	// trunks (Twilio/Plivo).
+	normalized, err := dial.India(to)
+	if err != nil {
+		s.log.Warn("outbound: invalid destination number", "room", roomID, "to", to, "err", err)
+		s.sendError(agentPID, "invalid destination number")
+		return
+	}
+	to = normalized
+
 	tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
 	selected, err := s.cfg.Trunks.OutboundTrunks(tctx, tenant)
 	tcancel()
@@ -58,6 +77,16 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 	names := make([]string, len(selected))
 	for i, t := range selected {
 		names[i] = t.Name
+	}
+	if len(selected) > 1 {
+		// Only names[0] ever rides as the bridge target (internal/fsplug's
+		// Originate uses req.Trunks[0] alone; the pipe-joined
+		// &bridge(t1|t2|t3) multi-trunk failover is deferred backlog). A
+		// tenant on the default "failover" strategy with 2+ active trunks
+		// would otherwise silently get manual (first-trunk-only) behavior
+		// with no signal that carrier failover isn't actually happening.
+		s.log.Warn("outbound: multi-trunk failover not yet wired, using first trunk only",
+			"tenant", tenant, "trunk_count", len(selected), "trunk", names[0])
 	}
 
 	leg, err := s.cfg.Originator.Originate(context.Background(), room.OriginateRequest{
