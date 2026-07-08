@@ -85,7 +85,14 @@ type Config struct {
 	// Supervisors records supervisor session audit (internal/callcdr implements
 	// it). nil → no audit. Best-effort.
 	Supervisors SupervisorLog
-	Logger      *slog.Logger
+	// Originator places agent-initiated outbound PSTN calls (internal/fsplug
+	// implements it). nil → outbound dialing (msgDial) is disabled.
+	Originator Originator
+	// Trunks resolves a tenant's already-selected ordered outbound trunks (the
+	// same selection internal/api uses for FreeSWITCH-path calls). nil →
+	// outbound dialing is disabled.
+	Trunks TrunkResolver
+	Logger *slog.Logger
 }
 
 // FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
@@ -133,18 +140,19 @@ type Server struct {
 	pstnGW  room.Plug
 	pstnDID DIDResolver
 
-	mu        sync.Mutex
-	conns     map[room.ParticipantID]*conn
-	agents    map[string]map[string]*conn                  // online agents: tenant → sip → presence socket
-	rings     map[room.RoomID]chan struct{}                // pending transfer rings → closed when an agent joins
-	declines  map[room.RoomID]func(sip string)             // registered per active ring → an agent rejecting advances the router now
-	pstnCalls map[room.RoomID]room.CallID                  // live phone legs by room (pstn.go)
-	onCall    map[string]int                               // "tenant|sip" → active call legs (drives on_call presence)
-	callers   map[room.RoomID]room.ParticipantID           // the IVR caller per room (flow-pinned joiner) — see handoff.go
-	handoffs  map[room.RoomID]*handoff                     // rooms waiting for a transfer handoff to end (handoff.go)
-	holds     map[room.RoomID]func()                       // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
-	roles     map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
-	supers    map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
+	mu           sync.Mutex
+	conns        map[room.ParticipantID]*conn
+	agents       map[string]map[string]*conn                  // online agents: tenant → sip → presence socket
+	rings        map[room.RoomID]chan struct{}                // pending transfer rings → closed when an agent joins
+	declines     map[room.RoomID]func(sip string)             // registered per active ring → an agent rejecting advances the router now
+	pstnCalls    map[room.RoomID]room.CallID                  // live phone legs by room (pstn.go)
+	outboundLegs map[room.RoomID]room.ParticipantID           // agent-initiated outbound legs by room (outbound.go)
+	onCall       map[string]int                               // "tenant|sip" → active call legs (drives on_call presence)
+	callers      map[room.RoomID]room.ParticipantID           // the IVR caller per room (flow-pinned joiner) — see handoff.go
+	handoffs     map[room.RoomID]*handoff                     // rooms waiting for a transfer handoff to end (handoff.go)
+	holds        map[room.RoomID]func()                       // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
+	roles        map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
+	supers       map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -165,19 +173,20 @@ func New(cfg Config) *Server {
 		cfg.Logger = slog.Default()
 	}
 	s := &Server{
-		cfg:       cfg,
-		sfu:       cfg.SFU,
-		log:       cfg.Logger.With("component", "signaling"),
-		brain:     brain.NewRunner(cfg.Logger),
-		conns:     make(map[room.ParticipantID]*conn),
-		agents:    make(map[string]map[string]*conn),
-		rings:     make(map[room.RoomID]chan struct{}),
-		declines:  make(map[room.RoomID]func(sip string)),
-		pstnCalls: make(map[room.RoomID]room.CallID),
-		onCall:    make(map[string]int),
-		callers:   make(map[room.RoomID]room.ParticipantID),
-		handoffs:  make(map[room.RoomID]*handoff),
-		holds:     make(map[room.RoomID]func()),
+		cfg:          cfg,
+		sfu:          cfg.SFU,
+		log:          cfg.Logger.With("component", "signaling"),
+		brain:        brain.NewRunner(cfg.Logger),
+		conns:        make(map[room.ParticipantID]*conn),
+		agents:       make(map[string]map[string]*conn),
+		rings:        make(map[room.RoomID]chan struct{}),
+		declines:     make(map[room.RoomID]func(sip string)),
+		pstnCalls:    make(map[room.RoomID]room.CallID),
+		outboundLegs: make(map[room.RoomID]room.ParticipantID),
+		onCall:       make(map[string]int),
+		callers:      make(map[room.RoomID]room.ParticipantID),
+		handoffs:     make(map[room.RoomID]*handoff),
+		holds:        make(map[room.RoomID]func()),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -396,12 +405,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.signalRing(roomID)
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
-	s.readLoop(c, p)
+	s.readLoop(c, p, princ.tenant)
 }
 
 // readLoop dispatches client messages until the socket closes, then drops the
-// participant into the grace window.
-func (s *Server) readLoop(c *conn, p *room.Participant) {
+// participant into the grace window. tenant is the joiner's principal tenant
+// (needed for agent-initiated actions like msgDial that must resolve
+// tenant-scoped config, e.g. outbound trunks).
+func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID) {
 	defer func() {
 		// Only act if THIS socket is still the participant's current one. A reattach
 		// (page refresh) replaces conns[pid] with the new socket; when this (old)
@@ -460,6 +471,9 @@ func (s *Server) readLoop(c *conn, p *room.Participant) {
 		case msgTransfer:
 			// Agent-initiated transfer — not yet wired on the embedded-brain plane.
 			s.log.Warn("call control not yet implemented", "type", m.Type)
+		case msgDial:
+			// Agent-initiated outbound PSTN call into this (already joined) room.
+			go s.handleAgentDial(p.Room().ID(), tenant, p.ID(), m.To)
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
@@ -488,6 +502,7 @@ func (s *Server) routeEvent(e room.Event) {
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
+			s.hangupOutboundIfAbandoned(e.Room)
 			s.closeSupervisors(e.Room) // end any supervisor sessions with the call
 			if s.cfg.Calls != nil {
 				s.cfg.Calls.Ended(string(e.Room), "ended")
