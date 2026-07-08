@@ -105,7 +105,52 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, s
 		l.log.Error("cdr: create call failed", "room", roomID, "err", err)
 		return nil
 	}
+	return l.started(ctx, tenant, callID, roomID, from, to, source, "inbound", legID, callerPID)
+}
 
+// StartedOutbound is Started's sibling for calls the AGENT originates (an
+// agent, already in a room, dials out over the phone plug — see
+// media/signaling/outbound.go). It records `direction='outbound'` in both the
+// `calls` row and the live-dashboard `ringingEvent`, instead of Started's
+// hardcoded 'inbound' — that mislabeling was the bug this method fixes. It
+// inserts via CreateCallOutbound (queries.sql: tenant_id, from_number,
+// to_number, agent_id, leg_id, job_uuid — source is hardcoded 'phone' in the
+// query itself, so there is no source param). agent_id and job_uuid are
+// FreeSWITCH/originate-path concepts that don't exist yet at media-plane call
+// open: agent_id is left NULL here (the answering agent is attributed later,
+// same as Started, via Answered → SetCallAgentID) and job_uuid is NULLIF'd
+// empty. room_id IS now persisted (CreateCallOutbound's $7) so an
+// agent-initiated outbound call stays reachable by get-supervise-target —
+// this was the bug that made outbound calls unsupervisable. clientRef, by
+// contrast, is a genuine no-op here: CreateCallOutbound has no client_ref
+// column (unlike CreateCallInbound), so the param is accepted for interface
+// symmetry with Started but silently dropped — not a bug, just an unused
+// knob until/unless outbound gets its own client_ref column.
+func (l *Log) StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink {
+	if from == "" {
+		from = "Unknown"
+	}
+	legID := uuid.NewString()
+	var (
+		callID                                    uuid.UUID
+		outTenant                                 uuid.UUID
+		direction, status, fromOut, toOut, srcOut string
+		agentID                                   *uuid.UUID
+		legIDOut                                  string
+		startedAt                                 time.Time
+	)
+	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallOutbound, tenant, from, to, (*uuid.UUID)(nil), legID, "", roomID).
+		Scan(&callID, &outTenant, &direction, &status, &fromOut, &toOut, &agentID, &legIDOut, &startedAt, &srcOut)
+	if err != nil {
+		l.log.Error("cdr: create outbound call failed", "room", roomID, "err", err)
+		return nil
+	}
+	return l.started(ctx, tenant, callID, roomID, from, to, "phone", "outbound", legID, callerPID)
+}
+
+// started centralizes the recorder/registry/event bookkeeping shared by
+// Started and StartedOutbound once the calls-table row already exists.
+func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, roomID, from, to, source, direction, legID string, callerPID room.ParticipantID) room.TrackSink {
 	ac := &activeCall{id: callID, legID: legID, tenant: tenant, startedAt: time.Now(), callerPID: callerPID}
 	var recordOn bool
 	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&recordOn); err != nil {
@@ -123,9 +168,9 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, s
 	l.mu.Lock()
 	l.calls[roomID] = ac
 	l.mu.Unlock()
-	l.log.Info("cdr: call started", "room", roomID, "call", callID, "recording", recordOn)
+	l.log.Info("cdr: call started", "room", roomID, "call", callID, "direction", direction, "recording", recordOn)
 	if l.events != nil {
-		l.events.Publish(ctx, tenant.String(), events.TypeCallRinging, ringingEvent(callID, from, to, source, ac.startedAt))
+		l.events.Publish(ctx, tenant.String(), events.TypeCallRinging, ringingEvent(callID, from, to, source, direction, ac.startedAt))
 	}
 	if ac.rec == nil {
 		return nil
@@ -258,11 +303,11 @@ func (l *Log) SuperviseEnd(sessionID string, modes []string) {
 	}
 }
 
-func ringingEvent(callID uuid.UUID, from, to, source string, startedAt time.Time) map[string]any {
+func ringingEvent(callID uuid.UUID, from, to, source, direction string, startedAt time.Time) map[string]any {
 	return map[string]any{
 		"id":          callID,
 		"status":      "ringing",
-		"direction":   "inbound",
+		"direction":   direction,
 		"from_number": from,
 		"to_number":   to,
 		"source":      source,

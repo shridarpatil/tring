@@ -13,12 +13,21 @@ import (
 func TestRingingEvent(t *testing.T) {
 	id := uuid.New()
 	at := time.Unix(1700000000, 0)
-	m := ringingEvent(id, "+15551234567", "Support flow", "web", at)
-	if m["id"] != id || m["status"] != "ringing" || m["source"] != "web" {
+	m := ringingEvent(id, "+15551234567", "Support flow", "web", "inbound", at)
+	if m["id"] != id || m["status"] != "ringing" || m["source"] != "web" || m["direction"] != "inbound" {
 		t.Fatalf("bad ringing event: %+v", m)
 	}
 	if m["from_number"] != "+15551234567" || m["to_number"] != "Support flow" {
 		t.Fatalf("bad numbers: %+v", m)
+	}
+}
+
+func TestRingingEventOutboundDirection(t *testing.T) {
+	id := uuid.New()
+	at := time.Unix(1700000000, 0)
+	m := ringingEvent(id, "16001122", "+919900112233", "phone", "outbound", at)
+	if m["direction"] != "outbound" || m["source"] != "phone" {
+		t.Fatalf("bad outbound ringing event: %+v", m)
 	}
 }
 

@@ -1,6 +1,7 @@
 package room_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -49,11 +50,19 @@ func (g *stubGateway) Answer(room.CallID) (*room.Leg, error) {
 func (g *stubGateway) Reject(room.CallID) error { return nil }
 func (g *stubGateway) Hangup(room.CallID) error { return nil }
 
+type stubOriginator struct{}
+
+func (stubOriginator) Originate(ctx context.Context, req room.OriginateRequest, onProgress func(room.Progress)) (*room.Leg, error) {
+	onProgress(room.Progress{State: "ringing"})
+	return &room.Leg{}, nil
+}
+
 var (
 	_ room.TrackSink         = (*stubSink)(nil)
 	_ room.ParticipantSource = (*stubSource)(nil)
 	_ room.Supervisor        = (*stubSupervisor)(nil)
 	_ room.Plug              = (*stubGateway)(nil)
+	_ room.Originator        = stubOriginator{}
 )
 
 func TestExtensionInterfaceStubs(t *testing.T) {
@@ -83,5 +92,13 @@ func TestExtensionInterfaceStubs(t *testing.T) {
 	leg, err := gw.Answer("c1")
 	if err != nil || leg == nil || leg.Source == nil {
 		t.Fatalf("answer: leg=%v err=%v", leg, err)
+	}
+}
+
+func TestOriginatorContract(t *testing.T) {
+	var _ room.Originator = stubOriginator{}
+	req := room.OriginateRequest{To: "+919000000001", CallerID: "+911600123456", Trunks: []string{"tata", "airtel"}}
+	if req.To == "" || len(req.Trunks) != 2 {
+		t.Fatal("OriginateRequest fields not wired")
 	}
 }

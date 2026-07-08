@@ -2,13 +2,13 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/freeswitch"
+	"github.com/shridarpatil/tring/internal/trunkselect"
 )
 
 // trunk is the bare info originate needs about an outbound number — the
@@ -67,24 +67,19 @@ func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
 		strategy = "failover"
 	}
 
-	switch strategy {
-	case "failover":
-		return all, nil
-	case "manual":
-		// Lowest-priority active trunk only. Operator controls failover
-		// by flipping `numbers.active` via PATCH /v1/numbers/{id}.
-		return all[:1], nil
-	case "round_robin":
-		idx := s.nextRoundRobin(t.ID, len(all))
-		return []trunk{all[idx]}, nil
-	case "load_based":
-		// Reserved for Phase 3 — needs per-trunk success-rate tracking.
-		// The schema accepts the value so adding the impl later is purely
-		// additive.
-		return nil, errors.New("load_based strategy is reserved and not yet implemented")
-	default:
-		return nil, fmt.Errorf("unknown outbound_strategy %q", strategy)
+	rrIdx := 0
+	if strategy == "round_robin" {
+		rrIdx = s.nextRoundRobin(t.ID, len(all))
 	}
+	idxs, err := trunkselect.SelectIndices(len(all), trunkselect.Strategy(strategy), rrIdx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]trunk, len(idxs))
+	for i, x := range idxs {
+		out[i] = all[x]
+	}
+	return out, nil
 }
 
 // nextRoundRobin returns the next index in [0, n) for round_robin tenants.

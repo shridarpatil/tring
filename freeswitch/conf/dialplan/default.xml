@@ -18,6 +18,42 @@
 <include>
   <context name="default">
 
+    <!-- Gateway-originated OUTBOUND trunk call: the media gateway's fsplug
+         (internal/fsplug) INVITEs FreeSWITCH's internal profile directly
+         (loopback/private IP, already trusted by the 'domains' ACL —
+         acl.conf.xml — so no auth/registration is involved) with the
+         destination in the RURI, the caller-ID in From (-> sip_from_user),
+         and the resolved trunk/gateway name in a custom X-Tring-Trunk
+         header (see fsplug/originate.go). Gate on that header being PRESENT
+         so this rule can NEVER fire for agent-to-agent or IVR/web traffic
+         (gwflow, tring_transfer, tring_ivr below) — those calls never carry
+         the header. Placed at the TOP of the context so it wins over
+         tring_ivr's catch-all "^\d+$" match on numeric destinations; a call
+         without the header falls straight through (default break-on-false:
+         the first condition aborts THIS extension only, not the dialplan)
+         to the extensions below, unaffected.
+
+         NOTE: this bridges a SINGLE trunk leg today —
+         X-Tring-Trunk carries only the FIRST of a tenant's selected/ordered
+         trunks (internal/fsplug's Originate uses req.Trunks[0] alone; see
+         internal/media/signaling's handleAgentDial). A tenant with 2+ active
+         outbound trunks on the default "failover" strategy does NOT get
+         carrier-level failover from this extension — that's a pipe-joined
+         &bridge(t1|t2|t3) across multiple gateways, deferred backlog.
+         continue_on_fail is consequently INERT here: there's no second leg
+         in this single-target bridge for FreeSWITCH to roll over to, so the
+         listed causes never get a chance to matter. It's set now so the
+         config is ready the day the pipe-join lands, not because it does
+         anything today. -->
+    <extension name="tring_outbound_trunk">
+      <condition field="${sip_h_X-Tring-Trunk}" expression="^(.+)$"/>
+      <condition field="destination_number" expression="^(\+?\d+)$">
+        <action application="set" data="effective_caller_id_number=${sip_from_user}"/>
+        <action application="set" data="continue_on_fail=NORMAL_TEMPORARY_FAILURE,NO_ROUTE_DESTINATION,RECOVERY_ON_TIMER_EXPIRE"/>
+        <action application="bridge" data="sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
+      </condition>
+    </extension>
+
     <!-- WebRTC gateway, flow-pinned (no DID): the pion gateway INVITEs
          'gwflow' with an X-Tring-Flow-Id header. We copy it to tring_flow_id
          and hand to the IVR socket, where the executor runs that flow via
