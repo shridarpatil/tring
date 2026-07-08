@@ -78,6 +78,14 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 		m.Close()
 		return nil, fmt.Errorf("fsplug: outbound not answered: %w", err) // busy/no-answer/failed
 	}
+	// Subscribe to the dialog state BEFORE Ack (and before touching the answer
+	// SDP), mirroring plug.go's Answer/watchDialog: StateRead() only delivers
+	// FUTURE transitions, it does not replay the current state, so a carrier
+	// BYE landing in the WaitAnswer→Ack window would otherwise be missed
+	// entirely and the teardown goroutine below would range forever on a
+	// channel that already dropped its one Ended event — leaking the
+	// goroutine, the mediaSession's UDP socket, and Leg.Done.
+	stateCh := dlg.StateRead()
 	ip, rtpPort, err := parseOffer(dlg.InviteResponse.Body()) // the 200's answer SDP
 	if err != nil {
 		m.Close()
@@ -89,13 +97,23 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 		return nil, fmt.Errorf("fsplug: ack: %w", err)
 	}
 	go func() { // teardown when the far side (carrier) hangs up
-		for st := range dlg.StateRead() {
+		for st := range stateCh {
 			if st == sip.DialogStateEnded {
 				break
 			}
 		}
 		m.Close()
 	}()
+	// Residual guard: StateRead()'s callback only fires for transitions that
+	// happen AFTER it's registered, so a BYE fully processed by the network
+	// reader goroutine before our call above reached the OnState
+	// registration (an even earlier race than the WaitAnswer→Ack window)
+	// would still never be seen by the goroutine's channel range. Checking
+	// LoadState() closes that gap; m.Close() is idempotent (rtp.go) so a
+	// double-close racing the goroutine above is safe.
+	if dlg.LoadState() == sip.DialogStateEnded {
+		m.Close()
+	}
 	return &room.Leg{
 		Source: m,
 		Write:  func(pkt *rtp.Packet) error { return m.write(pkt) },

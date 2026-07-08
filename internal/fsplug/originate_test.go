@@ -127,3 +127,106 @@ func TestOriginateBusyIsError(t *testing.T) {
 		t.Fatal("expected a nil leg on busy")
 	}
 }
+
+// TestOriginateTeardownOnCarrierBye asserts that when the carrier (fake FS)
+// hangs up with a BYE immediately after answering, the plug's teardown
+// goroutine observes DialogStateEnded and fires leg.Done — rather than
+// leaking the goroutine and the mediaSession's UDP socket.
+//
+// RED reasoning (why this exercises the fixed race, and why it can't be made
+// to reliably fail pre-fix): the pre-fix originate.go evaluated
+// `dlg.StateRead()` as the range expression INSIDE the spawned teardown
+// goroutine, i.e. AFTER dlg.Ack() had already returned. sipgo's StateRead()
+// (dialog.go) only ever delivers FUTURE state transitions — it registers an
+// OnState callback, it does not replay/snapshot the current state. So a BYE
+// whose Ended transition lands in the (Ack returns)→(goroutine reaches
+// StateRead()) window would be delivered to no subscriber, and the range
+// would block forever. That window, measured empirically, is a few hundred
+// nanoseconds of pure Go scheduling (a function return + a "go func(){}()"
+// dispatch) — dwarfed by the minimum possible latency of THIS test's BYE,
+// which cannot even be transmitted until sipgo's DialogServerSession.WriteBye
+// observes the dialog as Confirmed, i.e. until the fake FS has already fully
+// processed our ACK, then marshaled+sent a UDP packet, which the plug then
+// has to receive and dispatch — several orders of magnitude slower than the
+// window it's racing against. Confirmed by running this test with
+// `git stash` on the originate.go fix reverted, `-count=30`: 30/30 passed,
+// i.e. the old code's goroutine always won the race against a real
+// over-the-wire BYE. This matches the task brief's own anticipation ("if
+// reliably triggering the fast BYE timing... is hard, at minimum assert a
+// normal carrier BYE fires Done"). What this test DOES lock in: the fixed
+// code's actual mechanism (subscribe-before-Ack + LoadState() residual
+// guard) is exercised end-to-end via a real carrier BYE, so a regression
+// that removes the early subscription (reverting to a bare
+// `for st := range dlg.StateRead()` inside the goroutine) would only be
+// caught by chance/timing here, not deterministically — the deterministic
+// guarantee comes from code review + the doc comment on the fix itself,
+// same as plug.go's symmetric inbound case relies on for watchDialog.
+func TestOriginateTeardownOnCarrierBye(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// --- fake FS UAS on :15290, answers then immediately BYEs ---
+	ua, _ := sipgo.NewUA()
+	fsSrv, _ := sipgo.NewServer(ua)
+	fsClient, _ := sipgo.NewClient(ua)
+	ds := sipgo.NewDialogServerCache(fsClient, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15290}})
+	sessCh := make(chan *sipgo.DialogServerSession, 1)
+	fsSrv.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+		sess, err := ds.ReadInvite(req, tx)
+		if err != nil {
+			return
+		}
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16001, 111, 101))
+		sessCh <- sess
+	})
+	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
+		_ = ds.ReadAck(req, tx)
+		// Hang up the instant the ACK lands. Run on its own goroutine so
+		// Bye's wait-for-200 can't block this handler (and so it races the
+		// plug's own post-Ack bookkeeping as tightly as possible).
+		//
+		// Built by hand (Recipient pointed straight at the plug's known
+		// listen address) rather than via sess.Bye(), which resolves its
+		// target from the INVITE's Contact header — that Contact is built
+		// from p.dc's ContactHDR (plug.go), which carries no port, an
+		// unrelated pre-existing gap that would misroute this test's BYE
+		// off-box. sess.WriteBye fills in From/To/Call-ID/CSeq from the
+		// dialog for us (dialog_server.go:buildReq), so only Method +
+		// Recipient are needed here.
+		sess := <-sessCh
+		go func() {
+			bye := sip.NewRequest(sip.BYE, sip.Uri{User: "tring", Host: "127.0.0.1", Port: 15291})
+			_ = sess.WriteBye(context.Background(), bye)
+		}()
+	})
+	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadBye(req, tx) })
+	serveFakeFS(t, fsSrv, "127.0.0.1:15290")
+
+	// --- the plug as UAC ---
+	p, err := New(Config{SIPListen: "127.0.0.1:15291", SIPAdvertise: "127.0.0.1", RTPMin: 12800, RTPMax: 12900, OpusPT: 111, DTMFPT: 101, FSSIP: "127.0.0.1:15290"}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The outbound INVITE/ACK exchange rides the sipgo client's own ephemeral
+	// socket, but a carrier-initiated in-dialog BYE is an inbound *request*
+	// to the plug — that needs Plug.Run's server actually bound and
+	// listening at SIPListen, unlike the answer-only tests above.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	go p.Run(runCtx)
+	time.Sleep(100 * time.Millisecond) // let the plug's UAS bind (test-only, mirrors serveFakeFS)
+
+	leg, err := p.Originate(ctx, room.OriginateRequest{To: "919000000003", CallerID: "911600123456", Trunks: []string{"tata"}}, func(room.Progress) {})
+	if err != nil {
+		t.Fatalf("Originate: %v", err)
+	}
+	if leg == nil {
+		t.Fatal("no leg returned")
+	}
+
+	select {
+	case <-leg.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leg.Done never fired after carrier BYE (teardown goroutine leaked)")
+	}
+}
