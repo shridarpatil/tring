@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
 	"github.com/pion/rtp"
@@ -44,12 +45,16 @@ var errOutboundSourceClosed = errors.New("closed")
 
 // fakeOriginator is a scripted room.Originator + HangupOutbound (the
 // internal/fsplug stand-in). calls records every OriginateRequest;
-// hangups records every HangupOutbound pid.
+// hangups records every HangupOutbound pid. When release is non-nil,
+// Originate blocks on it after recording the call — simulating a carrier ring
+// that's still in progress — so a test can act (e.g. the agent leaving) before
+// letting Originate resolve.
 type fakeOriginator struct {
 	leg     *room.Leg
 	err     error
 	calls   chan room.OriginateRequest
 	hangups chan room.ParticipantID
+	release chan struct{}
 }
 
 func newFakeOriginator(leg *room.Leg) *fakeOriginator {
@@ -62,6 +67,9 @@ func newFakeOriginator(leg *room.Leg) *fakeOriginator {
 
 func (f *fakeOriginator) Originate(_ context.Context, req room.OriginateRequest, onProgress func(room.Progress)) (*room.Leg, error) {
 	f.calls <- req
+	if f.release != nil {
+		<-f.release
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -318,3 +326,194 @@ func TestHangupOutboundIfAbandonedHangsUpWhenAgentLeaves(t *testing.T) {
 	src.Close()
 	close(done)
 }
+
+// TestDialRejectedForVisitor: readLoop's msgDial gate must reject a
+// visitor-role socket outright — a visitor also carries a tenant (for
+// CDR/token purposes), so without the isAgent gate a visitor could originate a
+// billable PSTN call on the tenant's trunk (toll fraud). Originate must never
+// be invoked.
+func TestDialRejectedForVisitor(t *testing.T) {
+	orig := newFakeOriginator(&room.Leg{})
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+911600000000", Name: "tata"}}}
+	s := newOutboundServer(t, orig, trunks)
+
+	rid := room.RoomID("t/call-visitor")
+	visitor, err := s.rooms.Join(rid, "visitor")
+	if err != nil {
+		t.Fatalf("join visitor: %v", err)
+	}
+
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	c := &conn{Conn: serverConn, pid: visitor.ID()}
+
+	done := make(chan struct{})
+	go func() {
+		s.readLoop(c, visitor, uuid.New(), false /* isAgent */)
+		close(done)
+	}()
+
+	dial, _ := json.Marshal(msg{Type: msgDial, To: "+919900001111"})
+	if err := wsutil.WriteClientMessage(clientConn, ws.OpText, dial); err != nil {
+		t.Fatalf("write dial: %v", err)
+	}
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	data, err := wsutil.ReadServerText(clientConn)
+	if err != nil {
+		t.Fatalf("reading error message: %v", err)
+	}
+	var m msg
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m.Type != msgError {
+		t.Fatalf("type = %q, want %q", m.Type, msgError)
+	}
+
+	select {
+	case <-orig.calls:
+		t.Fatal("Originate must NEVER be called for a visitor-role socket")
+	default:
+	}
+
+	// End the read loop cleanly.
+	bye, _ := json.Marshal(msg{Type: msgBye})
+	if err := wsutil.WriteClientMessage(clientConn, ws.OpText, bye); err != nil {
+		t.Fatalf("write bye: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop did not exit after bye")
+	}
+}
+
+// TestDialAgentLeavesDuringRing: the agent that placed the outbound call
+// leaves the room (with nobody else present) WHILE Originate is still
+// blocking on the ring. hangupOutboundIfAbandoned no-ops in that window (no
+// outboundLegs entry exists yet). When Originate then resolves with an
+// answered leg, handleAgentDial's post-Originate recheck must catch the
+// abandoned room, HangupOutbound the just-raised carrier, and must NOT attach
+// the leg into the room or open a CDR.
+func TestDialAgentLeavesDuringRing(t *testing.T) {
+	doneLeg := make(chan struct{})
+	src := &fakeOutboundSource{id: "out-cancel", stop: make(chan struct{})}
+	leg := &room.Leg{
+		Source: src,
+		Write:  func(*rtp.Packet) error { return nil },
+		DTMF:   make(chan string),
+		Done:   doneLeg,
+	}
+	orig := newFakeOriginator(leg)
+	orig.release = make(chan struct{})
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+911600000000", Name: "tata"}}}
+	s := newOutboundServer(t, orig, trunks)
+
+	rid := room.RoomID("t/call-cancel-ring")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+		close(finished)
+	}()
+
+	// Wait until Originate has been invoked (the "ring" is in progress).
+	select {
+	case <-orig.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Originate was never called")
+	}
+
+	// The agent hangs up mid-ring with nobody else on the call.
+	agent.Leave()
+
+	// Now let Originate resolve — the callee "answered" too late.
+	close(orig.release)
+
+	// The just-raised carrier must be hung up.
+	select {
+	case pid := <-orig.hangups:
+		if pid != src.ID() {
+			t.Fatalf("HangupOutbound pid = %q, want %q", pid, src.ID())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("late-answered leg was not hung up after the agent left mid-ring")
+	}
+
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleAgentDial did not return after cancel-while-ringing")
+	}
+
+	// The leg must never have been attached to the (now-gone) room, and no
+	// outbound leg / CDR should be tracked.
+	if s.sfu.HasPort(rid) {
+		t.Fatal("leg was attached to a room the agent already left")
+	}
+	s.mu.Lock()
+	_, tracked := s.outboundLegs[rid]
+	s.mu.Unlock()
+	if tracked {
+		t.Fatal("no outbound leg should be tracked after cancel-while-ringing")
+	}
+}
+
+// TestDialOriginateError: Originate returning an error must send the agent a
+// msgError and must not attach anything or register an outbound leg.
+func TestDialOriginateError(t *testing.T) {
+	orig := newFakeOriginator(nil)
+	orig.err = errors.New("carrier rejected")
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+911600000000", Name: "tata"}}}
+	s := newOutboundServer(t, orig, trunks)
+
+	rid := room.RoomID("t/call-origfail")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	s.mu.Lock()
+	s.conns[agent.ID()] = &conn{Conn: serverConn, pid: agent.ID()}
+	s.mu.Unlock()
+
+	go s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	data, err := wsutil.ReadServerText(clientConn)
+	if err != nil {
+		t.Fatalf("reading error message: %v", err)
+	}
+	var m msg
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m.Type != msgError {
+		t.Fatalf("type = %q, want %q", m.Type, msgError)
+	}
+
+	if s.sfu.HasPort(rid) {
+		t.Fatal("no leg should have been attached after an Originate error")
+	}
+	s.mu.Lock()
+	_, tracked := s.outboundLegs[rid]
+	s.mu.Unlock()
+	if tracked {
+		t.Fatal("no outbound leg should be tracked after an Originate error")
+	}
+}
+
+// NOTE: an AttachPort-failure test (Fix scope item "TestDialAttachPortError")
+// was left out — sfu.AttachPort/InjectSource has no reachable failure seam
+// from this package's fakes (webrtc.NewTrackLocalStaticRTP essentially never
+// errors for a valid Opus capability), so forcing that branch would require
+// adding a fault-injection hook to internal/media/sfu itself, out of scope for
+// this handler-focused fix. The existing failed-attach branch (hangup +
+// sendError, see handleAgentDial) is exercised by code inspection only.

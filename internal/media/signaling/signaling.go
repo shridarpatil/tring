@@ -405,14 +405,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.signalRing(roomID)
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
-	s.readLoop(c, p, princ.tenant)
+	s.readLoop(c, p, princ.tenant, !princ.isVisitor)
 }
 
 // readLoop dispatches client messages until the socket closes, then drops the
 // participant into the grace window. tenant is the joiner's principal tenant
 // (needed for agent-initiated actions like msgDial that must resolve
-// tenant-scoped config, e.g. outbound trunks).
-func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID) {
+// tenant-scoped config, e.g. outbound trunks). isAgent gates agent-only
+// actions (msgDial) — a visitor socket also carries a tenant, but must never
+// be able to originate a billable PSTN call on it (toll fraud).
+func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgent bool) {
 	defer func() {
 		// Only act if THIS socket is still the participant's current one. A reattach
 		// (page refresh) replaces conns[pid] with the new socket; when this (old)
@@ -473,6 +475,12 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID) {
 			s.log.Warn("call control not yet implemented", "type", m.Type)
 		case msgDial:
 			// Agent-initiated outbound PSTN call into this (already joined) room.
+			// Visitor sockets carry a tenant too (for CDR/token purposes) but must
+			// NEVER be able to originate a billable PSTN call on it — toll fraud.
+			if !isAgent {
+				_ = c.send(msg{Type: msgError, Reason: "outbound calling is agent-only"})
+				continue
+			}
 			go s.handleAgentDial(p.Room().ID(), tenant, p.ID(), m.To)
 		case msgBye:
 			p.Leave() // terminal — emits left, which tears down the SFU peer
