@@ -30,18 +30,20 @@ const (
 	msgDial      = "dial" // agent: originate an outbound PSTN call into this room — {to}
 
 	// server → client
-	msgJoined     = "joined"          // {participant_id, session_token, ice_servers}
-	msgOffer      = "offer"           // {sdp}
-	msgPeerJoined = "peer-joined"     // {participant_id, name}
-	msgPeerState  = "peer-state"      // {participant_id, state}
-	msgPeerLeft   = "peer-left"       // {participant_id}
-	msgIncoming   = "incoming"        // s→agent: a call is ringing — {room, from}
-	msgCancelRing = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
-	msgReady      = "ready"           // s→agent: presence registered
-	msgEnded      = "ended"           // s→client: the call is over (terminal — don't reconnect)
-	msgError      = "error"           // {reason}
-	msgSupervisor = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
-	msgRinging    = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
+	msgJoined         = "joined"          // {participant_id, session_token, ice_servers}
+	msgOffer          = "offer"           // {sdp}
+	msgPeerJoined     = "peer-joined"     // {participant_id, name}
+	msgPeerState      = "peer-state"      // {participant_id, state}
+	msgPeerLeft       = "peer-left"       // {participant_id}
+	msgIncoming       = "incoming"        // s→agent: a call is ringing — {room, from}
+	msgCancelRing     = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
+	msgReady          = "ready"           // s→agent: presence registered
+	msgEnded          = "ended"           // s→client: the call is over (terminal — don't reconnect)
+	msgError          = "error"           // {reason}
+	msgTransferOK     = "transfer-ok"     // s→agent: blind transfer accepted; this leg will end
+	msgTransferFailed = "transfer-failed" // s→agent: transfer rejected — {reason}; agent keeps the call
+	msgSupervisor     = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
+	msgRinging        = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
 )
 
 // msg is the single envelope for every /rtc message.
