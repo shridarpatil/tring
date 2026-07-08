@@ -515,6 +515,7 @@ func (s *Server) routeEvent(e room.Event) {
 		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
+			s.endTransfer(e.Room) // caller gone → stop any in-flight blind-transfer ring
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
 			s.hangupOutboundIfAbandoned(e.Room)
@@ -530,6 +531,12 @@ func (s *Server) routeEvent(e room.Event) {
 			// left" as call-over (sends Bye), which would tear the caller down before
 			// the post-call flow can play. The SFU already removed the agent's track
 			// (renegotiation), so the caller simply hears the IVR again.
+			return
+		} else if s.transferActive(e.Room) {
+			// A blind transfer is ringing: the initiating agent just left and the
+			// caller is briefly alone. Keep the room (the target will join, or the
+			// no-answer message plays) and suppress peer-left to the caller — the
+			// visitor SDK treats "the last peer left" as call-over and would Bye.
 			return
 		} else {
 			// A 1:1 call whose OTHER party just left: end the lone remaining leg now
