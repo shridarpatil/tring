@@ -30,6 +30,7 @@ import (
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/media/signaling"
+	"github.com/shridarpatil/tring/internal/outboundtrunks"
 	"github.com/shridarpatil/tring/internal/presence"
 )
 
@@ -108,11 +109,13 @@ func main() {
 	var calls signaling.CallLog
 	var supervisors signaling.SupervisorLog
 	var didResolver signaling.DIDResolver
+	var trunkRes *outboundtrunks.Resolver
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
 		store := flowstore.New(database)
 		flows, teams, holdMusic, didResolver = store, store, store, store
+		trunkRes = outboundtrunks.New(database)
 		// CDRs + recordings for media-plane calls (web + phone): same calls table,
 		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
 		blob, berr := blobstore.New(blobstore.Config{
@@ -172,12 +175,16 @@ func main() {
 				RTPMax:       k.Int("fsplug_rtp_max"),
 				OpusPT:       111,
 				DTMFPT:       101,
+				FSSIP:        k.String("fsplug_fs_sip"),
 			}, logger)
 			if perr != nil {
 				logger.Error("fsplug init failed", "err", perr)
 				os.Exit(1)
 			}
 			sig.AttachPstn(plug, didResolver)
+			if trunkRes != nil {
+				sig.AttachOriginator(plug, trunkRes)
+			}
 			go func() {
 				if rerr := plug.Run(context.Background()); rerr != nil {
 					logger.Error("fsplug SIP server stopped", "err", rerr)
