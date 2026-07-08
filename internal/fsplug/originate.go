@@ -32,6 +32,20 @@ func splitHostPort(addr string) (string, int) {
 	return host, port
 }
 
+// terminateEstablished best-effort tears down a dialog that already
+// reached 200 OK (state Established) but failed before Originate could
+// hand back a leg — the carrier believes the call is up, so returning
+// without cleanup would strand a live channel. Bye requires a Confirmed
+// (acked) dialog, so Ack first: harmless if Ack already succeeded
+// elsewhere (sipgo only transitions Established→Confirmed once), and
+// gives an Ack-failure caller a second chance before the Bye attempt.
+// Errors are ignored throughout — this runs only on an already-failing
+// path, as cleanup.
+func terminateEstablished(ctx context.Context, dlg *sipgo.DialogClientSession) {
+	_ = dlg.Ack(ctx)
+	_ = dlg.Bye(ctx)
+}
+
 // Originate places an outbound call via FreeSWITCH and returns the answered leg.
 // It implements room.Originator. Originate blocks until the call is answered,
 // fails, or ctx is cancelled; onProgress is called with a synthetic "ringing"
@@ -88,20 +102,38 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	stateCh := dlg.StateRead()
 	ip, rtpPort, err := parseOffer(dlg.InviteResponse.Body()) // the 200's answer SDP
 	if err != nil {
+		// The 200 was already received (dialog Established) — the carrier
+		// believes the call is up even though we're about to fail out.
+		// Best-effort tear it down rather than stranding a live channel.
+		terminateEstablished(ctx, dlg)
 		m.Close()
 		return nil, fmt.Errorf("fsplug: bad answer sdp: %w", err)
 	}
 	m.setRemote(ip, rtpPort)
 	if err := dlg.Ack(ctx); err != nil {
+		// Same as above: Established, so best-effort terminate before
+		// surfacing the error, even though the Ack we just tried failed.
+		terminateEstablished(ctx, dlg)
 		m.Close()
 		return nil, fmt.Errorf("fsplug: ack: %w", err)
 	}
+
+	// Register the dialog (keyed by the leg's ParticipantID) so
+	// HangupOutbound can find it when the room hangs up first. Must happen
+	// after Ack succeeds — this map only ever holds calls Originate is
+	// about to hand back as a live leg.
+	pid := m.ID()
+	p.mu.Lock()
+	p.outbound[pid] = &outboundCall{dlg: dlg, m: m}
+	p.mu.Unlock()
+
 	go func() { // teardown when the far side (carrier) hangs up
 		for st := range stateCh {
 			if st == sip.DialogStateEnded {
 				break
 			}
 		}
+		p.forgetOutbound(pid)
 		m.Close()
 	}()
 	// Residual guard: StateRead()'s callback only fires for transitions that
@@ -110,8 +142,11 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	// registration (an even earlier race than the WaitAnswer→Ack window)
 	// would still never be seen by the goroutine's channel range. Checking
 	// LoadState() closes that gap; m.Close() is idempotent (rtp.go) so a
-	// double-close racing the goroutine above is safe.
+	// double-close racing the goroutine above is safe, and forgetOutbound
+	// is a no-op if the teardown goroutine (or a racing HangupOutbound)
+	// already removed the entry.
 	if dlg.LoadState() == sip.DialogStateEnded {
+		p.forgetOutbound(pid)
 		m.Close()
 	}
 	return &room.Leg{
