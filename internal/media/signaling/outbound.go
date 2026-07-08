@@ -75,6 +75,19 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 		return
 	}
 
+	// The agent may have left (or the room emptied) while Originate was
+	// blocking on the ring. hangupOutboundIfAbandoned found no outboundLegs
+	// entry back then (the leg didn't exist yet) and no-op'd — so without this
+	// recheck a now-answered carrier would get attached into a dead/empty room
+	// and a CDR opened AFTER the room already ended: a lingering carrier dialog
+	// plus a dangling, never-settled CDR row. Check without holding a lock
+	// across HangupOutbound.
+	if r, ok := s.rooms.Get(roomID); !ok || len(r.Participants()) == 0 {
+		s.log.Warn("outbound: agent left during ring, hanging up carrier", "room", roomID)
+		_ = s.cfg.Originator.HangupOutbound(leg.Source.ID())
+		return
+	}
+
 	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
 		s.log.Error("outbound: attach port failed", "room", roomID, "err", err)
 		_ = s.cfg.Originator.HangupOutbound(leg.Source.ID())
@@ -109,7 +122,18 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 // remaining participant with a terminal `ended`, settle the CDR, and forget
 // the leg. Mirrors pstn.go's endPstnRoom.
 func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
-	s.forgetOutbound(roomID)
+	s.mu.Lock()
+	pid, hadLeg := s.outboundLegs[roomID]
+	delete(s.outboundLegs, roomID)
+	s.mu.Unlock()
+	if hadLeg {
+		// Prune the room's SFU-side port publication — otherwise r.ports/r.pubs
+		// keep this leg's entry forever and the sfuRoom never gets pruned (a
+		// per-call leak). NOTE: endPstnRoom (inbound) has the SAME pre-existing
+		// leak; left untouched here — see the task report for the shared
+		// follow-up.
+		s.sfu.DetachPort(roomID, pid)
+	}
 	if s.cfg.Calls != nil {
 		s.cfg.Calls.Ended(string(roomID), cause)
 	}
@@ -142,12 +166,6 @@ func (s *Server) hangupOutboundIfAbandoned(roomID room.RoomID) {
 	if s.cfg.Originator != nil {
 		_ = s.cfg.Originator.HangupOutbound(pid)
 	}
-}
-
-func (s *Server) forgetOutbound(roomID room.RoomID) {
-	s.mu.Lock()
-	delete(s.outboundLegs, roomID)
-	s.mu.Unlock()
 }
 
 // sendError best-effort notifies a participant's socket of an error — the
