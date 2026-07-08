@@ -106,3 +106,13 @@ func (s *Store) TenantHoldMusic(ctx context.Context, tenantID uuid.UUID) (string
 	}
 	return moh, nil
 }
+
+// TenantTransferFailedAudio returns the synthesized "no one answered" prompt path
+// played on a failed blind transfer, "" when unset (TTS was off at save time).
+func (s *Store) TenantTransferFailedAudio(ctx context.Context, tenantID uuid.UUID) (string, error) {
+	var path string
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetTenantTransferAudio, tenantID).Scan(&path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
