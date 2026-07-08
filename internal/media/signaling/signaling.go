@@ -156,6 +156,7 @@ type Server struct {
 	callers      map[room.RoomID]room.ParticipantID           // the IVR caller per room (flow-pinned joiner) — see handoff.go
 	handoffs     map[room.RoomID]*handoff                     // rooms waiting for a transfer handoff to end (handoff.go)
 	holds        map[room.RoomID]func()                       // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
+	transfers    map[room.RoomID]context.CancelFunc           // rooms with a blind transfer ringing → cancel (transfer.go)
 	roles        map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
 	supers       map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
 
@@ -192,6 +193,7 @@ func New(cfg Config) *Server {
 		callers:      make(map[room.RoomID]room.ParticipantID),
 		handoffs:     make(map[room.RoomID]*handoff),
 		holds:        make(map[room.RoomID]func()),
+		transfers:    make(map[room.RoomID]context.CancelFunc),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
