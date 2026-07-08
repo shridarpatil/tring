@@ -59,10 +59,40 @@ func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, lo
 
 // Ring satisfies ivrdrive.Agents. roomID is the tenant-namespaced "<tenant>/<name>".
 func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
+	if a.runRing(ctx, roomID, t) != routing.OutcomeCompleted {
+		return "no_answer", nil
+	}
+	// An agent answered. If the transport can tell us when the handoff ends, wait
+	// so a node wired to the transfer's "completed" edge runs AFTER the agent
+	// disconnects (to the caller only). If the caller leaves first → end the flow.
+	if hw, ok := a.tport.(HandoffWaiter); ok {
+		if !hw.AwaitHandoffEnd(ctx, roomID) {
+			return "", nil
+		}
+	}
+	return "completed", nil
+}
+
+// RingNoHandoff rings a target and returns as soon as the outcome is known, WITHOUT
+// the IVR handoff-wait. Used by agent-initiated blind transfer: there is no IVR
+// session to resume, and registering a handoff would strand the caller when the
+// target later hangs up. "completed" = an agent answered; else "no_answer".
+func (a *AgentRouter) RingNoHandoff(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
+	if a.runRing(ctx, roomID, t) != routing.OutcomeCompleted {
+		return "no_answer", nil
+	}
+	return "completed", nil
+}
+
+// runRing resolves the target (single agent or team) to candidates + a RouteConfig,
+// drives routing.Router.Run over the transport's Effects, and returns the raw
+// outcome. Unresolvable target / no candidates → OutcomeAbandoned (treated as
+// no_answer by both callers).
+func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Target) string {
 	tenant, _, ok := strings.Cut(roomID, "/")
 	if !ok {
 		a.log.Debug("route: malformed roomID", "room", roomID)
-		return "no_answer", nil
+		return routing.OutcomeAbandoned
 	}
 
 	var sips []string
@@ -80,7 +110,7 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 		}
 	}
 	if !ringAll && len(sips) == 0 {
-		return "no_answer", nil
+		return routing.OutcomeAbandoned
 	}
 
 	rc := routing.RouteConfig{TenantID: tenant}
@@ -103,17 +133,5 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 	if cleanup != nil {
 		cleanup()
 	}
-	if outcome != routing.OutcomeCompleted {
-		return "no_answer", nil
-	}
-	// An agent answered. If the transport can tell us when the handoff ends, wait
-	// for it so a node wired to the transfer's "completed" edge runs AFTER the
-	// agent disconnects (to the caller only), not the moment the agent picks up.
-	// If the caller leaves first, AwaitHandoffEnd returns false → end the flow here.
-	if hw, ok := a.tport.(HandoffWaiter); ok {
-		if !hw.AwaitHandoffEnd(ctx, roomID) {
-			return "", nil
-		}
-	}
-	return "completed", nil
+	return outcome
 }
