@@ -267,8 +267,11 @@ SELECT sip_username FROM agents WHERE id = $1 AND tenant_id = $2;
 SELECT sip_domain FROM tenants WHERE id = $1;
 
 -- name: create-call-outbound
-INSERT INTO calls (tenant_id, direction, status, from_number, to_number, agent_id, leg_id, job_uuid, source)
-VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, $5, NULLIF($6,''), 'phone'::call_source)
+-- $7 is the pion room id (media plane) so a supervisor can be routed to the
+-- outbound call's live room; NULL for FreeSWITCH-path outbound calls, which
+-- have no pion room.
+INSERT INTO calls (tenant_id, direction, status, from_number, to_number, agent_id, leg_id, job_uuid, source, room_id)
+VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, $5, NULLIF($6,''), 'phone'::call_source, NULLIF($7, ''))
 RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, leg_id, started_at, source::text;
 
 -- name: create-call-bridge

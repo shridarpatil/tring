@@ -198,8 +198,10 @@ func (s *Server) originateForAgent(
 	outboundE164 := primaryDID
 
 	var c Call
+	// No pion room for the ESL/FreeSWITCH outbound path — room_id stays NULL
+	// (nothing for a supervisor to join on this leg).
 	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallOutbound,
-		t.ID, outboundE164, to, agentID, or.ChannelUUID, or.JobUUID).
+		t.ID, outboundE164, to, agentID, or.ChannelUUID, or.JobUUID, "").
 		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)

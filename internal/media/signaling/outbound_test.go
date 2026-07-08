@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/rtp"
 
+	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/trunkselect"
@@ -517,3 +518,136 @@ func TestDialOriginateError(t *testing.T) {
 // adding a fault-injection hook to internal/media/sfu itself, out of scope for
 // this handler-focused fix. The existing failed-attach branch (hangup +
 // sendError, see handleAgentDial) is exercised by code inspection only.
+
+// ── Task 4d: handleAgentDial must open its CDR via StartedOutbound ─────────
+
+// outboundCallRecord captures one StartedOutbound invocation's arguments.
+type outboundCallRecord struct {
+	roomID   room.RoomID
+	from, to string
+	pid      room.ParticipantID
+}
+
+// fakeOutboundCallLog is a minimal CallLog fake, local to this white-box test
+// file (signaling_test.go's fakeCallLog lives in the external `signaling_test`
+// package and isn't reachable from here). It records which method fired —
+// Started vs StartedOutbound — so a future revert to Started (which would
+// silently mislabel an agent-initiated outbound call as inbound, the Task 4d
+// bug this exercise pins down) fails a test instead of shipping unnoticed.
+type fakeOutboundCallLog struct {
+	mu              sync.Mutex
+	startedCalls    int
+	startedOutbound []outboundCallRecord
+}
+
+func (f *fakeOutboundCallLog) Started(_ context.Context, _ uuid.UUID, _, _, _, _, _ string, _ room.ParticipantID) room.TrackSink {
+	f.mu.Lock()
+	f.startedCalls++
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeOutboundCallLog) StartedOutbound(_ context.Context, _ uuid.UUID, roomID, from, to, _ string, pid room.ParticipantID) room.TrackSink {
+	f.mu.Lock()
+	f.startedOutbound = append(f.startedOutbound, outboundCallRecord{roomID: room.RoomID(roomID), from: from, to: to, pid: pid})
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeOutboundCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
+func (f *fakeOutboundCallLog) Journey(string, []ivr.Step)                                 {}
+func (f *fakeOutboundCallLog) Ended(string, string)                                       {}
+
+func (f *fakeOutboundCallLog) snapshot() (startedCalls int, outbound []outboundCallRecord) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.startedCalls, append([]outboundCallRecord(nil), f.startedOutbound...)
+}
+
+// TestHandleAgentDialOpensOutboundCDRViaStartedOutbound is the end-to-end
+// wiring guard: with Config.Calls set, a successful handleAgentDial must open
+// the CDR through StartedOutbound — never Started — carrying the room the
+// agent dialed from, the selected trunk's caller-ID as "from", the dialed
+// number as "to", and the carrier leg's participant id. Before this test,
+// Config.Calls was never set in this file's tests, so the CDR call site
+// (outbound.go) was entirely untested here.
+func TestHandleAgentDialOpensOutboundCDRViaStartedOutbound(t *testing.T) {
+	done := make(chan struct{})
+	src := &fakeOutboundSource{id: "out-cdr", stop: make(chan struct{})}
+	leg := &room.Leg{
+		Source: src,
+		Write:  func(*rtp.Packet) error { return nil },
+		DTMF:   make(chan string),
+		Done:   done,
+	}
+	orig := newFakeOriginator(leg)
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+911600000000", Name: "tata"}}}
+
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	cl := &fakeOutboundCallLog{}
+	srv := New(Config{SFU: s, Originator: orig, Trunks: trunks, Calls: cl})
+
+	rid := room.RoomID("t/call-cdr")
+	agent, err := srv.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	tenant := uuid.New()
+
+	finished := make(chan struct{})
+	go func() {
+		srv.handleAgentDial(rid, tenant, agent.ID(), "+919900001111")
+		close(finished)
+	}()
+
+	select {
+	case <-orig.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Originate was never called")
+	}
+	waitOutboundLeg(t, srv, rid)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, outbound := cl.snapshot(); len(outbound) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("StartedOutbound was never invoked")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	startedCalls, outbound := cl.snapshot()
+	if startedCalls != 0 {
+		t.Fatalf("Started was called %d times, want 0 (outbound calls must use StartedOutbound, not Started)", startedCalls)
+	}
+	if len(outbound) != 1 {
+		t.Fatalf("StartedOutbound called %d times, want 1", len(outbound))
+	}
+	rec := outbound[0]
+	if rec.roomID != rid {
+		t.Fatalf("StartedOutbound roomID = %q, want %q", rec.roomID, rid)
+	}
+	if rec.from != "+911600000000" {
+		t.Fatalf("StartedOutbound from = %q, want the selected trunk's caller-id", rec.from)
+	}
+	if rec.to != "+919900001111" {
+		t.Fatalf("StartedOutbound to = %q, want the dialed number", rec.to)
+	}
+	if rec.pid != src.ID() {
+		t.Fatalf("StartedOutbound callerPID = %q, want the carrier leg's pid %q", rec.pid, src.ID())
+	}
+
+	// Let the call end so the goroutine and room teardown complete cleanly.
+	src.Close()
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleAgentDial did not return after leg.Done closed")
+	}
+}

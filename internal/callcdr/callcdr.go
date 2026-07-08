@@ -119,10 +119,13 @@ func (l *Log) Started(ctx context.Context, tenant uuid.UUID, roomID, from, to, s
 // FreeSWITCH/originate-path concepts that don't exist yet at media-plane call
 // open: agent_id is left NULL here (the answering agent is attributed later,
 // same as Started, via Answered → SetCallAgentID) and job_uuid is NULLIF'd
-// empty. NOTE: unlike CreateCallInbound, CreateCallOutbound has no room_id /
-// client_ref columns, so — same as the FreeSWITCH-path outbound rows this
-// query already serves — this CDR row does not carry room_id; see the task
-// report for the supervisor-routing follow-up this implies.
+// empty. room_id IS now persisted (CreateCallOutbound's $7) so an
+// agent-initiated outbound call stays reachable by get-supervise-target —
+// this was the bug that made outbound calls unsupervisable. clientRef, by
+// contrast, is a genuine no-op here: CreateCallOutbound has no client_ref
+// column (unlike CreateCallInbound), so the param is accepted for interface
+// symmetry with Started but silently dropped — not a bug, just an unused
+// knob until/unless outbound gets its own client_ref column.
 func (l *Log) StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink {
 	if from == "" {
 		from = "Unknown"
@@ -136,7 +139,7 @@ func (l *Log) StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, fro
 		legIDOut                                  string
 		startedAt                                 time.Time
 	)
-	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallOutbound, tenant, from, to, nil, legID, "").
+	err := l.db.Pool.QueryRow(ctx, l.q.CreateCallOutbound, tenant, from, to, (*uuid.UUID)(nil), legID, "", roomID).
 		Scan(&callID, &outTenant, &direction, &status, &fromOut, &toOut, &agentID, &legIDOut, &startedAt, &srcOut)
 	if err != nil {
 		l.log.Error("cdr: create outbound call failed", "room", roomID, "err", err)
