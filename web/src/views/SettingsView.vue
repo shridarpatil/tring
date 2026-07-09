@@ -20,6 +20,8 @@ const holdMusic = ref("");
 const recordCalls = ref(true);
 // Max call duration in MINUTES (UI); stored as seconds on the tenant.
 const maxCallMinutes = ref(240);
+// Played to the caller when a blind transfer finds no one available.
+const transferFailedMessage = ref("");
 
 // ─── Guest web-calling config (the tenant's default guest flow) ───────
 const guest = ref<GuestConfig | null>(null);
@@ -41,6 +43,7 @@ async function load() {
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
     maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
+    transferFailedMessage.value = tenant.value.transfer_failed_message || "";
   } catch (e) {
     toast.error(errMessage(e, "failed to load"));
   } finally {
@@ -67,10 +70,12 @@ async function save() {
       hold_music: holdMusic.value,
       record_calls: recordCalls.value,
       max_call_seconds: Math.round(maxCallMinutes.value * 60),
+      transfer_failed_message: transferFailedMessage.value,
     });
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
     maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
+    transferFailedMessage.value = tenant.value.transfer_failed_message || "";
     toast.success("Saved");
   } catch (e) {
     toast.error(errMessage(e, "save failed"));
@@ -161,6 +166,18 @@ onMounted(load);
           Longest a call may last. Also sets the TURN relay credential lifetime, so it must
           cover your longest call. 1–1440 min.
         </p>
+      </div>
+
+      <div>
+        <span class="text-xs font-medium text-ink-muted">Transfer — no-answer message</span>
+        <p class="text-xs text-ink-faint mb-1">
+          Played to the caller when a blind transfer finds no one available.
+        </p>
+        <textarea
+          v-model="transferFailedMessage"
+          rows="3"
+          class="mt-1 block w-full rounded-md bg-surface-2 border border-border px-3 py-2 text-sm text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+        ></textarea>
       </div>
 
       <div>
