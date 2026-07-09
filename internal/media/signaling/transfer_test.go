@@ -64,6 +64,56 @@ func (f *fakeConn) saw(typ string) bool {
 	}
 }
 
+// waitSaw polls until a frame of the given type has been written (the transfer
+// runs in a goroutine, so the write may not have landed yet), or times out.
+func waitSaw(t *testing.T, f *fakeConn, typ string) bool {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if f.saw(typ) {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
+// A committed blind transfer must terminate the initiating agent's leg with a
+// terminal `ended` (not just `transfer-ok`). Without it the agent SDK treats the
+// socket close as an unexpected drop and reconnects — rejoining the room (resetting
+// the call timer) and prematurely resolving the transfer ring so the real target
+// never receives the handed-off call.
+func TestTransferEndsInitiatingAgentLeg(t *testing.T) {
+	s := newHandoffServer(t)
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/xfer")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	// A reachable target so the transfer clears pre-flight and commits.
+	target := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"bob": target.conn("bob-pid")}
+	s.mu.Unlock()
+
+	fc := &fakeConn{}
+	go s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
+
+	if !waitSaw(t, fc, msgEnded) {
+		t.Fatal("initiating agent was not sent a terminal `ended`; its SDK will reconnect and break the transfer")
+	}
+
+	// Unblock the ringing goroutine: the caller hangs up → transfer ctx cancelled.
+	caller.Leave()
+}
+
 // A self-transfer and a both/neither target are rejected without starting a ring.
 func TestHandleTransferValidation(t *testing.T) {
 	s := newHandoffServer(t)
