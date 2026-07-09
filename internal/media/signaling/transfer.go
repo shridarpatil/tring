@@ -86,8 +86,14 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 		return
 	}
 
-	// Commit: drop the initiating agent immediately (true blind).
+	// Commit: drop the initiating agent immediately (true blind). Send a terminal
+	// `ended` BEFORE closing the socket (same discipline as endIfAlone) so the
+	// agent SDK tears the leg down instead of treating the close as an unexpected
+	// drop and reconnecting — a reconnect would rejoin the room (resetting the call
+	// timer) and, via signalRing, prematurely resolve the transfer ring so the real
+	// target never receives the handed-off call.
 	_ = c.send(msg{Type: msgTransferOK})
+	_ = c.send(msg{Type: msgEnded, Reason: "transferred"})
 	label := p.Name()
 	if label == "" {
 		label = "Transferred call"
