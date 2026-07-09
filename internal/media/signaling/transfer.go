@@ -98,6 +98,11 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 	if label == "" {
 		label = "Transferred call"
 	}
+	// If this call reached the agent via the IVR, it left a paused handoff. Void it
+	// BEFORE the agent leaves so routeEvent treats the departure as a transfer
+	// (transferActive → keep the room) instead of a handoff-end that resumes the IVR
+	// and tears the caller down. See handoff.go.
+	s.voidHandoff(rid)
 	s.removeParticipant(rid, p.ID())
 
 	target := ivrdrive.Target{AgentSIP: toSip, Team: toTeam, Label: label}

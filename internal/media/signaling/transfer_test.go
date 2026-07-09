@@ -114,6 +114,76 @@ func TestTransferEndsInitiatingAgentLeg(t *testing.T) {
 	caller.Leave()
 }
 
+// hasParticipant reports whether pid is a current member of the room.
+func hasParticipant(r *room.Room, pid room.ParticipantID) bool {
+	for _, p := range r.Participants() {
+		if p.ID() == pid {
+			return true
+		}
+	}
+	return false
+}
+
+// waitGone blocks until pid has been removed from the room (or times out).
+func waitGone(t *testing.T, s *Server, rid room.RoomID, pid room.ParticipantID) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, pid) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("participant was not removed in time")
+}
+
+// A blind transfer of an IVR-routed call must NOT resume the paused IVR handoff.
+// The call reached the agent via the IVR (AwaitHandoffEnd registered a handoff); if
+// the agent's departure is misread as a handoff-end, routeEvent resumes the IVR,
+// which walks the flow to completion and tears the caller down (both legs drop).
+// The transfer must void the handoff so the room stays alive for the transfer ring.
+func TestTransferVoidsPendingHandoff(t *testing.T) {
+	s := newHandoffServer(t)
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/v-ivr")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	s.setCaller(rid, caller.ID())
+
+	// The IVR is paused in a handoff-wait after routing this call to the agent.
+	resume := make(chan struct{})
+	target := &fakeConn{}
+	s.mu.Lock()
+	s.handoffs[rid] = &handoff{caller: caller.ID(), resume: resume}
+	s.agents[tenant.String()] = map[string]*conn{"bob": target.conn("bob-pid")}
+	s.mu.Unlock()
+
+	fc := &fakeConn{}
+	go s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
+
+	waitGone(t, s, rid, agent.ID()) // the initiating agent is dropped (true blind)
+
+	// The paused IVR must NOT have been resumed (resuming ends the flow → caller
+	// torn down), and the caller must still be on the call for the transfer ring.
+	select {
+	case <-resume:
+		t.Fatal("transfer resumed the paused IVR handoff; the caller will be torn down")
+	default:
+	}
+	if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, caller.ID()) {
+		t.Fatal("caller was removed during the transfer")
+	}
+
+	caller.Leave() // unblock the ring goroutine
+}
+
 // A self-transfer and a both/neither target are rejected without starting a ring.
 func TestHandleTransferValidation(t *testing.T) {
 	s := newHandoffServer(t)
