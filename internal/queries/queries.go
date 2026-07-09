@@ -54,6 +54,7 @@ type Queries struct {
 	UpdateTenant            string `query:"update-tenant"`
 	GetTenantSipDomain      string `query:"get-tenant-sip-domain"`
 	GetTenantHoldMusic      string `query:"get-tenant-hold-music"`
+	GetTenantTransferAudio  string `query:"get-tenant-transfer-audio"`
 	GetTenantSettings       string `query:"get-tenant-settings"`
 	GetTenantRecordCalls    string `query:"get-tenant-record-calls"`
 	GetTenantMaxCallSeconds string `query:"get-tenant-max-call-seconds"`

@@ -86,6 +86,7 @@ export type RtcCallEvent =
   | { type: "reconnecting" }
   | { type: "ended"; reason?: string }
   | { type: "supervisor"; present: boolean; mode: string; name: string }
+  | { type: "transfer-failed"; reason: string }
   | { type: "error"; error: Error };
 
 // The gateway arms a ~90s read deadline on the call socket each read and drops it
@@ -201,6 +202,12 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         break;
       case ServerMsgType.Error:
         this.emit({ type: "error", error: new Error(m.reason ?? "edge error") });
+        break;
+      case ServerMsgType.TransferFailed:
+        // Pre-flight rejection (target unavailable / double-transfer / self): the
+        // server keeps this leg on the call, so this is informational, not an
+        // "ended"/"error" teardown signal — the call continues.
+        this.emit({ type: "transfer-failed", reason: m.reason ?? "transfer failed" });
         break;
       case ServerMsgType.Supervisor:
         this.emit({

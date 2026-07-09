@@ -62,6 +62,9 @@ type Config struct {
 	// hold path (msgHold). nil → agent hold plays silence. The queue/ring wait
 	// gets its hold music from the team config, not this.
 	HoldMusic HoldMusicResolver
+	// TransferMessage resolves the tenant's blind-transfer no-answer prompt. nil →
+	// a failed transfer hangs up the caller silently.
+	TransferMessage TransferMessageResolver
 	// AudioDir is where IVR prompt files (Ogg/Opus) are read from.
 	AudioDir string
 	// Tokens burns visitor gateway-call-token jtis single-use (anti-replay),
@@ -156,6 +159,7 @@ type Server struct {
 	callers      map[room.RoomID]room.ParticipantID           // the IVR caller per room (flow-pinned joiner) — see handoff.go
 	handoffs     map[room.RoomID]*handoff                     // rooms waiting for a transfer handoff to end (handoff.go)
 	holds        map[room.RoomID]func()                       // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
+	transfers    map[room.RoomID]context.CancelFunc           // rooms with a blind transfer ringing → cancel (transfer.go)
 	roles        map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
 	supers       map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
 
@@ -192,6 +196,7 @@ func New(cfg Config) *Server {
 		callers:      make(map[room.RoomID]room.ParticipantID),
 		handoffs:     make(map[room.RoomID]*handoff),
 		holds:        make(map[room.RoomID]func()),
+		transfers:    make(map[room.RoomID]context.CancelFunc),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -410,7 +415,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.signalRing(roomID)
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
-	s.readLoop(c, p, princ.tenant, !princ.isVisitor)
+	s.readLoop(c, p, princ.tenant, !princ.isVisitor, princ.sip)
 }
 
 // readLoop dispatches client messages until the socket closes, then drops the
@@ -419,7 +424,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 // tenant-scoped config, e.g. outbound trunks). isAgent gates agent-only
 // actions (msgDial) — a visitor socket also carries a tenant, but must never
 // be able to originate a billable PSTN call on it (toll fraud).
-func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgent bool) {
+func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgent bool, sip string) {
 	defer func() {
 		// Only act if THIS socket is still the participant's current one. A reattach
 		// (page refresh) replaces conns[pid] with the new socket; when this (old)
@@ -476,8 +481,11 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 		case msgResume:
 			s.resumeParty(p.Room().ID())
 		case msgTransfer:
-			// Agent-initiated transfer — not yet wired on the embedded-brain plane.
-			s.log.Warn("call control not yet implemented", "type", m.Type)
+			if !isAgent {
+				_ = c.send(msg{Type: msgTransferFailed, Reason: "only an agent can transfer"})
+				continue
+			}
+			go s.handleTransfer(c, p, tenant, sip, m)
 		case msgDial:
 			// Agent-initiated outbound PSTN call into this (already joined) room.
 			// Visitor sockets carry a tenant too (for CDR/token purposes) but must
@@ -513,6 +521,7 @@ func (s *Server) routeEvent(e room.Event) {
 		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
+			s.endTransfer(e.Room) // caller gone → stop any in-flight blind-transfer ring
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
 			s.hangupOutboundIfAbandoned(e.Room)
@@ -528,6 +537,12 @@ func (s *Server) routeEvent(e room.Event) {
 			// left" as call-over (sends Bye), which would tear the caller down before
 			// the post-call flow can play. The SFU already removed the agent's track
 			// (renegotiation), so the caller simply hears the IVR again.
+			return
+		} else if s.transferActive(e.Room) {
+			// A blind transfer is ringing: the initiating agent just left and the
+			// caller is briefly alone. Keep the room (the target will join, or the
+			// no-answer message plays) and suppress peer-left to the caller — the
+			// visitor SDK treats "the last peer left" as call-over and would Bye.
 			return
 		} else {
 			// A 1:1 call whose OTHER party just left: end the lone remaining leg now
