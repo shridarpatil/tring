@@ -451,8 +451,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	// Pre-render the no-answer message to Opus so the gateway plays it as a file
 	// (same pipeline as flow prompts). Best-effort: on any failure store "" audio
 	// → the gateway degrades to silent-then-hangup, exactly like a silent text node.
-	// nil message = leave audio unchanged; blank message = explicitly clear it so
-	// a stale synthesized prompt doesn't keep playing.
+	// nil message = leave audio unchanged; any SET message re-derives the audio
+	// (synth when possible, else "") so a stale synthesized prompt never plays.
 	var xferAudio *string
 	if req.TransferFailedMessage != nil {
 		msg := strings.TrimSpace(*req.TransferFailedMessage)
@@ -467,6 +467,11 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 			} else {
 				xferAudio = &fp
 			}
+		} else {
+			// Message set but TTS unavailable: clear any prior synthesized audio so
+			// an edited message never plays a stale prompt (degrades to silent).
+			empty := ""
+			xferAudio = &empty
 		}
 	}
 
