@@ -34,6 +34,19 @@ func (s *Server) clearCaller(roomID room.RoomID) {
 	s.mu.Unlock()
 }
 
+// voidHandoff drops a pending transfer handoff WITHOUT resuming the paused IVR.
+// Used when the answering agent initiates a blind transfer: their departure is a
+// transfer (routeEvent must take the transferActive branch and keep the room for
+// the new ring), NOT a normal handoff-end that should resume the IVR to a post-call
+// node — resuming would walk the flow to completion and tear the caller down. The
+// blocked AwaitHandoffEnd stays parked until the call's ctx cancels at teardown.
+// The caller mapping is left intact.
+func (s *Server) voidHandoff(roomID room.RoomID) {
+	s.mu.Lock()
+	delete(s.handoffs, roomID)
+	s.mu.Unlock()
+}
+
 // AwaitHandoffEnd implements brain.HandoffWaiter. Called after an agent answers a
 // transfer, it blocks until the agent leaves while the caller is still connected
 // (returns true → the flow continues to the caller) or the call ends / the caller
