@@ -87,6 +87,9 @@ func TestHandleTransferValidation(t *testing.T) {
 	if s.transferActive(rid) {
 		t.Fatal("no transfer should be active after a rejected request")
 	}
+	if r, ok := s.rooms.Get(rid); !ok || len(r.Participants()) != 2 {
+		t.Fatalf("agent should not be stranded after a rejected transfer; ok=%v room=%v", ok, r)
+	}
 
 	// both targets
 	fc2 := &fakeConn{}
