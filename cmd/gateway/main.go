@@ -106,6 +106,7 @@ func main() {
 	var flows signaling.FlowLoader
 	var teams signaling.TeamResolver
 	var holdMusic signaling.HoldMusicResolver
+	var transferMessage signaling.TransferMessageResolver
 	var calls signaling.CallLog
 	var supervisors signaling.SupervisorLog
 	var didResolver signaling.DIDResolver
@@ -115,6 +116,7 @@ func main() {
 	} else {
 		store := flowstore.New(database)
 		flows, teams, holdMusic, didResolver = store, store, store, store
+		transferMessage = store
 		trunkRes = outboundtrunks.New(database)
 		// CDRs + recordings for media-plane calls (web + phone): same calls table,
 		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
@@ -140,25 +142,26 @@ func main() {
 	}
 
 	sig := signaling.New(signaling.Config{
-		SFU:         mediaSFU,
-		JWTSecret:   []byte(k.String("jwt_secret")),
-		STUNURL:     k.String("stun_url"),
-		TURNURL:     turnURL,
-		TURNSecret:  turnSecret,
-		TURNTTL:     time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
-		Grace:       time.Duration(k.Int("media_grace_seconds")) * time.Second,
-		DevTokens:   k.Bool("rtc_dev_tokens"),
-		Flows:       flows,
-		Teams:       teams,
-		HoldMusic:   holdMusic, // tenant hold music for agent-initiated hold (msgHold)
-		AudioDir:    k.String("audio_dir"),
-		Tokens:      redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
-		Presence:    presence.New(redisCache), // publish agent online/offline for the dashboard
-		Calls:       calls,                    // CDRs + recordings (one path for web + phone)
-		Cache:       redisCache,               // publish web team-queue depth for the dashboard
-		Events:      eventsPub,
-		Supervisors: supervisors, // supervisor session audit (nil DB → nil, no audit)
-		Logger:      logger,
+		SFU:             mediaSFU,
+		JWTSecret:       []byte(k.String("jwt_secret")),
+		STUNURL:         k.String("stun_url"),
+		TURNURL:         turnURL,
+		TURNSecret:      turnSecret,
+		TURNTTL:         time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Grace:           time.Duration(k.Int("media_grace_seconds")) * time.Second,
+		DevTokens:       k.Bool("rtc_dev_tokens"),
+		Flows:           flows,
+		Teams:           teams,
+		HoldMusic:       holdMusic,       // tenant hold music for agent-initiated hold (msgHold)
+		TransferMessage: transferMessage, // tenant no-answer prompt for blind transfer
+		AudioDir:        k.String("audio_dir"),
+		Tokens:          redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
+		Presence:        presence.New(redisCache), // publish agent online/offline for the dashboard
+		Calls:           calls,                    // CDRs + recordings (one path for web + phone)
+		Cache:           redisCache,               // publish web team-queue depth for the dashboard
+		Events:          eventsPub,
+		Supervisors:     supervisors, // supervisor session audit (nil DB → nil, no audit)
+		Logger:          logger,
 	})
 
 	// FreeSWITCH SIP plug (internal/fsplug) — inbound PSTN calls over

@@ -22,6 +22,8 @@ export interface Tenant {
   record_calls?: boolean;
   // Max call duration in seconds (also the ephemeral TURN credential lifetime).
   max_call_seconds?: number;
+  // Played to the caller when a blind transfer finds no one available.
+  transfer_failed_message?: string;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,7 +28,7 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// the auth context (hold music, record toggle) so the Settings page sees the
 	// current selection.
 	t := *tenantFromCtx(r.Context())
-	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds)
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -413,6 +414,8 @@ type patchTenantRequest struct {
 	// MaxCallSeconds caps call duration (and sets the TURN credential lifetime).
 	// nil = leave unchanged.
 	MaxCallSeconds *int `json:"max_call_seconds,omitempty"`
+	// TransferFailedMessage sets the blind-transfer no-answer copy. nil = unchanged.
+	TransferFailedMessage *string `json:"transfer_failed_message,omitempty"`
 }
 
 // handlePatchMyTenant updates tenant-level settings. Today: outbound
@@ -424,8 +427,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls or max_call_seconds is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds or transfer_failed_message is required")
 		return
 	}
 	if req.MaxCallSeconds != nil && (*req.MaxCallSeconds < 60 || *req.MaxCallSeconds > 86400) {
@@ -445,10 +448,38 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		causes = req.FailoverCauses
 	}
 
+	// Pre-render the no-answer message to Opus so the gateway plays it as a file
+	// (same pipeline as flow prompts). Best-effort: on any failure store "" audio
+	// → the gateway degrades to silent-then-hangup, exactly like a silent text node.
+	// nil message = leave audio unchanged; any SET message re-derives the audio
+	// (synth when possible, else "") so a stale synthesized prompt never plays.
+	var xferAudio *string
+	if req.TransferFailedMessage != nil {
+		msg := strings.TrimSpace(*req.TransferFailedMessage)
+		if msg == "" {
+			empty := ""
+			xferAudio = &empty
+		} else if s.tts != nil && s.tts.Enabled() {
+			if fp, err := s.synthFlowText(r.Context(), msg); err != nil {
+				s.log.Warn("tts: transfer message synth failed; message will be silent", "err", err)
+				empty := ""
+				xferAudio = &empty
+			} else {
+				xferAudio = &fp
+			}
+		} else {
+			// Message set but TTS unavailable: clear any prior synthesized audio so
+			// an edited message never plays a stale prompt (degrades to silent).
+			empty := ""
+			xferAudio = &empty
+		}
+	}
+
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
-		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds)
+		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
+		req.TransferFailedMessage, xferAudio).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return

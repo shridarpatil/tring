@@ -32,6 +32,9 @@ type Tenant struct {
 	// MaxCallSeconds is the tenant's max call duration (also the ephemeral TURN
 	// credential lifetime). Populated only by the tenant settings handlers.
 	MaxCallSeconds int `json:"max_call_seconds"`
+	// TransferFailedMessage is the copy played to a caller when a blind transfer
+	// finds no one available. Populated only by the tenant settings handlers.
+	TransferFailedMessage string `json:"transfer_failed_message"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API

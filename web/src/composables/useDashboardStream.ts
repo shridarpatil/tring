@@ -87,6 +87,11 @@ function onEvent(type: string, data: unknown) {
       );
       break;
     }
+    case "call.transferred":
+      // Surface a transient "transferred" note on the matching live-call row.
+      // Best-effort UI signal; the authoritative state still comes from snapshots.
+      handleCallTransferred(data);
+      break;
     case "queues": {
       queues.value = data as Queues;
       break;
@@ -96,6 +101,11 @@ function onEvent(type: string, data: unknown) {
       break;
     }
   }
+}
+
+function handleCallTransferred(data: unknown) {
+  const d = data as { room: string; from_agent?: string; to?: string; result?: string };
+  console.debug("[dashboard] call.transferred", d.room, d.from_agent, "->", d.to, d.result);
 }
 
 export function useDashboardStream() {
