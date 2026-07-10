@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 // fakeConn is a net.Conn that captures server-written WebSocket frames so a test
@@ -252,6 +254,97 @@ func TestTransferGuardSuppressesAloneTeardown(t *testing.T) {
 	r, ok := s.rooms.Get(rid)
 	if !ok || len(r.Participants()) != 1 {
 		t.Fatalf("caller should remain during transfer; ok=%v room=%v", ok, r)
+	}
+}
+
+// failXferMsg counts how many times the blind-transfer no-answer prompt is
+// resolved — i.e. how many failed transfers reached playTransferFailMessage. It
+// returns "" so the play itself is a no-op; we only assert the fail path RAN.
+type failXferMsg struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *failXferMsg) TenantTransferFailedAudio(context.Context, uuid.UUID) (string, error) {
+	r.mu.Lock()
+	r.calls++
+	r.mu.Unlock()
+	return "", nil
+}
+
+func (r *failXferMsg) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// shortTeams resolves a team to fixed members with a 1s ring/wait, so a
+// never-answered transfer target times out fast (a to_sip target would use the
+// 30s router default).
+type shortTeams struct{ members map[string][]string }
+
+func (s shortTeams) TeamSIPs(_ context.Context, _ uuid.UUID, team string) ([]string, error) {
+	return s.members[team], nil
+}
+
+func (s shortTeams) TeamConfig(_ context.Context, _ uuid.UUID, team string) (routing.TeamConfig, bool, error) {
+	if _, ok := s.members[team]; !ok {
+		return routing.TeamConfig{}, false, nil
+	}
+	return routing.TeamConfig{Name: team, RingSeconds: 1, MaxWait: 1}, true, nil
+}
+
+// A blind transfer whose target never answers must, WITH the caller still on the
+// line, resolve + play the tenant's no-answer prompt before hanging the caller up.
+// This is the branch the "message not played" report is about. It must run every
+// time a transfer fails while the caller is present — the real-world "2nd transfer"
+// failure was the caller having already dropped during a SILENT ring (fixed by the
+// hold-music fallback), NOT this branch being skipped. Guards that the fail path
+// itself is intact.
+func TestFailedTransferPlaysNoAnswerMessage(t *testing.T) {
+	sf, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	xm := &failXferMsg{}
+	s := New(Config{
+		SFU:             sf,
+		Teams:           shortTeams{members: map[string][]string{"sales": {"carol"}}},
+		TransferMessage: xm,
+	})
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/call")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	s.setCaller(rid, caller.ID())
+	agent, err := s.rooms.Join(rid, "agent") // the transferring agent, already on the call
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	// carol is reachable at pre-flight (registered) but never joins → the ring times out.
+	target := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"carol": target.conn("carol-pid")}
+	s.mu.Unlock()
+
+	fc := &fakeConn{}
+	done := make(chan struct{})
+	go func() {
+		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "agent", msg{Type: msgTransfer, ToTeam: "sales"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleTransfer did not return (the ring never timed out)")
+	}
+
+	if got := xm.count(); got != 1 {
+		t.Fatalf("no-answer message resolved %d times, want 1 (a failed transfer did not play its message)", got)
 	}
 }
 
