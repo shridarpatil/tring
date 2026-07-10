@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4/pkg/media/oggwriter"
@@ -33,9 +34,12 @@ const (
 
 // Track is one recorded participant leg.
 type Track struct {
-	PID  room.ParticipantID
-	Role string // "agent" / "customer" / … — drives the stereo channel mapping
-	Path string
+	PID    room.ParticipantID
+	Role   string        // "agent" / "customer" / … — drives the stereo channel mapping
+	Path   string        // <dir>/<callID>-<pid>.ogg (unique per participant, not per role)
+	Offset time.Duration // when this leg's first packet landed, relative to Arm — so a
+	// later-joining agent (transfer) is placed at its real position on the customer
+	// timeline instead of at t=0. ~0 for the caller and the first agent.
 }
 
 // Recorder writes each participant's Opus RTP to its own Ogg file. Its WriteRTP
@@ -48,11 +52,13 @@ type Recorder struct {
 	roles   map[room.ParticipantID]string
 	writers map[room.ParticipantID]*oggwriter.OggWriter
 	paths   map[room.ParticipantID]string
+	offsets map[room.ParticipantID]time.Duration // first-packet offset from armedAt
 	armed   bool
+	armedAt time.Time
 	closed  bool
 }
 
-// New builds a recorder that writes <dir>/<callID>-<role>.ogg per participant.
+// New builds a recorder that writes <dir>/<callID>-<pid>.ogg per participant.
 func New(dir, callID string) *Recorder {
 	return &Recorder{
 		dir:     dir,
@@ -60,6 +66,7 @@ func New(dir, callID string) *Recorder {
 		roles:   map[room.ParticipantID]string{},
 		writers: map[room.ParticipantID]*oggwriter.OggWriter{},
 		paths:   map[room.ParticipantID]string{},
+		offsets: map[room.ParticipantID]time.Duration{},
 	}
 }
 
@@ -78,7 +85,10 @@ func (r *Recorder) Label(pid room.ParticipantID, role string) {
 // one timeline. Idempotent.
 func (r *Recorder) Arm() {
 	r.mu.Lock()
-	r.armed = true
+	if !r.armed {
+		r.armed = true
+		r.armedAt = time.Now()
+	}
 	r.mu.Unlock()
 }
 
@@ -102,6 +112,12 @@ func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 			return err
 		}
 		w, r.writers[pid], r.paths[pid] = nw, nw, path
+		// Record where this leg begins relative to the recording start, so a leg that
+		// joins mid-call (an agent answering a transfer) is placed at its real time on
+		// the merged timeline. Clamp negative skew to 0.
+		if off := time.Since(r.armedAt); off > 0 {
+			r.offsets[pid] = off
+		}
 	}
 	return w.WriteRTP(pkt)
 }
@@ -130,13 +146,18 @@ func (r *Recorder) Tracks() []Track {
 	defer r.mu.Unlock()
 	out := make([]Track, 0, len(r.paths))
 	for pid, path := range r.paths {
-		out = append(out, Track{PID: pid, Role: r.roleOf(pid), Path: path})
+		out = append(out, Track{PID: pid, Role: r.roleOf(pid), Path: path, Offset: r.offsets[pid]})
 	}
 	return out
 }
 
+// fileName keys the per-leg file on the PARTICIPANT id, not the role: a call that
+// passes through more than one agent (a blind transfer) has two legs with role
+// "agent", and a role-keyed name would make the second overwrite the first — the
+// bug that left only the last agent in the recording. The role still drives the
+// stereo channel mapping (via Track.Role), it just no longer names the file.
 func (r *Recorder) fileName(pid room.ParticipantID) string {
-	return fmt.Sprintf("%s-%s.ogg", r.callID, sanitize(r.roleOf(pid)))
+	return fmt.Sprintf("%s-%s.ogg", r.callID, sanitize(string(pid)))
 }
 
 // roleOf must be called with r.mu held.
