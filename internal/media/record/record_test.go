@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pion/rtp"
 
@@ -47,18 +48,19 @@ func TestRecorderWritesPerParticipantOgg(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	// Two role-named Ogg files, each a real Ogg stream (starts with "OggS").
-	for _, role := range []string{"agent", "customer"} {
-		path := filepath.Join(dir, "call-1-"+role+".ogg")
+	// One Ogg file PER PARTICIPANT (keyed by pid, not role, so two agents never
+	// share a file), each a real Ogg stream (starts with "OggS").
+	for _, pid := range []string{"p-agent", "p-cust"} {
+		path := filepath.Join(dir, "call-1-"+pid+".ogg")
 		b, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s: %v", role, err)
+			t.Fatalf("read %s: %v", pid, err)
 		}
 		if len(b) < 64 {
-			t.Errorf("%s.ogg too small: %d bytes", role, len(b))
+			t.Errorf("%s.ogg too small: %d bytes", pid, len(b))
 		}
 		if string(b[:4]) != "OggS" {
-			t.Errorf("%s.ogg missing OggS magic: %x", role, b[:4])
+			t.Errorf("%s.ogg missing OggS magic: %x", pid, b[:4])
 		}
 	}
 
@@ -96,8 +98,8 @@ func TestRecorderDropsUntilArmed(t *testing.T) {
 	if n := len(rec.Tracks()); n != 1 {
 		t.Fatalf("tracks after Arm = %d, want 1", n)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "c-customer.ogg")); err != nil {
-		t.Fatalf("expected c-customer.ogg after Arm: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "c-cust.ogg")); err != nil {
+		t.Fatalf("expected c-cust.ogg after Arm: %v", err)
 	}
 }
 
@@ -141,8 +143,8 @@ func TestMergeStereoGraceful(t *testing.T) {
 	}
 	_ = rec.Close()
 
-	left := filepath.Join(dir, "c-agent.ogg")
-	right := filepath.Join(dir, "c-customer.ogg")
+	left := filepath.Join(dir, "c-a.ogg")
+	right := filepath.Join(dir, "c-b.ogg")
 	out := filepath.Join(dir, "c-stereo.ogg")
 	err := record.MergeStereo(context.Background(), out, left, right)
 	if err == record.ErrFFmpegMissing {
@@ -188,6 +190,64 @@ func TestMergeStereoSeparatesChannels(t *testing.T) {
 	// tones must yield distinct channels.
 	if d := meanAbsDiff(left, right); d < 1000 {
 		t.Fatalf("left/right channels are ~identical (meanAbsDiff=%.0f): customer leg was dropped, not placed on the right", d)
+	}
+}
+
+// TestMergeCallPlacesLaterAgentAtOffset guards the transfer-recording rule: when a
+// call passes through more than one agent (a blind transfer), EVERY agent leg must
+// appear on the LEFT channel at its real position on the customer timeline — not
+// only the last agent, and not all stacked at t=0. Agent A speaks in second 1,
+// agent B (delayed 1s, as if answering a transfer) in second 2; the customer talks
+// throughout on the RIGHT. We assert the left channel has energy in BOTH seconds
+// (so A wasn't overwritten) and that B's energy lands in the SECOND second (so it
+// was time-aligned, not placed at 0).
+func TestMergeCallPlacesLaterAgentAtOffset(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	agentA := filepath.Join(dir, "a.ogg")
+	agentB := filepath.Join(dir, "b.ogg")
+	customer := filepath.Join(dir, "cust.ogg")
+	genTone(t, agentA, 300)
+	genTone(t, agentB, 1200)
+	genToneDur(t, customer, 800, 2) // customer spans the whole 2s call
+
+	out := filepath.Join(dir, "call.ogg")
+	if err := record.MergeCall(context.Background(), out, customer, []record.AgentLeg{
+		{Path: agentA, Delay: 0},
+		{Path: agentB, Delay: time.Second}, // B answered the transfer 1s in
+	}); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	left, right := decodeStereo(t, out)
+	// Split the left channel into second 1 and second 2 (48k samples/s).
+	const sr = 48000
+	if len(left) < 2*sr-2400 {
+		t.Fatalf("left channel too short: %d samples, want ~%d", len(left), 2*sr)
+	}
+	l1, l2 := rms(left[:sr]), rms(left[sr:2*sr])
+	if l1 < 1000 {
+		t.Fatalf("agent A missing from left second 1 (rms=%.0f): first agent's leg was dropped", l1)
+	}
+	if l2 < 1000 {
+		t.Fatalf("agent B missing from left second 2 (rms=%.0f): later agent was overwritten or not time-aligned", l2)
+	}
+	// The customer must be present on the right for the whole call.
+	if rr := rms(right[:2*sr]); rr < 1000 {
+		t.Fatalf("customer missing from right channel (rms=%.0f)", rr)
+	}
+}
+
+// genToneDur is genTone with a caller-chosen duration in seconds.
+func genToneDur(t *testing.T, path string, freq, seconds int) {
+	t.Helper()
+	cmd := exec.Command("ffmpeg", "-y", "-f", "lavfi",
+		"-i", fmt.Sprintf("sine=frequency=%d:duration=%d:sample_rate=48000", freq, seconds),
+		"-ac", "2", "-c:a", "libopus", path)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("gen tone %dHz: %v: %s", freq, err, b)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -339,11 +340,12 @@ func endedEvent(callID uuid.UUID, duration int, cause string, at time.Time) map[
 func (l *Log) finalizeRecording(ac *activeCall) {
 	_ = ac.rec.Close()
 	tracks := ac.rec.Tracks()
-	var agent, customer string
+	var customer string
+	var agents []record.AgentLeg // one per agent leg; a blind transfer yields >1
 	for _, t := range tracks {
 		switch t.Role {
 		case "agent":
-			agent = t.Path
+			agents = append(agents, record.AgentLeg{Path: t.Path, Delay: t.Offset})
 		case "customer":
 			customer = t.Path
 		}
@@ -352,26 +354,39 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 		l.log.Info("cdr: no media captured, skipping recording", "call", ac.id)
 		return
 	}
+	// Earliest-answering agent first, so the offsets read left-to-right on the timeline.
+	sort.Slice(agents, func(i, j int) bool { return agents[i].Delay < agents[j].Delay })
 
 	out := filepath.Join(l.dir, ac.legID+".ogg")
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if agent != "" {
-		if err := record.MergeStereo(ctx, out, agent, customer); err != nil {
-			l.log.Error("cdr: stereo merge failed, keeping customer leg", "err", err)
+	switch {
+	case len(agents) == 0:
+		// IVR-only call: the caller's leg IS the recording.
+		if err := os.Rename(customer, out); err != nil {
+			l.log.Error("cdr: recording finalize failed", "err", err)
+			return
+		}
+	default:
+		// One agent → agent L / customer R. More than one (blind transfer) → every
+		// agent laid onto L at its real offset so no leg is lost or misaligned.
+		var mergeErr error
+		if len(agents) == 1 {
+			mergeErr = record.MergeStereo(ctx, out, agents[0].Path, customer)
+		} else {
+			mergeErr = record.MergeCall(ctx, out, customer, agents)
+		}
+		if mergeErr != nil {
+			l.log.Error("cdr: stereo merge failed, keeping customer leg", "err", mergeErr, "agents", len(agents))
 			if err := os.Rename(customer, out); err != nil {
 				l.log.Error("cdr: recording finalize failed", "err", err)
 				return
 			}
 		} else {
-			_ = os.Remove(agent)
+			for _, a := range agents {
+				_ = os.Remove(a.Path)
+			}
 			_ = os.Remove(customer)
-		}
-	} else {
-		// IVR-only call: the caller's leg IS the recording.
-		if err := os.Rename(customer, out); err != nil {
-			l.log.Error("cdr: recording finalize failed", "err", err)
-			return
 		}
 	}
 
