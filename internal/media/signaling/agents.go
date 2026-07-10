@@ -235,7 +235,19 @@ type pionRing struct {
 // held, and keeps it playing for the rest of the transfer (across ring/hold
 // iterations). Idempotent — safe to call every Ring/Hold pass.
 func (p *pionRing) ensureHold() {
-	p.holdOnce.Do(func() { p.holdStop = p.s.playHold(p.roomID, p.moh) })
+	p.holdOnce.Do(func() { p.holdStop = p.s.playHold(p.roomID, p.effectiveMOH()) })
+}
+
+// effectiveMOH resolves what the waiting caller should hear. The team MOH wins
+// when it's a playable file; otherwise (no team config — e.g. a direct-agent
+// transfer where moh is always "" — or a stream sentinel pion can't play) it
+// falls back to the tenant's system hold music so the caller hears ringback, not
+// silence. Mirrors the agent-initiated hold path (holdParty → tenantHoldMusic).
+func (p *pionRing) effectiveMOH() string {
+	if holdFile(p.moh) != "" {
+		return p.moh
+	}
+	return p.s.tenantHoldMusic(p.roomID)
 }
 
 // stopHold ends the caller's hold music (once an agent answers, the wait times
