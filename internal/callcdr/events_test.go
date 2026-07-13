@@ -31,6 +31,36 @@ func TestRingingEventOutboundDirection(t *testing.T) {
 	}
 }
 
+func TestOpenPhase(t *testing.T) {
+	// Inbound lands in the IVR, not "ringing" — that was the bug.
+	if got := openPhase("inbound"); got != "ivr" {
+		t.Fatalf("inbound phase = %q, want ivr", got)
+	}
+	// Outbound is genuinely dialing the far end.
+	if got := openPhase("outbound"); got != "ringing" {
+		t.Fatalf("outbound phase = %q, want ringing", got)
+	}
+}
+
+func TestRingingEventCarriesPhase(t *testing.T) {
+	m := ringingEvent(uuid.New(), "+15551234567", "Support flow", "web", "inbound", time.Unix(1700000000, 0))
+	if m["phase"] != "ivr" {
+		t.Fatalf("inbound ringing event phase = %v, want ivr", m["phase"])
+	}
+}
+
+func TestRoutingEvent(t *testing.T) {
+	cid := uuid.New()
+	ring := routingEvent(cid, "ringing", "Sales")
+	if ring["call_id"] != cid || ring["phase"] != "ringing" || ring["target"] != "Sales" {
+		t.Fatalf("bad ringing routing event: %+v", ring)
+	}
+	revert := routingEvent(cid, "ivr", "")
+	if revert["phase"] != "ivr" || revert["target"] != "" {
+		t.Fatalf("bad revert routing event: %+v", revert)
+	}
+}
+
 func TestAnsweredEvent(t *testing.T) {
 	cid := uuid.New()
 	aid := uuid.New()
