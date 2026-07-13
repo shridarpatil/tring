@@ -13,6 +13,7 @@ import (
 // Event types. Keep in sync with the frontend dispatcher (useDashboardStream.ts).
 const (
 	TypeCallRinging     = "call.ringing"
+	TypeCallRouting     = "call.routing"
 	TypeCallAnswered    = "call.answered"
 	TypeCallEnded       = "call.ended"
 	TypeAgentPresence   = "agent.presence"

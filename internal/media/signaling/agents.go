@@ -196,9 +196,18 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	s.declines[rid] = eff.decline
 	s.mu.Unlock()
 
+	// Surface "ringing → <target>" on the live dashboard for the whole routing
+	// window (queue-hold + ring). Team/agent naming is resolved by callcdr.
+	if s.cfg.Calls != nil {
+		s.cfg.Calls.RingStart(ctx, roomID, t.Team, t.AgentSIP)
+	}
+
 	cleanup := func() {
 		eff.stopHold() // stop the queue/ring hold music (no-op if it never started)
 		eff.cancelRung()
+		if s.cfg.Calls != nil {
+			s.cfg.Calls.RingStop(roomID) // no-op if answered — reverts to the IVR phase on no-answer
+		}
 		s.mu.Lock()
 		if s.rings[rid] == ring {
 			delete(s.rings, rid)

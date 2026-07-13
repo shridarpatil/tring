@@ -588,7 +588,9 @@ func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID, agentSip s
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeCallLog) Journey(string, []ivr.Step) {}
+func (f *fakeCallLog) RingStart(context.Context, string, string, string) {}
+func (f *fakeCallLog) RingStop(string)                                    {}
+func (f *fakeCallLog) Journey(string, []ivr.Step)                         {}
 func (f *fakeCallLog) Ended(roomID, cause string) {
 	f.mu.Lock()
 	f.ended = append(f.ended, roomID+"|"+cause)
@@ -704,6 +706,8 @@ func (o *orderedCallLog) StartedOutbound(context.Context, uuid.UUID, string, str
 	return nil
 }
 func (o *orderedCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
+func (o *orderedCallLog) RingStart(context.Context, string, string, string)           {}
+func (o *orderedCallLog) RingStop(string)                                             {}
 func (o *orderedCallLog) Journey(_ string, steps []ivr.Step) {
 	o.mu.Lock()
 	defer o.mu.Unlock()

@@ -138,6 +138,11 @@ export interface Call {
   agent_name?: string;
   client_ref?: string;
   source?: 'web' | 'phone' | 'whatsapp';
+  // Live-dashboard call phase (event-driven, not persisted): "ivr" while the
+  // caller is in the IVR, "ringing" while an agent/team is being rung. Absent on
+  // rows rebuilt from a reconnect snapshot.
+  phase?: 'ivr' | 'ringing';
+  ring_target?: string; // agent/team being rung, shown as the destination during "ringing"
   leg_id: string;
   started_at: string;
   answered_at?: string;

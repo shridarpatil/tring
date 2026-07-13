@@ -47,10 +47,24 @@ function onEvent(type: string, data: unknown) {
       else calls.value = [...calls.value, c];
       break;
     }
+    case "call.routing": {
+      // A transfer began ringing an agent/team ("ringing"), or a ring ended with no
+      // answer and the caller fell back into the flow ("ivr"). Dashboard-only phase.
+      // Ignore once answered — a late revert must not undo the "talking" state.
+      const d = data as { call_id: string; phase: Call["phase"]; target?: string };
+      calls.value = calls.value.map((c) =>
+        c.id === d.call_id && c.status !== "answered"
+          ? { ...c, phase: d.phase, ring_target: d.phase === "ringing" ? d.target : undefined }
+          : c,
+      );
+      break;
+    }
     case "call.answered": {
       const d = data as { call_id: string; agent_id?: string; agent_name?: string; answered_at?: string };
       calls.value = calls.value.map((c) =>
-        c.id === d.call_id ? { ...c, status: "answered", agent_id: d.agent_id, agent_name: d.agent_name, answered_at: d.answered_at } : c,
+        c.id === d.call_id
+          ? { ...c, status: "answered", phase: undefined, ring_target: undefined, agent_id: d.agent_id, agent_name: d.agent_name, answered_at: d.answered_at }
+          : c,
       );
       break;
     }
