@@ -127,6 +127,12 @@ type CallLog interface {
 	// instead of Started's hardcoded 'inbound'.
 	StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink
 	Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink
+	// RingStart/RingStop drive the live-dashboard "ringing → <target>" phase for a
+	// transfer: RingStart when routing to a team/agent begins (so the row shows who
+	// it's ringing instead of the IVR label), RingStop when the ring ends with no
+	// answer (revert to the IVR phase). Dashboard-only, best-effort.
+	RingStart(ctx context.Context, roomID, team, agentSIP string)
+	RingStop(roomID string)
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)
 }

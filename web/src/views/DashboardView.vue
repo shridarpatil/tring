@@ -70,7 +70,18 @@ function callerLabel(c: Call): string {
   return c.from_number || "Unknown";
 }
 function destLabel(c: Call): string {
-  return c.agent_name || c.to_number || "—";
+  // While ringing an agent/team, show who it's ringing (ring_target) as the
+  // destination; once answered agent_name wins; otherwise the dialed number/flow.
+  return c.agent_name || c.ring_target || c.to_number || "—";
+}
+
+// Live-call status badge. Three pre-terminal states the operator cares about:
+// talking (answered), in IVR (caller in the menu, nobody being rung yet), and
+// ringing (an agent/team is being rung — destLabel shows who).
+function callBadge(c: Call): { text: string; cls: string } {
+  if (c.status === "answered") return { text: "talking", cls: "text-live bg-live-soft" };
+  if (c.phase === "ivr") return { text: "in IVR", cls: "text-ink-muted bg-surface-2" };
+  return { text: "ringing", cls: "text-accent bg-accent-soft" };
 }
 
 // ── supervisor (Listen/Whisper/Barge) ─────────────────────────────────
@@ -200,8 +211,8 @@ usePoll(() => (now.value = Date.now()), 1000);
             </div>
             <span
               class="text-[10.5px] px-2 py-0.5 rounded-full font-semibold shrink-0"
-              :class="c.status === 'answered' ? 'text-live bg-live-soft' : 'text-accent bg-accent-soft'"
-              >{{ c.status === "answered" ? "talking" : "ringing" }}</span
+              :class="callBadge(c).cls"
+              >{{ callBadge(c).text }}</span
             >
             <span class="tabular-nums text-sm text-ink-muted shrink-0 w-12 text-right">{{
               fmtDur(callSeconds(c))

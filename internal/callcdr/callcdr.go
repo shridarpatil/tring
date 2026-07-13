@@ -54,6 +54,7 @@ type activeCall struct {
 	startedAt time.Time
 	callerPID room.ParticipantID
 	rec       *record.Recorder // nil = tenant doesn't record
+	answered  bool             // an agent has joined — gates RingStop's revert-to-ivr
 }
 
 // New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
@@ -186,6 +187,9 @@ func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, r
 func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink {
 	l.mu.Lock()
 	ac := l.calls[roomID]
+	if ac != nil && agentPID != ac.callerPID {
+		ac.answered = true // gate RingStop's revert-to-ivr (a late cleanup mustn't undo "talking")
+	}
 	l.mu.Unlock()
 	if ac == nil || agentPID == ac.callerPID {
 		return nil
@@ -224,6 +228,53 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	// this agent) start on one timeline.
 	ac.rec.Arm()
 	return ac.rec
+}
+
+// RingStart marks a call as now ringing a specific target (an agent or a team)
+// and publishes it to the live dashboard so the row shows "ringing → <target>"
+// instead of the stale IVR label. Called when a transfer node starts routing.
+// The target label is resolved for humans: a team by its name, a single agent by
+// their display name (falling back to the SIP username), or "Available agents"
+// for a ring-all. Best-effort + dashboard-only (no calls.status change); a nil
+// events sink or unknown room is a no-op.
+func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
+	l.mu.Lock()
+	ac := l.calls[roomID]
+	l.mu.Unlock()
+	if ac == nil || l.events == nil {
+		return
+	}
+	target := "Available agents"
+	switch {
+	case team != "":
+		target = team
+	case agentSIP != "":
+		target = agentSIP // fall back to the SIP username if the name lookup fails
+		var id uuid.UUID
+		var name string
+		if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, agentSIP).Scan(&id, &name); err == nil && name != "" {
+			target = name
+		}
+	}
+	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", target))
+}
+
+// RingStop reverts a call's live phase back to "ivr" when a ring ends with no
+// answer (the caller falls back into the flow — a menu, a no-answer prompt, or
+// hangup). It is a no-op once the call has been answered, so a late transfer
+// cleanup can't undo the "talking" state, and on an unknown/ended room. The
+// calls.status column is untouched (dashboard-only), matching RingStart.
+func (l *Log) RingStop(roomID string) {
+	l.mu.Lock()
+	ac := l.calls[roomID]
+	answered := ac != nil && ac.answered
+	l.mu.Unlock()
+	if ac == nil || answered || l.events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ivr", ""))
 }
 
 // Journey stamps the IVR walk onto the call (calls.ivr_path) — the console's
@@ -307,11 +358,36 @@ func ringingEvent(callID uuid.UUID, from, to, source, direction string, startedA
 	return map[string]any{
 		"id":          callID,
 		"status":      "ringing",
+		"phase":       openPhase(direction),
 		"direction":   direction,
 		"from_number": from,
 		"to_number":   to,
 		"source":      source,
 		"started_at":  startedAt,
+	}
+}
+
+// openPhase is the live-dashboard phase a call is in the instant it opens. An
+// inbound call lands in the IVR (greeting/menu) before any agent is rung — so it
+// is "ivr", NOT "ringing" (the old, misleading label). An outbound call the agent
+// placed is genuinely dialing the far end, so "ringing" is correct there.
+func openPhase(direction string) string {
+	if direction == "outbound" {
+		return "ringing"
+	}
+	return "ivr"
+}
+
+// routingEvent carries a live phase transition for an in-flight call: "ringing"
+// (with the target agent/team being rung) when a transfer starts, or "ivr" when
+// a ring ends with no answer and the caller falls back into the flow. It is a
+// dashboard-only signal (best-effort, not persisted) — the calls.status column
+// stays 'ringing' throughout, per the live-events-only scope.
+func routingEvent(callID uuid.UUID, phase, target string) map[string]any {
+	return map[string]any{
+		"call_id": callID,
+		"phase":   phase,
+		"target":  target,
 	}
 }
 
