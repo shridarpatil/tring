@@ -106,13 +106,19 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 	s.removeParticipant(rid, p.ID())
 
 	target := ivrdrive.Target{AgentSIP: toSip, Team: toTeam, Label: label}
-	outcome, _ := s.agentRouter.RingNoHandoff(ctx, string(rid), target)
-	s.endTransfer(rid) // clear the guard (idempotent; also fired if the caller hung up)
-
 	to := toSip
 	if to == "" {
 		to = toTeam
 	}
+	// Record the transfer on the timeline NOW, before the target rings, so the call
+	// history stays chronological: "Transfer → <target> by <agent>" lands ahead of
+	// the "Ringing <target>" / "Answered by <target>" rows the ring below produces.
+	if s.cfg.Calls != nil {
+		s.cfg.Calls.Transferred(string(rid), sip, to)
+	}
+	outcome, _ := s.agentRouter.RingNoHandoff(ctx, string(rid), target)
+	s.endTransfer(rid) // clear the guard (idempotent; also fired if the caller hung up)
+
 	if outcome != "completed" {
 		s.playTransferFailMessage(rid, tenant)
 		s.endIfAlone(rid) // hang up the stranded caller
@@ -194,13 +200,10 @@ func (s *Server) playTransferFailMessage(rid room.RoomID, tenantID uuid.UUID) {
 	_ = player.Close()
 }
 
-// publishTransferred records an agent-initiated blind transfer on the durable
-// call timeline and emits the live call.transferred dashboard event. Both
-// best-effort.
+// publishTransferred emits the live call.transferred dashboard event (with the
+// resolved outcome). The durable timeline row is written separately at transfer
+// initiation (see handleTransfer → Calls.Transferred), not here. Best-effort.
 func (s *Server) publishTransferred(tenant string, rid room.RoomID, fromSip, to, result string) {
-	if s.cfg.Calls != nil {
-		s.cfg.Calls.Transferred(string(rid), fromSip, to, result)
-	}
 	if s.cfg.Events == nil {
 		return
 	}

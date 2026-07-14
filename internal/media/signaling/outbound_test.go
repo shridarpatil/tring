@@ -649,7 +649,7 @@ func (f *fakeOutboundCallLog) Answered(string, room.ParticipantID, string) room.
 func (f *fakeOutboundCallLog) RingStart(context.Context, string, string, string)          {}
 func (f *fakeOutboundCallLog) RingAgent(string, string)                                    {}
 func (f *fakeOutboundCallLog) RingStop(string)                                            {}
-func (f *fakeOutboundCallLog) Transferred(string, string, string, string)                 {}
+func (f *fakeOutboundCallLog) Transferred(string, string, string)                         {}
 func (f *fakeOutboundCallLog) Journey(string, []ivr.Step)                                 {}
 func (f *fakeOutboundCallLog) Ended(string, string)                                       {}
 

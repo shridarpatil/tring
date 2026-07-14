@@ -256,7 +256,7 @@ func TestTimelineEvents(t *testing.T) {
 	l.RingStart(ctx, roomID, "", "alice")              // direct-agent window
 	l.RingAgent(roomID, "alice")                       // ring(Alice A)
 	l.Answered(roomID, "agent-pid", "alice")           // answered by Alice
-	l.Transferred(roomID, "alice", "Bob", "completed") // agent blind-transfers onward
+	l.Transferred(roomID, "alice", "Bob") // agent blind-transfers onward
 	l.Ended(roomID, "caller_hangup")
 
 	// agent := detail->>'agent' (ring/answered); noAns := first name in detail->'agents'

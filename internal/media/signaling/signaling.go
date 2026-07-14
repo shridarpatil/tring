@@ -137,8 +137,9 @@ type CallLog interface {
 	RingAgent(roomID, sip string)
 	RingStop(roomID string)
 	// Transferred records an agent-initiated blind transfer on the call timeline
-	// (the one routing event outside the IVR walk). Best-effort.
-	Transferred(roomID, from, to, result string)
+	// (the one routing event outside the IVR walk), at initiation before the target
+	// rings. Best-effort.
+	Transferred(roomID, from, to string)
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)
 }
