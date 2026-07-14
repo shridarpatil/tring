@@ -175,6 +175,7 @@ type Server struct {
 	transfers    map[room.RoomID]context.CancelFunc           // rooms with a blind transfer ringing → cancel (transfer.go)
 	roles        map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
 	supers       map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
+	hangupBy     map[room.RoomID]string                       // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -509,12 +510,53 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 			}
 			go s.handleAgentDial(p.Room().ID(), tenant, p.ID(), m.To)
 		case msgBye:
+			// An explicit hangup — attribute the call's end to this party (first Bye wins).
+			s.markHangupInitiator(p.Room().ID(), p.ID())
 			p.Leave() // terminal — emits left, which tears down the SFU peer
 			return
 		default:
 			s.log.Warn("unknown message", "type", m.Type, "participant", p.ID())
 		}
 	}
+}
+
+// markHangupInitiator records WHO ended a call, from the explicit `bye` a party's
+// SDK sends on hangup (and on the peer-left cascade). First writer wins, so the
+// party who actually hung up is captured — not the other side that auto-leaves
+// after. Supervisors and unknown roles never count. A room with no recorded
+// initiator ended without a human hangup (IVR hangup node, no-answer, flow end,
+// or a socket drop) → "system", resolved by endCause.
+func (s *Server) markHangupInitiator(rid room.RoomID, pid room.ParticipantID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var by string
+	switch s.roles[pid] {
+	case roleVisitor:
+		by = "client"
+	case roleAgent:
+		by = "agent"
+	default:
+		return // supervisor / unknown — not a call-ending hangup
+	}
+	if s.hangupBy == nil {
+		s.hangupBy = map[room.RoomID]string{}
+	}
+	if _, ok := s.hangupBy[rid]; !ok {
+		s.hangupBy[rid] = by
+	}
+}
+
+// endCause resolves and consumes a room's hangup cause: the recorded initiator
+// ("client"/"agent"), or "system" when no party hung up. Clears the entry.
+func (s *Server) endCause(rid room.RoomID) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	by, ok := s.hangupBy[rid]
+	delete(s.hangupBy, rid)
+	if !ok {
+		return "system"
+	}
+	return by
 }
 
 // routeEvent is the room Manager's emitter: it fans membership events out to the
@@ -540,7 +582,7 @@ func (s *Server) routeEvent(e room.Event) {
 			s.hangupOutboundIfAbandoned(e.Room)
 			s.closeSupervisors(e.Room) // end any supervisor sessions with the call
 			if s.cfg.Calls != nil {
-				s.cfg.Calls.Ended(string(e.Room), "ended")
+				s.cfg.Calls.Ended(string(e.Room), s.endCause(e.Room))
 			}
 		} else if s.resumeHandoffIfAgentLeft(e.Room, e.Participant) {
 			// A transfer's answered agent just left with the caller still on the line:
