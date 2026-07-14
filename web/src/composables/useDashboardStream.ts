@@ -48,15 +48,17 @@ function onEvent(type: string, data: unknown) {
       break;
     }
     case "call.routing": {
-      // A transfer began ringing an agent/team ("ringing"), or a ring ended with no
-      // answer and the caller fell back into the flow ("ivr"). Dashboard-only phase.
-      // Ignore once answered — a late revert must not undo the "talking" state.
+      // A transfer began ringing an agent ("ringing"), or a ring ended with no answer
+      // and the caller fell back into the flow ("ivr"). A "ringing" update applies even
+      // mid-call — an agent-to-agent transfer must show the agent now being rung, not
+      // the one who just handed the call off. An "ivr" revert, though, must never demote
+      // an already-answered call out of "talking".
       const d = data as { call_id: string; phase: Call["phase"]; target?: string };
-      calls.value = calls.value.map((c) =>
-        c.id === d.call_id && c.status !== "answered"
-          ? { ...c, phase: d.phase, ring_target: d.phase === "ringing" ? d.target : undefined }
-          : c,
-      );
+      calls.value = calls.value.map((c) => {
+        if (c.id !== d.call_id) return c;
+        if (d.phase === "ivr" && c.status === "answered") return c;
+        return { ...c, phase: d.phase, ring_target: d.phase === "ringing" ? d.target : undefined };
+      });
       break;
     }
     case "call.answered": {

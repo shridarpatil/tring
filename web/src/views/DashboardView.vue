@@ -70,15 +70,19 @@ function callerLabel(c: Call): string {
   return c.from_number || "Unknown";
 }
 function destLabel(c: Call): string {
-  // While ringing an agent/team, show who it's ringing (ring_target) as the
-  // destination; once answered agent_name wins; otherwise the dialed number/flow.
+  // A ring in progress (including a transfer re-ring on an answered call) shows who
+  // it's ringing (ring_target); otherwise the answering agent, then the flow/number.
+  if (c.phase === "ringing" && c.ring_target) return c.ring_target;
   return c.agent_name || c.ring_target || c.to_number || "—";
 }
 
-// Live-call status badge. Three pre-terminal states the operator cares about:
-// talking (answered), in IVR (caller in the menu, nobody being rung yet), and
-// ringing (an agent/team is being rung — destLabel shows who).
+// Live-call status badge. Pre-terminal states the operator cares about: ringing
+// (an agent is being rung — destLabel shows who), talking (answered), and in IVR
+// (caller in the menu, nobody being rung yet). An active ring is checked first so a
+// transfer re-ring on an in-progress call reads "ringing" until the new agent picks
+// up, rather than staying "talking" on the agent who handed it off.
 function callBadge(c: Call): { text: string; cls: string } {
+  if (c.phase === "ringing") return { text: "ringing", cls: "text-accent bg-accent-soft" };
   if (c.status === "answered") return { text: "talking", cls: "text-live bg-live-soft" };
   if (c.phase === "ivr") return { text: "in IVR", cls: "text-ink-muted bg-surface-2" };
   return { text: "ringing", cls: "text-accent bg-accent-soft" };
