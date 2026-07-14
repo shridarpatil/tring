@@ -346,12 +346,14 @@ func (l *Log) RingStop(roomID string) {
 	}
 }
 
-// Transferred records an agent-initiated blind transfer on the call timeline —
-// the one routing moment that lives entirely outside the IVR walk (an agent, on a
-// live call, hands it to another agent/team), so without this it left no durable
-// trace at all. from is the initiating agent (SIP/label), to the target, result
-// "completed"|"no_answer". Best-effort; a nil sink/DB or unknown room no-ops.
-func (l *Log) Transferred(roomID, from, to, result string) {
+// Transferred records an agent-initiated blind transfer on the call timeline — the
+// one routing moment outside the IVR walk (an agent, on a live call, hands it to
+// another agent/team). It is written at INITIATION, before the target is rung, so
+// the history reads in order: "Answered by A" → "Transfer → B by A" → "Ringing B" →
+// "Answered by B"; the outcome is carried by those following ring/answer rows, not
+// here. from/to are SIPs (to may be a team) — both resolved to display names when
+// they name an agent. Best-effort; a nil DB or unknown room no-ops.
+func (l *Log) Transferred(roomID, from, to string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
 	l.mu.Unlock()
@@ -359,8 +361,26 @@ func (l *Log) Transferred(roomID, from, to, result string) {
 		return
 	}
 	l.timelineEvent(ac.tenant, ac.id, "transfer", map[string]any{
-		"from": from, "to": to, "result": result,
+		"from": l.resolveAgentName(ac.tenant, from),
+		"to":   l.resolveAgentName(ac.tenant, to),
 	})
+}
+
+// resolveAgentName maps a SIP username to an agent's display name, returning the
+// input unchanged when it doesn't name an agent (a team name, an email, or an
+// unknown SIP all pass through). A nil DB is a no-op passthrough.
+func (l *Log) resolveAgentName(tenant uuid.UUID, s string) string {
+	if l.db == nil || s == "" {
+		return s
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var id uuid.UUID
+	var name string
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, tenant, s).Scan(&id, &name); err == nil && name != "" {
+		return name
+	}
+	return s
 }
 
 // Journey stamps the IVR walk onto the call (calls.ivr_path) — the console's
