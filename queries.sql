@@ -330,6 +330,19 @@ UPDATE calls SET agent_id = $1, agent_leg_id = $3 WHERE leg_id = $2;
 -- agent is on the pion plane. Matched by the call's leg id.
 UPDATE calls SET agent_id = $2 WHERE leg_id = $1;
 
+-- name: insert-call-event
+-- Append one event to a call's timeline (internal/callcdr). Best-effort; a missed
+-- write just leaves a gap in the history. detail is type-specific JSON.
+INSERT INTO call_events (tenant_id, call_id, type, detail)
+VALUES ($1, $2, $3, $4::jsonb);
+
+-- name: list-call-events
+-- The full ordered timeline for one call, tenant-scoped (the console call detail).
+SELECT type, at, detail
+FROM call_events
+WHERE call_id = $1 AND tenant_id = $2
+ORDER BY at ASC, seq ASC;
+
 -- name: get-call-control-leg
 -- The CUSTOMER leg (the party that should hear hold music), the call's status,
 -- and the tenant's hold music — scoped to the tenant. Hold injects MOH into this

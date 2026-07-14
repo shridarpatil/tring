@@ -207,6 +207,69 @@ func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
 	}
 }
 
+// TestTimelineEvents covers the durable per-call history (call_events): the full
+// routing arc — started → ring → no_answer → ring → answered → transfer → ended —
+// lands as ordered, typed rows with resolved detail (team name, agent name).
+func TestTimelineEvents(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx,
+		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		fx.TenantID); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
+	roomID := fx.TenantID.String() + "/tl-test"
+
+	l.Started(ctx, fx.TenantID, roomID, "+15551230000", "Support flow", "web", "", "caller-pid")
+	l.RingStart(ctx, roomID, "Sales", "")             // ring a team
+	l.RingStop(roomID)                                // nobody answered → no_answer(Sales)
+	l.RingStart(ctx, roomID, "", "alice")             // ring a specific agent (SIP → display name)
+	l.Answered(roomID, "agent-pid", "alice")          // answered by Alice
+	l.Transferred(roomID, "alice", "Bob", "completed") // agent blind-transfers onward
+	l.Ended(roomID, "caller_hangup")
+
+	rows, err := fx.DB.Pool.Query(ctx,
+		`SELECT type, COALESCE(detail->>'target',''), COALESCE(detail->>'agent',''), COALESCE(detail->>'to','')
+		 FROM call_events WHERE tenant_id = $1 ORDER BY seq ASC`, fx.TenantID)
+	if err != nil {
+		t.Fatalf("read call_events: %v", err)
+	}
+	defer rows.Close()
+	var types, targets, agents, tos []string
+	for rows.Next() {
+		var typ, target, agent, to string
+		if err := rows.Scan(&typ, &target, &agent, &to); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		types = append(types, typ)
+		targets = append(targets, target)
+		agents = append(agents, agent)
+		tos = append(tos, to)
+	}
+	want := []string{"started", "ring", "no_answer", "ring", "answered", "transfer", "ended"}
+	if len(types) != len(want) {
+		t.Fatalf("timeline = %v, want %v", types, want)
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("event %d = %q, want %q (full: %v)", i, types[i], want[i], types)
+		}
+	}
+	if targets[1] != "Sales" || targets[2] != "Sales" {
+		t.Fatalf("ring/no_answer target = %q/%q, want Sales", targets[1], targets[2])
+	}
+	if targets[3] != "Alice A" {
+		t.Fatalf("single-agent ring target = %q, want resolved display name Alice A", targets[3])
+	}
+	if agents[4] != "Alice A" {
+		t.Fatalf("answered agent = %q, want Alice A", agents[4])
+	}
+	if tos[5] != "Bob" {
+		t.Fatalf("transfer to = %q, want Bob", tos[5])
+	}
+}
+
 // TestNoRecordingWhenTenantOff: CDR still written, but no sink and no file.
 // (record_calls defaults to true in the schema, so disable it explicitly.)
 func TestNoRecordingWhenTenantOff(t *testing.T) {

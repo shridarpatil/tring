@@ -128,6 +128,15 @@ export interface IvrStep {
   outcome: string;
 }
 
+// CallEvent is one row of a call's durable timeline (GET /v1/calls/{id}/events).
+// type ∈ started|ring|no_answer|answered|transfer|supervise|ended; detail is
+// type-specific (e.g. {target}, {agent}, {from,to,result}, {cause,duration_seconds}).
+export interface CallEvent {
+  type: string;
+  at: string;
+  detail: Record<string, unknown>;
+}
+
 export interface Call {
   id: string;
   direction: string;
