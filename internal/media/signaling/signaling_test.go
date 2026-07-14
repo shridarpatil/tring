@@ -589,6 +589,7 @@ func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID, agentSip s
 	return nil
 }
 func (f *fakeCallLog) RingStart(context.Context, string, string, string) {}
+func (f *fakeCallLog) RingAgent(string, string)                           {}
 func (f *fakeCallLog) RingStop(string)                                    {}
 func (f *fakeCallLog) Transferred(string, string, string, string)         {}
 func (f *fakeCallLog) Journey(string, []ivr.Step)                         {}
@@ -708,6 +709,7 @@ func (o *orderedCallLog) StartedOutbound(context.Context, uuid.UUID, string, str
 }
 func (o *orderedCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
 func (o *orderedCallLog) RingStart(context.Context, string, string, string)           {}
+func (o *orderedCallLog) RingAgent(string, string)                                    {}
 func (o *orderedCallLog) RingStop(string)                                             {}
 func (o *orderedCallLog) Transferred(string, string, string, string)                  {}
 func (o *orderedCallLog) Journey(_ string, steps []ivr.Step) {

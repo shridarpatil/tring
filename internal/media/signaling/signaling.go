@@ -132,6 +132,9 @@ type CallLog interface {
 	// it's ringing instead of the IVR label), RingStop when the ring ends with no
 	// answer (revert to the IVR phase). Dashboard-only, best-effort.
 	RingStart(ctx context.Context, roomID, team, agentSIP string)
+	// RingAgent records that one specific agent is now being rung (id + name), so
+	// the timeline names who the call rang. Called per agent as each is popped.
+	RingAgent(roomID, sip string)
 	RingStop(roomID string)
 	// Transferred records an agent-initiated blind transfer on the call timeline
 	// (the one routing event outside the IVR walk). Best-effort.

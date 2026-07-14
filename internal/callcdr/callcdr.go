@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,9 +56,9 @@ type activeCall struct {
 	tenant    uuid.UUID
 	startedAt time.Time
 	callerPID room.ParticipantID
-	rec       *record.Recorder // nil = tenant doesn't record
-	answered  bool             // an agent has joined — gates RingStop's revert-to-ivr
-	lastRing  string           // most recent ring target — names the no_answer timeline event
+	rec        *record.Recorder // nil = tenant doesn't record
+	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
+	ringAgents []string         // agents rung in the current window — names the no_answer event
 }
 
 // New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
@@ -250,10 +251,17 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
+	if ac != nil {
+		ac.ringAgents = nil // new routing window — reset the per-agent ring roster
+	}
 	l.mu.Unlock()
-	if ac == nil {
+	if ac == nil || l.events == nil {
 		return
 	}
+	// Live dashboard label only: the team name (or a single agent's name / "Available
+	// agents") drives the "ringing → X" phase chip. The durable, per-agent ring rows
+	// — who the call actually rang, by id + name — are written by RingAgent as each
+	// agent is popped, since a team ring can ring several agents.
 	target := "Available agents"
 	switch {
 	case team != "":
@@ -266,17 +274,49 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 			target = name
 		}
 	}
-	// Remember the target so a following no-answer names who didn't pick up.
+	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", target))
+}
+
+// RingAgent records that a SPECIFIC agent is now being rung — resolving their id +
+// display name (falling back to the SIP username) — so the timeline names WHO the
+// call rang, not just the team. A team ring_all yields one row per agent; a
+// one-at-a-time strategy yields them in sequence as each is tried. It also rosters
+// the agent so a later no-answer can list who didn't pick up. Best-effort; a nil
+// DB or unknown room is a no-op. Does not touch the live dashboard.
+func (l *Log) RingAgent(roomID, sip string) {
+	if l.db == nil || sip == "" {
+		return
+	}
+	l.mu.Lock()
+	ac := l.calls[roomID]
+	l.mu.Unlock()
+	if ac == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	name := sip
+	var id uuid.UUID
+	var label string
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, sip).Scan(&id, &label); err == nil && label != "" {
+		name = label
+	}
+	var roster string
 	l.mu.Lock()
 	if cur := l.calls[roomID]; cur != nil {
-		cur.lastRing = target
+		cur.ringAgents = append(cur.ringAgents, name)
+		roster = strings.Join(cur.ringAgents, ", ")
 	}
 	l.mu.Unlock()
-	// Durable timeline first (independent of the live-events sink), then the live
-	// dashboard phase update if events are enabled.
-	l.timelineEvent(ac.tenant, ac.id, "ring", map[string]any{"target": target})
+	detail := map[string]any{"agent": name, "sip": sip}
+	if id != uuid.Nil {
+		detail["agent_id"] = id
+	}
+	l.timelineEvent(ac.tenant, ac.id, "ring", detail)
+	// Live dashboard: replace the team label with the agent(s) actually ringing —
+	// the roster grows as a ring_all pops more agents.
 	if l.events != nil {
-		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", target))
+		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", roster))
 	}
 }
 
@@ -289,16 +329,16 @@ func (l *Log) RingStop(roomID string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
 	answered := ac != nil && ac.answered
-	lastRing := ""
+	var agents []string
 	if ac != nil {
-		lastRing = ac.lastRing
+		agents = ac.ringAgents
 	}
 	l.mu.Unlock()
 	if ac == nil || answered {
 		return
 	}
-	// Durable timeline: the ring ended without an answer (who it rang is lastRing).
-	l.timelineEvent(ac.tenant, ac.id, "no_answer", map[string]any{"target": lastRing})
+	// Durable timeline: the whole window ended without an answer — name who it rang.
+	l.timelineEvent(ac.tenant, ac.id, "no_answer", map[string]any{"agents": agents})
 	if l.events != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

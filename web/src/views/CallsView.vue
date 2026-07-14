@@ -93,9 +93,15 @@ function eventText(e: CallEvent): string {
       return from || to ? `Call started — ${from || "?"} → ${to || "?"}` : "Call started";
     }
     case "ring":
-      return `Ringing ${s("target") || "agents"}`;
-    case "no_answer":
+      // Per-agent (agent name); fall back to target for rows from the old format.
+      return `Ringing ${s("agent") || s("target") || "agents"}`;
+    case "no_answer": {
+      const agents = Array.isArray(d.agents)
+        ? (d.agents as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      if (agents.length) return `No answer from ${agents.join(", ")}`;
       return s("target") ? `No answer from ${s("target")}` : "No answer";
+    }
     case "answered":
       return s("agent") ? `Answered by ${s("agent")}` : "Answered";
     case "transfer": {
