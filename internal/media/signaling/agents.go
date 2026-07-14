@@ -303,11 +303,13 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		}
 	}
 
+	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
 			p.rung[sip] = true
 			p.active[sip] = true
+			poppedNow = append(poppedNow, sip)
 		}
 	}
 
@@ -336,6 +338,15 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		}
 	}
 	p.s.mu.Unlock()
+
+	// Record each agent actually rung on the durable timeline (id + name resolved
+	// by callcdr), off the lock. ring_all pops several at once; a one-at-a-time
+	// strategy pops one per attempt, so these land in the order agents were tried.
+	if p.s.cfg.Calls != nil {
+		for _, sip := range poppedNow {
+			p.s.cfg.Calls.RingAgent(string(p.roomID), sip)
+		}
+	}
 
 	timer := time.NewTimer(perAttempt)
 	defer timer.Stop()

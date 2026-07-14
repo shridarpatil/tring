@@ -374,6 +374,46 @@ func (s *Server) handleGetCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, c)
 }
 
+// callEvent is one row of a call's durable timeline (call_events). Detail is
+// type-specific JSON passed through verbatim.
+type callEvent struct {
+	Type   string          `json:"type"`
+	At     time.Time       `json:"at"`
+	Detail json.RawMessage `json:"detail"`
+}
+
+// handleGetCallEvents returns a call's complete, ordered event timeline — the
+// console's per-call history (started → rings/no-answers → answered → transfers →
+// ended). Tenant-scoped so one tenant can't read another's history. Returns an
+// empty array (not 404) for a call with no recorded events, so the UI renders
+// consistently for old calls that predate the timeline.
+func (s *Server) handleGetCallEvents(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListCallEvents, id, t.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+	out := []callEvent{}
+	for rows.Next() {
+		var e callEvent
+		var detail []byte
+		if err := rows.Scan(&e.Type, &e.At, &detail); err != nil {
+			writeError(w, http.StatusInternalServerError, "scan failed")
+			return
+		}
+		e.Detail = detail
+		out = append(out, e)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // recordingMIME maps a recording file extension to its Content-Type. Explicit
 // (not mime.TypeByExtension) because the stdlib table lacks ".wav" on some
 // platforms. Mirrors the orchestrator's mapping in runner.go.
