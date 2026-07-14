@@ -113,8 +113,12 @@ function eventText(e: CallEvent): string {
     case "supervise":
       return `Supervisor joined${s("mode") ? ` (${s("mode")})` : ""}`;
     case "ended": {
+      // cause is who ended it: client (caller) / agent / system (IVR, no-answer,
+      // flow end, drop). Older rows may carry a raw FreeSWITCH-style cause.
       const cause = s("cause");
-      return cause ? `Call ended — ${cause}` : "Call ended";
+      const who: Record<string, string> = { client: "caller", agent: "agent", system: "system" };
+      if (who[cause]) return `Call ended by ${who[cause]}`;
+      return cause && cause !== "ended" ? `Call ended — ${cause}` : "Call ended";
     }
     default:
       return e.type;
