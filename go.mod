@@ -3,6 +3,7 @@ module github.com/shridarpatil/tring
 go 1.25.0
 
 require (
+	github.com/emiago/sipgo v1.4.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/gobwas/ws v1.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -26,7 +27,6 @@ require (
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/emiago/sipgo v1.4.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/gobwas/pool v0.2.1 // indirect
@@ -38,7 +38,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.11 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
