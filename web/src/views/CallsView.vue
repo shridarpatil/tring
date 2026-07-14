@@ -105,9 +105,10 @@ function eventText(e: CallEvent): string {
     case "answered":
       return s("agent") ? `Answered by ${s("agent")}` : "Answered";
     case "transfer": {
+      // Recorded at initiation; the following ring/answer rows show the outcome, so
+      // no "(answered/no answer)" here.
       const to = s("to"), by = s("from");
-      const res = s("result") === "completed" ? "answered" : "no answer";
-      return `Transfer${to ? ` → ${to}` : ""} (${res})${by ? ` — by ${by}` : ""}`;
+      return `Transfer${to ? ` → ${to}` : ""}${by ? ` by ${by}` : ""}`;
     }
     case "supervise":
       return `Supervisor joined${s("mode") ? ` (${s("mode")})` : ""}`;
