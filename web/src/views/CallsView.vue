@@ -6,7 +6,7 @@ import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import { callStatusTone } from "../lib/status";
 import { usePagedList } from "../composables/usePagedList";
-import type { Call, IvrStep } from "../api/types";
+import type { Call, IvrStep, CallEvent } from "../api/types";
 import { Button, Select, Badge, Modal, TextField, Pagination } from "../components/ui";
 import { ChevronRight, ChevronDown } from "lucide-vue-next";
 
@@ -39,15 +39,67 @@ async function playRecording(c: Call) {
   recUrl.value = { ...recUrl.value, [c.id]: URL.createObjectURL(await res.blob()) };
 }
 
-// Per-call expand state for the IVR-path detail row.
+// Per-call expand state for the history detail row. Expanding fetches the call's
+// durable event timeline (call_events); the IVR path ships with the call row.
 const expanded = ref<Set<string>>(new Set());
+const events = ref<Record<string, CallEvent[]>>({});
+const loadingEvents = ref<Set<string>>(new Set());
 function toggle(id: string) {
   const s = new Set(expanded.value);
   s.has(id) ? s.delete(id) : s.add(id);
   expanded.value = s;
+  if (s.has(id) && events.value[id] === undefined) loadEvents(id);
+}
+async function loadEvents(id: string) {
+  loadingEvents.value = new Set(loadingEvents.value).add(id);
+  try {
+    events.value = { ...events.value, [id]: await api.get<CallEvent[]>(`/v1/calls/${id}/events`) };
+  } catch {
+    events.value = { ...events.value, [id]: [] }; // don't retry-loop; show "no history"
+  } finally {
+    const s = new Set(loadingEvents.value);
+    s.delete(id);
+    loadingEvents.value = s;
+  }
 }
 function hasPath(c: Call): boolean {
   return Array.isArray(c.ivr_path) && c.ivr_path.length > 0;
+}
+
+// eventText renders one timeline row to a human line: "Ringing Sales",
+// "No answer from Alice", "Answered by Bob", "Transfer → Sales (no answer)".
+function eventText(e: CallEvent): string {
+  const d = e.detail || {};
+  const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : "");
+  switch (e.type) {
+    case "started": {
+      const from = s("from"), to = s("to");
+      return from || to ? `Call started — ${from || "?"} → ${to || "?"}` : "Call started";
+    }
+    case "ring":
+      return `Ringing ${s("target") || "agents"}`;
+    case "no_answer":
+      return s("target") ? `No answer from ${s("target")}` : "No answer";
+    case "answered":
+      return s("agent") ? `Answered by ${s("agent")}` : "Answered";
+    case "transfer": {
+      const to = s("to"), by = s("from");
+      const res = s("result") === "completed" ? "answered" : "no answer";
+      return `Transfer${to ? ` → ${to}` : ""} (${res})${by ? ` — by ${by}` : ""}`;
+    }
+    case "supervise":
+      return `Supervisor joined${s("mode") ? ` (${s("mode")})` : ""}`;
+    case "ended": {
+      const cause = s("cause");
+      return cause ? `Call ended — ${cause}` : "Call ended";
+    }
+    default:
+      return e.type;
+  }
+}
+function eventTime(iso: string): string {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString();
 }
 
 // stepText turns one recorded step into a human-readable line, e.g.
@@ -138,9 +190,8 @@ function fmt(d?: string) {
         <tbody>
           <template v-for="c in calls" :key="c.id">
             <tr
-              class="border-b border-border/60 transition-colors"
-              :class="hasPath(c) ? 'cursor-pointer hover:bg-surface-2/40' : ''"
-              @click="hasPath(c) && toggle(c.id)"
+              class="border-b border-border/60 transition-colors cursor-pointer hover:bg-surface-2/40"
+              @click="toggle(c.id)"
             >
               <td class="px-4 py-2.5 font-mono text-xs text-ink">
                 <div class="max-w-[200px] truncate" :title="c.client_ref || c.from_number">
@@ -177,28 +228,46 @@ function fmt(d?: string) {
               </td>
               <td class="px-4 py-2.5">
                 <button
-                  v-if="hasPath(c)"
                   class="inline-flex items-center gap-1 text-ink-muted hover:text-ink"
                   @click.stop="toggle(c.id)"
                 >
                   <component :is="expanded.has(c.id) ? ChevronDown : ChevronRight" class="h-3.5 w-3.5" />
-                  {{ expanded.has(c.id) ? "Hide" : `View (${c.ivr_path!.length})` }}
+                  {{ expanded.has(c.id) ? "Hide" : "Details" }}
                 </button>
-                <span v-else class="text-ink-faint">—</span>
               </td>
             </tr>
-            <tr v-if="hasPath(c) && expanded.has(c.id)" class="bg-surface-2/40 border-b border-border">
-              <td colspan="9" class="px-8 py-3">
-                <ol class="space-y-1">
-                  <li
-                    v-for="(step, i) in c.ivr_path"
-                    :key="i"
-                    class="flex items-center gap-3 text-sm"
-                  >
-                    <span class="text-ink-faint font-mono tabular-nums w-5 text-right">{{ i + 1 }}.</span>
-                    <span class="text-ink">{{ stepText(step) }}</span>
-                  </li>
-                </ol>
+            <tr v-if="expanded.has(c.id)" class="bg-surface-2/40 border-b border-border">
+              <td colspan="9" class="px-8 py-3 space-y-4">
+                <!-- Durable call timeline (call_events): the complete history. -->
+                <div>
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Timeline</div>
+                  <div v-if="loadingEvents.has(c.id)" class="text-sm text-ink-faint">Loading…</div>
+                  <ol v-else-if="events[c.id]?.length" class="space-y-1">
+                    <li
+                      v-for="(e, i) in events[c.id]"
+                      :key="i"
+                      class="flex items-baseline gap-3 text-sm"
+                    >
+                      <span class="text-ink-faint font-mono tabular-nums whitespace-nowrap">{{ eventTime(e.at) }}</span>
+                      <span class="text-ink">{{ eventText(e) }}</span>
+                    </li>
+                  </ol>
+                  <div v-else class="text-sm text-ink-faint">No history recorded for this call.</div>
+                </div>
+                <!-- IVR navigation (calls.ivr_path): menu keypresses / greetings. -->
+                <div v-if="hasPath(c)">
+                  <div class="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">IVR navigation</div>
+                  <ol class="space-y-1">
+                    <li
+                      v-for="(step, i) in c.ivr_path"
+                      :key="i"
+                      class="flex items-center gap-3 text-sm"
+                    >
+                      <span class="text-ink-faint font-mono tabular-nums w-5 text-right">{{ i + 1 }}.</span>
+                      <span class="text-ink">{{ stepText(step) }}</span>
+                    </li>
+                  </ol>
+                </div>
               </td>
             </tr>
           </template>

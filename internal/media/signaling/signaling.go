@@ -133,6 +133,9 @@ type CallLog interface {
 	// answer (revert to the IVR phase). Dashboard-only, best-effort.
 	RingStart(ctx context.Context, roomID, team, agentSIP string)
 	RingStop(roomID string)
+	// Transferred records an agent-initiated blind transfer on the call timeline
+	// (the one routing event outside the IVR walk). Best-effort.
+	Transferred(roomID, from, to, result string)
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)
 }

@@ -351,6 +351,7 @@ func (s *Server) Router() http.Handler {
 				r.Post("/calls/connect", s.handleConnectCall)
 				r.Get("/calls", s.handleListCalls)
 				r.Get("/calls/{id}", s.handleGetCall)
+				r.Get("/calls/{id}/events", s.handleGetCallEvents)
 				r.Get("/calls/{id}/recording", s.handleGetCallRecording)
 				// Backend-mediated call control (CRM backend, API key). ADR-001.
 				r.Post("/calls/{id}/hold", s.handleHoldCall)
