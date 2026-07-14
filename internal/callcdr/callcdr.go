@@ -15,11 +15,13 @@ package callcdr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,8 +56,9 @@ type activeCall struct {
 	tenant    uuid.UUID
 	startedAt time.Time
 	callerPID room.ParticipantID
-	rec       *record.Recorder // nil = tenant doesn't record
-	answered  bool             // an agent has joined — gates RingStop's revert-to-ivr
+	rec        *record.Recorder // nil = tenant doesn't record
+	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
+	ringAgents []string         // agents rung in the current window — names the no_answer event
 }
 
 // New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
@@ -171,6 +174,9 @@ func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, r
 	l.calls[roomID] = ac
 	l.mu.Unlock()
 	l.log.Info("cdr: call started", "room", roomID, "call", callID, "direction", direction, "recording", recordOn)
+	l.timelineEvent(tenant, callID, "started", map[string]any{
+		"from": from, "to": to, "source": source, "direction": direction,
+	})
 	if l.events != nil {
 		l.events.Publish(ctx, tenant.String(), events.TypeCallRinging, ringingEvent(callID, from, to, source, direction, ac.startedAt))
 	}
@@ -216,6 +222,10 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 			answeredAgentName = label
 		}
 	}
+	l.timelineEvent(ac.tenant, ac.id, "answered", map[string]any{
+		"agent":    answeredAgentName, // "" when the SIP didn't resolve to a named agent
+		"agent_id": answeredAgentID,
+	})
 	if l.events != nil {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, answeredAgentName, time.Now()))
 	}
@@ -241,10 +251,17 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
+	if ac != nil {
+		ac.ringAgents = nil // new routing window — reset the per-agent ring roster
+	}
 	l.mu.Unlock()
 	if ac == nil || l.events == nil {
 		return
 	}
+	// Live dashboard label only: the team name (or a single agent's name / "Available
+	// agents") drives the "ringing → X" phase chip. The durable, per-agent ring rows
+	// — who the call actually rang, by id + name — are written by RingAgent as each
+	// agent is popped, since a team ring can ring several agents.
 	target := "Available agents"
 	switch {
 	case team != "":
@@ -260,6 +277,49 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", target))
 }
 
+// RingAgent records that a SPECIFIC agent is now being rung — resolving their id +
+// display name (falling back to the SIP username) — so the timeline names WHO the
+// call rang, not just the team. A team ring_all yields one row per agent; a
+// one-at-a-time strategy yields them in sequence as each is tried. It also rosters
+// the agent so a later no-answer can list who didn't pick up. Best-effort; a nil
+// DB or unknown room is a no-op. Does not touch the live dashboard.
+func (l *Log) RingAgent(roomID, sip string) {
+	if l.db == nil || sip == "" {
+		return
+	}
+	l.mu.Lock()
+	ac := l.calls[roomID]
+	l.mu.Unlock()
+	if ac == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	name := sip
+	var id uuid.UUID
+	var label string
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, sip).Scan(&id, &label); err == nil && label != "" {
+		name = label
+	}
+	var roster string
+	l.mu.Lock()
+	if cur := l.calls[roomID]; cur != nil {
+		cur.ringAgents = append(cur.ringAgents, name)
+		roster = strings.Join(cur.ringAgents, ", ")
+	}
+	l.mu.Unlock()
+	detail := map[string]any{"agent": name, "sip": sip}
+	if id != uuid.Nil {
+		detail["agent_id"] = id
+	}
+	l.timelineEvent(ac.tenant, ac.id, "ring", detail)
+	// Live dashboard: replace the team label with the agent(s) actually ringing —
+	// the roster grows as a ring_all pops more agents.
+	if l.events != nil {
+		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", roster))
+	}
+}
+
 // RingStop reverts a call's live phase back to "ivr" when a ring ends with no
 // answer (the caller falls back into the flow — a menu, a no-answer prompt, or
 // hangup). It is a no-op once the call has been answered, so a late transfer
@@ -269,13 +329,38 @@ func (l *Log) RingStop(roomID string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
 	answered := ac != nil && ac.answered
+	var agents []string
+	if ac != nil {
+		agents = ac.ringAgents
+	}
 	l.mu.Unlock()
-	if ac == nil || answered || l.events == nil {
+	if ac == nil || answered {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ivr", ""))
+	// Durable timeline: the whole window ended without an answer — name who it rang.
+	l.timelineEvent(ac.tenant, ac.id, "no_answer", map[string]any{"agents": agents})
+	if l.events != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ivr", ""))
+	}
+}
+
+// Transferred records an agent-initiated blind transfer on the call timeline —
+// the one routing moment that lives entirely outside the IVR walk (an agent, on a
+// live call, hands it to another agent/team), so without this it left no durable
+// trace at all. from is the initiating agent (SIP/label), to the target, result
+// "completed"|"no_answer". Best-effort; a nil sink/DB or unknown room no-ops.
+func (l *Log) Transferred(roomID, from, to, result string) {
+	l.mu.Lock()
+	ac := l.calls[roomID]
+	l.mu.Unlock()
+	if ac == nil {
+		return
+	}
+	l.timelineEvent(ac.tenant, ac.id, "transfer", map[string]any{
+		"from": from, "to": to, "result": result,
+	})
 }
 
 // Journey stamps the IVR walk onto the call (calls.ivr_path) — the console's
@@ -312,6 +397,9 @@ func (l *Log) Ended(roomID, cause string) {
 		l.log.Warn("cdr: settle failed", "room", roomID, "err", err)
 	}
 	l.log.Info("cdr: call ended", "room", roomID, "call", ac.id, "duration_s", duration)
+	l.timelineEvent(ac.tenant, ac.id, "ended", map[string]any{
+		"cause": cause, "duration_seconds": duration,
+	})
 	if l.events != nil {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallEnded, endedEvent(ac.id, duration, cause, time.Now()))
 	}
@@ -338,6 +426,9 @@ func (l *Log) SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, 
 	if err := l.db.Pool.QueryRow(ctx, l.q.CreateSupervisorSession, tenant, callID, uid, []string{mode}).Scan(&sessionID); err != nil {
 		l.log.Warn("supervise: start audit failed", "err", err)
 		return ""
+	}
+	if callID != nil {
+		l.timelineEvent(tenant, *callID, "supervise", map[string]any{"mode": mode})
 	}
 	return sessionID.String()
 }
@@ -407,6 +498,24 @@ func endedEvent(callID uuid.UUID, duration int, cause string, at time.Time) map[
 		"ended_at":         at,
 		"duration_seconds": duration,
 		"hangup_cause":     cause,
+	}
+}
+
+// timelineEvent appends one row to a call's durable event timeline (call_events)
+// — the console's per-call history. Best-effort: a DB failure logs and moves on,
+// leaving a gap rather than failing the call. detail is type-specific JSON.
+func (l *Log) timelineEvent(tenant, callID uuid.UUID, typ string, detail map[string]any) {
+	if l.db == nil {
+		return
+	}
+	raw, err := json.Marshal(detail)
+	if err != nil {
+		raw = []byte("{}")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := l.db.Pool.Exec(ctx, l.q.InsertCallEvent, tenant, callID, typ, raw); err != nil {
+		l.log.Warn("cdr: call event insert failed", "type", typ, "err", err)
 	}
 }
 

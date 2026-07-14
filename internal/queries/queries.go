@@ -78,6 +78,8 @@ type Queries struct {
 	SetCallIVRPath          string `query:"set-call-ivr-path"`
 	SetCallAgent            string `query:"set-call-agent"`
 	SetCallAgentID          string `query:"set-call-agent-id"`
+	InsertCallEvent         string `query:"insert-call-event"`
+	ListCallEvents          string `query:"list-call-events"`
 	GetCallControlLeg       string `query:"get-call-control-leg"`
 	GetAgentActiveCallLeg   string `query:"get-agent-active-call-leg"`
 	SetCallCustomerLeg      string `query:"set-call-customer-leg"`

@@ -158,8 +158,8 @@ func main() {
 	// Forward/Recompute write hub maps lock-free and MUST complete before Run
 	// starts reading them.
 	hub.Forward(
-		events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded,
-		events.TypeAgentPresence, events.TypeAgentStatus, events.TypeCallSupervised,
+		events.TypeCallRinging, events.TypeCallRouting, events.TypeCallAnswered, events.TypeCallEnded,
+		events.TypeAgentPresence, events.TypeAgentStatus, events.TypeCallSupervised, events.TypeCallTransferred,
 	)
 	hub.Recompute(
 		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded},

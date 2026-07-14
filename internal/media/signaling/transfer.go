@@ -194,8 +194,13 @@ func (s *Server) playTransferFailMessage(rid room.RoomID, tenantID uuid.UUID) {
 	_ = player.Close()
 }
 
-// publishTransferred emits a call.transferred dashboard event (best-effort).
+// publishTransferred records an agent-initiated blind transfer on the durable
+// call timeline and emits the live call.transferred dashboard event. Both
+// best-effort.
 func (s *Server) publishTransferred(tenant string, rid room.RoomID, fromSip, to, result string) {
+	if s.cfg.Calls != nil {
+		s.cfg.Calls.Transferred(string(rid), fromSip, to, result)
+	}
 	if s.cfg.Events == nil {
 		return
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,33 @@ import (
 	"github.com/shridarpatil/tring/internal/dbtest"
 	"github.com/shridarpatil/tring/internal/ivr"
 )
+
+// routingSink captures the last call.routing event's data, for asserting what the
+// live dashboard would show as the ring target.
+type routingSink struct {
+	mu   sync.Mutex
+	last map[string]any
+}
+
+func (s *routingSink) Publish(_ context.Context, _, typ string, data any) {
+	if typ != "call.routing" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := data.(map[string]any); ok {
+		s.last = m
+	}
+}
+
+func (s *routingSink) lastTarget() any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last == nil {
+		return nil
+	}
+	return s.last["target"]
+}
 
 func opusPkt(ts uint32) *rtp.Packet {
 	return &rtp.Packet{
@@ -204,6 +232,100 @@ func TestStartedOutboundRecordsOutboundDirection(t *testing.T) {
 	}
 	if gotRoomID != roomID {
 		t.Fatalf("room_id = %q, want %q (supervisor routing needs this persisted)", gotRoomID, roomID)
+	}
+}
+
+// TestTimelineEvents covers the durable per-call history (call_events): the full
+// routing arc — started → ring → no_answer → ring → answered → transfer → ended —
+// lands as ordered, typed rows with resolved detail (team name, agent name).
+func TestTimelineEvents(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx,
+		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		fx.TenantID); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
+	roomID := fx.TenantID.String() + "/tl-test"
+
+	l.Started(ctx, fx.TenantID, roomID, "+15551230000", "Support flow", "web", "", "caller-pid")
+	l.RingStart(ctx, roomID, "Sales", "")              // team window opens (live label only)
+	l.RingAgent(roomID, "alice")                       // Alice is actually rung → ring(Alice A)
+	l.RingStop(roomID)                                 // window ends unanswered → no_answer([Alice A])
+	l.RingStart(ctx, roomID, "", "alice")              // direct-agent window
+	l.RingAgent(roomID, "alice")                       // ring(Alice A)
+	l.Answered(roomID, "agent-pid", "alice")           // answered by Alice
+	l.Transferred(roomID, "alice", "Bob", "completed") // agent blind-transfers onward
+	l.Ended(roomID, "caller_hangup")
+
+	// agent := detail->>'agent' (ring/answered); noAns := first name in detail->'agents'
+	// (no_answer); to := detail->>'to' (transfer).
+	rows, err := fx.DB.Pool.Query(ctx,
+		`SELECT type, COALESCE(detail->>'agent',''), COALESCE(detail->'agents'->>0,''), COALESCE(detail->>'to','')
+		 FROM call_events WHERE tenant_id = $1 ORDER BY seq ASC`, fx.TenantID)
+	if err != nil {
+		t.Fatalf("read call_events: %v", err)
+	}
+	defer rows.Close()
+	var types, agents, noAns, tos []string
+	for rows.Next() {
+		var typ, agent, na, to string
+		if err := rows.Scan(&typ, &agent, &na, &to); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		types = append(types, typ)
+		agents = append(agents, agent)
+		noAns = append(noAns, na)
+		tos = append(tos, to)
+	}
+	want := []string{"started", "ring", "no_answer", "ring", "answered", "transfer", "ended"}
+	if len(types) != len(want) {
+		t.Fatalf("timeline = %v, want %v", types, want)
+	}
+	for i := range want {
+		if types[i] != want[i] {
+			t.Fatalf("event %d = %q, want %q (full: %v)", i, types[i], want[i], types)
+		}
+	}
+	// ring events name the agent, not the team.
+	if agents[1] != "Alice A" || agents[3] != "Alice A" {
+		t.Fatalf("ring agent = %q/%q, want resolved display name Alice A", agents[1], agents[3])
+	}
+	if noAns[2] != "Alice A" {
+		t.Fatalf("no_answer agents[0] = %q, want Alice A", noAns[2])
+	}
+	if agents[4] != "Alice A" {
+		t.Fatalf("answered agent = %q, want Alice A", agents[4])
+	}
+	if tos[5] != "Bob" {
+		t.Fatalf("transfer to = %q, want Bob", tos[5])
+	}
+}
+
+// TestRingAgentLiveShowsAgentName is the regression for "live calls show the team
+// name": once an agent is actually rung, the live dashboard ring target must be
+// that agent's display name, overriding the team label RingStart set.
+func TestRingAgentLiveShowsAgentName(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx,
+		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		fx.TenantID); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+	sink := &routingSink{}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, sink)
+	roomID := fx.TenantID.String() + "/live-test"
+
+	l.Started(ctx, fx.TenantID, roomID, "visitor", "Support flow", "web", "", "caller-pid")
+	l.RingStart(ctx, roomID, "Sales", "") // team label published first
+	if got := sink.lastTarget(); got != "Sales" {
+		t.Fatalf("pre-ring live target = %v, want the team label Sales", got)
+	}
+	l.RingAgent(roomID, "alice") // now an agent is actually ringing
+	if got := sink.lastTarget(); got != "Alice A" {
+		t.Fatalf("live ring target = %v, want the agent name Alice A (not the team)", got)
 	}
 }
 
