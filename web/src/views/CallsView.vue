@@ -8,7 +8,23 @@ import { callStatusTone } from "../lib/status";
 import { usePagedList } from "../composables/usePagedList";
 import type { Call, IvrStep, CallEvent } from "../api/types";
 import { Button, Select, Badge, Modal, TextField, Pagination } from "../components/ui";
-import { ChevronRight, ChevronDown } from "lucide-vue-next";
+import type { Component } from "vue";
+import {
+  ChevronRight,
+  ChevronDown,
+  PhoneIncoming,
+  BellRing,
+  PhoneMissed,
+  PhoneCall,
+  ArrowRightLeft,
+  Headphones,
+  PhoneOff,
+  Volume2,
+  MessageSquare,
+  ListTree,
+  Flag,
+  CircleDot,
+} from "lucide-vue-next";
 
 const statusFilter = ref("");
 const params = computed(() => ({ status: statusFilter.value }));
@@ -103,7 +119,9 @@ function eventTime(iso: string): string {
 }
 
 // stepText turns one recorded step into a human-readable line, e.g.
-// "Menu — pressed 1", "Transfer → alice (no answer)".
+// "Menu — pressed 1", "Transfer → alice (no answer)". Audio prompts show their
+// spoken text when known, never the internal .ogg file path (meaningless to an
+// operator).
 function stepText(s: IvrStep): string {
   switch (s.node_type) {
     case "menu":
@@ -112,16 +130,61 @@ function stepText(s: IvrStep): string {
       if (s.outcome === "max_retries")
         return `Menu — invalid input${s.dtmf_input ? ` (${s.dtmf_input})` : ""}`;
       return "Menu";
+    case "gather":
+      return s.dtmf_input ? `Gather — entered ${s.dtmf_input}` : "Gather";
     case "transfer":
       return `Transfer → ${s.detail || "agent"} (${s.outcome === "completed" ? "answered" : "no answer"})`;
     case "greeting":
-      return s.action === "speak" ? `Greeting — “${s.detail}”` : `Greeting — ${s.detail || "audio"}`;
+      return s.action === "speak" && s.detail ? `Greeting — “${s.detail}”` : "Played greeting";
     case "hangup":
-      return "Hangup";
+      return "Hung up";
     case "start":
-      return "Start";
+      return "Call entered flow";
     default:
       return s.outcome ? `${s.node_type} — ${s.outcome}` : s.node_type;
+  }
+}
+
+// stepIcon maps an IVR node to its glyph — a compact visual key for the flow walk.
+function stepIcon(s: IvrStep): Component {
+  switch (s.node_type) {
+    case "start":
+      return Flag;
+    case "greeting":
+      return s.action === "speak" ? MessageSquare : Volume2;
+    case "menu":
+    case "gather":
+      return ListTree;
+    case "transfer":
+      return ArrowRightLeft;
+    case "hangup":
+      return PhoneOff;
+    default:
+      return CircleDot;
+  }
+}
+
+// eventMeta styles one timeline event by type: an icon plus a soft/ink tone pair
+// so the lifecycle reads at a glance (ringing = amber, no-answer = red, answered
+// = green, ended = muted).
+function eventMeta(type: string): { icon: Component; ring: string; ink: string } {
+  switch (type) {
+    case "started":
+      return { icon: PhoneIncoming, ring: "bg-accent-soft", ink: "text-accent" };
+    case "ring":
+      return { icon: BellRing, ring: "bg-warning-soft", ink: "text-warning" };
+    case "no_answer":
+      return { icon: PhoneMissed, ring: "bg-danger-soft", ink: "text-danger" };
+    case "answered":
+      return { icon: PhoneCall, ring: "bg-success-soft", ink: "text-success" };
+    case "transfer":
+      return { icon: ArrowRightLeft, ring: "bg-accent-soft", ink: "text-accent" };
+    case "supervise":
+      return { icon: Headphones, ring: "bg-accent-soft", ink: "text-accent" };
+    case "ended":
+      return { icon: PhoneOff, ring: "bg-surface-2", ink: "text-ink-muted" };
+    default:
+      return { icon: CircleDot, ring: "bg-surface-2", ink: "text-ink-muted" };
   }
 }
 
@@ -236,37 +299,69 @@ function fmt(d?: string) {
                 </button>
               </td>
             </tr>
-            <tr v-if="expanded.has(c.id)" class="bg-surface-2/40 border-b border-border">
-              <td colspan="9" class="px-8 py-3 space-y-4">
-                <!-- Durable call timeline (call_events): the complete history. -->
-                <div>
-                  <div class="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Timeline</div>
-                  <div v-if="loadingEvents.has(c.id)" class="text-sm text-ink-faint">Loading…</div>
-                  <ol v-else-if="events[c.id]?.length" class="space-y-1">
-                    <li
-                      v-for="(e, i) in events[c.id]"
-                      :key="i"
-                      class="flex items-baseline gap-3 text-sm"
-                    >
-                      <span class="text-ink-faint font-mono tabular-nums whitespace-nowrap">{{ eventTime(e.at) }}</span>
-                      <span class="text-ink">{{ eventText(e) }}</span>
-                    </li>
-                  </ol>
-                  <div v-else class="text-sm text-ink-faint">No history recorded for this call.</div>
-                </div>
-                <!-- IVR navigation (calls.ivr_path): menu keypresses / greetings. -->
-                <div v-if="hasPath(c)">
-                  <div class="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">IVR navigation</div>
-                  <ol class="space-y-1">
-                    <li
-                      v-for="(step, i) in c.ivr_path"
-                      :key="i"
-                      class="flex items-center gap-3 text-sm"
-                    >
-                      <span class="text-ink-faint font-mono tabular-nums w-5 text-right">{{ i + 1 }}.</span>
-                      <span class="text-ink">{{ stepText(step) }}</span>
-                    </li>
-                  </ol>
+            <tr v-if="expanded.has(c.id)" class="bg-surface-2/30 border-b border-border">
+              <td colspan="9" class="px-6 py-5">
+                <div class="grid gap-x-12 gap-y-6 md:grid-cols-2 max-w-5xl">
+                  <!-- Durable call timeline (call_events): the lifecycle, in time. -->
+                  <section>
+                    <h4 class="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-ink-faint">
+                      Timeline
+                      <span v-if="events[c.id]?.length" class="rounded-full bg-surface-2 px-1.5 text-[10px] font-medium text-ink-muted">
+                        {{ events[c.id].length }}
+                      </span>
+                    </h4>
+                    <div v-if="loadingEvents.has(c.id)" class="text-sm text-ink-faint">Loading…</div>
+                    <ol v-else-if="events[c.id]?.length" class="relative">
+                      <li
+                        v-for="(e, i) in events[c.id]"
+                        :key="i"
+                        class="relative flex gap-3 pb-4 last:pb-0"
+                      >
+                        <!-- connector rail: reaches down to the next node -->
+                        <span
+                          v-if="i < events[c.id].length - 1"
+                          class="absolute left-[13px] top-7 bottom-0 w-px bg-border"
+                          aria-hidden="true"
+                        ></span>
+                        <span
+                          class="relative z-10 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full ring-1 ring-border/60"
+                          :class="eventMeta(e.type).ring"
+                        >
+                          <component :is="eventMeta(e.type).icon" class="h-3.5 w-3.5" :class="eventMeta(e.type).ink" />
+                        </span>
+                        <div class="min-w-0 flex-1 pt-0.5">
+                          <div class="flex items-baseline justify-between gap-3">
+                            <span class="text-sm text-ink">{{ eventText(e) }}</span>
+                            <span class="shrink-0 font-mono text-[11px] tabular-nums text-ink-faint">{{ eventTime(e.at) }}</span>
+                          </div>
+                        </div>
+                      </li>
+                    </ol>
+                    <div v-else class="text-sm text-ink-faint">No history recorded for this call.</div>
+                  </section>
+
+                  <!-- IVR navigation (calls.ivr_path): the ordered flow walk. -->
+                  <section v-if="hasPath(c)">
+                    <h4 class="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-ink-faint">
+                      IVR navigation
+                      <span class="rounded-full bg-surface-2 px-1.5 text-[10px] font-medium text-ink-muted">
+                        {{ c.ivr_path!.length }}
+                      </span>
+                    </h4>
+                    <ol class="space-y-2.5">
+                      <li
+                        v-for="(step, i) in c.ivr_path"
+                        :key="i"
+                        class="flex items-center gap-3 text-sm"
+                      >
+                        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface-2 font-mono text-[11px] tabular-nums text-ink-muted">
+                          {{ i + 1 }}
+                        </span>
+                        <component :is="stepIcon(step)" class="h-3.5 w-3.5 shrink-0 text-ink-faint" />
+                        <span class="text-ink">{{ stepText(step) }}</span>
+                      </li>
+                    </ol>
+                  </section>
                 </div>
               </td>
             </tr>
