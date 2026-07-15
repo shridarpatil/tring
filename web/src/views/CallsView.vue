@@ -6,25 +6,9 @@ import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import { callStatusTone } from "../lib/status";
 import { usePagedList } from "../composables/usePagedList";
-import type { Call, IvrStep, CallEvent } from "../api/types";
-import { Button, Select, Badge, Modal, TextField, Pagination } from "../components/ui";
-import type { Component } from "vue";
-import {
-  ChevronRight,
-  ChevronDown,
-  PhoneIncoming,
-  BellRing,
-  PhoneMissed,
-  PhoneCall,
-  ArrowRightLeft,
-  Headphones,
-  PhoneOff,
-  Volume2,
-  MessageSquare,
-  ListTree,
-  Flag,
-  CircleDot,
-} from "lucide-vue-next";
+import type { Call, CallEvent } from "../api/types";
+import { Button, Select, Badge, Modal, TextField, Pagination, CallDetailModal, CallFullLogModal } from "../components/ui";
+import { toCallDetail, toFullLog } from "../lib/callDetail";
 
 const statusFilter = ref("");
 const params = computed(() => ({ status: statusFilter.value }));
@@ -55,17 +39,10 @@ async function playRecording(c: Call) {
   recUrl.value = { ...recUrl.value, [c.id]: URL.createObjectURL(await res.blob()) };
 }
 
-// Per-call expand state for the history detail row. Expanding fetches the call's
-// durable event timeline (call_events); the IVR path ships with the call row.
-const expanded = ref<Set<string>>(new Set());
+// Detail popup: clicking a row opens the summary modal; "View full log" swaps to
+// the wide event table. Both read the same fetched timeline + the call's ivr_path.
 const events = ref<Record<string, CallEvent[]>>({});
 const loadingEvents = ref<Set<string>>(new Set());
-function toggle(id: string) {
-  const s = new Set(expanded.value);
-  s.has(id) ? s.delete(id) : s.add(id);
-  expanded.value = s;
-  if (s.has(id) && events.value[id] === undefined) loadEvents(id);
-}
 async function loadEvents(id: string) {
   loadingEvents.value = new Set(loadingEvents.value).add(id);
   try {
@@ -78,126 +55,27 @@ async function loadEvents(id: string) {
     loadingEvents.value = s;
   }
 }
-function hasPath(c: Call): boolean {
-  return Array.isArray(c.ivr_path) && c.ivr_path.length > 0;
+
+const detailCall = ref<Call | null>(null);
+const detailOpen = ref(false);
+const fullLogOpen = ref(false);
+
+function openDetail(c: Call) {
+  detailCall.value = c;
+  if (events.value[c.id] === undefined) loadEvents(c.id);
+  detailOpen.value = true;
 }
 
-// eventText renders one timeline row to a human line: "Ringing Sales",
-// "No answer from Alice", "Answered by Bob", "Transfer → Sales (no answer)".
-function eventText(e: CallEvent): string {
-  const d = e.detail || {};
-  const s = (k: string) => (typeof d[k] === "string" ? (d[k] as string) : "");
-  switch (e.type) {
-    case "started": {
-      const from = s("from"), to = s("to");
-      return from || to ? `Call started — ${from || "?"} → ${to || "?"}` : "Call started";
-    }
-    case "ring":
-      // Per-agent (agent name); fall back to target for rows from the old format.
-      return `Ringing ${s("agent") || s("target") || "agents"}`;
-    case "no_answer": {
-      const agents = Array.isArray(d.agents)
-        ? (d.agents as unknown[]).filter((x): x is string => typeof x === "string")
-        : [];
-      if (agents.length) return `No answer from ${agents.join(", ")}`;
-      return s("target") ? `No answer from ${s("target")}` : "No answer";
-    }
-    case "answered":
-      return s("agent") ? `Answered by ${s("agent")}` : "Answered";
-    case "transfer": {
-      // Recorded at initiation; the following ring/answer rows show the outcome, so
-      // no "(answered/no answer)" here.
-      const to = s("to"), by = s("from");
-      return `Transfer${to ? ` → ${to}` : ""}${by ? ` by ${by}` : ""}`;
-    }
-    case "supervise":
-      return `Supervisor joined${s("mode") ? ` (${s("mode")})` : ""}`;
-    case "ended": {
-      // cause is who ended it: client (caller) / agent / system (IVR, no-answer,
-      // flow end, drop). Older rows may carry a raw FreeSWITCH-style cause.
-      const cause = s("cause");
-      const who: Record<string, string> = { client: "caller", agent: "agent", system: "system" };
-      if (who[cause]) return `Call ended by ${who[cause]}`;
-      return cause && cause !== "ended" ? `Call ended — ${cause}` : "Call ended";
-    }
-    default:
-      return e.type;
-  }
-}
-function eventTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString();
-}
-
-// stepText turns one recorded step into a human-readable line, e.g.
-// "Menu — pressed 1", "Transfer → alice (no answer)". Audio prompts show their
-// spoken text when known, never the internal .ogg file path (meaningless to an
-// operator).
-function stepText(s: IvrStep): string {
-  switch (s.node_type) {
-    case "menu":
-      if (s.outcome.startsWith("digit:")) return `Menu — pressed ${s.outcome.slice(6)}`;
-      if (s.outcome === "timeout") return "Menu — no input (timeout)";
-      if (s.outcome === "max_retries")
-        return `Menu — invalid input${s.dtmf_input ? ` (${s.dtmf_input})` : ""}`;
-      return "Menu";
-    case "gather":
-      return s.dtmf_input ? `Gather — entered ${s.dtmf_input}` : "Gather";
-    case "transfer":
-      return `Transfer → ${s.detail || "agent"} (${s.outcome === "completed" ? "answered" : "no answer"})`;
-    case "greeting":
-      return s.action === "speak" && s.detail ? `Greeting — “${s.detail}”` : "Played greeting";
-    case "hangup":
-      return "Hung up";
-    case "start":
-      return "Call entered flow";
-    default:
-      return s.outcome ? `${s.node_type} — ${s.outcome}` : s.node_type;
-  }
-}
-
-// stepIcon maps an IVR node to its glyph — a compact visual key for the flow walk.
-function stepIcon(s: IvrStep): Component {
-  switch (s.node_type) {
-    case "start":
-      return Flag;
-    case "greeting":
-      return s.action === "speak" ? MessageSquare : Volume2;
-    case "menu":
-    case "gather":
-      return ListTree;
-    case "transfer":
-      return ArrowRightLeft;
-    case "hangup":
-      return PhoneOff;
-    default:
-      return CircleDot;
-  }
-}
-
-// eventMeta styles one timeline event by type: an icon plus a soft/ink tone pair
-// so the lifecycle reads at a glance (ringing = amber, no-answer = red, answered
-// = green, ended = muted).
-function eventMeta(type: string): { icon: Component; ring: string; ink: string } {
-  switch (type) {
-    case "started":
-      return { icon: PhoneIncoming, ring: "bg-accent-soft", ink: "text-accent" };
-    case "ring":
-      return { icon: BellRing, ring: "bg-warning-soft", ink: "text-warning" };
-    case "no_answer":
-      return { icon: PhoneMissed, ring: "bg-danger-soft", ink: "text-danger" };
-    case "answered":
-      return { icon: PhoneCall, ring: "bg-success-soft", ink: "text-success" };
-    case "transfer":
-      return { icon: ArrowRightLeft, ring: "bg-accent-soft", ink: "text-accent" };
-    case "supervise":
-      return { icon: Headphones, ring: "bg-accent-soft", ink: "text-accent" };
-    case "ended":
-      return { icon: PhoneOff, ring: "bg-surface-2", ink: "text-ink-muted" };
-    default:
-      return { icon: CircleDot, ring: "bg-surface-2", ink: "text-ink-muted" };
-  }
-}
+const detailProp = computed(() =>
+  detailCall.value && events.value[detailCall.value.id] !== undefined
+    ? toCallDetail(detailCall.value, events.value[detailCall.value.id])
+    : null,
+);
+const fullLogRows = computed(() =>
+  detailCall.value && events.value[detailCall.value.id] !== undefined
+    ? toFullLog(detailCall.value, events.value[detailCall.value.id])
+    : [],
+);
 
 const showConnect = ref(false);
 const placing = ref(false);
@@ -258,14 +136,13 @@ function fmt(d?: string) {
             <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Started</th>
             <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint text-right">Dur</th>
             <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Recording</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">IVR path</th>
           </tr>
         </thead>
         <tbody>
           <template v-for="c in calls" :key="c.id">
             <tr
               class="border-b border-border/60 transition-colors cursor-pointer hover:bg-surface-2/40"
-              @click="toggle(c.id)"
+              @click="openDetail(c)"
             >
               <td class="px-4 py-2.5 font-mono text-xs text-ink">
                 <div class="max-w-[200px] truncate" :title="c.client_ref || c.from_number">
@@ -303,85 +180,18 @@ function fmt(d?: string) {
               <td class="px-4 py-2.5">
                 <button
                   class="inline-flex items-center gap-1 text-ink-muted hover:text-ink"
-                  @click.stop="toggle(c.id)"
+                  @click.stop="openDetail(c)"
                 >
-                  <component :is="expanded.has(c.id) ? ChevronDown : ChevronRight" class="h-3.5 w-3.5" />
-                  {{ expanded.has(c.id) ? "Hide" : "Details" }}
+                  Details
                 </button>
-              </td>
-            </tr>
-            <tr v-if="expanded.has(c.id)" class="bg-surface-2/30 border-b border-border">
-              <td colspan="9" class="px-6 py-5">
-                <div class="grid gap-x-12 gap-y-6 md:grid-cols-2 max-w-5xl">
-                  <!-- Durable call timeline (call_events): the lifecycle, in time. -->
-                  <section>
-                    <h4 class="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-ink-faint">
-                      Timeline
-                      <span v-if="events[c.id]?.length" class="rounded-full bg-surface-2 px-1.5 text-[10px] font-medium text-ink-muted">
-                        {{ events[c.id].length }}
-                      </span>
-                    </h4>
-                    <div v-if="loadingEvents.has(c.id)" class="text-sm text-ink-faint">Loading…</div>
-                    <ol v-else-if="events[c.id]?.length" class="relative">
-                      <li
-                        v-for="(e, i) in events[c.id]"
-                        :key="i"
-                        class="relative flex gap-3 pb-4 last:pb-0"
-                      >
-                        <!-- connector rail: reaches down to the next node -->
-                        <span
-                          v-if="i < events[c.id].length - 1"
-                          class="absolute left-[13px] top-7 bottom-0 w-px bg-border"
-                          aria-hidden="true"
-                        ></span>
-                        <span
-                          class="relative z-10 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full ring-1 ring-border/60"
-                          :class="eventMeta(e.type).ring"
-                        >
-                          <component :is="eventMeta(e.type).icon" class="h-3.5 w-3.5" :class="eventMeta(e.type).ink" />
-                        </span>
-                        <div class="min-w-0 flex-1 pt-0.5">
-                          <div class="flex items-baseline justify-between gap-3">
-                            <span class="text-sm text-ink">{{ eventText(e) }}</span>
-                            <span class="shrink-0 font-mono text-[11px] tabular-nums text-ink-faint">{{ eventTime(e.at) }}</span>
-                          </div>
-                        </div>
-                      </li>
-                    </ol>
-                    <div v-else class="text-sm text-ink-faint">No history recorded for this call.</div>
-                  </section>
-
-                  <!-- IVR navigation (calls.ivr_path): the ordered flow walk. -->
-                  <section v-if="hasPath(c)">
-                    <h4 class="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-ink-faint">
-                      IVR navigation
-                      <span class="rounded-full bg-surface-2 px-1.5 text-[10px] font-medium text-ink-muted">
-                        {{ c.ivr_path!.length }}
-                      </span>
-                    </h4>
-                    <ol class="space-y-2.5">
-                      <li
-                        v-for="(step, i) in c.ivr_path"
-                        :key="i"
-                        class="flex items-center gap-3 text-sm"
-                      >
-                        <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-surface-2 font-mono text-[11px] tabular-nums text-ink-muted">
-                          {{ i + 1 }}
-                        </span>
-                        <component :is="stepIcon(step)" class="h-3.5 w-3.5 shrink-0 text-ink-faint" />
-                        <span class="text-ink">{{ stepText(step) }}</span>
-                      </li>
-                    </ol>
-                  </section>
-                </div>
               </td>
             </tr>
           </template>
           <tr v-if="!loading && calls.length === 0">
-            <td colspan="9" class="px-4 py-10 text-center text-ink-faint">No calls</td>
+            <td colspan="8" class="px-4 py-10 text-center text-ink-faint">No calls</td>
           </tr>
           <tr v-if="loading">
-            <td colspan="9" class="px-4 py-10 text-center text-ink-faint">Loading…</td>
+            <td colspan="8" class="px-4 py-10 text-center text-ink-faint">Loading…</td>
           </tr>
         </tbody>
       </table>
@@ -417,5 +227,20 @@ function fmt(d?: string) {
         <Button type="submit" form="connect-form" :loading="placing">Place call</Button>
       </template>
     </Modal>
+
+    <CallDetailModal
+      :open="detailOpen"
+      :call="detailProp"
+      @update:open="detailOpen = $event"
+      @view-full-log="detailOpen = false; fullLogOpen = true"
+    />
+    <CallFullLogModal
+      :open="fullLogOpen"
+      :rows="fullLogRows"
+      :caller="detailCall?.client_ref || detailCall?.from_number || ''"
+      :callee="detailCall?.to_number || ''"
+      @update:open="fullLogOpen = $event"
+      @back="fullLogOpen = false; detailOpen = true"
+    />
   </div>
 </template>
