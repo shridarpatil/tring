@@ -255,17 +255,28 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
     rows.push({ timestamp: hms(startAt), offset: "+0s", source: "timeline", event: "call.started", actor: call.from_number || "caller", detail: `→ ${call.to_number} (${call.direction})` });
   }
 
-  // 2. Pre-handoff IVR block — the walk before the agent leg rings. IVR steps are
-  //    untimestamped (the whole walk is written once at teardown), so we can only
-  //    bound the block to the start→first-ring window. Show that window on the
-  //    first row and "—" on the rest, so the rows read as ordered-but-untimed
-  //    rather than all happening at one instant.
-  const preTs = firstRing
+  // 2. Pre-handoff IVR block — the walk before the agent leg rings. Newer traces
+  //    carry a real per-step time (`at`) → show it. Older traces are untimed (the
+  //    whole walk was written once at teardown), so fall back to the start→first-
+  //    ring window on the first untimed row and "—" on the rest, so those rows
+  //    read as ordered-but-untimed rather than all at one instant.
+  const preWindow = firstRing
     ? `~${hms(startAt)}–${new Date(firstRing.at).getSeconds().toString().padStart(2, "0")}`
     : `~${hms(startAt)}`;
-  pre.forEach((st, j) => {
-    rows.push({ timestamp: j === 0 ? preTs : "—", offset: "—", source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
-  });
+  let preWindowShown = false;
+  for (const st of pre) {
+    let timestamp: string;
+    let offset: string;
+    if (st.at) {
+      timestamp = hms(st.at);
+      offset = `+${secsBetween(startAt, st.at)}s`;
+    } else {
+      timestamp = preWindowShown ? "—" : preWindow;
+      preWindowShown = true;
+      offset = "—";
+    }
+    rows.push({ timestamp, offset, source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+  }
 
   // 3. Timeline events (ring/answer/transfer/end), in time order.
   let pendingRing: CallEvent | null = null;
@@ -320,12 +331,23 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
 
   // 4. Post-handoff IVR block — flow that resumed after the agent leg ended
   //    (survey/hangup). Placed after the timeline so it can't read as the call
-  //    hanging up mid-conversation. Untimed like the pre block: window on the
-  //    first row (around call-end), "—" on the rest.
-  const postTs = `~${hms(endAt)}`;
-  post.forEach((st, j) => {
-    rows.push({ timestamp: j === 0 ? postTs : "—", offset: "—", source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
-  });
+  //    hanging up mid-conversation. Real per-step time when present; else an
+  //    around-call-end window on the first untimed row, "—" on the rest.
+  const postWindow = `~${hms(endAt)}`;
+  let postWindowShown = false;
+  for (const st of post) {
+    let timestamp: string;
+    let offset: string;
+    if (st.at) {
+      timestamp = hms(st.at);
+      offset = `+${secsBetween(startAt, st.at)}s`;
+    } else {
+      timestamp = postWindowShown ? "—" : postWindow;
+      postWindowShown = true;
+      offset = "—";
+    }
+    rows.push({ timestamp, offset, source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+  }
 
   return rows.map((r, i) => ({ index: i + 1, ...r }));
 }
