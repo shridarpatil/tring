@@ -126,6 +126,7 @@ export interface IvrStep {
   detail?: string;
   dtmf_input?: string;
   outcome: string;
+  at?: string; // wall-clock execution time (ISO); absent on traces recorded before per-step timing
 }
 
 // CallEvent is one row of a call's durable timeline (GET /v1/calls/{id}/events).
