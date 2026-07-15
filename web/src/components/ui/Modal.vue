@@ -3,7 +3,7 @@ import { ref, watch, nextTick, onBeforeUnmount } from "vue";
 import { X } from "lucide-vue-next";
 
 const props = withDefaults(
-  defineProps<{ open: boolean; title?: string; size?: "sm" | "md" | "lg" }>(),
+  defineProps<{ open: boolean; title?: string; size?: "sm" | "md" | "lg" | "detail" | "wide" }>(),
   { size: "md" },
 );
 const emit = defineEmits<{ (e: "update:open", v: boolean): void }>();
@@ -61,7 +61,13 @@ onBeforeUnmount(() => {
   document.body.style.overflow = "";
 });
 
-const sizeCls = { sm: "max-w-sm", md: "max-w-lg", lg: "max-w-2xl" };
+const sizeCls = {
+  sm: "max-w-sm",
+  md: "max-w-lg",
+  lg: "max-w-2xl",
+  detail: "max-w-[480px]",
+  wide: "max-w-4xl",
+};
 </script>
 
 <template>
