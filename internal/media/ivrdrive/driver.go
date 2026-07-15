@@ -53,6 +53,11 @@ type Agents interface {
 	Ring(ctx context.Context, room string, t Target) (outcome string, err error)
 }
 
+// Now exposes the driver's clock so ivr.Walk stamps each step's wall-clock
+// execution time into calls.ivr_path (per-step timing in the call's full log).
+// Runtime-only: the simulator has no such method, so its traces stay untimed.
+func (d *Driver) Now() time.Time { return d.now() }
+
 // Driver implements ivr.CallDriver against the pion media plane.
 type Driver struct {
 	prompts   Prompts

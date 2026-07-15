@@ -1,5 +1,7 @@
 package ivr
 
+import "time"
+
 // Step is one row in an IVR trace — the path a call took through the graph.
 // Reused by the deterministic simulator (Test panel), the live executor
 // (persisted to calls.ivr_path), and the pion driver, so a flow's traced path
@@ -11,4 +13,8 @@ type Step struct {
 	Detail    string `json:"detail,omitempty"`     // file path, agent number, URL, etc.
 	DTMFInput string `json:"dtmf_input,omitempty"` // digit consumed at a menu/gather, if any
 	Outcome   string `json:"outcome"`              // edge handle id taken: "default", "digit:1", "timeout"...
+	// At is the wall-clock time the node began executing, stamped by Walk when
+	// the driver exposes a clock (the runtime pion driver). nil for the
+	// deterministic simulator and older traces recorded before per-step timing.
+	At *time.Time `json:"at,omitempty"`
 }

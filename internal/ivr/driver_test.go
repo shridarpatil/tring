@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/shridarpatil/tring/internal/ivr"
 )
@@ -193,6 +194,58 @@ func TestWalkRecordsRichSteps(t *testing.T) {
 	for i, w := range want {
 		if path[i] != w {
 			t.Errorf("step %d = %+v, want %+v", i, path[i], w)
+		}
+	}
+}
+
+// clockedDriver exposes Now(), so Walk stamps each step's At. It returns a
+// scripted advancing clock for deterministic assertions.
+type clockedDriver struct {
+	scriptDriver
+	times []time.Time
+	i     int
+}
+
+func (d *clockedDriver) Now() time.Time {
+	t := d.times[d.i]
+	if d.i < len(d.times)-1 {
+		d.i++
+	}
+	return t
+}
+
+func TestWalkStampsStepTimesWhenDriverClocked(t *testing.T) {
+	base := time.Date(2026, 7, 15, 7, 28, 15, 0, time.UTC)
+	d := &clockedDriver{
+		scriptDriver: scriptDriver{outcomes: map[string]string{"g": "default", "m": "digit:1", "t": "completed"}},
+		times:        []time.Time{base, base.Add(2 * time.Second), base.Add(5 * time.Second), base.Add(9 * time.Second), base.Add(20 * time.Second)},
+	}
+	path, err := ivr.Walk(context.Background(), sampleFlow(), "s", d)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	for i, s := range path {
+		if s.At == nil {
+			t.Fatalf("step %d (%s) has nil At — expected a stamped time", i, s.NodeID)
+		}
+	}
+	if !path[0].At.Equal(base) {
+		t.Fatalf("first step At = %v, want %v", path[0].At, base)
+	}
+	if !path[1].At.Equal(base.Add(2 * time.Second)) {
+		t.Fatalf("second step At = %v, want %v", path[1].At, base.Add(2*time.Second))
+	}
+}
+
+func TestWalkLeavesStepTimesNilWhenDriverUnclocked(t *testing.T) {
+	d := &scriptDriver{outcomes: map[string]string{"g": "default", "m": "digit:1", "t": "completed"}}
+	path, err := ivr.Walk(context.Background(), sampleFlow(), "s", d)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	for i, s := range path {
+		if s.At != nil {
+			t.Fatalf("step %d (%s) At = %v, want nil for an unclocked driver", i, s.NodeID, s.At)
 		}
 	}
 }
