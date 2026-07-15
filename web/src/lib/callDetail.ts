@@ -87,6 +87,19 @@ function failedIvrTransfers(steps: IvrStep[]): IvrStep[] {
   return steps.filter((st) => st.node_type === "transfer" && st.outcome !== "completed");
 }
 
+// splitIvrAtHandoff splits the IVR walk at the first SUCCESSFUL transfer — the
+// handoff to a live agent. Steps up to and including it happened during the IVR
+// phase (before the agent leg rings); steps after it are post-call flow that
+// resumes once the bridged agent leg ends (e.g. a survey gather, then hangup).
+// ivr_path carries no per-step timestamps, so this ordering is inferred from the
+// handoff point rather than measured. With no successful transfer, the whole
+// walk is pre-handoff (e.g. a failed IVR transfer that then routed to an agent).
+function splitIvrAtHandoff(steps: IvrStep[]): { pre: IvrStep[]; post: IvrStep[] } {
+  const i = steps.findIndex((st) => st.node_type === "transfer" && st.outcome === "completed");
+  if (i === -1) return { pre: steps, post: [] };
+  return { pre: steps.slice(0, i + 1), post: steps.slice(i + 1) };
+}
+
 // --- summary adapter --------------------------------------------------------
 
 export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
@@ -122,7 +135,10 @@ export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
   // events stream
   const out: DetailEvent[] = [];
   if (started) {
-    out.push({ time: hms(startAt), icon: "flag", kind: "muted", label: "Entered IVR", sub: ivrNav(ivr), failed: false });
+    // Only the pre-handoff walk describes "how the caller got routed"; post-call
+    // resume steps (survey/hangup) don't belong in the entry summary.
+    const { pre } = splitIvrAtHandoff(ivr);
+    out.push({ time: hms(startAt), icon: "flag", kind: "muted", label: "Entered IVR", sub: ivrNav(pre), failed: false });
   }
   // IVR-path transfers carry no timestamp → approximate "8:12:—".
   const approx = hms(startAt).replace(/:\d{2}$/, ":—");
@@ -226,9 +242,11 @@ function fullStepText(st: IvrStep): string {
 export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
   const evs = [...events].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
   const ivr = call.ivr_path ?? [];
+  const { pre, post } = splitIvrAtHandoff(ivr);
   const started = evs.find((e) => e.type === "started");
   const startAt = started?.at ?? call.started_at;
   const firstRing = evs.find((e) => e.type === "ring");
+  const endAt = evs.length ? evs[evs.length - 1].at : startAt;
 
   const rows: Omit<FullLogRow, "index">[] = [];
 
@@ -237,15 +255,19 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
     rows.push({ timestamp: hms(startAt), offset: "+0s", source: "timeline", event: "call.started", actor: call.from_number || "caller", detail: `→ ${call.to_number} (${call.direction})` });
   }
 
-  // 2. IVR block — approximate window from start to first ring, no exact offset.
-  const approxTs = firstRing
+  // 2. Pre-handoff IVR block — the walk before the agent leg rings. IVR steps are
+  //    untimestamped (the whole walk is written once at teardown), so we can only
+  //    bound the block to the start→first-ring window. Show that window on the
+  //    first row and "—" on the rest, so the rows read as ordered-but-untimed
+  //    rather than all happening at one instant.
+  const preTs = firstRing
     ? `~${hms(startAt)}–${new Date(firstRing.at).getSeconds().toString().padStart(2, "0")}`
     : `~${hms(startAt)}`;
-  for (const st of ivr) {
-    rows.push({ timestamp: approxTs, offset: "—", source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
-  }
+  pre.forEach((st, j) => {
+    rows.push({ timestamp: j === 0 ? preTs : "—", offset: "—", source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+  });
 
-  // 3. remaining timeline events, in time order.
+  // 3. Timeline events (ring/answer/transfer/end), in time order.
   let pendingRing: CallEvent | null = null;
   let lastAnswerAt: string | null = null;
   for (const e of evs) {
@@ -295,6 +317,15 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
     }
     rows.push({ timestamp: hms(e.at), offset: `+${secsBetween(startAt, e.at)}s`, source: "timeline", event, actor, detail });
   }
+
+  // 4. Post-handoff IVR block — flow that resumed after the agent leg ended
+  //    (survey/hangup). Placed after the timeline so it can't read as the call
+  //    hanging up mid-conversation. Untimed like the pre block: window on the
+  //    first row (around call-end), "—" on the rest.
+  const postTs = `~${hms(endAt)}`;
+  post.forEach((st, j) => {
+    rows.push({ timestamp: j === 0 ? postTs : "—", offset: "—", source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+  });
 
   return rows.map((r, i) => ({ index: i + 1, ...r }));
 }
