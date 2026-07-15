@@ -176,3 +176,125 @@ export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
     events: out,
   };
 }
+
+// --- full-log adapter -------------------------------------------------------
+
+export interface FullLogRow {
+  index: number;
+  timestamp: string;
+  offset: string;
+  source: "timeline" | "ivr";
+  event: string;
+  actor: string;
+  detail: string;
+}
+
+// ivrEventCode maps an IVR node to its dotted event code (ivr.entered, ivr.dtmf…).
+function ivrEventCode(st: IvrStep): string {
+  switch (st.node_type) {
+    case "start": return "ivr.entered";
+    case "greeting": return "ivr.prompt";
+    case "menu":
+    case "gather": return "ivr.dtmf";
+    case "transfer": return st.outcome === "completed" ? "ivr.transfer" : "ivr.transfer.failed";
+    case "hangup": return "ivr.hangup";
+    default: return `ivr.${st.node_type}`;
+  }
+}
+
+// ivrActor: caller-driven input rows are the visitor; prompts/transfers are the system.
+function ivrActor(st: IvrStep): string {
+  return st.node_type === "menu" || st.node_type === "gather" ? "Web visitor" : "system";
+}
+
+// fullStepText is the human detail for an IVR row.
+function fullStepText(st: IvrStep): string {
+  switch (st.node_type) {
+    case "start": return "Call entered flow";
+    case "greeting": return "Played greeting";
+    case "menu":
+      if (st.outcome && st.outcome.startsWith("digit:")) return `Menu — pressed ${st.outcome.slice(6)}`;
+      if (st.outcome === "timeout") return "Menu — no input (timeout)";
+      return "Menu";
+    case "gather": return st.dtmf_input ? `Gather — entered ${st.dtmf_input}` : "Gather";
+    case "transfer": return `Transfer → ${st.detail || "agent"} — ${st.outcome === "completed" ? "answered" : "no answer"}`;
+    case "hangup": return "Hung up";
+    default: return st.outcome ? `${st.node_type} — ${st.outcome}` : st.node_type;
+  }
+}
+
+export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
+  const evs = [...events].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  const ivr = call.ivr_path ?? [];
+  const started = evs.find((e) => e.type === "started");
+  const startAt = started?.at ?? call.started_at;
+  const firstRing = evs.find((e) => e.type === "ring");
+
+  const rows: Omit<FullLogRow, "index">[] = [];
+
+  // 1. call.started (timeline)
+  if (started) {
+    rows.push({ timestamp: hms(startAt), offset: "+0s", source: "timeline", event: "call.started", actor: call.from_number || "caller", detail: `→ ${call.to_number} (${call.direction})` });
+  }
+
+  // 2. IVR block — approximate window from start to first ring, no exact offset.
+  const approxTs = firstRing
+    ? `~${hms(startAt)}–${new Date(firstRing.at).getSeconds().toString().padStart(2, "0")}`
+    : `~${hms(startAt)}`;
+  for (const st of ivr) {
+    rows.push({ timestamp: approxTs, offset: "—", source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+  }
+
+  // 3. remaining timeline events, in time order.
+  let pendingRing: CallEvent | null = null;
+  let lastAnswerAt: string | null = null;
+  for (const e of evs) {
+    if (e.type === "started") continue;
+    const d = e.detail;
+    let event = e.type;
+    let actor = "system";
+    let detail = e.type;
+    switch (e.type) {
+      case "ring":
+        pendingRing = e;
+        event = "leg.ringing";
+        actor = str(d, "agent") || "agent";
+        detail = e === firstRing ? `Ringing (after ${secsBetween(startAt, e.at)}s in IVR)` : "Ringing";
+        break;
+      case "answered":
+        event = "leg.answered";
+        actor = str(d, "agent") || "agent";
+        detail = pendingRing ? `Answered — rang ${secsBetween(pendingRing.at, e.at)}s` : "Answered";
+        lastAnswerAt = e.at;
+        pendingRing = null;
+        break;
+      case "transfer": {
+        event = "call.transfer";
+        actor = str(d, "from") || "agent";
+        const to = str(d, "to");
+        const onCall = lastAnswerAt ? ` — on call ${secsBetween(lastAnswerAt, e.at)}s` : "";
+        detail = `Transfer → ${to || "agent"}${onCall}`;
+        break;
+      }
+      case "no_answer":
+        event = "leg.no_answer";
+        actor = str(d, "target") || "agent";
+        detail = "No answer";
+        pendingRing = null;
+        break;
+      case "supervise":
+        event = "call.supervised";
+        actor = str(d, "supervisor") || "supervisor";
+        detail = `Supervisor joined${str(d, "mode") ? ` (${str(d, "mode")})` : ""}`;
+        break;
+      case "ended":
+        event = "call.ended";
+        actor = ENDED_BY[str(d, "cause")] || "system";
+        detail = `Call ended by ${ENDED_BY[str(d, "cause")] || "system"}`;
+        break;
+    }
+    rows.push({ timestamp: hms(e.at), offset: `+${secsBetween(startAt, e.at)}s`, source: "timeline", event, actor, detail });
+  }
+
+  return rows.map((r, i) => ({ index: i + 1, ...r }));
+}
