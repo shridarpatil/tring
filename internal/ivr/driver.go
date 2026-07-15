@@ -4,7 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
+
+// clocked is optionally implemented by a runtime driver so Walk can stamp each
+// step with its wall-clock execution time (per-step timing in calls.ivr_path).
+// Pure drivers — the simulator, test fakes — don't implement it, keeping their
+// traces deterministic and untimed.
+type clocked interface{ Now() time.Time }
 
 // MaxDepth bounds graph traversal so a cyclic (mis-authored) flow can't loop
 // forever. Matches the live executor's historical limit.
@@ -46,11 +53,17 @@ type CallDriver interface {
 // outcome is "error" and the error is returned.
 func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, error) {
 	var path []Step
+	clk, timed := d.(clocked)
 	nodeID := entry
 	for depth := 0; depth < MaxDepth; depth++ {
 		node, ok := FindNode(flow, nodeID)
 		if !ok {
 			return path, fmt.Errorf("node %s not found", nodeID)
+		}
+		var at *time.Time
+		if timed {
+			t := clk.Now()
+			at = &t
 		}
 		res, err := runNode(ctx, node, d)
 		outcome := res.Outcome
@@ -60,7 +73,7 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 		path = append(path, Step{
 			NodeID: node.ID, NodeType: node.Type,
 			Action: res.Action, Detail: res.Detail, DTMFInput: res.DTMF,
-			Outcome: outcome,
+			Outcome: outcome, At: at,
 		})
 		if err != nil {
 			return path, fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
