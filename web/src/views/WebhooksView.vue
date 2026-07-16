@@ -70,30 +70,30 @@ async function remove(w: Webhook) {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">Webhooks</h1>
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">Webhooks</h1>
       <Button @click="showForm = true">Add webhook</Button>
     </div>
 
-    <div v-if="newSecret" class="rounded-xl border border-live/30 bg-live-soft p-4">
-      <div class="flex items-center justify-between gap-3">
-        <div class="text-sm">Signing secret — shown once, save it now</div>
+    <div v-if="newSecret" role="alert" data-variant="warning">
+      <div class="hstack justify-between">
+        <div>Signing secret — shown once, save it now</div>
         <CopyButton :value="newSecret" label="Copy secret" />
       </div>
-      <code class="block mt-2 break-all text-xs font-mono text-ink-muted">{{ newSecret }}</code>
+      <code class="mono reveal-code">{{ newSecret }}</code>
     </div>
 
     <Panel>
       <DataTable :columns="cols" :rows="webhooks" :loading="loading" empty-text="No webhooks">
         <template #cell-events="{ row }">
-          <div v-if="row.events.length" class="flex flex-wrap gap-1.5">
+          <div v-if="row.events.length" class="chip-wrap">
             <Badge v-for="ev in row.events" :key="ev" tone="neutral">{{ ev }}</Badge>
           </div>
           <Badge v-else tone="accent">all</Badge>
         </template>
         <template #cell-created_at="{ value }">
-          <span class="text-ink-muted">{{ new Date(String(value)).toLocaleDateString() }}</span>
+          <span class="text-light">{{ new Date(String(value)).toLocaleDateString() }}</span>
         </template>
         <template #row-actions="{ row }">
           <Button variant="danger" size="sm" @click="remove(row)">Delete</Button>
@@ -102,7 +102,7 @@ async function remove(w: Webhook) {
     </Panel>
 
     <Modal v-model:open="showForm" title="Add webhook">
-      <form id="webhook-form" class="space-y-4" @submit.prevent="create">
+      <form id="webhook-form" class="vstack" @submit.prevent="create">
         <TextField
           v-model="form.url"
           label="Delivery URL"
@@ -111,8 +111,8 @@ async function remove(w: Webhook) {
           placeholder="https://your-crm.com/tring/webhook"
         />
         <div>
-          <span class="text-sm font-medium text-ink">Events</span>
-          <div class="mt-2 space-y-2">
+          <span style="font-size: var(--text-7); font-weight: 500">Events</span>
+          <div class="vstack" style="margin-top: 0.5rem">
             <Toggle
               v-for="ev in eventTypes"
               :key="ev"
@@ -121,7 +121,7 @@ async function remove(w: Webhook) {
               @update:model-value="(on: boolean) => toggleEvent(ev, on)"
             />
           </div>
-          <p class="text-xs text-ink-faint mt-2">Leave all off to receive every event.</p>
+          <p class="text-lighter" style="margin-top: 0.5rem">Leave all off to receive every event.</p>
         </div>
       </form>
       <template #footer>
