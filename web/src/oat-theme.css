@@ -49,8 +49,20 @@
   /* Extra Operator tokens for the live-signal language (not part of Oat). */
   --color-accent-hover: #0f766e;
   --color-live: #d97706; /* on-call amber */
-  --color-live-soft: #fdeccd;
   --color-border-strong: #cdd2d9;
+
+  /* Soft status fills (badges, chips) — verbatim Operator hex. */
+  --color-accent-soft: #d8f3ee;
+  --color-live-soft: #fdeccd;
+  --color-success-soft: #dcfce7;
+  --color-danger-soft: #fde4e4;
+  --color-warning-soft: #fcefc7;
+
+  /* Presence status dots. */
+  --color-online: #0d9488;
+  --color-oncall: #d97706;
+  --color-away: #b45309;
+  --color-offline: #94a3b8;
 }
 
 /* ── Dark override ───────────────────────────────────────────────────── */
@@ -82,8 +94,18 @@ html[data-theme="dark"] {
 
   --color-accent-hover: #5ee0d0;
   --color-live: #f5a524;
-  --color-live-soft: #3a2a0e;
   --color-border-strong: #3a4451;
+
+  --color-accent-soft: #133a35;
+  --color-live-soft: #3a2a0e;
+  --color-success-soft: #0f2a17;
+  --color-danger-soft: #3a1414;
+  --color-warning-soft: #332811;
+
+  --color-online: #2dd4bf;
+  --color-oncall: #f5a524;
+  --color-away: #d29922;
+  --color-offline: #5a6573;
 }
 
 /*
