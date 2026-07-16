@@ -74,45 +74,33 @@ function fmtSize(n: number) {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <h1 class="text-xl font-semibold tracking-tight">Sounds</h1>
-    <p class="text-sm text-ink-muted">
+  <div class="view">
+    <h1 class="page-title">Sounds</h1>
+    <p class="text-light">
       Upload audio (.wav or .mp3) once, then reuse it for IVR greetings and menu prompts, or as your
       queue hold music. Pick an uploaded sound on the <strong>Flows</strong> editor and in
       <strong>Settings</strong>.
     </p>
 
-    <form
-      class="bg-surface rounded-xl border border-border p-5 grid sm:grid-cols-3 gap-4 items-end"
-      @submit.prevent="upload"
-    >
-      <label class="block">
-        <span class="text-xs font-medium text-ink-muted">Name (optional)</span>
-        <input
-          v-model="name"
-          class="mt-1 w-full rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink placeholder:text-ink-faint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
-          placeholder="Welcome greeting"
-        />
-      </label>
-      <label class="block">
-        <span class="text-xs font-medium text-ink-muted">File (.wav / .mp3)</span>
-        <input
-          ref="fileInput"
-          type="file"
-          accept=".wav,.mp3,audio/wav,audio/mpeg"
-          class="mt-1 w-full text-sm text-ink-muted file:mr-3 file:rounded-md file:border file:border-border file:bg-surface-2 file:px-3 file:py-1.5 file:text-sm file:text-ink"
-        />
-      </label>
+    <form class="card grid grid-3" style="align-items: end" @submit.prevent="upload">
+      <div data-field>
+        <label for="snd-name">Name (optional)</label>
+        <input id="snd-name" v-model="name" placeholder="Welcome greeting" />
+      </div>
+      <div data-field>
+        <label for="snd-file">File (.wav / .mp3)</label>
+        <input id="snd-file" ref="fileInput" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" />
+      </div>
       <Button type="submit" :loading="uploading">Upload</Button>
     </form>
 
     <Panel>
       <DataTable :columns="cols" :rows="sounds" :loading="loading" empty-text="No sounds yet">
         <template #cell-format="{ value }">
-          <span class="uppercase text-ink-muted">{{ value }}</span>
+          <span class="text-light" style="text-transform: uppercase">{{ value }}</span>
         </template>
         <template #cell-size_bytes="{ value }">
-          <span class="text-ink-muted">{{ fmtSize(Number(value)) }}</span>
+          <span class="text-light">{{ fmtSize(Number(value)) }}</span>
         </template>
         <template #cell-preview="{ row }">
           <audio v-if="previewUrl[row.id]" :src="previewUrl[row.id]" controls class="h-8"></audio>
