@@ -142,16 +142,16 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">Numbers</h1>
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">Numbers</h1>
       <Button @click="showForm = true">Register number</Button>
     </div>
 
     <Panel>
       <DataTable :columns="cols" :rows="numbers" :loading="loading" empty-text="No numbers registered">
         <template #cell-trunk="{ row }">
-          <span class="text-ink-muted">{{ trunkName(row.trunk_id) }}</span>
+          <span class="text-light">{{ trunkName(row.trunk_id) }}</span>
         </template>
         <template #cell-flow="{ row }">
           <Select
@@ -173,7 +173,7 @@ onMounted(load);
     </Panel>
 
     <Modal v-model:open="showForm" title="Register number">
-      <form id="number-form" class="space-y-4" @submit.prevent="create">
+      <form id="number-form" class="vstack" @submit.prevent="create">
         <TextField v-model="form.e164" label="E.164" mono required placeholder="+918001234567" />
         <Select v-model="form.type" label="Type" :options="typeOptions" />
         <Select
