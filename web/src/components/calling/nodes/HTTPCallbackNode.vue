@@ -26,7 +26,7 @@ const outputHandles = [
     header-class="bg-orange-600"
     :output-handles="outputHandles"
   >
-    <template #icon><Globe class="w-4 h-4" /></template>
-    <p class="truncate font-mono text-[10px]">{{ summary }}</p>
+    <template #icon><Globe :size="16" /></template>
+    <p class="truncate mono" style="font-size:10px">{{ summary }}</p>
   </BaseNode>
 </template>
