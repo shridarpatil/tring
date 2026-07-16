@@ -30,61 +30,50 @@ defineSlots<{
   empty?: () => unknown;
 }>();
 
+const MONO = { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" as const };
+
 function alignCls(a?: string) {
-  return a === "right" ? "text-right" : a === "center" ? "text-center" : "text-left";
+  return a === "right" ? "align-right" : a === "center" ? "align-center" : "align-left";
 }
 </script>
 
 <template>
-  <div :class="maxHeight ? 'overflow-auto' : 'overflow-x-auto'" :style="maxHeight ? { maxHeight } : undefined">
-    <table class="w-full text-sm">
-      <thead :class="maxHeight ? 'sticky top-0 z-10 bg-surface' : ''">
-        <tr class="border-b border-border">
+  <div class="table" :class="maxHeight ? 'dt-scroll' : ''" :style="maxHeight ? { maxHeight } : undefined">
+    <table>
+      <thead :class="maxHeight ? 'dt-sticky' : ''">
+        <tr>
           <th
             v-for="c in columns"
             :key="c.key"
-            class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint whitespace-nowrap"
             :class="alignCls(c.align)"
-            :style="c.width ? { width: c.width } : {}"
+            :style="c.width ? { width: c.width } : undefined"
           >
             {{ c.label }}
           </th>
-          <th v-if="$slots['row-actions']" class="px-4 h-10 w-0"></th>
+          <th v-if="$slots['row-actions']"></th>
         </tr>
       </thead>
       <tbody>
         <tr v-if="loading">
-          <td
-            :colspan="columns.length + ($slots['row-actions'] ? 1 : 0)"
-            class="px-4 py-10 text-center text-ink-faint"
-          >
-            <Loader2 class="inline h-4 w-4 animate-spin mr-2" />Loading…
+          <td :colspan="columns.length + ($slots['row-actions'] ? 1 : 0)" class="dt-msg">
+            <Loader2 class="dt-spin" :size="16" />Loading…
           </td>
         </tr>
         <tr v-else-if="rows.length === 0">
-          <td :colspan="columns.length + ($slots['row-actions'] ? 1 : 0)" class="p-0">
-            <slot name="empty">
-              <div class="px-4 py-10 text-center text-ink-faint text-sm">{{ emptyText }}</div>
-            </slot>
+          <td :colspan="columns.length + ($slots['row-actions'] ? 1 : 0)" style="padding: 0">
+            <slot name="empty"><div class="dt-msg">{{ emptyText }}</div></slot>
           </td>
         </tr>
-        <tr
-          v-for="row in rows"
-          :key="row[rowKey]"
-          class="border-b border-border/60 hover:bg-surface-2/40 transition-colors"
-        >
+        <tr v-for="row in rows" :key="row[rowKey]">
           <td
             v-for="c in columns"
             :key="c.key"
-            class="px-4 py-2.5 align-middle"
-            :class="[
-              alignCls(c.align),
-              c.mono ? 'font-mono text-xs tabular-nums text-ink' : 'text-ink',
-            ]"
+            :class="alignCls(c.align)"
+            :style="c.mono ? MONO : undefined"
           >
             <slot :name="`cell-${c.key}`" :row="row" :value="row[c.key]">{{ row[c.key] }}</slot>
           </td>
-          <td v-if="$slots['row-actions']" class="px-4 py-2.5 text-right whitespace-nowrap">
+          <td v-if="$slots['row-actions']" class="align-right dt-actions">
             <slot name="row-actions" :row="row" />
           </td>
         </tr>
@@ -92,3 +81,12 @@ function alignCls(a?: string) {
     </table>
   </div>
 </template>
+
+<style scoped>
+.dt-scroll { overflow: auto; }
+.dt-sticky { position: sticky; top: 0; z-index: 10; background: var(--card); }
+.dt-msg { padding: 2.5rem 1rem; text-align: center; color: var(--faint-foreground); }
+.dt-actions { white-space: nowrap; }
+.dt-spin { display: inline; vertical-align: -2px; margin-right: 0.5rem; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>

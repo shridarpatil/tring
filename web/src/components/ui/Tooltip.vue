@@ -6,19 +6,34 @@ const show = ref(false);
 
 <template>
   <span
-    class="relative inline-flex"
+    class="tt-wrap"
     @mouseenter="show = true"
     @mouseleave="show = false"
     @focusin="show = true"
     @focusout="show = false"
   >
     <slot />
-    <span
-      v-if="show"
-      role="tooltip"
-      class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded-md bg-overlay border border-border text-xs text-ink whitespace-nowrap z-50 pointer-events-none shadow-lg"
-    >
-      {{ content }}
-    </span>
+    <span v-if="show" role="tooltip" class="tt-bubble">{{ content }}</span>
   </span>
 </template>
+
+<style scoped>
+.tt-wrap { position: relative; display: inline-flex; }
+.tt-bubble {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-medium);
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  font-size: var(--text-8);
+  white-space: nowrap;
+  z-index: 50;
+  pointer-events: none;
+  box-shadow: var(--shadow-medium);
+}
+</style>
