@@ -191,10 +191,10 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
         </template>
         <template #row-actions="{ row }">
           <IconButton title="Edit" variant="ghost" size="sm" @click="startEdit(row)">
-            <Pencil class="h-4 w-4" />
+            <Pencil :size="16" />
           </IconButton>
           <IconButton title="Delete" variant="danger" size="sm" @click="removeTrunk(row)">
-            <Trash2 class="h-4 w-4" />
+            <Trash2 :size="16" />
           </IconButton>
         </template>
         <template #empty>

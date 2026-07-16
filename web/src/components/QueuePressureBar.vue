@@ -16,21 +16,30 @@ const width = computed(() =>
 </script>
 
 <template>
-  <div class="px-4 py-2.5 border-b border-border last:border-b-0">
-    <div class="flex justify-between text-[12.5px] mb-1.5">
+  <div class="qpb">
+    <div class="qpb-head">
       <span class="truncate">{{ team }}</span>
-      <span
-        class="tabular-nums font-semibold"
-        :class="waiting === 0 ? 'text-ink-faint' : pressured ? 'text-live' : 'text-ink'"
-        >{{ waiting }}</span
-      >
+      <span class="qpb-num" :class="waiting === 0 ? 'zero' : pressured ? 'hot' : ''">{{ waiting }}</span>
     </div>
-    <div class="h-1.5 rounded-full bg-surface-2 overflow-hidden">
-      <div
-        class="h-full rounded-full transition-all"
-        :class="pressured ? 'bg-live' : 'bg-accent'"
-        :style="{ width: width + '%' }"
-      ></div>
+    <div class="qpb-track">
+      <div class="qpb-fill" :class="{ hot: pressured }" :style="{ width: width + '%' }"></div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.qpb { padding: 0.625rem 1rem; border-bottom: 1px solid var(--border); }
+.qpb:last-child { border-bottom: none; }
+.qpb-head { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 0.375rem; }
+.qpb-num { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--foreground); }
+.qpb-num.zero { color: var(--faint-foreground); }
+.qpb-num.hot { color: var(--color-live); }
+.qpb-track { height: 0.375rem; border-radius: 9999px; background: var(--secondary); overflow: hidden; }
+.qpb-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--primary);
+  transition: width var(--transition, 200ms);
+}
+.qpb-fill.hot { background: var(--color-live); }
+</style>
