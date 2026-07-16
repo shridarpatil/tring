@@ -123,6 +123,23 @@ html[data-theme="dark"] {
 }
 
 /*
+ * Two badge tones Oat lacks — expressed in Oat's OWN soft-badge style
+ * (colored text + color-mix tint), only the color is ours. Not per-component
+ * CSS: a colour extension of Oat's .badge, alongside its success/warning/danger.
+ */
+.badge[data-variant="live"] {
+  color: var(--color-live);
+  background-color: color-mix(in srgb, var(--color-live) 15%, transparent);
+}
+.badge[data-variant="accent"] {
+  color: var(--primary);
+  background-color: color-mix(in srgb, var(--primary) 15%, transparent);
+}
+
+/* Required-field asterisk colour. */
+.req { color: var(--danger); }
+
+/*
  * Signature Operator accents that Oat has no equivalent for — the live-signal
  * language. Kept identical to web/src/style.css, gated behind reduced-motion.
  */
