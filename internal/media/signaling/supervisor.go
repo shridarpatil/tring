@@ -24,8 +24,9 @@ const (
 // SupervisorLog records supervisor sessions for audit (internal/callcdr
 // implements it). Best-effort; a nil SupervisorLog disables audit.
 type SupervisorLog interface {
-	SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, userID, mode string) string
-	SuperviseEnd(sessionID string, modes []string)
+	SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, userID, name, mode string) string
+	SuperviseMode(callRoomID, name, mode string)
+	SuperviseEnd(sessionID, callRoomID, name string, modes []string)
 }
 
 // validSuperviseMode reports whether m is a recognized supervisor mode.
@@ -225,7 +226,7 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 	modes := []string{"monitor"}
 	if s.cfg.Supervisors != nil {
 		startCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		sessionID = s.cfg.Supervisors.SuperviseStart(startCtx, princ.tenant, string(roomID), princ.userID, "monitor")
+		sessionID = s.cfg.Supervisors.SuperviseStart(startCtx, princ.tenant, string(roomID), princ.userID, princ.name, "monitor")
 		cancel()
 	}
 
@@ -234,7 +235,7 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 
 	s.teardownSupervisor(roomID, pid)
 	if s.cfg.Supervisors != nil && sessionID != "" {
-		s.cfg.Supervisors.SuperviseEnd(sessionID, modes)
+		s.cfg.Supervisors.SuperviseEnd(sessionID, string(roomID), princ.name, modes)
 	}
 	// Only clear the indicator if no OTHER supervisor is still watching this room.
 	if !s.supervisorsRemain(roomID) {
@@ -274,9 +275,15 @@ func (s *Server) supervisorReadLoop(c *conn, roomID room.RoomID, pid room.Partic
 			}
 			all, allowed := superviseAudience(m.Mode, s.agentPIDs(roomID))
 			s.sfu.SetAudience(roomID, pid, all, allowed)
+			// changed is computed BEFORE the append, against the current (last)
+			// mode — clicking the same mode logs nothing on the timeline.
+			changed := len(*modes) == 0 || (*modes)[len(*modes)-1] != m.Mode
 			*modes = append(*modes, m.Mode)
 			s.notifyAgentsSupervisor(roomID, true, m.Mode, name)
 			s.publishSupervised(tenant, roomID, m.Mode, name)
+			if changed && s.cfg.Supervisors != nil {
+				s.cfg.Supervisors.SuperviseMode(string(roomID), name, m.Mode)
+			}
 		case msgPing:
 			// keepalive
 		case msgBye:
