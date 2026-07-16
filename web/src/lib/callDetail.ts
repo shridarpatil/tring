@@ -170,9 +170,18 @@ export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
         pending = null;
         break;
       }
-      case "supervise":
-        out.push({ time: hms(e.at), icon: "supervise", kind: "accent", label: `Supervisor joined${str(d, "mode") ? ` (${str(d, "mode")})` : ""}`, sub: "", failed: false });
+      case "supervise": {
+        const who = str(d, "supervisor") || "supervisor";
+        const mode = str(d, "mode");
+        const action = str(d, "action");
+        let label: string;
+        if (action === "mode") label = `${who} switched to ${mode}`;
+        else if (action === "end") label = `${who} stopped supervising`;
+        else if (action === "start") label = `${who} started supervising${mode ? ` (${mode})` : ""}`;
+        else label = `Supervisor joined${mode ? ` (${mode})` : ""}`; // legacy rows (no action)
+        out.push({ time: hms(e.at), icon: "supervise", kind: "accent", label, sub: "", failed: false });
         break;
+      }
       case "ended":
         out.push({ time: hms(e.at), icon: "phone-off", kind: "muted", label: `Call ended by ${ENDED_BY[str(d, "cause")] || "system"}`, sub: "", failed: false });
         break;
@@ -315,11 +324,17 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
         detail = "No answer";
         pendingRing = null;
         break;
-      case "supervise":
+      case "supervise": {
         event = "call.supervised";
         actor = str(d, "supervisor") || "supervisor";
-        detail = `Supervisor joined${str(d, "mode") ? ` (${str(d, "mode")})` : ""}`;
+        const mode = str(d, "mode");
+        const action = str(d, "action");
+        if (action === "mode") detail = `Switched to ${mode}`;
+        else if (action === "end") detail = `Stopped supervising`;
+        else if (action === "start") detail = `Started supervising${mode ? ` (${mode})` : ""}`;
+        else detail = `Supervisor joined${mode ? ` (${mode})` : ""}`; // legacy rows
         break;
+      }
       case "ended":
         event = "call.ended";
         actor = ENDED_BY[str(d, "cause")] || "system";
