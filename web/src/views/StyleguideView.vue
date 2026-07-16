@@ -58,42 +58,39 @@ const rows = [
 </script>
 
 <template>
-  <div class="min-h-screen bg-base text-ink p-10">
-    <div class="max-w-5xl mx-auto space-y-12">
-      <header>
-        <h1 class="text-xl font-semibold tracking-tight">Operator styleguide</h1>
-        <p class="text-sm text-ink-muted mt-1">
+  <div class="styleguide">
+    <div class="styleguide-inner">
+      <header class="vstack" style="gap: 0.25rem">
+        <h1 class="page-title">Operator styleguide</h1>
+        <p class="text-light">
           Every primitive, in every state. Dev-only — built to design views against.
         </p>
       </header>
 
       <!-- Tokens -->
-      <section class="space-y-3">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">Color tokens</h2>
-        <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
-          <div v-for="t in tokens" :key="t" class="space-y-1.5">
-            <div
-              class="h-12 rounded-lg border border-border"
-              :style="{ background: `var(--color-${t})` }"
-            ></div>
-            <div class="text-xs font-mono text-ink-faint">{{ t }}</div>
+      <section class="vstack">
+        <h2 class="section-title">Color tokens</h2>
+        <div class="token-grid">
+          <div v-for="t in tokens" :key="t" class="vstack" style="gap: 0.375rem">
+            <div class="token-swatch" :style="{ background: `var(--color-${t})` }"></div>
+            <div class="text-lighter mono">{{ t }}</div>
           </div>
         </div>
       </section>
 
       <!-- Type -->
-      <section class="space-y-2">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">Type</h2>
-        <p class="text-xl font-semibold tracking-tight">Page title — text-xl semibold</p>
-        <p class="text-sm">Body — the quick brown fox jumps over the lazy dog.</p>
-        <p class="text-xs text-ink-muted">Meta — secondary caption text.</p>
-        <p class="font-mono text-sm tabular-nums">Mono data — +91 98765 43210 · DTMF 1234 · 02:14</p>
+      <section class="vstack" style="gap: 0.5rem">
+        <h2 class="section-title">Type</h2>
+        <p class="page-title">Page title — text-xl semibold</p>
+        <p>Body — the quick brown fox jumps over the lazy dog.</p>
+        <p class="text-light">Meta — secondary caption text.</p>
+        <p class="mono" style="font-variant-numeric: tabular-nums">Mono data — +91 98765 43210 · DTMF 1234 · 02:14</p>
       </section>
 
       <!-- Buttons -->
-      <section class="space-y-3">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">Buttons</h2>
-        <div class="flex flex-wrap items-center gap-3">
+      <section class="vstack">
+        <h2 class="section-title">Buttons</h2>
+        <div class="hstack">
           <Button variant="primary">Primary</Button>
           <Button variant="secondary">Secondary</Button>
           <Button variant="ghost">Ghost</Button>
@@ -101,22 +98,22 @@ const rows = [
           <Button variant="primary" loading>Loading</Button>
           <Button variant="primary" disabled>Disabled</Button>
           <Button variant="secondary" size="sm">Small</Button>
-          <Button variant="primary"><Phone class="h-4 w-4" />With icon</Button>
+          <Button variant="primary"><Phone :size="16" />With icon</Button>
         </div>
-        <div class="flex items-center gap-3">
-          <IconButton title="Add"><Plus class="h-4 w-4" /></IconButton>
-          <IconButton title="Delete" variant="danger"><Trash2 class="h-4 w-4" /></IconButton>
-          <IconButton title="Secondary" variant="secondary"><Plus class="h-4 w-4" /></IconButton>
+        <div class="hstack">
+          <IconButton title="Add"><Plus :size="16" /></IconButton>
+          <IconButton title="Delete" variant="danger"><Trash2 :size="16" /></IconButton>
+          <IconButton title="Secondary" variant="secondary"><Plus :size="16" /></IconButton>
           <Tooltip content="A helpful hint">
-            <IconButton title="Hover me"><Phone class="h-4 w-4" /></IconButton>
+            <IconButton title="Hover me"><Phone :size="16" /></IconButton>
           </Tooltip>
         </div>
       </section>
 
       <!-- Form -->
-      <section class="space-y-3">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">Form fields</h2>
-        <div class="grid sm:grid-cols-2 gap-4 max-w-2xl">
+      <section class="vstack">
+        <h2 class="section-title">Form fields</h2>
+        <div class="grid grid-2" style="max-width: 42rem">
           <TextField v-model="text" label="Display name" placeholder="Jane Rao" hint="Shown to callers" />
           <TextField v-model="text" label="SIP username" mono placeholder="agent.rao" />
           <TextField v-model="text" label="With error" error="This field is required" />
@@ -129,14 +126,14 @@ const rows = [
             ]"
           />
           <Textarea v-model="area" label="Notes" placeholder="Anything…" />
-          <div class="flex items-end"><Toggle v-model="on" label="Record calls" /></div>
+          <div style="display: flex; align-items: flex-end"><Toggle v-model="on" label="Record calls" /></div>
         </div>
       </section>
 
       <!-- Status -->
-      <section class="space-y-3">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">Status</h2>
-        <div class="flex flex-wrap items-center gap-4">
+      <section class="vstack">
+        <h2 class="section-title">Status</h2>
+        <div class="hstack" style="gap: 1rem">
           <SignalDot state="online" />
           <SignalDot state="on_call" />
           <SignalDot state="ringing" />
@@ -145,7 +142,7 @@ const rows = [
           <LevelMeter active />
           <LevelMeter />
         </div>
-        <div class="flex flex-wrap items-center gap-2">
+        <div class="hstack" style="gap: 0.5rem">
           <Badge tone="neutral">neutral</Badge>
           <Badge tone="success">success</Badge>
           <Badge tone="live">live</Badge>
@@ -156,8 +153,8 @@ const rows = [
       </section>
 
       <!-- Table -->
-      <section class="space-y-3">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">DataTable</h2>
+      <section class="vstack">
+        <h2 class="section-title">DataTable</h2>
         <Panel>
           <template #title>Recent calls</template>
           <template #actions><Button size="sm" variant="secondary">Export</Button></template>
@@ -166,7 +163,7 @@ const rows = [
               <SignalDot :state="value === 'on_call' ? 'on_call' : 'offline'" :label="String(value)" />
             </template>
             <template #row-actions>
-              <IconButton title="Delete" size="sm" variant="danger"><Trash2 class="h-4 w-4" /></IconButton>
+              <IconButton title="Delete" size="sm" variant="danger"><Trash2 :size="16" /></IconButton>
             </template>
           </DataTable>
         </Panel>
@@ -178,9 +175,9 @@ const rows = [
       </section>
 
       <!-- Overlays + feedback -->
-      <section class="space-y-3">
-        <h2 class="text-sm font-medium text-ink-muted uppercase tracking-wide">Overlays & feedback</h2>
-        <div class="flex flex-wrap items-center gap-3">
+      <section class="vstack">
+        <h2 class="section-title">Overlays &amp; feedback</h2>
+        <div class="hstack">
           <Button @click="modalOpen = true">Open modal</Button>
           <Button variant="secondary" @click="toast.success('Saved changes')">Toast success</Button>
           <Button variant="secondary" @click="toast.error('Something went wrong')">Toast error</Button>
@@ -188,14 +185,14 @@ const rows = [
           <CopyButton value="tk_live_example" label="Copy key" />
         </div>
         <Tabs v-model="tab" :tabs="[{ value: 'one', label: 'Overview' }, { value: 'two', label: 'Advanced' }]" />
-        <p class="text-sm text-ink-muted">Active tab: {{ tab }}</p>
+        <p class="text-light">Active tab: {{ tab }}</p>
       </section>
     </div>
 
     <Modal v-model:open="modalOpen" title="Example dialog" size="md">
-      <div class="space-y-4">
+      <div class="vstack">
         <TextField label="Name" placeholder="Type something…" />
-        <p class="text-sm text-ink-muted">Esc closes, focus is trapped, scrim click dismisses.</p>
+        <p class="text-light">Esc closes, focus is trapped, scrim click dismisses.</p>
       </div>
       <template #footer>
         <Button variant="ghost" @click="modalOpen = false">Cancel</Button>
@@ -204,3 +201,23 @@ const rows = [
     </Modal>
   </div>
 </template>
+
+<style scoped>
+/* Standalone dev-only route (outside AppLayout), so it needs its own
+   full-page background — same pattern as LoginView. Structural only;
+   colours via tokens. */
+.styleguide { min-height: 100vh; background: var(--background); color: var(--foreground); padding: 2.5rem; }
+.styleguide-inner { max-width: 64rem; margin-inline: auto; display: flex; flex-direction: column; gap: 3rem; }
+.section-title {
+  font-size: var(--text-8);
+  font-weight: 500;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.token-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.75rem; }
+@media (max-width: 820px) {
+  .token-grid { grid-template-columns: repeat(3, 1fr); }
+}
+.token-swatch { height: 3rem; border-radius: var(--radius-large); border: 1px solid var(--border); }
+</style>

@@ -21,7 +21,7 @@ const outputHandles = [{ id: "default", label: "Start", title: "Flow entry point
     :output-handles="outputHandles"
     :has-input="false"
   >
-    <template #icon><PlayCircle class="w-4 h-4" /></template>
-    <p class="text-gray-400">Flow entry — connect to the first step.</p>
+    <template #icon><PlayCircle :size="16" /></template>
+    <p class="text-lighter">Flow entry — connect to the first step.</p>
   </BaseNode>
 </template>

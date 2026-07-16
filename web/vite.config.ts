@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "node:path";
 import { writeFileSync } from "node:fs";
 
@@ -24,7 +23,7 @@ const preserveGitkeep = {
 };
 
 export default defineConfig({
-  plugins: [vue(), tailwindcss(), preserveGitkeep],
+  plugins: [vue(), preserveGitkeep],
   base: "/admin/",
   build: {
     outDir: resolve(__dirname, "../internal/webui/dist"),

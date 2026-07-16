@@ -77,23 +77,23 @@ async function setAvailability(a: Agent, available: boolean) {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">Agents</h1>
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">Agents</h1>
       <Button @click="showForm = true">New agent</Button>
     </div>
 
-    <div v-if="token" class="rounded-xl border border-live/30 bg-live-soft p-4">
-      <div class="flex items-center justify-between gap-3">
-        <div class="text-sm">
-          Token for <span class="font-mono">{{ tokenFor }}</span>
-          <span class="text-ink-muted">
+    <div v-if="token" role="alert" data-variant="warning">
+      <div class="hstack justify-between">
+        <div>
+          Token for <span class="mono">{{ tokenFor }}</span>
+          <span class="text-light">
             · expires {{ new Date(token.expires_at).toLocaleTimeString() }}</span
           >
         </div>
         <CopyButton :value="token.token" label="Copy token" />
       </div>
-      <code class="block mt-2 break-all text-xs font-mono text-ink-muted">{{ token.token }}</code>
+      <code class="mono reveal-code">{{ token.token }}</code>
     </div>
 
     <Panel>
@@ -109,7 +109,8 @@ async function setAvailability(a: Agent, available: boolean) {
         </template>
         <template #cell-available="{ row }">
           <button
-            class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-md"
+            type="button"
+            class="plain"
             :title="row.available_for_calls ? 'Click to set Away' : 'Click to set Available'"
             @click="setAvailability(row, !row.available_for_calls)"
           >
@@ -119,7 +120,7 @@ async function setAvailability(a: Agent, available: boolean) {
           </button>
         </template>
         <template #cell-created_at="{ value }">
-          <span class="text-ink-muted">{{ new Date(String(value)).toLocaleDateString() }}</span>
+          <span class="text-light">{{ new Date(String(value)).toLocaleDateString() }}</span>
         </template>
         <template #row-actions="{ row }">
           <Button variant="ghost" size="sm" @click="mintToken(row)">Get token</Button>
@@ -128,7 +129,7 @@ async function setAvailability(a: Agent, available: boolean) {
     </Panel>
 
     <Modal v-model:open="showForm" title="New agent">
-      <form id="agent-form" class="space-y-4" @submit.prevent="create">
+      <form id="agent-form" class="vstack" @submit.prevent="create">
         <TextField v-model="form.sip_username" label="SIP username" mono required placeholder="alice" />
         <TextField v-model="form.display_name" label="Display name" placeholder="Alice" />
       </form>

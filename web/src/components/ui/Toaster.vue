@@ -3,32 +3,22 @@ import { CheckCircle2, AlertCircle, Info, X } from "lucide-vue-next";
 import { toasts, toast } from "../../lib/toast";
 
 const icon = { success: CheckCircle2, danger: AlertCircle, info: Info };
-const accent = {
-  success: "text-success",
-  danger: "text-danger",
-  info: "text-accent",
-};
 </script>
 
 <template>
   <Teleport to="body">
-    <div class="fixed top-4 right-4 z-[60] flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
+    <div class="toaster">
       <TransitionGroup name="toast">
-        <div
-          v-for="t in toasts.items"
-          :key="t.id"
-          class="flex items-start gap-3 rounded-lg bg-surface border border-border shadow-xl px-4 py-3"
-          role="status"
-        >
-          <component :is="icon[t.tone]" class="h-4 w-4 mt-0.5 shrink-0" :class="accent[t.tone]" />
-          <p class="flex-1 text-sm text-ink break-words">{{ t.message }}</p>
+        <div v-for="t in toasts.items" :key="t.id" class="card toast-row" role="status">
+          <component :is="icon[t.tone]" :size="16" class="toast-icon" :class="`tone-${t.tone}`" />
+          <p class="toast-msg">{{ t.message }}</p>
           <button
             type="button"
-            class="text-ink-faint hover:text-ink transition-colors"
+            class="ghost icon small"
             aria-label="Dismiss"
             @click="toast.dismiss(t.id)"
           >
-            <X class="h-3.5 w-3.5" />
+            <X :size="14" />
           </button>
         </div>
       </TransitionGroup>
@@ -37,19 +27,32 @@ const accent = {
 </template>
 
 <style scoped>
+.toaster {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 20rem;
+  max-width: calc(100vw - 2rem);
+}
+.toast-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  box-shadow: var(--shadow-large);
+}
+.toast-icon { margin-top: 0.125rem; flex-shrink: 0; }
+.tone-success { color: var(--success); }
+.tone-danger { color: var(--danger); }
+.tone-info { color: var(--primary); }
+.toast-msg { flex: 1; font-size: var(--text-7); word-break: break-word; }
 .toast-enter-active,
-.toast-leave-active {
-  transition: all 0.2s ease;
-}
-.toast-enter-from {
-  opacity: 0;
-  transform: translateX(1rem);
-}
-.toast-leave-to {
-  opacity: 0;
-  transform: translateX(1rem);
-}
-.toast-move {
-  transition: transform 0.2s ease;
-}
+.toast-leave-active { transition: all 0.2s ease; }
+.toast-enter-from,
+.toast-leave-to { opacity: 0; transform: translateX(1rem); }
+.toast-move { transition: transform 0.2s ease; }
 </style>

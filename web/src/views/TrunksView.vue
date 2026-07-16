@@ -153,10 +153,10 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">Trunks</h1>
-      <div class="flex items-center gap-2">
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">Trunks</h1>
+      <div class="hstack">
         <Button
           variant="ghost"
           :loading="reloadingFS"
@@ -191,41 +191,41 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
         </template>
         <template #row-actions="{ row }">
           <IconButton title="Edit" variant="ghost" size="sm" @click="startEdit(row)">
-            <Pencil class="h-4 w-4" />
+            <Pencil :size="16" />
           </IconButton>
           <IconButton title="Delete" variant="danger" size="sm" @click="removeTrunk(row)">
-            <Trash2 class="h-4 w-4" />
+            <Trash2 :size="16" />
           </IconButton>
         </template>
         <template #empty>
-          No trunks yet — click <span class="text-ink">New trunk</span> to add one.
+          No trunks yet — click <span>New trunk</span> to add one.
         </template>
       </DataTable>
     </Panel>
 
-    <p class="text-xs text-ink-faint">
+    <p class="text-lighter">
       Saving a trunk renders gateway XML to
-      <code class="font-mono">freeswitch/conf/sip_profiles/external/dynamic/</code>
+      <code class="mono">freeswitch/conf/sip_profiles/external/dynamic/</code>
       and runs
-      <code class="font-mono">sofia profile external rescan</code>. Zero downtime;
+      <code class="mono">sofia profile external rescan</code>. Zero downtime;
       live calls stay up.
     </p>
 
     <Modal v-model:open="showForm" :title="formTitle" size="lg">
-      <form id="trunk-form" class="space-y-4" @submit.prevent="save">
-        <div class="grid sm:grid-cols-2 gap-4">
+      <form id="trunk-form" class="vstack" @submit.prevent="save">
+        <div class="grid grid-2">
           <TextField v-model="form.name" label="Name" required placeholder="Tata production" />
           <Select v-model="form.provider_type" label="Provider type" :options="providerOptions" />
         </div>
 
-        <div class="flex items-center gap-6 pt-2 border-t border-border">
+        <div class="hstack" style="gap: 1.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border)">
           <Toggle v-model="form.register" label="REGISTER auth (aggregator-style)" />
           <Toggle v-model="form.active" label="Active" />
         </div>
 
         <!-- REGISTER auth fields -->
         <template v-if="form.register">
-          <div class="grid sm:grid-cols-2 gap-4">
+          <div class="grid grid-2">
             <TextField v-model="form.sip_username" label="SIP username" mono required />
             <TextField v-model="form.sip_password" label="SIP password" type="password" mono required />
           </div>
@@ -240,7 +240,7 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
 
         <!-- IP-auth fields -->
         <template v-else>
-          <div class="grid sm:grid-cols-2 gap-4">
+          <div class="grid grid-2">
             <TextField
               v-model="form.proxy_ip"
               label="SBC proxy IP"

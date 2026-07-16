@@ -482,50 +482,45 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col bg-base text-ink">
+  <div class="fe-root">
     <!-- Toolbar -->
-    <div class="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface shrink-0">
+    <div class="fe-toolbar">
       <IconButton title="Back to flows" @click="router.push({ name: 'flows' })">
-        <ArrowLeft class="h-4 w-4" />
+        <ArrowLeft :size="16" />
       </IconButton>
-      <input
-        v-model="flowName"
-        placeholder="Flow name"
-        class="h-9 text-sm rounded-md bg-surface-2 border border-border px-3 max-w-[280px] flex-1 sm:flex-none text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
-      />
-      <Toggle v-model="isActive" label="Active" class="ml-2" />
-      <Toggle v-model="isOutgoingEnd" label="Outgoing Post-Call" :disabled="!isActive" class="ml-1" />
-      <div class="flex-1" />
-      <span v-if="savedMsg" class="text-xs text-success">{{ savedMsg }}</span>
+      <input v-model="flowName" placeholder="Flow name" class="fe-name-input" />
+      <Toggle v-model="isActive" label="Active" />
+      <Toggle v-model="isOutgoingEnd" label="Outgoing Post-Call" :disabled="!isActive" />
+      <div class="fe-spacer" />
+      <span v-if="savedMsg" class="fe-saved-msg">{{ savedMsg }}</span>
       <Button variant="secondary" size="sm" @click="showSimPanel = !showSimPanel">
-        <PlayCircle class="h-4 w-4" />
+        <PlayCircle :size="16" />
         Test
       </Button>
       <Button size="sm" :loading="saving" @click="saveFlow">
-        <Save class="h-4 w-4" />
+        <Save :size="16" />
         {{ saving ? "Saving…" : "Save" }}
       </Button>
     </div>
 
     <!-- Palette -->
-    <div
-      class="flex items-center gap-2 px-4 py-2 border-b border-border bg-surface/60 overflow-x-auto shrink-0"
-    >
+    <div class="fe-palette">
       <button
         v-for="p in palette"
         :key="p.type"
-        class="h-7 text-xs rounded-md border border-border bg-surface-2 px-2 text-ink-muted hover:text-ink hover:border-border-strong flex items-center gap-1.5 shrink-0 transition-colors"
+        type="button"
+        class="outline small fe-palette-btn"
         @click="addNodeFromPalette(p.type)"
       >
-        <span :class="['w-2 h-2 rounded-full', p.color]" />
-        <component :is="p.icon" class="w-3 h-3" />
+        <span class="fe-palette-dot" :class="p.color" />
+        <component :is="p.icon" :size="12" />
         {{ p.label }}
       </button>
     </div>
 
     <!-- Main: canvas + right panel -->
-    <div class="flex-1 flex overflow-hidden">
-      <div class="flex-1 relative bg-base">
+    <div class="fe-main">
+      <div class="fe-canvas">
         <VueFlow
           :nodes="nodes"
           :edges="edges"
@@ -546,10 +541,7 @@ onMounted(async () => {
         </VueFlow>
       </div>
 
-      <aside
-        v-if="!showSimPanel"
-        class="w-[420px] min-w-0 border-l border-border bg-surface shrink-0 flex flex-col overflow-hidden"
-      >
+      <aside v-if="!showSimPanel" class="fe-panel">
         <IVRNodeProperties
           v-if="selectedNode"
           :key="selectedNode.id + '|' + ((selectedNode.data?.config?.audio_file as string) || '')"
@@ -561,7 +553,7 @@ onMounted(async () => {
           @update:node="onUpdateNode"
           @delete="requestDeleteSelectedNode"
         />
-        <div v-else class="p-6 text-sm text-ink-faint text-center">
+        <div v-else class="fe-panel-empty text-lighter">
           Click a node to edit, or pick one from the palette above to add it.
         </div>
       </aside>
@@ -570,59 +562,50 @@ onMounted(async () => {
            when the operator clicks "Test". POSTs to /v1/flows/{id}/simulate
            and renders the returned step trace. No FreeSWITCH involved;
            audio "plays" and HTTP "calls" are recorded as intent only. -->
-      <aside
-        v-else
-        class="w-[480px] min-w-0 border-l border-border bg-surface shrink-0 flex flex-col overflow-hidden"
-      >
-        <div class="px-4 py-3 border-b border-border flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <PlayCircle class="h-4 w-4 text-accent" />
-            <span class="font-medium text-sm">Simulator</span>
+      <aside v-else class="fe-panel fe-sim-panel">
+        <div class="fe-sim-head">
+          <div class="hstack gap-2">
+            <PlayCircle :size="16" class="fe-sim-head-icon" />
+            <span class="fe-sim-head-title">Simulator</span>
           </div>
-          <button class="text-ink-muted hover:text-ink text-sm" @click="showSimPanel = false">
-            Close
-          </button>
+          <button type="button" class="ghost small" @click="showSimPanel = false">Close</button>
         </div>
-        <div class="p-4 space-y-3 border-b border-border">
-          <label class="block text-xs">
-            <span class="font-medium text-ink-muted">Caller</span>
+        <div class="fe-sim-form">
+          <label class="fe-sim-caller-label">
+            Caller
             <input
               v-model="simCaller"
               :disabled="simSession?.status === 'awaiting_dtmf'"
-              class="mt-1 w-full rounded-md bg-surface-2 border border-border px-2 py-1.5 text-sm font-mono text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent disabled:opacity-50"
+              class="mono"
             />
           </label>
           <Button block :loading="simBusy" @click="startSimulation">
             {{ simSession ? "Restart simulation" : "Start simulation" }}
           </Button>
-          <p v-if="simError" class="text-xs text-danger">{{ simError }}</p>
+          <p v-if="simError" class="fe-sim-error">{{ simError }}</p>
         </div>
 
-        <div class="flex-1 overflow-auto p-4 text-xs">
-          <div v-if="!simSession" class="text-ink-faint text-center py-8">
+        <div class="fe-sim-body">
+          <div v-if="!simSession" class="fe-sim-empty text-lighter">
             Start a simulation. The walker pauses on every Menu / Gather and
             asks for the next digit, just like a real call.
           </div>
           <div v-else>
-            <ol class="space-y-2">
-              <li
-                v-for="(step, idx) in simSession.steps"
-                :key="idx"
-                class="border border-border rounded-md p-2 bg-surface-2/40"
-              >
-                <div class="flex items-center gap-1.5">
-                  <span class="font-mono text-[10px] text-ink-faint">{{ idx + 1 }}</span>
-                  <span class="font-medium text-ink">{{ step.node_type }}</span>
-                  <span class="text-ink-faint">·</span>
-                  <span class="text-ink-muted">{{ step.action }}</span>
+            <ol class="fe-sim-steps">
+              <li v-for="(step, idx) in simSession.steps" :key="idx" class="fe-sim-step">
+                <div class="hstack gap-1">
+                  <span class="mono fe-sim-step-idx text-lighter">{{ idx + 1 }}</span>
+                  <span class="fe-sim-step-type">{{ step.node_type }}</span>
+                  <span class="text-lighter">·</span>
+                  <span class="text-light">{{ step.action }}</span>
                 </div>
-                <div v-if="step.detail" class="mt-1 text-ink-muted break-all">
+                <div v-if="step.detail" class="fe-sim-step-detail text-light">
                   {{ step.detail }}
                 </div>
-                <div v-if="step.dtmf_input" class="mt-1 font-mono text-ink-muted">
+                <div v-if="step.dtmf_input" class="mono fe-sim-step-detail text-light">
                   input: {{ step.dtmf_input }}
                 </div>
-                <div v-if="step.outcome" class="mt-1 text-[10px] text-ink-faint">
+                <div v-if="step.outcome" class="fe-sim-step-outcome text-lighter">
                   → {{ step.outcome }}
                 </div>
               </li>
@@ -631,24 +614,24 @@ onMounted(async () => {
             <!-- Live prompt for the paused node — Menu/Gather only. -->
             <div
               v-if="simSession.status === 'awaiting_dtmf' && simSession.awaiting_node"
-              class="mt-4 border border-accent/50 rounded-md p-3 bg-accent-soft/40"
+              class="fe-sim-waiting"
             >
-              <div class="text-[11px] uppercase tracking-wide text-ink-muted mb-1">
+              <div class="fe-sim-waiting-label text-light">
                 Waiting at {{ simSession.awaiting_node.node_type }}
               </div>
-              <div v-if="simSession.awaiting_node.prompt" class="text-ink mb-2">
+              <div v-if="simSession.awaiting_node.prompt" class="fe-sim-waiting-prompt">
                 {{ simSession.awaiting_node.prompt }}
               </div>
-              <form class="flex gap-2" @submit.prevent="sendSimInput">
+              <form class="hstack gap-2" @submit.prevent="sendSimInput">
                 <input
                   v-model="simInput"
                   autofocus
                   placeholder="press a digit"
-                  class="flex-1 rounded-md bg-surface-2 border border-border px-2 py-1.5 text-sm font-mono text-ink focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+                  class="mono fe-sim-input"
                 />
                 <Button type="submit" size="sm" :disabled="simBusy || !simInput">Send</Button>
               </form>
-              <div class="mt-1 text-[10px] text-ink-faint">
+              <div class="fe-sim-hint text-lighter">
                 For Menu: a single digit (1-9, *, #). For Gather: the full sequence.
               </div>
             </div>
@@ -656,17 +639,17 @@ onMounted(async () => {
             <!-- Ended state — flow finished or errored. -->
             <div
               v-else-if="simSession.status === 'ended' || simSession.status === 'error'"
-              class="mt-3 p-2 rounded-md bg-surface-2/40 border border-border text-ink-muted"
+              class="fe-sim-ended text-light"
             >
-              <div><span class="font-medium text-ink">Ended at:</span> {{ simSession.ended_at }}</div>
+              <div><span class="fe-sim-ended-label">Ended at:</span> {{ simSession.ended_at }}</div>
               <div>
-                <span class="font-medium text-ink">Hangup cause:</span> {{ simSession.hangup_cause }}
+                <span class="fe-sim-ended-label">Hangup cause:</span> {{ simSession.hangup_cause }}
               </div>
               <div v-if="Object.keys(simSession.vars).length">
-                <span class="font-medium text-ink">Vars:</span> {{ JSON.stringify(simSession.vars) }}
+                <span class="fe-sim-ended-label">Vars:</span> {{ JSON.stringify(simSession.vars) }}
               </div>
-              <div v-if="simSession.error" class="text-danger">
-                <span class="font-medium">Error:</span> {{ simSession.error }}
+              <div v-if="simSession.error" style="color: var(--danger)">
+                <span class="fe-sim-ended-label">Error:</span> {{ simSession.error }}
               </div>
             </div>
           </div>
@@ -675,6 +658,112 @@ onMounted(async () => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Structural chrome around the vue-flow canvas — toolbar, palette, side
+   panels, simulator drawer. Oat has no app-shell/toolbar primitive.
+   Colours all via tokens; palette dot colours are node-type identity
+   (same Tailwind-named keys the already-migrated node components key
+   their gradients off — see components/calling/nodes/BaseNode.vue). */
+.fe-root { height: 100vh; display: flex; flex-direction: column; background: var(--background); color: var(--foreground); }
+
+.fe-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+  flex-shrink: 0;
+}
+.fe-name-input { max-width: 280px; }
+.fe-spacer { flex: 1 1 auto; }
+.fe-saved-msg { font-size: var(--text-8); color: var(--success); }
+
+.fe-palette {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.fe-palette-btn { flex-shrink: 0; }
+.fe-palette-dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: var(--radius-full); }
+
+.fe-main { flex: 1 1 auto; display: flex; overflow: hidden; }
+.fe-canvas { flex: 1 1 auto; position: relative; background: var(--background); }
+
+.fe-panel {
+  width: 420px;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--card);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fe-sim-panel { width: 480px; }
+.fe-panel-empty { padding: 1.5rem; font-size: var(--text-7); text-align: center; }
+
+.fe-sim-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.fe-sim-head-icon { color: var(--primary); }
+.fe-sim-head-title { font-size: var(--text-7); font-weight: 500; }
+
+.fe-sim-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.fe-sim-caller-label { font-size: var(--text-8); color: var(--muted-foreground); }
+.fe-sim-error { font-size: var(--text-8); color: var(--danger); }
+
+.fe-sim-body { flex: 1 1 auto; overflow: auto; padding: 1rem; font-size: var(--text-8); }
+.fe-sim-empty { text-align: center; padding: 2rem 0; }
+.fe-sim-steps { display: flex; flex-direction: column; gap: 0.5rem; list-style: none; margin: 0; padding: 0; }
+.fe-sim-step {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-medium);
+  padding: 0.5rem;
+  background: color-mix(in srgb, var(--secondary) 40%, transparent);
+}
+.fe-sim-step-idx { font-size: 10px; }
+.fe-sim-step-type { font-weight: 500; }
+.fe-sim-step-detail { margin-top: 0.25rem; overflow-wrap: break-word; }
+.fe-sim-step-outcome { margin-top: 0.25rem; font-size: 10px; }
+
+.fe-sim-waiting {
+  margin-top: 1rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 50%, transparent);
+  border-radius: var(--radius-medium);
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.fe-sim-waiting-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.25rem; }
+.fe-sim-waiting-prompt { margin-bottom: 0.5rem; }
+.fe-sim-input { flex: 1 1 auto; }
+.fe-sim-hint { margin-top: 0.25rem; font-size: 10px; }
+
+.fe-sim-ended {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-medium);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 40%, transparent);
+}
+.fe-sim-ended-label { font-weight: 500; color: var(--foreground); }
+</style>
 
 <style>
 .vue-flow__node {

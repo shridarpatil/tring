@@ -13,7 +13,7 @@ defineProps<{ data: Record<string, any> }>();
     header-class="bg-red-600"
     :output-handles="[]"
   >
-    <template #icon><PhoneOff class="w-4 h-4" /></template>
+    <template #icon><PhoneOff :size="16" /></template>
     <p v-if="data?.config?.audio_file || data?.config?.greeting_text" class="truncate">
       {{ data.config.greeting_text || data.config.audio_file }}
     </p>

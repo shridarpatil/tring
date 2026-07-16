@@ -27,29 +27,38 @@ function hourLabel(iso: string): string {
 
 <template>
   <div>
-    <div class="text-[11px] text-ink-faint mb-1.5">Calls / hour · last 12h</div>
-    <div class="flex items-end gap-1.5">
-      <div
-        v-for="(b, i) in buckets"
-        :key="b.hour"
-        class="flex-1 flex flex-col items-center"
-      >
-        <span
-          class="text-[10px] tabular-nums mb-0.5"
-          :class="i === buckets.length - 1 ? 'text-live font-semibold' : 'text-ink-muted'"
-          >{{ b.count }}</span
-        >
+    <div class="mbc-title">Calls / hour · last 12h</div>
+    <div class="mbc-row">
+      <div v-for="(b, i) in buckets" :key="b.hour" class="mbc-col">
+        <span class="mbc-count" :class="{ hot: i === buckets.length - 1 }">{{ b.count }}</span>
         <div
-          class="w-full rounded-t"
-          :class="i === buckets.length - 1 ? 'bg-live' : 'bg-accent/80'"
+          class="mbc-bar"
+          :class="{ hot: i === buckets.length - 1 }"
           :style="{ height: barHeight(b.count) + 'px' }"
         ></div>
-        <span
-          class="text-[9.5px] mt-1 whitespace-nowrap"
-          :class="i === buckets.length - 1 ? 'text-live font-semibold' : 'text-ink-faint'"
-          >{{ hourLabel(b.hour) }}</span
-        >
+        <span class="mbc-hr" :class="{ hot: i === buckets.length - 1 }">{{ hourLabel(b.hour) }}</span>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.mbc-title { font-size: 11px; color: var(--faint-foreground); margin-bottom: 0.375rem; }
+.mbc-row { display: flex; align-items: flex-end; gap: 0.375rem; }
+.mbc-col { flex: 1; display: flex; flex-direction: column; align-items: center; }
+.mbc-count {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 0.125rem;
+  color: var(--muted-foreground);
+}
+.mbc-count.hot { color: var(--color-live); font-weight: 600; }
+.mbc-bar {
+  width: 100%;
+  border-radius: var(--radius-small, 4px) var(--radius-small, 4px) 0 0;
+  background: color-mix(in srgb, var(--primary) 80%, transparent);
+}
+.mbc-bar.hot { background: var(--color-live); }
+.mbc-hr { font-size: 9.5px; margin-top: 0.25rem; white-space: nowrap; color: var(--faint-foreground); }
+.mbc-hr.hot { color: var(--color-live); font-weight: 600; }
+</style>
