@@ -1,0 +1,158 @@
+/*
+ * Oat × Tring "Operator" theme bridge.
+ *
+ * Re-points @knadh/oat's semantic theme variables onto the console's existing
+ * Operator design tokens (verbatim hex from web/src/style.css). Loaded AFTER
+ * oat.min.css; these rules are UNLAYERED, so they beat Oat's `@layer theme`
+ * regardless of source order. Oat's own light-dark() is thereby bypassed —
+ * light is the default, dark is applied under html[data-theme="dark"], the
+ * same mechanism web/src/lib/theme.ts drives.
+ */
+
+/* ── Light (default) ─────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  --background: #f6f7f9; /* --color-base */
+  --foreground: #1a1d21; /* --color-ink */
+  --card: #ffffff; /* --color-surface */
+  --card-foreground: #1a1d21;
+  --primary: #0d9488; /* --color-accent (signal teal) */
+  --primary-foreground: #ffffff; /* --color-accent-ink */
+  --secondary: #f1f3f5; /* --color-surface-2 */
+  --secondary-foreground: #1a1d21;
+  --muted: #f1f3f5;
+  --muted-foreground: #5a636e; /* --color-ink-muted */
+  --faint: #f1f3f5;
+  --faint-foreground: #8b95a1; /* --color-ink-faint */
+  --accent: #f1f3f5; /* Oat's --accent = hover surface, NOT a signal color */
+  --danger: #dc2626;
+  --danger-foreground: #ffffff;
+  --success: #15803d;
+  --success-foreground: #ffffff;
+  --warning: #b45309;
+  --warning-foreground: #ffffff;
+  --border: #e4e7eb; /* --color-border */
+  --input: #e4e7eb;
+  --ring: #0d9488;
+
+  /* Radius — Operator scale (sm 4 / md 6 / lg 10). */
+  --radius-small: 4px;
+  --radius-medium: 6px;
+  --radius-large: 10px;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SFMono-Regular",
+    "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* Extra Operator tokens for the live-signal language (not part of Oat). */
+  --color-accent-hover: #0f766e;
+  --color-live: #d97706; /* on-call amber */
+  --color-live-soft: #fdeccd;
+  --color-border-strong: #cdd2d9;
+}
+
+/* ── Dark override ───────────────────────────────────────────────────── */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background: #0e1116;
+  --foreground: #e6edf3;
+  --card: #161b22;
+  --card-foreground: #e6edf3;
+  --primary: #2dd4bf;
+  --primary-foreground: #07140f;
+  --secondary: #1c232d;
+  --secondary-foreground: #e6edf3;
+  --muted: #1c232d;
+  --muted-foreground: #9ba8b7;
+  --faint: #1c232d;
+  --faint-foreground: #6b7682;
+  --accent: #1c232d;
+  --danger: #f85149;
+  --danger-foreground: #07140f;
+  --success: #3fb950;
+  --success-foreground: #07140f;
+  --warning: #d29922;
+  --warning-foreground: #07140f;
+  --border: #2a323d;
+  --input: #2a323d;
+  --ring: #2dd4bf;
+
+  --color-accent-hover: #5ee0d0;
+  --color-live: #f5a524;
+  --color-live-soft: #3a2a0e;
+  --color-border-strong: #3a4451;
+}
+
+/*
+ * Signature Operator accents that Oat has no equivalent for — the live-signal
+ * language. Kept identical to web/src/style.css, gated behind reduced-motion.
+ */
+.live-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.7rem 0.25rem 0.55rem;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-live-soft);
+  color: var(--color-live);
+  font-size: var(--text-8, 0.75rem);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.live-dot {
+  position: relative;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 9999px;
+  background: var(--color-live);
+}
+
+.live-dot::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--color-live);
+  animation: tring-pulse-ring 1.8s ease-out infinite;
+}
+
+.level-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 1rem;
+}
+.level-meter > i {
+  display: block;
+  width: 3px;
+  height: 100%;
+  background: var(--primary);
+  border-radius: 2px;
+  transform-origin: bottom;
+  animation: tring-level 0.9s ease-in-out infinite;
+}
+.level-meter > i:nth-child(2) { animation-delay: 0.15s; }
+.level-meter > i:nth-child(3) { animation-delay: 0.3s; }
+.level-meter > i:nth-child(4) { animation-delay: 0.45s; }
+
+@keyframes tring-pulse-ring {
+  0%   { transform: scale(0.9); opacity: 0.7; }
+  70%  { transform: scale(2.2); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+@keyframes tring-level {
+  0%, 100% { transform: scaleY(0.35); }
+  50%      { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot::before,
+  .level-meter > i {
+    animation: none !important;
+  }
+}

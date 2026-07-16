@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Oat loads alongside Tailwind during the migration (Tailwind removed at
+   cutover). oat-theme.css re-points Oat's vars onto the Operator palette. */
+@import "@knadh/oat/oat.min.css";
+@import "./oat-theme.css";
+
 /*
  * Tring console — "Operator" design tokens.
  *
