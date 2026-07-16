@@ -165,7 +165,7 @@ onMounted(load);
         </template>
         <template #row-actions="{ row }">
           <Button variant="ghost" size="sm" @click="toggleActive(row)">
-            <Power class="h-4 w-4" />
+            <Power :size="16" />
             {{ row.active ? "Deactivate" : "Activate" }}
           </Button>
         </template>

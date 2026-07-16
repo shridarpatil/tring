@@ -95,10 +95,10 @@ async function deleteFlow(id: string) {
             size="sm"
             @click="router.push({ name: 'flow-editor', params: { id: row.id } })"
           >
-            Edit <ArrowRight class="h-3 w-3" />
+            Edit <ArrowRight :size="12" />
           </Button>
           <IconButton title="Delete flow" size="sm" variant="danger" @click="deleteFlow(row.id)">
-            <Trash2 class="h-4 w-4" />
+            <Trash2 :size="16" />
           </IconButton>
         </template>
       </DataTable>

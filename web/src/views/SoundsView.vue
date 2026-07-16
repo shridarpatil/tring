@@ -103,7 +103,7 @@ function fmtSize(n: number) {
           <span class="text-light">{{ fmtSize(Number(value)) }}</span>
         </template>
         <template #cell-preview="{ row }">
-          <audio v-if="previewUrl[row.id]" :src="previewUrl[row.id]" controls class="h-8"></audio>
+          <audio v-if="previewUrl[row.id]" :src="previewUrl[row.id]" controls style="height:2rem"></audio>
           <Button v-else variant="ghost" size="sm" @click="preview(row)">▶ Play</Button>
         </template>
         <template #row-actions="{ row }">
