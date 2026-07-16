@@ -25,7 +25,7 @@ const summary = computed(() => {
       { id: 'queue_timeout', label: 'queue T/O' },
     ]"
   >
-    <template #icon><Users class="w-4 h-4" /></template>
+    <template #icon><Users :size="16" /></template>
     <p class="truncate">{{ summary }}</p>
   </BaseNode>
 </template>
