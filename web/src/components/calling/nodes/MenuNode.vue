@@ -33,13 +33,13 @@ const outputHandles = computed(() => {
     header-class="bg-purple-600"
     :output-handles="outputHandles"
   >
-    <template #icon><Grid3X3 class="w-4 h-4" /></template>
-    <div v-if="options.length > 0" class="space-y-0.5">
+    <template #icon><Grid3X3 :size="16" /></template>
+    <div v-if="options.length > 0" style="display:flex;flex-direction:column;gap:0.125rem">
       <div v-for="[digit, opt] in options" :key="digit" class="flex gap-1">
-        <span class="font-mono font-bold">{{ digit }}:</span>
+        <span class="mono" style="font-weight:700">{{ digit }}:</span>
         <span class="truncate">{{ (opt as any)?.label || "—" }}</span>
       </div>
     </div>
-    <p v-else class="text-gray-400">No options</p>
+    <p v-else class="text-lighter">No options</p>
   </BaseNode>
 </template>

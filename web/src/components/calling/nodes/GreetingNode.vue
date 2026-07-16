@@ -24,9 +24,9 @@ const outputHandles = [{ id: "default", label: "next" }];
     header-class="bg-green-600"
     :output-handles="outputHandles"
   >
-    <template #icon><Volume2 class="w-4 h-4" /></template>
+    <template #icon><Volume2 :size="16" /></template>
     <p class="truncate">{{ summary }}</p>
-    <p v-if="data?.config?.interruptible" class="text-[10px] text-green-600 mt-0.5">
+    <p v-if="data?.config?.interruptible" class="node-hint-ok">
       Interruptible
     </p>
   </BaseNode>

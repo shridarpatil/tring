@@ -103,18 +103,18 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="space-y-5 max-w-2xl">
-    <h1 class="text-xl font-semibold tracking-tight">Settings</h1>
+  <div class="view" style="max-width: 42rem">
+    <h1 class="page-title">Settings</h1>
 
-    <Card v-if="tenant" class="space-y-5">
-      <div class="grid grid-cols-2 gap-4 text-sm">
+    <Card v-if="tenant" class="vstack">
+      <div class="grid grid-2">
         <div>
-          <div class="text-ink-muted">Tenant</div>
-          <div class="font-medium text-ink">{{ tenant.name }}</div>
+          <div class="text-light">Tenant</div>
+          <div style="font-weight: 500">{{ tenant.name }}</div>
         </div>
         <div>
-          <div class="text-ink-muted">SIP domain</div>
-          <div class="font-mono text-ink">{{ tenant.sip_domain }}</div>
+          <div class="text-light">SIP domain</div>
+          <div class="mono">{{ tenant.sip_domain }}</div>
         </div>
       </div>
 
@@ -124,21 +124,21 @@ onMounted(load);
           label="Outbound trunk strategy"
           :options="strategyOptions"
         />
-        <p class="text-xs text-ink-faint mt-1">
+        <p class="text-lighter" style="margin-top: 0.5rem">
           failover = try all in priority order · round_robin = rotate · manual = lowest priority only · load_based = reserved
         </p>
       </div>
 
-      <div v-if="tenant.failover_causes?.length" class="text-sm">
-        <div class="text-ink-muted">Failover causes</div>
-        <div class="mt-1 flex flex-wrap gap-1">
+      <div v-if="tenant.failover_causes?.length">
+        <div class="text-light">Failover causes</div>
+        <div class="chip-wrap" style="margin-top: 0.5rem">
           <Badge v-for="c in tenant.failover_causes" :key="c" tone="neutral">{{ c }}</Badge>
         </div>
       </div>
 
       <div>
-        <span class="text-xs font-medium text-ink-muted">Hold music</span>
-        <p class="text-xs text-ink-faint mb-1">
+        <span class="text-light" style="font-weight: 500">Hold music</span>
+        <p class="text-lighter" style="margin-bottom: 0.5rem">
           Played to callers waiting in a team's queue. Upload audio under <strong>Sounds</strong>.
           Default is FreeSWITCH's built-in music.
         </p>
@@ -147,37 +147,34 @@ onMounted(load);
 
       <div>
         <Toggle v-model="recordCalls" label="Record calls" />
-        <p class="text-xs text-ink-faint mt-1">
+        <p class="text-lighter" style="margin-top: 0.5rem">
           Record each call once the agent and caller connect. Recordings appear in the
           <strong>Calls</strong> log. Make sure recording is permitted and disclosed where you operate.
         </p>
       </div>
 
-      <div>
-        <span class="text-xs font-medium text-ink-muted">Max call duration (minutes)</span>
+      <div data-field>
+        <label for="max-call-minutes">Max call duration (minutes)</label>
         <input
+          id="max-call-minutes"
           v-model.number="maxCallMinutes"
           type="number"
           min="1"
           max="1440"
-          class="mt-1 block w-40 rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+          style="max-width: 10rem"
         />
-        <p class="text-xs text-ink-faint mt-1">
+        <small data-hint>
           Longest a call may last. Also sets the TURN relay credential lifetime, so it must
           cover your longest call. 1–1440 min.
-        </p>
+        </small>
       </div>
 
-      <div>
-        <span class="text-xs font-medium text-ink-muted">Transfer — no-answer message</span>
-        <p class="text-xs text-ink-faint mb-1">
+      <div data-field>
+        <label for="transfer-failed-message">Transfer — no-answer message</label>
+        <textarea id="transfer-failed-message" v-model="transferFailedMessage" rows="3"></textarea>
+        <small data-hint>
           Played to the caller when a blind transfer finds no one available.
-        </p>
-        <textarea
-          v-model="transferFailedMessage"
-          rows="3"
-          class="mt-1 block w-full rounded-md bg-surface-2 border border-border px-3 py-2 text-sm text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
-        ></textarea>
+        </small>
       </div>
 
       <div>
@@ -186,10 +183,10 @@ onMounted(load);
     </Card>
 
     <!-- ─── Guest web calling ─────────────────────────────────────── -->
-    <Card v-if="guest" class="space-y-5">
+    <Card v-if="guest" class="vstack">
       <div>
-        <h2 class="text-base font-semibold text-ink">Guest web calling</h2>
-        <p class="text-sm text-ink-muted">
+        <h2 style="font-size: var(--text-4); margin: 0">Guest web calling</h2>
+        <p class="text-light">
           The default IVR flow a guest call lands in when your backend doesn't pass
           an explicit <code>flow_id</code>. Visitor tokens are minted server-side via
           <code>POST /v1/guest-credentials</code> (your API key) — gate that with a
@@ -199,7 +196,7 @@ onMounted(load);
 
       <div>
         <Select v-model="defaultFlowId" label="Default flow" :options="flowOptions" />
-        <p class="text-xs text-ink-faint mt-1">
+        <p class="text-lighter" style="margin-top: 0.5rem">
           The fallback flow for guest calls with no explicit flow_id. Only active flows are listed.
         </p>
       </div>

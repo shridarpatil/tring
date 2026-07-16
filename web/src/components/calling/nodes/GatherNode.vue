@@ -28,7 +28,7 @@ const outputHandles = [
     header-class="bg-blue-600"
     :output-handles="outputHandles"
   >
-    <template #icon><Hash class="w-4 h-4" /></template>
+    <template #icon><Hash :size="16" /></template>
     <p class="truncate">{{ summary }}</p>
   </BaseNode>
 </template>

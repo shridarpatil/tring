@@ -36,17 +36,14 @@ async function submit() {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-base px-4">
-    <form
-      class="w-full max-w-sm bg-surface rounded-xl border border-border p-8 space-y-5 shadow-2xl"
-      @submit.prevent="submit"
-    >
-      <div class="text-center space-y-1">
-        <div class="flex items-center justify-center gap-2">
-          <span class="h-2 w-2 rounded-full bg-accent"></span>
-          <span class="text-2xl font-semibold tracking-tight">Tring</span>
+  <div class="login">
+    <form class="card login-card" @submit.prevent="submit">
+      <div class="login-brand">
+        <div class="login-word">
+          <span class="brand-dot"></span>
+          <span class="brand-name">Tring</span>
         </div>
-        <div class="text-sm text-ink-muted">Console sign-in</div>
+        <div class="text-light">Console sign-in</div>
       </div>
       <TextField
         v-model="email"
@@ -63,10 +60,34 @@ async function submit() {
         required
         autocomplete="current-password"
       />
-      <p v-if="error" class="text-sm text-danger">{{ error }}</p>
+      <p v-if="error" class="login-error">{{ error }}</p>
       <Button type="submit" :loading="loading" block>
         {{ loading ? "Signing in…" : "Sign in" }}
       </Button>
     </form>
   </div>
 </template>
+
+<style scoped>
+.login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background);
+  padding: 1rem;
+}
+.login-card {
+  width: 100%;
+  max-width: 24rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 2rem;
+}
+.login-brand { text-align: center; display: flex; flex-direction: column; gap: 0.25rem; }
+.login-word { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+.brand-dot { height: 0.5rem; width: 0.5rem; border-radius: 9999px; background: var(--primary); }
+.brand-name { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+.login-error { font-size: var(--text-7); color: var(--danger); }
+</style>
