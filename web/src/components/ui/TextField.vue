@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, useId } from "vue";
+import { useId } from "vue";
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     modelValue?: string | number;
     label?: string;
@@ -19,18 +19,12 @@ const props = withDefaults(
 
 const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
 const uid = useId();
-
-const inputCls = computed(() => [
-  "w-full rounded-md bg-surface-2 border px-3 h-9 text-sm text-ink placeholder:text-ink-faint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent disabled:opacity-50",
-  props.error ? "border-danger" : "border-border",
-  props.mono ? "font-mono" : "",
-]);
 </script>
 
 <template>
-  <div>
-    <label v-if="label" :for="uid" class="block text-xs font-medium text-ink-muted mb-1">
-      {{ label }}<span v-if="required" class="text-danger ml-0.5">*</span>
+  <div data-field :aria-invalid="error ? 'true' : undefined">
+    <label v-if="label || required" :for="uid">
+      {{ label }}<span v-if="required" class="req">*</span>
     </label>
     <input
       :id="uid"
@@ -40,10 +34,11 @@ const inputCls = computed(() => [
       :required="required"
       :disabled="disabled"
       :autocomplete="autocomplete"
-      :class="inputCls"
+      :aria-invalid="error ? 'true' : undefined"
+      :style="mono ? { fontFamily: 'var(--font-mono)' } : undefined"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
-    <p v-if="error" class="mt-1 text-xs text-danger">{{ error }}</p>
-    <p v-else-if="hint" class="mt-1 text-xs text-ink-faint">{{ hint }}</p>
+    <small v-if="hint && !error" data-hint>{{ hint }}</small>
+    <small v-if="error" class="error">{{ error }}</small>
   </div>
 </template>

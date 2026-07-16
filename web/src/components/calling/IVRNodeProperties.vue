@@ -1,8 +1,7 @@
 <script setup lang="ts">
 // IVRNodeProperties — right-side panel that edits the config of the
-// currently selected node. Faithful port of Whatomate's IVRNodeProperties
-// adapted to Tring's stack (plain Tailwind, no shadcn-vue/i18n). Per-
-// node-type config blocks cover all 8 IVR node types.
+// currently selected node. Per-node-type config blocks cover all 8 IVR
+// node types. Bare inputs are styled by Oat; only structural layout is scoped.
 import { computed, ref, watch } from "vue";
 import { Trash2, Volume2, Grid3X3, Hash, Globe, Users, ExternalLink, Clock, PhoneOff, Plus, X } from "lucide-vue-next";
 import type { IVRNodeType, Flow, Agent, Team } from "../../api/types";
@@ -42,15 +41,16 @@ const iconFor: Record<string, any> = {
   hangup: PhoneOff,
 };
 
+// Node-type identity colours (concrete hex — not theme tokens).
 const colorFor: Record<string, string> = {
-  greeting: "bg-green-600",
-  menu: "bg-purple-600",
-  gather: "bg-blue-600",
-  http_callback: "bg-orange-600",
-  transfer: "bg-amber-600",
-  goto_flow: "bg-teal-600",
-  timing: "bg-cyan-600",
-  hangup: "bg-red-600",
+  greeting: "#16a34a",
+  menu: "#9333ea",
+  gather: "#2563eb",
+  http_callback: "#ea580c",
+  transfer: "#d97706",
+  goto_flow: "#0d9488",
+  timing: "#0891b2",
+  hangup: "#dc2626",
 };
 
 const label = ref(props.node.data?.label || "");
@@ -152,110 +152,73 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
+  <div class="props">
     <!-- Header -->
-    <div class="px-4 py-3 border-b border-border flex items-center gap-3">
-      <div
-        :class="[
-          'h-8 w-8 rounded-md flex items-center justify-center text-white shrink-0',
-          colorFor[node.type] || 'bg-surface-2',
-        ]"
-      >
-        <component :is="iconFor[node.type] || PhoneOff" class="h-4 w-4" />
+    <div class="props-head">
+      <div class="type-badge" :style="{ background: colorFor[node.type] || 'var(--secondary)' }">
+        <component :is="iconFor[node.type] || PhoneOff" :size="16" />
       </div>
-      <div class="flex-1 min-w-0">
-        <div class="text-[10px] uppercase tracking-wide text-ink-faint font-medium">
-          {{ node.type.replace("_", " ") }}
-        </div>
-        <input
-          v-model="label"
-          class="w-full text-sm font-semibold bg-transparent border-0 p-0 focus:outline-none focus:ring-0"
-          placeholder="Node label"
-        />
+      <div class="head-mid">
+        <div class="type-kicker">{{ node.type.replace("_", " ") }}</div>
+        <input v-model="label" class="label-input" placeholder="Node label" />
       </div>
-      <button
-        class="h-7 w-7 rounded-md text-danger hover:bg-danger-soft flex items-center justify-center"
-        title="Delete node"
-        @click="$emit('delete')"
-      >
-        <Trash2 class="h-4 w-4" />
+      <button type="button" class="mini-del" title="Delete node" @click="$emit('delete')">
+        <Trash2 :size="16" />
       </button>
     </div>
 
-    <div class="flex-1 overflow-y-auto px-4 py-4 space-y-4 text-sm">
+    <div class="props-body">
       <!-- ── GREETING ──────────────────────────────────────────── -->
       <template v-if="node.type === 'greeting' || node.type === 'hangup'">
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Greeting text</span>
+        <label class="fld">
+          <span class="fl">Greeting text</span>
           <textarea
             v-model="config.greeting_text"
             rows="3"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
             placeholder="Say this with TTS, or leave blank and use an audio file"
           />
         </label>
-        <div class="block">
-          <span class="text-xs font-medium text-ink-muted">Audio file (from your sound library)</span>
+        <div>
+          <span class="fl">Audio file (from your sound library)</span>
           <AudioPicker v-model="config.audio_file" default-label="None (use text-to-speech above)" />
         </div>
-        <label v-if="node.type === 'greeting'" class="flex items-center gap-2">
-          <input v-model="config.interruptible" type="checkbox" class="rounded" />
-          <span class="text-xs">Interruptible (caller can press a key to skip)</span>
+        <label v-if="node.type === 'greeting'" class="chk">
+          <input v-model="config.interruptible" type="checkbox" />
+          <span>Interruptible (caller can press a key to skip)</span>
         </label>
       </template>
 
       <!-- ── MENU ──────────────────────────────────────────────── -->
       <template v-if="node.type === 'menu'">
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Prompt text</span>
-          <textarea
-            v-model="config.greeting_text"
-            rows="2"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            placeholder="Press 1 for sales, 2 for support…"
-          />
+        <label class="fld">
+          <span class="fl">Prompt text</span>
+          <textarea v-model="config.greeting_text" rows="2" placeholder="Press 1 for sales, 2 for support…" />
         </label>
-        <div class="block">
-          <span class="text-xs font-medium text-ink-muted">Audio file (from your sound library)</span>
+        <div>
+          <span class="fl">Audio file (from your sound library)</span>
           <AudioPicker v-model="config.audio_file" default-label="None (use prompt text above)" />
         </div>
-        <div class="grid grid-cols-2 gap-3">
-          <label class="block">
-            <span class="text-xs font-medium text-ink-muted">Timeout (s)</span>
-            <input
-              v-model.number="config.timeout_seconds"
-              type="number"
-              min="1"
-              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            />
+        <div class="grid grid-2">
+          <label class="fld">
+            <span class="fl">Timeout (s)</span>
+            <input v-model.number="config.timeout_seconds" type="number" min="1" />
           </label>
-          <label class="block">
-            <span class="text-xs font-medium text-ink-muted">Max retries</span>
-            <input
-              v-model.number="config.max_retries"
-              type="number"
-              min="0"
-              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            />
+          <label class="fld">
+            <span class="fl">Max retries</span>
+            <input v-model.number="config.max_retries" type="number" min="0" />
           </label>
         </div>
 
         <div>
-          <div class="text-xs font-medium text-ink-muted mb-2">Options</div>
-          <div v-if="menuOptions.length === 0" class="text-xs text-ink-faint italic">
+          <div class="fl" style="margin-bottom: 0.5rem">Options</div>
+          <div v-if="menuOptions.length === 0" class="empty-note">
             No options yet — add a digit and label below.
           </div>
-          <div
-            v-for="[digit, opt] in menuOptions"
-            :key="digit"
-            class="flex items-center gap-2 mb-2"
-          >
-            <span
-              class="h-7 w-7 rounded border border-border bg-surface-2 text-ink flex items-center justify-center font-mono font-bold text-sm shrink-0"
-              >{{ digit }}</span
-            >
+          <div v-for="[digit, opt] in menuOptions" :key="digit" class="edit-row">
+            <span class="digit-chip">{{ digit }}</span>
             <input
               :value="opt.label"
+              placeholder="Option label"
               @input="
                 (e) => {
                   const opts = { ...(config.options || {}) };
@@ -263,181 +226,98 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
                   config = { ...config, options: opts };
                 }
               "
-              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-sm"
-              placeholder="Option label"
             />
-            <button
-              class="h-7 w-7 rounded text-danger hover:bg-danger-soft flex items-center justify-center"
-              @click="removeMenuOption(digit)"
-            >
-              <X class="h-3.5 w-3.5" />
+            <button type="button" class="mini-del" @click="removeMenuOption(digit)">
+              <X :size="14" />
             </button>
           </div>
-          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-border">
-            <input
-              v-model="newDigit"
-              maxlength="1"
-              placeholder="0-9"
-              class="h-7 w-12 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-sm text-center font-mono"
-            />
-            <input
-              v-model="newOptionLabel"
-              placeholder="Label"
-              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-sm"
-            />
-            <button
-              class="h-7 w-7 rounded bg-accent text-accent-ink hover:bg-accent-hover flex items-center justify-center"
-              @click="addMenuOption"
-            >
-              <Plus class="h-3.5 w-3.5" />
-            </button>
+          <div class="edit-row add-row">
+            <input v-model="newDigit" maxlength="1" placeholder="0-9" class="mono digit-in" />
+            <input v-model="newOptionLabel" placeholder="Label" />
+            <button type="button" class="mini-add" @click="addMenuOption"><Plus :size="14" /></button>
           </div>
         </div>
       </template>
 
       <!-- ── GATHER ────────────────────────────────────────────── -->
       <template v-if="node.type === 'gather'">
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Prompt text</span>
-          <textarea
-            v-model="config.greeting_text"
-            rows="2"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            placeholder="Please enter your account number followed by #"
-          />
+        <label class="fld">
+          <span class="fl">Prompt text</span>
+          <textarea v-model="config.greeting_text" rows="2" placeholder="Please enter your account number followed by #" />
         </label>
-        <div class="block">
-          <span class="text-xs font-medium text-ink-muted">Audio file (from your sound library)</span>
+        <div>
+          <span class="fl">Audio file (from your sound library)</span>
           <AudioPicker v-model="config.audio_file" default-label="None (use prompt text above)" />
         </div>
-        <div class="grid grid-cols-2 gap-3">
-          <label class="block">
-            <span class="text-xs font-medium text-ink-muted">Max digits</span>
-            <input
-              v-model.number="config.max_digits"
-              type="number"
-              min="1"
-              max="50"
-              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            />
+        <div class="grid grid-2">
+          <label class="fld">
+            <span class="fl">Max digits</span>
+            <input v-model.number="config.max_digits" type="number" min="1" max="50" />
           </label>
-          <label class="block">
-            <span class="text-xs font-medium text-ink-muted">Terminator</span>
-            <input
-              v-model="config.terminator"
-              maxlength="1"
-              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm text-center font-mono"
-              placeholder="#"
-            />
+          <label class="fld">
+            <span class="fl">Terminator</span>
+            <input v-model="config.terminator" maxlength="1" class="mono" style="text-align: center" placeholder="#" />
           </label>
-          <label class="block">
-            <span class="text-xs font-medium text-ink-muted">Timeout (s)</span>
-            <input
-              v-model.number="config.timeout_seconds"
-              type="number"
-              min="1"
-              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            />
+          <label class="fld">
+            <span class="fl">Timeout (s)</span>
+            <input v-model.number="config.timeout_seconds" type="number" min="1" />
           </label>
-          <label class="block">
-            <span class="text-xs font-medium text-ink-muted">Max retries</span>
-            <input
-              v-model.number="config.max_retries"
-              type="number"
-              min="0"
-              class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-            />
+          <label class="fld">
+            <span class="fl">Max retries</span>
+            <input v-model.number="config.max_retries" type="number" min="0" />
           </label>
         </div>
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Store as (variable name)</span>
-          <input
-            v-model="config.store_as"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm font-mono"
-            placeholder="account_number"
-          />
+        <label class="fld">
+          <span class="fl">Store as (variable name)</span>
+          <input v-model="config.store_as" class="mono" placeholder="account_number" />
         </label>
       </template>
 
       <!-- ── HTTP CALLBACK ─────────────────────────────────────── -->
       <template v-if="node.type === 'http_callback'">
-        <div class="grid grid-cols-[80px_1fr] gap-2">
-          <select
-            v-model="config.method"
-            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-2 text-sm font-mono"
-          >
+        <div class="g-http">
+          <select v-model="config.method" class="mono">
             <option>GET</option>
             <option>POST</option>
             <option>PUT</option>
             <option>PATCH</option>
             <option>DELETE</option>
           </select>
-          <input
-            v-model="config.url"
-            type="url"
-            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm font-mono"
-            placeholder="https://your-crm/webhook"
-          />
+          <input v-model="config.url" type="url" class="mono" placeholder="https://your-crm/webhook" />
         </div>
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Body template</span>
+        <label class="fld">
+          <span class="fl">Body template</span>
           <textarea
             v-model="config.body_template"
             rows="4"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-xs font-mono"
+            class="mono"
             placeholder='{"caller":"{{caller_id}}","digits":"{{account_number}}"}'
           />
         </label>
         <div>
-          <div class="text-xs font-medium text-ink-muted mb-2">Headers</div>
-          <div v-for="[k, v] in httpHeaders" :key="k" class="flex items-center gap-2 mb-2">
-            <span class="font-mono text-xs flex-1 truncate">{{ k }}</span>
-            <span class="font-mono text-xs flex-1 truncate text-ink-muted">{{ v }}</span>
-            <button
-              class="h-6 w-6 rounded text-danger hover:bg-danger-soft flex items-center justify-center"
-              @click="removeHeader(k)"
-            >
-              <X class="h-3 w-3" />
-            </button>
+          <div class="fl" style="margin-bottom: 0.5rem">Headers</div>
+          <div v-for="[k, v] in httpHeaders" :key="k" class="edit-row">
+            <span class="mono truncate hdr-cell">{{ k }}</span>
+            <span class="mono truncate hdr-cell text-light">{{ v }}</span>
+            <button type="button" class="mini-del" @click="removeHeader(k)"><X :size="12" /></button>
           </div>
-          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-border">
-            <input
-              v-model="newHeaderKey"
-              placeholder="Header"
-              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs font-mono"
-            />
-            <input
-              v-model="newHeaderVal"
-              placeholder="Value"
-              class="flex-1 rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs font-mono"
-            />
-            <button
-              class="h-7 w-7 rounded bg-accent text-accent-ink hover:bg-accent-hover flex items-center justify-center"
-              @click="addHeader"
-            >
-              <Plus class="h-3.5 w-3.5" />
-            </button>
+          <div class="edit-row add-row">
+            <input v-model="newHeaderKey" placeholder="Header" class="mono" />
+            <input v-model="newHeaderVal" placeholder="Value" class="mono" />
+            <button type="button" class="mini-add" @click="addHeader"><Plus :size="14" /></button>
           </div>
         </div>
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Timeout (s)</span>
-          <input
-            v-model.number="config.timeout_seconds"
-            type="number"
-            min="1"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-          />
+        <label class="fld">
+          <span class="fl">Timeout (s)</span>
+          <input v-model.number="config.timeout_seconds" type="number" min="1" />
         </label>
       </template>
 
       <!-- ── TRANSFER ──────────────────────────────────────────── -->
       <template v-if="node.type === 'transfer'">
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Transfer to</span>
-          <select
-            v-model="transferTarget"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-          >
+        <label class="fld">
+          <span class="fl">Transfer to</span>
+          <select v-model="transferTarget">
             <option value="">All available agents (ring everyone)</option>
             <optgroup v-if="availableTeams && availableTeams.length" label="Teams">
               <option v-for="t in availableTeams" :key="t.name" :value="`team:${t.name}`">
@@ -454,17 +334,17 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 
         <!-- Queue explainer + Priority checkbox — only meaningful for a team. -->
         <template v-if="transferTarget.startsWith('team:')">
-          <div class="rounded-md bg-accent-soft/40 border border-accent/30 p-3 text-[11px] text-ink-muted leading-relaxed">
-            <span class="font-medium">If everyone on the team is busy,</span> callers hear hold
+          <div class="info-box">
+            <span style="font-weight: 500">If everyone on the team is busy,</span> callers hear hold
             music and wait in line, then connect to the next agent who frees up. The team's
             strategy, wait time and hold music are set on the <strong>Teams</strong> page.
           </div>
 
-          <label class="flex items-start gap-2">
-            <input type="checkbox" v-model="config.priority" class="mt-0.5" />
-            <span class="text-xs text-ink-muted">
-              <span class="font-medium">Priority caller — let them skip the line</span>
-              <span class="block text-[11px] text-ink-faint mt-0.5">
+          <label class="chk chk-top">
+            <input type="checkbox" v-model="config.priority" />
+            <span class="text-light">
+              <span style="font-weight: 500; color: var(--foreground)">Priority caller — let them skip the line</span>
+              <span class="sub-note">
                 Callers reaching this step wait in a separate front-of-line queue. To route by
                 who's calling, put an <strong>HTTP callback</strong> step before this and wire its
                 <strong>2xx</strong> branch here (priority on) and its <strong>error</strong>
@@ -474,19 +354,16 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           </label>
         </template>
 
-        <p v-if="!availableTeams || !availableTeams.length" class="text-[11px] text-warning">
+        <p v-if="!availableTeams || !availableTeams.length" class="warn-note">
           No teams yet — create one under <strong>Teams</strong> to ring a group with a strategy.
         </p>
       </template>
 
       <!-- ── GOTO FLOW ─────────────────────────────────────────── -->
       <template v-if="node.type === 'goto_flow'">
-        <label class="block">
-          <span class="text-xs font-medium text-ink-muted">Target flow</span>
-          <select
-            v-model="config.flow_id"
-            class="mt-1 w-full rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-3 py-2 text-sm"
-          >
+        <label class="fld">
+          <span class="fl">Target flow</span>
+          <select v-model="config.flow_id">
             <option value="">— Select a flow —</option>
             <option
               v-for="f in (availableFlows || []).filter((f) => f.id !== currentFlowId)"
@@ -501,34 +378,144 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 
       <!-- ── TIMING ────────────────────────────────────────────── -->
       <template v-if="node.type === 'timing'">
-        <div class="text-xs font-medium text-ink-muted mb-1">Business hours</div>
+        <div class="fl" style="margin-bottom: 0.25rem">Business hours</div>
         <div
           v-for="(s, idx) in (config.schedule || []) as Array<{day:string,enabled:boolean,start_time:string,end_time:string}>"
           :key="s.day"
-          class="grid grid-cols-[80px_1fr_1fr_auto] gap-2 items-center"
+          class="g-timing"
         >
-          <span class="text-xs font-medium capitalize">{{ s.day }}</span>
-          <input
-            v-model="s.start_time"
-            type="time"
-            :disabled="!s.enabled"
-            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs"
-          />
-          <input
-            v-model="s.end_time"
-            type="time"
-            :disabled="!s.enabled"
-            class="rounded-md border border-border bg-surface-2 text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent px-2 py-1 text-xs"
-          />
+          <span class="day-name">{{ s.day }}</span>
+          <input v-model="s.start_time" type="time" :disabled="!s.enabled" />
+          <input v-model="s.end_time" type="time" :disabled="!s.enabled" />
           <input
             v-model="s.enabled"
             type="checkbox"
-            class="rounded"
-            @change="config = { ...config, schedule: [...(config.schedule || [])] }"
             :data-idx="idx"
+            @change="config = { ...config, schedule: [...(config.schedule || [])] }"
           />
         </div>
       </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.props { height: 100%; display: flex; flex-direction: column; }
+.props-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.type-badge {
+  height: 2rem;
+  width: 2rem;
+  border-radius: var(--radius-medium);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+}
+.head-mid { flex: 1; min-width: 0; }
+.type-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--faint-foreground);
+  font-weight: 500;
+}
+.label-input {
+  width: 100%;
+  font-size: var(--text-7);
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--foreground);
+}
+.label-input:focus { outline: none; box-shadow: none; }
+.props-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  font-size: var(--text-7);
+}
+.fld { display: block; }
+.fld > input,
+.fld > textarea,
+.fld > select { margin-top: 0.25rem; }
+.fl { display: block; font-size: var(--text-8); font-weight: 500; color: var(--muted-foreground); }
+.chk { display: flex; align-items: center; gap: 0.5rem; font-size: var(--text-8); }
+.chk-top { align-items: flex-start; }
+.chk-top input { margin-top: 0.15rem; }
+.sub-note { display: block; font-size: 11px; color: var(--faint-foreground); margin-top: 0.15rem; }
+.empty-note { font-size: var(--text-8); color: var(--faint-foreground); font-style: italic; }
+.edit-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.edit-row > input { margin-top: 0; }
+.add-row { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.digit-in { width: 3rem; text-align: center; flex: none; }
+.digit-chip {
+  height: 1.75rem;
+  width: 1.75rem;
+  border-radius: var(--radius-medium);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.hdr-cell { flex: 1; font-size: var(--text-8); }
+.mini-del {
+  height: 1.75rem;
+  width: 1.75rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-medium);
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mini-del:hover { background: var(--color-danger-soft); }
+.mini-add {
+  height: 1.75rem;
+  width: 1.75rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-medium);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.info-box {
+  border-radius: var(--radius-medium);
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+.warn-note { font-size: 11px; color: var(--warning); }
+.g-http { display: grid; grid-template-columns: 80px 1fr; gap: 0.5rem; }
+.g-http > select, .g-http > input { margin-top: 0; }
+.g-timing { display: grid; grid-template-columns: 80px 1fr 1fr auto; gap: 0.5rem; align-items: center; }
+.g-timing > input { margin-top: 0; }
+.day-name { font-size: var(--text-8); font-weight: 500; text-transform: capitalize; }
+</style>

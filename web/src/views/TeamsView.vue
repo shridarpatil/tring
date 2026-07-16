@@ -161,118 +161,112 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">Teams</h1>
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">Teams</h1>
       <Button @click="showForm = true">New team</Button>
     </div>
 
-    <p class="text-sm text-ink-muted">
-      A team is a group of agents the IVR <span class="font-medium text-ink">Transfer</span> node rings as a
+    <p class="text-light">
+      A team is a group of agents the IVR <span style="font-weight: 500">Transfer</span> node rings as a
       unit, using the team's strategy. When every member is busy the caller waits in the team's queue.
     </p>
 
-    <div class="rounded-xl bg-surface border border-border overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="border-b border-border text-left">
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Name</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Strategy</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint text-right">Ring</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint text-right">Max wait</th>
-            <th class="px-4 h-10 w-0"></th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-for="t in teams" :key="t.name">
-            <tr
-              class="border-b border-border/60 transition-colors cursor-pointer hover:bg-surface-2/40"
-              @click="open(t)"
-            >
-              <td class="px-4 py-2.5 font-medium text-ink">{{ t.name }}</td>
-              <td class="px-4 py-2.5 text-ink">{{ strategyLabel(t.strategy) }}</td>
-              <td class="px-4 py-2.5 text-right text-ink-muted">{{ t.ring_seconds }}s</td>
-              <td class="px-4 py-2.5 text-right text-ink-muted">{{ t.max_wait_seconds }}s</td>
-              <td class="px-4 py-2.5 text-right whitespace-nowrap" @click.stop>
-                <Button variant="ghost" size="sm" @click="open(t)">
-                  {{ selected && selected.name === t.name ? "Close" : "Manage" }}
-                </Button>
-                <IconButton title="Delete team" size="sm" variant="danger" @click="destroy(t)">
-                  <Trash2 class="h-4 w-4" />
-                </IconButton>
-              </td>
+    <div class="card" style="padding: 0">
+      <div class="table">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Strategy</th>
+              <th class="align-right">Ring</th>
+              <th class="align-right">Max wait</th>
+              <th></th>
             </tr>
-            <tr
-              v-if="selected && selected.name === t.name"
-              class="border-b border-border bg-surface-2/40"
-            >
-              <td colspan="5" class="px-5 py-4">
-                <div class="grid sm:grid-cols-3 gap-4 items-end mb-4">
-                  <Select v-model="selected.strategy" label="Strategy" :options="strategyOptions" />
-                  <TextField v-model.number="selected.ring_seconds" type="number" label="Ring secs" />
-                  <TextField v-model.number="selected.max_wait_seconds" type="number" label="Max wait secs" />
-                </div>
-                <Button variant="secondary" size="sm" class="mb-4" @click="saveSettings">Save settings</Button>
-
-                <div class="text-xs font-medium text-ink-muted mb-1">
-                  Members (position orders sequential ring)
-                </div>
-                <div class="rounded-lg border border-border overflow-hidden bg-surface">
-                  <table class="w-full text-sm">
-                    <tbody>
-                      <tr
-                        v-for="m in selected.members"
-                        :key="m.agent_id"
-                        class="border-t border-border first:border-t-0"
-                      >
-                        <td class="px-3 py-1.5 text-ink-faint w-10">{{ m.position }}</td>
-                        <td class="px-3 py-1.5 font-mono text-ink">{{ m.sip_username }}</td>
-                        <td class="px-3 py-1.5 text-ink-muted">{{ m.display_name }}</td>
-                        <td class="px-3 py-1.5 text-right">
-                          <IconButton title="Remove member" size="sm" variant="danger" @click="removeMember(m.agent_id)">
-                            <Trash2 class="h-4 w-4" />
-                          </IconButton>
-                        </td>
-                      </tr>
-                      <tr v-if="!selected.members?.length">
-                        <td colspan="4" class="px-3 py-3 text-center text-ink-faint">No members yet</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                <div class="flex items-end gap-2 mt-3">
-                  <div class="flex-1">
-                    <Select
-                      v-model="addAgentId"
-                      label="Add agent"
-                      placeholder="Select an agent…"
-                      :options="addAgentOptions"
-                    />
+          </thead>
+          <tbody>
+            <template v-for="t in teams" :key="t.name">
+              <tr style="cursor: pointer" @click="open(t)">
+                <td style="font-weight: 500">{{ t.name }}</td>
+                <td>{{ strategyLabel(t.strategy) }}</td>
+                <td class="align-right text-light">{{ t.ring_seconds }}s</td>
+                <td class="align-right text-light">{{ t.max_wait_seconds }}s</td>
+                <td class="align-right" style="white-space: nowrap" @click.stop>
+                  <Button variant="ghost" size="sm" @click="open(t)">
+                    {{ selected && selected.name === t.name ? "Close" : "Manage" }}
+                  </Button>
+                  <IconButton title="Delete team" size="sm" variant="danger" @click="destroy(t)">
+                    <Trash2 :size="16" />
+                  </IconButton>
+                </td>
+              </tr>
+              <tr v-if="selected && selected.name === t.name" style="background: var(--secondary)">
+                <td colspan="5">
+                  <div class="grid grid-3" style="align-items: end; margin-bottom: 1rem">
+                    <Select v-model="selected.strategy" label="Strategy" :options="strategyOptions" />
+                    <TextField v-model.number="selected.ring_seconds" type="number" label="Ring secs" />
+                    <TextField v-model.number="selected.max_wait_seconds" type="number" label="Max wait secs" />
                   </div>
-                  <div class="w-24">
-                    <TextField v-model.number="addPosition" type="number" label="Position" />
+                  <Button variant="secondary" size="sm" style="margin-bottom: 1rem" @click="saveSettings">
+                    Save settings
+                  </Button>
+
+                  <div class="text-light" style="font-weight: 500; margin-bottom: 0.375rem">
+                    Members (position orders sequential ring)
                   </div>
-                  <Button :disabled="!addAgentId" @click="addMember">Add</Button>
-                </div>
-              </td>
+                  <div class="table" style="border: 1px solid var(--border); border-radius: var(--radius-large); overflow: hidden">
+                    <table>
+                      <tbody>
+                        <tr v-for="m in selected.members" :key="m.agent_id">
+                          <td class="text-lighter" style="width: 2.5rem">{{ m.position }}</td>
+                          <td class="mono">{{ m.sip_username }}</td>
+                          <td class="text-light">{{ m.display_name }}</td>
+                          <td class="align-right">
+                            <IconButton title="Remove member" size="sm" variant="danger" @click="removeMember(m.agent_id)">
+                              <Trash2 :size="16" />
+                            </IconButton>
+                          </td>
+                        </tr>
+                        <tr v-if="!selected.members?.length">
+                          <td colspan="4" class="align-center text-lighter">No members yet</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div class="flex gap-2" style="align-items: flex-end; margin-top: 0.75rem">
+                    <div style="flex: 1 1 auto">
+                      <Select
+                        v-model="addAgentId"
+                        label="Add agent"
+                        placeholder="Select an agent…"
+                        :options="addAgentOptions"
+                      />
+                    </div>
+                    <div style="width: 6rem">
+                      <TextField v-model.number="addPosition" type="number" label="Position" />
+                    </div>
+                    <Button :disabled="!addAgentId" @click="addMember">Add</Button>
+                  </div>
+                </td>
+              </tr>
+            </template>
+            <tr v-if="!loading && teams.length === 0">
+              <td colspan="5" class="align-center text-lighter">No teams yet</td>
             </tr>
-          </template>
-          <tr v-if="!loading && teams.length === 0">
-            <td colspan="5" class="px-4 py-10 text-center text-ink-faint">No teams yet</td>
-          </tr>
-          <tr v-if="loading">
-            <td colspan="5" class="px-4 py-10 text-center text-ink-faint">Loading…</td>
-          </tr>
-        </tbody>
-      </table>
+            <tr v-if="loading">
+              <td colspan="5" class="align-center text-lighter">Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <Modal v-model:open="showForm" title="New team">
-      <form id="team-form" class="space-y-4" @submit.prevent="create">
+      <form id="team-form" class="vstack" @submit.prevent="create">
         <TextField v-model="form.name" label="Name" required placeholder="Sales" />
         <Select v-model="form.strategy" label="Strategy" :options="strategyOptions" />
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-2">
           <TextField v-model.number="form.ring_seconds" type="number" label="Ring secs" />
           <TextField v-model.number="form.max_wait_seconds" type="number" label="Max wait secs" />
         </div>

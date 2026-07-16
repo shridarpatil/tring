@@ -26,7 +26,7 @@ const outputHandles = [
     header-class="bg-cyan-600"
     :output-handles="outputHandles"
   >
-    <template #icon><Clock class="w-4 h-4" /></template>
+    <template #icon><Clock :size="16" /></template>
     <p class="truncate">{{ summary }}</p>
   </BaseNode>
 </template>

@@ -65,41 +65,41 @@ function fmt(d?: string) {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">API keys</h1>
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">API keys</h1>
       <Button @click="showForm = true">Generate key</Button>
     </div>
 
-    <p class="text-sm text-ink-muted">
-      Server-to-server credentials (<code class="font-mono text-ink">tk_live_…</code>) for your
+    <p class="text-light">
+      Server-to-server credentials (<code class="mono">tk_live_…</code>) for your
       backend — e.g. minting calling credentials. Send as
-      <code class="font-mono text-ink">Authorization: Bearer &lt;key&gt;</code>. Never expose a key
+      <code class="mono">Authorization: Bearer &lt;key&gt;</code>. Never expose a key
       in a browser.
     </p>
 
     <!-- Plaintext shown exactly once -->
-    <div v-if="newKey" class="rounded-xl border border-live/30 bg-live-soft p-4">
-      <div class="flex items-center justify-between gap-3">
-        <div class="text-sm">New API key — copy it now, it won't be shown again</div>
+    <div v-if="newKey" role="alert" data-variant="warning">
+      <div class="hstack justify-between">
+        <div>New API key — copy it now, it won't be shown again</div>
         <CopyButton :value="newKey" label="Copy key" />
       </div>
-      <code class="block mt-2 break-all text-xs font-mono text-ink-muted">{{ newKey }}</code>
+      <code class="mono reveal-code">{{ newKey }}</code>
     </div>
 
     <Panel>
       <DataTable :columns="cols" :rows="keys" :loading="loading" empty-text="No API keys yet">
         <template #cell-name="{ row }">
-          <span :class="row.revoked ? 'text-ink-faint' : ''">{{ row.name }}</span>
+          <span :class="row.revoked ? 'text-lighter' : ''">{{ row.name }}</span>
         </template>
         <template #cell-key_prefix="{ value }">
-          <span class="text-ink-muted">{{ value }}…</span>
+          <span class="text-light">{{ value }}…</span>
         </template>
         <template #cell-created_at="{ value }">
-          <span class="text-ink-muted">{{ fmt(value as string | undefined) }}</span>
+          <span class="text-light">{{ fmt(value as string | undefined) }}</span>
         </template>
         <template #cell-last_used_at="{ value }">
-          <span class="text-ink-muted">{{ fmt(value as string | undefined) }}</span>
+          <span class="text-light">{{ fmt(value as string | undefined) }}</span>
         </template>
         <template #cell-status="{ row }">
           <Badge :tone="row.revoked ? 'neutral' : 'success'">
@@ -113,7 +113,7 @@ function fmt(d?: string) {
     </Panel>
 
     <Modal v-model:open="showForm" title="Generate API key">
-      <form id="apikey-form" class="space-y-2" @submit.prevent="create">
+      <form id="apikey-form" class="vstack" @submit.prevent="create">
         <TextField
           v-model="newName"
           label="Name"

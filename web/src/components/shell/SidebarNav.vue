@@ -11,28 +11,51 @@ function isActive(to: string): boolean {
 </script>
 
 <template>
-  <nav class="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
+  <nav class="nav">
     <RouterLink
       v-for="item in items"
       :key="item.to"
       :to="item.to"
-      class="group relative flex items-center gap-2.5 px-3 h-9 rounded-md text-sm transition-colors"
-      :class="
-        isActive(item.to)
-          ? 'bg-surface-2 text-ink font-medium'
-          : 'text-ink-muted hover:text-ink hover:bg-surface-2/60'
-      "
+      class="nav-link"
+      :class="{ active: isActive(item.to) }"
     >
-      <span
-        class="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-accent transition-opacity"
-        :class="isActive(item.to) ? 'opacity-100' : 'opacity-0'"
-      ></span>
-      <component
-        :is="item.icon"
-        class="h-4 w-4 shrink-0"
-        :class="isActive(item.to) ? 'text-accent' : ''"
-      />
+      <span class="nav-ind"></span>
+      <component :is="item.icon" :size="16" class="nav-icon" />
       {{ item.label }}
     </RouterLink>
   </nav>
 </template>
+
+<style scoped>
+.nav { flex: 1; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.125rem; overflow-y: auto; }
+.nav-link {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0 0.75rem;
+  height: 2.25rem;
+  border-radius: var(--radius-medium);
+  font-size: var(--text-7);
+  color: var(--muted-foreground);
+  text-decoration: none;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+.nav-link:hover { color: var(--foreground); background: color-mix(in srgb, var(--secondary) 60%, transparent); }
+.nav-link.active { background: var(--secondary); color: var(--foreground); font-weight: 500; }
+.nav-ind {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1.25rem;
+  width: 0.125rem;
+  border-radius: 9999px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+.nav-link.active .nav-ind { opacity: 1; }
+.nav-icon { flex-shrink: 0; }
+.nav-link.active .nav-icon { color: var(--primary); }
+</style>

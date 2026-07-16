@@ -14,58 +14,47 @@ function sourceCls(source: string): string {
 
 <template>
   <Modal :open="open" size="wide" @update:open="(v) => emit('update:open', v)">
-    <div class="space-y-3">
+    <div class="cfl">
       <!-- Header -->
-      <div class="flex items-center gap-3">
-        <button
-          type="button"
-          class="flex items-center gap-1 text-sm text-ink-muted hover:text-ink transition-colors"
-          @click="emit('back')"
-        >
-          <ArrowLeft class="h-4 w-4" />
+      <div class="cfl-head">
+        <button type="button" class="ghost small" @click="emit('back')">
+          <ArrowLeft :size="14" />
           Back
         </button>
-        <div class="min-w-0 flex-1 truncate text-sm font-medium text-ink">
-          Full log — {{ caller }} → {{ callee }}
-        </div>
-        <button
-          type="button"
-          class="text-ink-faint hover:text-ink transition-colors"
-          aria-label="Close"
-          @click="emit('update:open', false)"
-        >
-          <X class="h-4 w-4" />
+        <div class="truncate cfl-title">Full log — {{ caller }} → {{ callee }}</div>
+        <button type="button" class="ghost icon small" aria-label="Close" @click="emit('update:open', false)">
+          <X :size="16" />
         </button>
       </div>
 
       <!-- Table -->
-      <div class="-mx-5 overflow-auto max-h-[60vh] border-y border-border">
-        <table class="w-full text-sm">
-          <thead class="sticky top-0 z-10 bg-surface">
-            <tr class="border-b border-border text-left">
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">#</th>
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">Timestamp</th>
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">Offset</th>
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">Source</th>
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">Event</th>
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">Actor</th>
-              <th class="px-3 h-9 font-medium text-[11px] uppercase tracking-wide text-ink-faint">Detail</th>
+      <div class="table cfl-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="align-right">#</th>
+              <th>Timestamp</th>
+              <th>Offset</th>
+              <th>Source</th>
+              <th>Event</th>
+              <th>Actor</th>
+              <th>Detail</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in rows" :key="r.index" class="border-b border-border/60">
-              <td class="px-3 py-2 text-ink-faint tabular-nums">{{ r.index }}</td>
-              <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-ink-muted">{{ r.timestamp }}</td>
-              <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-ink-faint">{{ r.offset }}</td>
-              <td class="px-3 py-2">
-                <span class="rounded px-1.5 py-0.5 text-[10px] font-medium" :class="sourceCls(r.source)">{{ r.source }}</span>
+            <tr v-for="r in rows" :key="r.index">
+              <td class="align-right mono text-lighter">{{ r.index }}</td>
+              <td class="mono text-light" style="white-space: nowrap">{{ r.timestamp }}</td>
+              <td class="mono text-lighter" style="white-space: nowrap">{{ r.offset }}</td>
+              <td>
+                <span class="badge" :data-variant="r.source === 'ivr' ? 'secondary' : 'accent'">{{ r.source }}</span>
               </td>
-              <td class="px-3 py-2 whitespace-nowrap font-mono text-xs text-ink">{{ r.event }}</td>
-              <td class="px-3 py-2 whitespace-nowrap text-ink">{{ r.actor }}</td>
-              <td class="px-3 py-2 text-ink-muted">{{ r.detail }}</td>
+              <td class="mono" style="white-space: nowrap">{{ r.event }}</td>
+              <td style="white-space: nowrap">{{ r.actor }}</td>
+              <td class="text-light">{{ r.detail }}</td>
             </tr>
             <tr v-if="rows.length === 0">
-              <td colspan="7" class="px-3 py-8 text-center text-ink-faint">No events recorded.</td>
+              <td colspan="7" class="align-center text-lighter cfl-empty">No events recorded.</td>
             </tr>
           </tbody>
         </table>
@@ -73,3 +62,22 @@ function sourceCls(source: string): string {
     </div>
   </Modal>
 </template>
+
+<style scoped>
+/* Structural only — the sticky-header/max-height scroll behaviour has no
+   Oat primitive (DataTable's maxHeight mode isn't usable here without
+   touching <script>, since it isn't already imported). Colours via tokens. */
+.cfl { display: flex; flex-direction: column; gap: 0.75rem; }
+.cfl-head { display: flex; align-items: center; gap: 0.75rem; }
+.cfl-title { flex: 1 1 auto; min-width: 0; font-size: var(--text-7); font-weight: 500; }
+.cfl-table-wrap {
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0 -1.25rem;
+  width: auto;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.cfl-table-wrap thead { position: sticky; top: 0; z-index: 10; background: var(--card); }
+.cfl-empty { padding: 2.5rem 1rem; }
+</style>
