@@ -41,46 +41,49 @@ function go(n: number) {
 </script>
 
 <template>
-  <div
-    v-if="totalPages > 1"
-    class="flex items-center justify-between gap-3 px-4 h-12 border-t border-border text-sm"
-  >
-    <span class="text-ink-faint">{{ total }} {{ label }}</span>
+  <div v-if="totalPages > 1" class="pager">
+    <span class="pager-count">{{ total }} {{ label }}</span>
 
-    <div class="flex items-center gap-1">
+    <div class="hstack pager-controls">
       <button
-        class="inline-flex items-center justify-center h-8 w-8 rounded-md text-ink-muted hover:bg-surface-2/60 disabled:opacity-40 disabled:hover:bg-transparent"
+        class="icon ghost small"
         :disabled="page <= 1"
         aria-label="Previous page"
         @click="go(page - 1)"
       >
-        <ChevronLeft class="h-4 w-4" />
+        <ChevronLeft :size="16" />
       </button>
 
       <template v-for="(p, i) in pages" :key="i">
-        <span v-if="p === '…'" class="px-1.5 text-ink-faint select-none">…</span>
-        <button
-          v-else
-          class="inline-flex items-center justify-center h-8 min-w-8 px-2 rounded-md tabular-nums transition-colors"
-          :class="
-            p === page
-              ? 'bg-accent text-accent-ink'
-              : 'text-ink-muted hover:bg-surface-2/60'
-          "
-          @click="go(p)"
-        >
+        <span v-if="p === '…'" class="pager-gap">…</span>
+        <button v-else class="small" :class="p === page ? '' : 'ghost'" @click="go(p)">
           {{ p }}
         </button>
       </template>
 
       <button
-        class="inline-flex items-center justify-center h-8 w-8 rounded-md text-ink-muted hover:bg-surface-2/60 disabled:opacity-40 disabled:hover:bg-transparent"
+        class="icon ghost small"
         :disabled="page >= totalPages"
         aria-label="Next page"
         @click="go(page + 1)"
       >
-        <ChevronRight class="h-4 w-4" />
+        <ChevronRight :size="16" />
       </button>
     </div>
   </div>
 </template>
+
+<style scoped>
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 1rem;
+  height: 3rem;
+  border-top: 1px solid var(--border);
+}
+.pager-count { font-size: var(--text-7); color: var(--faint-foreground); }
+.pager-controls { gap: 0.25rem; }
+.pager-gap { padding: 0 0.375rem; color: var(--faint-foreground); user-select: none; }
+</style>

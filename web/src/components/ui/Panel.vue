@@ -5,14 +5,23 @@ withDefaults(defineProps<{ pad?: boolean }>(), { pad: false });
 </script>
 
 <template>
-  <div class="rounded-xl bg-surface border border-border overflow-hidden">
-    <div
-      v-if="$slots.title || $slots.actions"
-      class="flex items-center justify-between gap-3 px-5 h-12 border-b border-border"
-    >
-      <div class="text-sm font-medium text-ink"><slot name="title" /></div>
-      <div class="flex items-center gap-2"><slot name="actions" /></div>
+  <div class="card panel">
+    <div v-if="$slots.title || $slots.actions" class="hstack justify-between panel-head">
+      <div class="panel-title"><slot name="title" /></div>
+      <div class="hstack"><slot name="actions" /></div>
     </div>
-    <div :class="pad ? 'p-5' : ''"><slot /></div>
+    <div :class="pad ? 'panel-body-pad' : ''"><slot /></div>
   </div>
 </template>
+
+<style scoped>
+/* Structural only — Oat has no titled-panel primitive. Colours via tokens. */
+.panel { padding: 0; overflow: hidden; }
+.panel-head {
+  height: 3rem;
+  padding: 0 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.panel-title { font-size: var(--text-7); font-weight: 500; }
+.panel-body-pad { padding: 1.25rem; }
+</style>
