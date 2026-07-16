@@ -109,6 +109,20 @@ html[data-theme="dark"] {
 }
 
 /*
+ * Operator form inputs are raised (surface-2), not page-bg. Oat's native input
+ * styling uses --background; re-point it to --secondary. Unlayered + :where()
+ * (0 specificity) so it beats Oat's @layer base yet loses to component scoped
+ * styles. Matters most in dark (page #0e1116 vs input #1c232d).
+ */
+:where(
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+  textarea,
+  select
+) {
+  background-color: var(--secondary);
+}
+
+/*
  * Signature Operator accents that Oat has no equivalent for — the live-signal
  * language. Kept identical to web/src/style.css, gated behind reduced-motion.
  */

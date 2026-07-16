@@ -18,12 +18,27 @@ async function copy() {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="inline-flex items-center gap-1.5 rounded-md px-2 h-7 text-xs text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-    @click="copy"
-  >
-    <component :is="copied ? Check : Copy" class="h-3.5 w-3.5" :class="copied ? 'text-success' : ''" />
+  <button type="button" class="copy-btn" @click="copy">
+    <component :is="copied ? Check : Copy" :size="14" :class="copied ? 'ok' : ''" />
     {{ copied ? "Copied" : label || "Copy" }}
   </button>
 </template>
+
+<style scoped>
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  background: transparent;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: var(--radius-medium);
+  font-size: var(--text-8);
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+.copy-btn:hover { color: var(--foreground); background: var(--secondary); }
+.copy-btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.copy-btn .ok { color: var(--success); }
+</style>
