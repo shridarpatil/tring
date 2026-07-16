@@ -4,24 +4,48 @@ const emit = defineEmits<{ (e: "update:modelValue", v: boolean): void }>();
 </script>
 
 <template>
-  <label
-    class="inline-flex items-center gap-2 cursor-pointer select-none"
-    :class="disabled ? 'opacity-50 pointer-events-none' : ''"
-  >
+  <label class="tgl" :class="disabled ? 'is-off' : ''">
     <button
       type="button"
       role="switch"
       :aria-checked="modelValue"
       :disabled="disabled"
-      class="relative h-5 w-9 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-base"
-      :class="modelValue ? 'bg-accent' : 'bg-surface-2 border border-border'"
+      class="track"
+      :class="modelValue ? 'on' : ''"
       @click="emit('update:modelValue', !modelValue)"
     >
-      <span
-        class="absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform"
-        :class="modelValue ? 'translate-x-4 bg-base' : 'bg-ink-faint'"
-      ></span>
+      <span class="knob" :class="modelValue ? 'on' : ''"></span>
     </button>
-    <span v-if="label" class="text-sm text-ink">{{ label }}</span>
+    <span v-if="label" class="lbl">{{ label }}</span>
   </label>
 </template>
+
+<style scoped>
+.tgl { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; user-select: none; }
+.tgl.is-off { opacity: 0.5; pointer-events: none; }
+/* Reset Oat's bare-<button> base. */
+.track {
+  position: relative;
+  height: 1.25rem;
+  width: 2.25rem;
+  padding: 0;
+  border-radius: 9999px;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+.track.on { background: var(--primary); border-color: transparent; }
+.track:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.knob {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  height: 1rem;
+  width: 1rem;
+  border-radius: 9999px;
+  background: var(--faint-foreground);
+  transition: transform var(--transition-fast), background-color var(--transition-fast);
+}
+.knob.on { transform: translateX(1rem); background: var(--background); }
+.lbl { font-size: var(--text-7); color: var(--foreground); }
+</style>

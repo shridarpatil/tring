@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, useId } from "vue";
+import { useId } from "vue";
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     modelValue?: string | number;
     label?: string;
@@ -19,18 +19,12 @@ const props = withDefaults(
 
 const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
 const uid = useId();
-
-const inputCls = computed(() => [
-  "w-full rounded-md bg-surface-2 border px-3 h-9 text-sm text-ink placeholder:text-ink-faint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent disabled:opacity-50",
-  props.error ? "border-danger" : "border-border",
-  props.mono ? "font-mono" : "",
-]);
 </script>
 
 <template>
-  <div>
-    <label v-if="label" :for="uid" class="block text-xs font-medium text-ink-muted mb-1">
-      {{ label }}<span v-if="required" class="text-danger ml-0.5">*</span>
+  <div class="field">
+    <label v-if="label" :for="uid" class="field-label">
+      {{ label }}<span v-if="required" class="req">*</span>
     </label>
     <input
       :id="uid"
@@ -40,10 +34,27 @@ const inputCls = computed(() => [
       :required="required"
       :disabled="disabled"
       :autocomplete="autocomplete"
-      :class="inputCls"
+      :aria-invalid="!!error"
+      :class="{ mono }"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
-    <p v-if="error" class="mt-1 text-xs text-danger">{{ error }}</p>
-    <p v-else-if="hint" class="mt-1 text-xs text-ink-faint">{{ hint }}</p>
+    <p v-if="error" class="msg err">{{ error }}</p>
+    <p v-else-if="hint" class="msg hint">{{ hint }}</p>
   </div>
 </template>
+
+<style scoped>
+.field-label {
+  display: block;
+  font-size: var(--text-8);
+  font-weight: 500;
+  color: var(--muted-foreground);
+  margin-bottom: 0.25rem;
+}
+.req { color: var(--danger); margin-left: 0.125rem; }
+.field input { margin-block-start: 0; }
+.mono { font-family: var(--font-mono); }
+.msg { margin-top: 0.25rem; font-size: var(--text-8); }
+.err { color: var(--danger); }
+.hint { color: var(--faint-foreground); }
+</style>
