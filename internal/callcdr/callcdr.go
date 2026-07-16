@@ -521,6 +521,23 @@ func endedEvent(callID uuid.UUID, duration int, cause string, at time.Time) map[
 	}
 }
 
+// superviseStartDetail / superviseModeDetail / superviseEndDetail build the
+// call_events detail for the three supervisor moments. All share the "supervise"
+// type; the "action" field distinguishes start / live mode switch / stop, and
+// every moment carries the supervisor's display name so the timeline reads
+// without a users join and disambiguates concurrent supervisors.
+func superviseStartDetail(name, mode string) map[string]any {
+	return map[string]any{"action": "start", "mode": mode, "supervisor": name}
+}
+
+func superviseModeDetail(name, mode string) map[string]any {
+	return map[string]any{"action": "mode", "mode": mode, "supervisor": name}
+}
+
+func superviseEndDetail(name string) map[string]any {
+	return map[string]any{"action": "end", "supervisor": name}
+}
+
 // timelineEvent appends one row to a call's durable event timeline (call_events)
 // — the console's per-call history. Best-effort: a DB failure logs and moves on,
 // leaving a gap rather than failing the call. detail is type-specific JSON.
