@@ -431,7 +431,7 @@ func (l *Log) Ended(roomID, cause string) {
 // SuperviseStart records a supervisor session start and returns its id ("" on
 // failure — the caller treats "" as "no audit row"). userID is the console
 // user's id (the JWT subject) — a FK into users(id) — not a token jti.
-func (l *Log) SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, userID, mode string) string {
+func (l *Log) SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, userID, name, mode string) string {
 	var uid *uuid.UUID
 	if u, err := uuid.Parse(userID); err == nil {
 		uid = &u
@@ -448,13 +448,29 @@ func (l *Log) SuperviseStart(ctx context.Context, tenant uuid.UUID, callRoomID, 
 		return ""
 	}
 	if callID != nil {
-		l.timelineEvent(tenant, *callID, "supervise", map[string]any{"mode": mode})
+		l.timelineEvent(tenant, *callID, "supervise", superviseStartDetail(name, mode))
 	}
 	return sessionID.String()
 }
 
-// SuperviseEnd stamps the end + the full mode list on a supervisor session.
-func (l *Log) SuperviseEnd(sessionID string, modes []string) {
+// SuperviseMode records a live supervisor mode switch (monitor→whisper→barge) on
+// the call timeline. Best-effort and no-op once the call is no longer active;
+// tenant is resolved from the active call, so the caller passes only the room.
+func (l *Log) SuperviseMode(callRoomID, name, mode string) {
+	l.mu.Lock()
+	ac := l.calls[callRoomID]
+	l.mu.Unlock()
+	if ac == nil {
+		return
+	}
+	l.timelineEvent(ac.tenant, ac.id, "supervise", superviseModeDetail(name, mode))
+}
+
+// SuperviseEnd stamps the end + the full mode list on the supervisor session row,
+// and — while the call is still live — appends a "stopped supervising" event to
+// the timeline. If the call already ended, the timeline row is skipped: a stop
+// after "call ended" would be misordered, and best-effort tolerates the gap.
+func (l *Log) SuperviseEnd(sessionID, callRoomID, name string, modes []string) {
 	id, err := uuid.Parse(sessionID)
 	if err != nil {
 		return
@@ -463,6 +479,12 @@ func (l *Log) SuperviseEnd(sessionID string, modes []string) {
 	defer cancel()
 	if _, err := l.db.Pool.Exec(ctx, l.q.EndSupervisorSession, id, modes); err != nil {
 		l.log.Warn("supervise: end audit failed", "err", err)
+	}
+	l.mu.Lock()
+	ac := l.calls[callRoomID]
+	l.mu.Unlock()
+	if ac != nil {
+		l.timelineEvent(ac.tenant, ac.id, "supervise", superviseEndDetail(name))
 	}
 }
 
@@ -519,6 +541,23 @@ func endedEvent(callID uuid.UUID, duration int, cause string, at time.Time) map[
 		"duration_seconds": duration,
 		"hangup_cause":     cause,
 	}
+}
+
+// superviseStartDetail / superviseModeDetail / superviseEndDetail build the
+// call_events detail for the three supervisor moments. All share the "supervise"
+// type; the "action" field distinguishes start / live mode switch / stop, and
+// every moment carries the supervisor's display name so the timeline reads
+// without a users join and disambiguates concurrent supervisors.
+func superviseStartDetail(name, mode string) map[string]any {
+	return map[string]any{"action": "start", "mode": mode, "supervisor": name}
+}
+
+func superviseModeDetail(name, mode string) map[string]any {
+	return map[string]any{"action": "mode", "mode": mode, "supervisor": name}
+}
+
+func superviseEndDetail(name string) map[string]any {
+	return map[string]any{"action": "end", "supervisor": name}
 }
 
 // timelineEvent appends one row to a call's durable event timeline (call_events)

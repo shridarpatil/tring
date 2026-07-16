@@ -84,6 +84,30 @@ func TestEndedEvent(t *testing.T) {
 	}
 }
 
+func TestSuperviseStartDetail(t *testing.T) {
+	m := superviseStartDetail("Nidhi", "monitor")
+	if m["action"] != "start" || m["mode"] != "monitor" || m["supervisor"] != "Nidhi" {
+		t.Fatalf("bad start detail: %+v", m)
+	}
+}
+
+func TestSuperviseModeDetail(t *testing.T) {
+	m := superviseModeDetail("Nidhi", "whisper")
+	if m["action"] != "mode" || m["mode"] != "whisper" || m["supervisor"] != "Nidhi" {
+		t.Fatalf("bad mode detail: %+v", m)
+	}
+}
+
+func TestSuperviseEndDetail(t *testing.T) {
+	m := superviseEndDetail("Nidhi")
+	if m["action"] != "end" || m["supervisor"] != "Nidhi" {
+		t.Fatalf("bad end detail: %+v", m)
+	}
+	if _, ok := m["mode"]; ok {
+		t.Fatalf("end detail must not carry mode: %+v", m)
+	}
+}
+
 // fakeSink records publishes (used by integration-style tests / future use).
 type fakeSink struct{ types []string }
 
