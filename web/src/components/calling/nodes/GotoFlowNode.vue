@@ -22,7 +22,7 @@ const summary = computed(() => {
     header-class="bg-teal-600"
     :output-handles="[]"
   >
-    <template #icon><ExternalLink class="w-4 h-4" /></template>
+    <template #icon><ExternalLink :size="16" /></template>
     <p class="truncate">{{ summary }}</p>
   </BaseNode>
 </template>

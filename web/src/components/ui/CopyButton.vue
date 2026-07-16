@@ -18,12 +18,8 @@ async function copy() {
 </script>
 
 <template>
-  <button
-    type="button"
-    class="inline-flex items-center gap-1.5 rounded-md px-2 h-7 text-xs text-ink-muted hover:text-ink hover:bg-surface-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-    @click="copy"
-  >
-    <component :is="copied ? Check : Copy" class="h-3.5 w-3.5" :class="copied ? 'text-success' : ''" />
+  <button type="button" class="ghost small" @click="copy">
+    <component :is="copied ? Check : Copy" :size="14" />
     {{ copied ? "Copied" : label || "Copy" }}
   </button>
 </template>

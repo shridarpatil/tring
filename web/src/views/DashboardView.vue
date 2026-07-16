@@ -82,10 +82,10 @@ function destLabel(c: Call): string {
 // transfer re-ring on an in-progress call reads "ringing" until the new agent picks
 // up, rather than staying "talking" on the agent who handed it off.
 function callBadge(c: Call): { text: string; cls: string } {
-  if (c.phase === "ringing") return { text: "ringing", cls: "text-accent bg-accent-soft" };
-  if (c.status === "answered") return { text: "talking", cls: "text-live bg-live-soft" };
-  if (c.phase === "ivr") return { text: "in IVR", cls: "text-ink-muted bg-surface-2" };
-  return { text: "ringing", cls: "text-accent bg-accent-soft" };
+  if (c.phase === "ringing") return { text: "ringing", cls: "accent" };
+  if (c.status === "answered") return { text: "talking", cls: "live" };
+  if (c.phase === "ivr") return { text: "in IVR", cls: "secondary" };
+  return { text: "ringing", cls: "accent" };
 }
 
 // ── supervisor (Listen/Whisper/Barge) ─────────────────────────────────
@@ -130,106 +130,95 @@ usePoll(() => (now.value = Date.now()), 1000);
 </script>
 
 <template>
-  <div class="space-y-4">
-    <h1 class="text-xl font-semibold tracking-tight">Dashboard</h1>
-    <div v-if="!ready" class="text-ink-faint text-sm">Loading…</div>
+  <div class="view">
+    <h1 class="page-title">Dashboard</h1>
+    <div v-if="!ready" class="text-lighter">Loading…</div>
 
     <template v-else>
       <!-- Trend strip: today so far -->
-      <div class="rounded-xl bg-surface border border-border px-5 py-3.5 flex items-center gap-6">
-        <div class="shrink-0">
-          <div class="text-xl font-semibold tabular-nums">{{ stats?.calls_today ?? 0 }}</div>
-          <div class="text-[11px] text-ink-muted mt-1">Calls today</div>
+      <div class="card trend-strip">
+        <div style="flex-shrink: 0">
+          <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
+          <div class="trend-label">Calls today</div>
         </div>
-        <div class="shrink-0">
-          <div class="text-xl font-semibold tabular-nums text-success">{{ stats?.answered_pct ?? 0 }}%</div>
-          <div class="text-[11px] text-ink-muted mt-1">Answered</div>
+        <div style="flex-shrink: 0">
+          <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
+          <div class="trend-label">Answered</div>
         </div>
-        <div class="shrink-0">
-          <div class="text-xl font-semibold tabular-nums">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
-          <div class="text-[11px] text-ink-muted mt-1">Avg talk</div>
+        <div style="flex-shrink: 0">
+          <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
+          <div class="trend-label">Avg talk</div>
         </div>
-        <div class="w-px self-stretch bg-border"></div>
-        <div class="flex-1 min-w-0">
+        <div class="trend-divider"></div>
+        <div style="flex: 1 1 auto; min-width: 0">
           <MiniBarChart v-if="stats" :buckets="stats.hourly" />
         </div>
       </div>
 
       <!-- KPI hero row. On-call + waiting aren't here — they already show in the
            Live calls / Queues panels below; these surface outcomes instead. -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div class="rounded-xl bg-surface border border-border p-5">
-          <div class="text-3xl font-semibold tabular-nums" :class="(stats?.abandoned_today ?? 0) > 0 ? 'text-warning' : ''">
+      <div class="grid grid-4">
+        <div class="card">
+          <div class="kpi-num" :style="{ color: (stats?.abandoned_today ?? 0) > 0 ? 'var(--warning)' : undefined }">
             {{ stats?.abandoned_today ?? 0 }}
           </div>
-          <div class="text-sm text-ink-muted mt-1">Abandoned today</div>
+          <div class="text-light" style="margin-top: 0.25rem">Abandoned today</div>
         </div>
 
-        <div class="rounded-xl bg-surface border border-border p-5">
-          <div class="text-3xl font-semibold tabular-nums" :class="(stats?.failed_today ?? 0) > 0 ? 'text-danger' : ''">
+        <div class="card">
+          <div class="kpi-num" :style="{ color: (stats?.failed_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
             {{ stats?.failed_today ?? 0 }}
           </div>
-          <div class="text-sm text-ink-muted mt-1">Failed today</div>
+          <div class="text-light" style="margin-top: 0.25rem">Failed today</div>
         </div>
 
-        <div class="rounded-xl bg-surface border border-border p-5">
-          <div class="text-3xl font-semibold tabular-nums">
-            {{ availableAgents }}<span class="text-lg text-ink-faint"> / {{ agents.length }}</span>
+        <div class="card">
+          <div class="kpi-num">
+            {{ availableAgents }}<span class="text-lighter" style="font-size: 1.125rem"> / {{ agents.length }}</span>
           </div>
-          <div class="text-sm text-ink-muted mt-1">Agents available</div>
+          <div class="text-light" style="margin-top: 0.25rem">Agents available</div>
         </div>
 
-        <div class="rounded-xl bg-surface border border-border p-5">
-          <div class="text-3xl font-semibold tabular-nums">{{ fmtDur(stats?.avg_wait_seconds ?? 0) }}</div>
-          <div class="text-sm text-ink-muted mt-1">Avg wait today</div>
+        <div class="card">
+          <div class="kpi-num">{{ fmtDur(stats?.avg_wait_seconds ?? 0) }}</div>
+          <div class="text-light" style="margin-top: 0.25rem">Avg wait today</div>
         </div>
       </div>
 
       <!-- Main row: live calls | queues + agents -->
-      <div class="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-4 items-start">
+      <div class="dash-main">
         <Panel>
           <template #title>Live calls</template>
           <template #actions>
             <LevelMeter v-if="hasTalking" active />
-            <span class="text-xs text-ink-muted">{{ calls.length }} active</span>
+            <span class="text-light">{{ calls.length }} active</span>
           </template>
-          <div class="max-h-[28rem] overflow-y-auto">
-          <div v-if="!calls.length" class="px-5 py-8 text-sm text-ink-faint text-center">
+          <div class="scroll-max" style="--max-h: 28rem">
+          <div v-if="!calls.length" class="list-empty">
             No live calls
           </div>
-          <div
-            v-for="c in calls"
-            :key="c.id"
-            class="flex items-center gap-3 px-5 py-3 border-b border-border last:border-b-0"
-          >
-            <span
-              class="shrink-0 w-7 h-7 rounded-md bg-surface-2 flex items-center justify-center text-xs"
-              aria-hidden="true"
-              >{{ sourceIcon(c) }}</span
-            >
-            <div class="flex-1 min-w-0">
-              <div class="text-sm truncate">
-                {{ callerLabel(c) }} → <span class="font-medium">{{ destLabel(c) }}</span>
+          <div v-for="c in calls" :key="c.id" class="live-call-row">
+            <span class="source-badge" aria-hidden="true">{{ sourceIcon(c) }}</span>
+            <div style="flex: 1 1 auto; min-width: 0">
+              <div class="truncate">
+                {{ callerLabel(c) }} → <span style="font-weight: 500">{{ destLabel(c) }}</span>
               </div>
-              <div class="text-[11.5px] text-ink-faint font-mono truncate">{{ c.to_number }}</div>
+              <div class="text-lighter mono truncate">{{ c.to_number }}</div>
             </div>
-            <span
-              class="text-[10.5px] px-2 py-0.5 rounded-full font-semibold shrink-0"
-              :class="callBadge(c).cls"
-              >{{ callBadge(c).text }}</span
-            >
-            <span class="tabular-nums text-sm text-ink-muted shrink-0 w-12 text-right">{{
+            <span class="badge" :data-variant="callBadge(c).cls" style="flex-shrink: 0">{{ callBadge(c).text }}</span>
+            <span class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
               fmtDur(callSeconds(c))
             }}</span>
             <!-- Supervisor controls: web calls only. Only ONE supervise session
                  is supported at a time (the `active` ref, not per-row state). -->
-            <div v-if="c.source === 'web'" class="shrink-0 flex items-center gap-1">
-              <span v-if="c.supervised && active?.callId !== c.id" class="text-[10.5px] text-ink-faint" :title="'Supervised by ' + c.supervised"
+            <div v-if="c.source === 'web'" style="flex-shrink: 0; display: flex; align-items: center; gap: 0.25rem">
+              <span v-if="c.supervised && active?.callId !== c.id" class="text-lighter" :title="'Supervised by ' + c.supervised"
                 >🎧 {{ c.supervised }}</span
               >
               <button
                 v-if="active?.callId !== c.id"
-                class="text-[11px] px-2 py-0.5 rounded-md bg-surface-2 hover:bg-surface transition-colors"
+                type="button"
+                class="dash-pill"
                 @click="startSupervise(c)"
               >
                 Listen
@@ -238,16 +227,14 @@ usePoll(() => (now.value = Date.now()), 1000);
                 <button
                   v-for="m in (['monitor', 'whisper', 'barge'] as const)"
                   :key="m"
-                  class="text-[11px] px-2 py-0.5 rounded-md capitalize transition-colors"
-                  :class="active.mode === m ? 'bg-accent text-white' : 'bg-surface-2 hover:bg-surface'"
+                  type="button"
+                  class="dash-pill"
+                  :class="{ 'dash-pill-active': active.mode === m }"
                   @click="setMode(m)"
                 >
                   {{ m }}
                 </button>
-                <button
-                  class="text-[11px] px-2 py-0.5 rounded-md bg-danger-soft text-danger transition-colors"
-                  @click="stopSupervise()"
-                >
+                <button type="button" class="dash-pill dash-pill-danger" @click="stopSupervise()">
                   Stop
                 </button>
               </template>
@@ -256,14 +243,14 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
         </Panel>
 
-        <div class="space-y-4">
+        <div class="vstack">
           <Panel>
             <template #title>Queues by team</template>
             <template #actions>
-              <span class="text-xs text-ink-muted">{{ queues.total }} waiting</span>
+              <span class="text-light">{{ queues.total }} waiting</span>
             </template>
-            <div class="max-h-56 overflow-y-auto">
-            <div v-if="!queues.queues.length" class="px-5 py-6 text-sm text-ink-faint text-center">
+            <div class="scroll-max" style="--max-h: 14rem">
+            <div v-if="!queues.queues.length" class="list-empty">
               No teams
             </div>
             <QueuePressureBar
@@ -279,20 +266,16 @@ usePoll(() => (now.value = Date.now()), 1000);
           <Panel>
             <template #title>Agents</template>
             <template #actions>
-              <span class="text-xs text-ink-muted">{{ onlineCount }} online · {{ queues.on_call }} on call</span>
+              <span class="text-light">{{ onlineCount }} online · {{ queues.on_call }} on call</span>
             </template>
-            <div class="max-h-80 overflow-y-auto">
-            <div v-if="!agents.length" class="px-5 py-6 text-sm text-ink-faint text-center">
+            <div class="scroll-max" style="--max-h: 20rem">
+            <div v-if="!agents.length" class="list-empty">
               No agents
             </div>
-            <div
-              v-for="a in sortedAgents"
-              :key="a.id"
-              class="flex items-center gap-2.5 px-4 py-2 text-[12.5px] border-b border-border last:border-b-0"
-            >
+            <div v-for="a in sortedAgents" :key="a.id" class="agent-row">
               <SignalDot :state="(a.status === 'unknown' ? 'offline' : a.status) ?? 'offline'" hide-label size="sm" />
-              <span class="flex-1 truncate">{{ a.display_name || a.sip_username }}</span>
-              <span class="text-[11px] text-ink-muted tabular-nums">{{ agentStatusLabel(a) }}</span>
+              <span class="truncate" style="flex: 1 1 auto">{{ a.display_name || a.sip_username }}</span>
+              <span class="text-light" style="font-variant-numeric: tabular-nums">{{ agentStatusLabel(a) }}</span>
             </div>
             </div>
           </Panel>
@@ -301,3 +284,69 @@ usePoll(() => (now.value = Date.now()), 1000);
     </template>
   </div>
 </template>
+
+<style scoped>
+/* Structural + typographic treatments Oat has no utility for — colours and
+   spacing all come from tokens, nothing hardcoded. */
+.trend-strip { display: flex; align-items: center; gap: 1.5rem; }
+.trend-num { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.trend-label { font-size: var(--text-8); color: var(--muted-foreground); margin-top: 0.25rem; }
+.trend-divider { width: 1px; align-self: stretch; background: var(--border); }
+
+.kpi-num { font-size: 1.875rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.dash-main { display: grid; grid-template-columns: 1.6fr 1fr; gap: 1rem; align-items: start; }
+@media (max-width: 900px) {
+  .dash-main { grid-template-columns: 1fr; }
+}
+
+.scroll-max { max-height: var(--max-h); overflow-y: auto; }
+.list-empty { padding: 2rem 1.25rem; text-align: center; color: var(--faint-foreground); }
+
+.live-call-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.live-call-row:last-child { border-bottom: none; }
+
+.source-badge {
+  flex-shrink: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-medium);
+  background: var(--secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-8);
+}
+
+.agent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 1rem;
+  font-size: var(--text-8);
+  border-bottom: 1px solid var(--border);
+}
+.agent-row:last-child { border-bottom: none; }
+
+.dash-pill {
+  font-size: var(--text-8);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-medium);
+  background: var(--secondary);
+  text-transform: capitalize;
+  transition: background-color var(--transition-fast);
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+}
+.dash-pill:hover { background: var(--card); }
+.dash-pill-active { background: var(--primary); color: var(--primary-foreground); }
+.dash-pill-danger { background: var(--color-danger-soft); color: var(--danger); }
+</style>

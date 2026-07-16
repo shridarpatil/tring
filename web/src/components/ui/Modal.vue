@@ -60,51 +60,29 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", onKeydown);
   document.body.style.overflow = "";
 });
-
-const sizeCls = {
-  sm: "max-w-sm",
-  md: "max-w-lg",
-  lg: "max-w-2xl",
-  detail: "max-w-[480px]",
-  wide: "max-w-4xl",
-};
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div
-        v-if="open"
-        class="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-6 overflow-y-auto"
-      >
-        <div class="fixed inset-0 bg-overlay/70 backdrop-blur-sm" @click="close"></div>
+      <div v-if="open" class="scrim-wrap">
+        <div class="scrim" @click="close"></div>
         <div
           ref="panel"
           role="dialog"
           aria-modal="true"
           :aria-label="title"
-          class="relative z-10 w-full mt-[6vh] rounded-xl bg-surface border border-border shadow-2xl"
-          :class="sizeCls[size]"
+          class="card modal-panel"
+          :class="`sz-${size}`"
         >
-          <div
-            v-if="title || $slots.title"
-            class="flex items-center justify-between gap-3 px-5 h-12 border-b border-border"
-          >
-            <h2 class="text-sm font-medium text-ink"><slot name="title">{{ title }}</slot></h2>
-            <button
-              type="button"
-              class="text-ink-faint hover:text-ink transition-colors"
-              aria-label="Close"
-              @click="close"
-            >
-              <X class="h-4 w-4" />
+          <div v-if="title || $slots.title" class="hstack justify-between modal-head">
+            <h2 class="modal-title"><slot name="title">{{ title }}</slot></h2>
+            <button type="button" class="ghost icon small" aria-label="Close" @click="close">
+              <X :size="16" />
             </button>
           </div>
-          <div class="p-5"><slot /></div>
-          <div
-            v-if="$slots.footer"
-            class="flex items-center justify-end gap-2 px-5 py-3 border-t border-border bg-surface-2/40"
-          >
+          <div class="modal-body"><slot /></div>
+          <div v-if="$slots.footer" class="hstack justify-end modal-foot">
             <slot name="footer" />
           </div>
         </div>
@@ -114,12 +92,42 @@ const sizeCls = {
 </template>
 
 <style scoped>
+/* Structural only — Oat has no teleported-overlay modal. Colours via tokens. */
+.scrim-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--overlay, #0f172a) 70%, transparent);
+  backdrop-filter: blur(2px);
+}
+.modal-panel {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  margin-top: 6vh;
+  padding: 0;
+  box-shadow: var(--shadow-large);
+}
+.sz-sm { max-width: 24rem; }
+.sz-md { max-width: 32rem; }
+.sz-lg { max-width: 42rem; }
+.sz-detail { max-width: 480px; }
+.sz-wide { max-width: 56rem; }
+.modal-head { height: 3rem; padding: 0 1.25rem; border-bottom: 1px solid var(--border); }
+.modal-title { font-size: var(--text-7); font-weight: 500; }
+.modal-body { padding: 1.25rem; }
+.modal-foot { padding: 0.75rem 1.25rem; border-top: 1px solid var(--border); background: var(--secondary); }
 .modal-enter-active,
-.modal-leave-active {
-  transition: opacity 0.15s ease;
-}
+.modal-leave-active { transition: opacity 0.15s ease; }
 .modal-enter-from,
-.modal-leave-to {
-  opacity: 0;
-}
+.modal-leave-to { opacity: 0; }
 </style>

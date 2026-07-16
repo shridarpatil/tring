@@ -109,89 +109,85 @@ function fmt(d?: string) {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <div class="flex items-center justify-between">
-      <h1 class="text-xl font-semibold tracking-tight">Calls</h1>
+  <div class="view">
+    <div class="row-between">
+      <h1 class="page-title">Calls</h1>
       <Button @click="showConnect = true">Connect two numbers</Button>
     </div>
 
-    <div class="flex items-center gap-2">
-      <span class="text-sm text-ink-muted">Status</span>
+    <div class="hstack">
+      <span class="text-light">Status</span>
       <Select v-model="statusFilter" :options="statusOptions" />
     </div>
 
-    <div class="rounded-xl bg-surface border border-border">
+    <div class="card" style="padding: 0">
       <!-- Cap the log to the viewport so the table scrolls inside its own area
            (sticky header) instead of growing the whole page; the filter above
            and pagination below stay put. -->
-      <div class="overflow-auto max-h-[calc(100vh-16rem)]">
-        <table class="w-full text-sm">
-        <thead class="sticky top-0 z-10 bg-surface">
-          <tr class="border-b border-border text-left">
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">From</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">To</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Agent</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Dir</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Status</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Started</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint text-right">Dur</th>
-            <th class="px-4 h-10 font-medium text-xs uppercase tracking-wide text-ink-faint">Recording</th>
+      <div class="table calls-scroll">
+        <table>
+        <thead class="calls-sticky">
+          <tr>
+            <th>From</th>
+            <th>To</th>
+            <th>Agent</th>
+            <th>Dir</th>
+            <th>Status</th>
+            <th>Started</th>
+            <th class="align-right">Dur</th>
+            <th>Recording</th>
           </tr>
         </thead>
         <tbody>
           <template v-for="c in calls" :key="c.id">
-            <tr
-              class="border-b border-border/60 transition-colors cursor-pointer hover:bg-surface-2/40"
-              @click="openDetail(c)"
-            >
-              <td class="px-4 py-2.5 font-mono text-xs text-ink">
-                <div class="max-w-[200px] truncate" :title="c.client_ref || c.from_number">
+            <tr style="cursor: pointer" @click="openDetail(c)">
+              <td class="mono">
+                <div class="truncate" style="max-width: 200px" :title="c.client_ref || c.from_number">
                   {{ c.client_ref || c.from_number }}
                 </div>
               </td>
-              <td class="px-4 py-2.5 font-mono text-xs text-ink">
-                <div class="max-w-[200px] truncate" :title="c.to_number">{{ c.to_number }}</div>
+              <td class="mono">
+                <div class="truncate" style="max-width: 200px" :title="c.to_number">{{ c.to_number }}</div>
               </td>
-              <td class="px-4 py-2.5 text-ink">{{ c.agent_name || "—" }}</td>
-              <td class="px-4 py-2.5 text-ink-muted">{{ c.direction }}</td>
-              <td class="px-4 py-2.5"><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
-              <td class="px-4 py-2.5 text-ink-muted whitespace-nowrap">{{ fmt(c.started_at) }}</td>
-              <td class="px-4 py-2.5 text-right font-mono text-xs tabular-nums text-ink">
+              <td>{{ c.agent_name || "—" }}</td>
+              <td class="text-light">{{ c.direction }}</td>
+              <td><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
+              <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
+              <td class="align-right mono">
                 {{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}
               </td>
-              <td class="px-4 py-2.5">
+              <td>
                 <audio
                   v-if="recUrl[c.id]"
                   :src="recUrl[c.id]"
                   controls
                   autoplay
-                  class="h-8"
+                  style="height: 2rem"
                   @click.stop
                 ></audio>
                 <button
                   v-else-if="c.recording_url"
-                  class="text-accent hover:text-accent-hover"
+                  type="button"
+                  class="plain"
+                  style="color: var(--primary)"
                   @click.stop="playRecording(c)"
                 >
                   Play
                 </button>
-                <span v-else class="text-ink-faint">—</span>
+                <span v-else class="text-lighter">—</span>
               </td>
-              <td class="px-4 py-2.5">
-                <button
-                  class="inline-flex items-center gap-1 text-ink-muted hover:text-ink"
-                  @click.stop="openDetail(c)"
-                >
+              <td>
+                <button type="button" class="plain text-light" @click.stop="openDetail(c)">
                   Details
                 </button>
               </td>
             </tr>
           </template>
           <tr v-if="!loading && calls.length === 0">
-            <td colspan="8" class="px-4 py-10 text-center text-ink-faint">No calls</td>
+            <td colspan="8" class="align-center text-lighter">No calls</td>
           </tr>
           <tr v-if="loading">
-            <td colspan="8" class="px-4 py-10 text-center text-ink-faint">Loading…</td>
+            <td colspan="8" class="align-center text-lighter">Loading…</td>
           </tr>
         </tbody>
       </table>
@@ -206,7 +202,7 @@ function fmt(d?: string) {
     </div>
 
     <Modal v-model:open="showConnect" title="Connect two numbers">
-      <form id="connect-form" class="space-y-4" @submit.prevent="connect">
+      <form id="connect-form" class="vstack" @submit.prevent="connect">
         <TextField
           v-model="connectForm.agent_number"
           label="Agent number"
@@ -244,3 +240,10 @@ function fmt(d?: string) {
     />
   </div>
 </template>
+
+<style scoped>
+/* Structural only — cap the log to the viewport so it scrolls within its own
+   area (sticky header) instead of growing the whole page. Colours via tokens. */
+.calls-scroll { max-height: calc(100vh - 16rem); overflow: auto; }
+.calls-sticky { position: sticky; top: 0; z-index: 10; background: var(--card); }
+</style>

@@ -5,13 +5,32 @@ withDefaults(defineProps<{ active?: boolean; bars?: number }>(), { bars: 4 });
 </script>
 
 <template>
-  <span class="inline-flex items-end gap-0.5 h-3.5" aria-hidden="true">
+  <span class="meter" aria-hidden="true">
     <span
       v-for="i in bars"
       :key="i"
-      class="w-0.5 rounded-full"
-      :class="active ? 'h-full bg-accent animate-level' : 'h-1 bg-ink-faint'"
+      class="bar"
+      :class="active ? 'on' : ''"
       :style="active ? { animationDelay: i * 0.12 + 's' } : {}"
     ></span>
   </span>
 </template>
+
+<style scoped>
+.meter { display: inline-flex; align-items: flex-end; gap: 0.125rem; height: 0.875rem; }
+.bar {
+  width: 0.125rem;
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: var(--faint-foreground);
+  transform-origin: bottom;
+}
+.bar.on {
+  height: 100%;
+  background: var(--primary);
+  animation: tring-level 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bar.on { animation: none; }
+}
+</style>

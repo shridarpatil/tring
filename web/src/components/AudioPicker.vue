@@ -29,7 +29,7 @@ onMounted(async () => {
     /* leave empty — the custom-path escape hatch still works */
   }
   // A path that isn't a known asset and isn't a generated TTS prompt is a
-  // hand-entered custom path → open the advanced input so it's visible/editable.
+  // hand-entered custom path -> open the advanced input so it's visible/editable.
   if (
     props.modelValue &&
     !isGenerated.value &&
@@ -122,99 +122,125 @@ async function onFile(ev: Event) {
 
 <template>
   <div>
-    <span v-if="label" class="text-xs font-medium text-ink-muted">{{ label }}</span>
+    <span v-if="label" class="ap-label">{{ label }}</span>
 
     <!-- Generated-from-text prompt: a friendly chip + play, not the raw hash path. -->
     <template v-if="isGenerated && !override">
-      <div class="mt-1 flex items-center gap-2">
-        <div
-          class="flex-1 inline-flex items-center gap-2 rounded-md bg-accent-soft/40 border border-accent/30 px-3 h-9 text-sm text-ink-muted"
-        >
-          <Sparkles class="h-3.5 w-3.5 text-accent shrink-0" />
+      <div class="ap-row">
+        <div class="gen-chip">
+          <Sparkles :size="14" class="gen-spark" />
           Audio generated from text
         </div>
         <button
           type="button"
+          class="icon secondary"
           :title="playing ? 'Playing…' : 'Play'"
           aria-label="Play sound"
-          class="shrink-0 inline-flex items-center justify-center rounded-md bg-surface-2 border border-border w-9 h-9 text-ink transition-colors hover:bg-surface hover:text-accent focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50"
           :disabled="playing"
           @click="play"
         >
-          <component :is="playing ? Loader2 : Play" class="h-4 w-4" :class="playing ? 'animate-spin' : ''" />
+          <component :is="playing ? Loader2 : Play" :size="16" :class="playing ? 'spin' : ''" />
         </button>
       </div>
-      <button type="button" class="mt-1 text-[11px] text-ink-faint hover:text-ink-muted" @click="override = true">
+      <button type="button" class="plain link" @click="override = true">
         Use an uploaded file instead
       </button>
     </template>
 
     <template v-else-if="!custom">
-      <div class="mt-1 flex gap-2">
-        <select
-          v-model="val"
-          class="w-full rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
-        >
+      <div class="ap-row">
+        <select v-model="val">
           <option value="">{{ defaultLabel || "Default" }}</option>
-          <option v-for="s in sounds" :key="s.id" :value="s.file_path">{{ s.name }} ({{ s.format }})</option>
+          <option v-for="s in sounds" :key="s.id" :value="s.file_path">
+            {{ s.name }} ({{ s.format }})
+          </option>
         </select>
         <button
           v-if="previewable"
           type="button"
+          class="icon secondary"
           :title="playing ? 'Playing…' : 'Play'"
           aria-label="Play sound"
-          class="shrink-0 inline-flex items-center justify-center rounded-md bg-surface-2 border border-border w-9 h-9 text-ink transition-colors hover:bg-surface hover:text-accent focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50"
           :disabled="playing"
           @click="play"
         >
-          <component :is="playing ? Loader2 : Play" class="h-4 w-4" :class="playing ? 'animate-spin' : ''" />
+          <component :is="playing ? Loader2 : Play" :size="16" :class="playing ? 'spin' : ''" />
         </button>
-        <button
-          type="button"
-          class="shrink-0 rounded-md bg-surface-2 border border-border px-3 h-9 text-sm text-ink transition-colors hover:bg-surface focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50"
-          :disabled="uploading"
-          @click="fileInput?.click()"
-        >
+        <button type="button" class="secondary" :disabled="uploading" @click="fileInput?.click()">
           {{ uploading ? "Uploading…" : "Upload" }}
         </button>
         <input
           ref="fileInput"
           type="file"
           accept=".wav,.mp3,.ogg,.m4a"
-          class="hidden"
+          class="ap-hidden"
           @change="onFile"
         />
       </div>
-      <button type="button" class="mt-1 text-[11px] text-ink-faint hover:text-ink-muted" @click="custom = true">
-        Use a custom path
-      </button>
+      <button type="button" class="plain link" @click="custom = true">Use a custom path</button>
     </template>
+
     <template v-else>
-      <div class="mt-1 flex gap-2">
+      <div class="ap-row">
         <input
           v-model="val"
-          class="w-full rounded-md bg-surface-2 border border-border px-3 h-9 text-sm font-mono text-ink placeholder:text-ink-faint transition-colors focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent"
+          class="mono"
           placeholder="local_stream://moh or /usr/share/freeswitch/sounds/..."
         />
         <button
           v-if="previewable"
           type="button"
+          class="icon secondary"
           :title="playing ? 'Playing…' : 'Play'"
           aria-label="Play sound"
-          class="shrink-0 inline-flex items-center justify-center rounded-md bg-surface-2 border border-border w-9 h-9 text-ink transition-colors hover:bg-surface hover:text-accent focus:outline-none focus:ring-2 focus:ring-accent/40 disabled:opacity-50"
           :disabled="playing"
           @click="play"
         >
-          <component :is="playing ? Loader2 : Play" class="h-4 w-4" :class="playing ? 'animate-spin' : ''" />
+          <component :is="playing ? Loader2 : Play" :size="16" :class="playing ? 'spin' : ''" />
         </button>
       </div>
-      <button type="button" class="mt-1 text-[11px] text-ink-faint hover:text-ink-muted" @click="custom = false">
+      <button type="button" class="plain link" @click="custom = false">
         Pick from the sound library
       </button>
     </template>
-    <p v-if="error" class="text-[11px] text-danger mt-1">{{ error }}</p>
-    <p v-else-if="!sounds.length && !custom" class="text-[11px] text-ink-faint mt-1">
+
+    <p v-if="error" class="ap-err">{{ error }}</p>
+    <p v-else-if="!sounds.length && !custom" class="ap-hint">
       No sounds yet — click <strong>Upload</strong> to add one.
     </p>
   </div>
 </template>
+
+<style scoped>
+.ap-label {
+  display: block;
+  font-size: var(--text-8);
+  font-weight: 500;
+  color: var(--muted-foreground);
+  margin-bottom: 0.25rem;
+}
+.ap-row { display: flex; gap: 0.5rem; margin-top: 0.25rem; }
+.ap-row select,
+.ap-row input { margin-block-start: 0; }
+.gen-chip {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 0.75rem;
+  border-radius: var(--radius-medium);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  font-size: var(--text-7);
+  color: var(--muted-foreground);
+}
+.gen-spark { color: var(--primary); flex-shrink: 0; }
+.link { margin-top: 0.25rem; font-size: 11px; color: var(--faint-foreground); }
+.link:hover { color: var(--muted-foreground); }
+.ap-err { margin-top: 0.25rem; font-size: 11px; color: var(--danger); }
+.ap-hint { margin-top: 0.25rem; font-size: 11px; color: var(--faint-foreground); }
+.ap-hidden { display: none; }
+.spin { animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>

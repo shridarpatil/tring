@@ -13,19 +13,18 @@ const props = withDefaults(
   { state: "offline", size: "md" },
 );
 
-const color = computed(
+const colorVar = computed(
   () =>
     ({
-      online: "bg-online",
-      on_call: "bg-oncall",
-      away: "bg-away",
-      offline: "bg-offline",
-      ringing: "bg-accent",
+      online: "var(--color-online)",
+      on_call: "var(--color-oncall)",
+      away: "var(--color-away)",
+      offline: "var(--color-offline)",
+      ringing: "var(--primary)",
     })[props.state],
 );
 
 const pulse = computed(() => props.state === "on_call" || props.state === "ringing");
-const dotSize = computed(() => (props.size === "sm" ? "h-2 w-2" : "h-2.5 w-2.5"));
 
 const defaultText = computed(
   () =>
@@ -41,15 +40,39 @@ const text = computed(() => props.label ?? defaultText.value);
 </script>
 
 <template>
-  <span class="inline-flex items-center gap-2">
-    <span class="relative inline-flex" :class="dotSize">
-      <span
-        v-if="pulse"
-        class="absolute inset-0 inline-flex rounded-full opacity-60 animate-pulse-ring"
-        :class="color"
-      ></span>
-      <span class="relative inline-flex rounded-full" :class="[dotSize, color]"></span>
+  <span class="sig" :style="{ '--dot': colorVar }">
+    <span class="dot-wrap" :class="`sz-${size}`">
+      <span v-if="pulse" class="ring"></span>
+      <span class="dot"></span>
     </span>
-    <span v-if="!hideLabel" class="text-xs text-ink-muted">{{ text }}</span>
+    <span v-if="!hideLabel" class="lbl">{{ text }}</span>
   </span>
 </template>
+
+<style scoped>
+.sig { display: inline-flex; align-items: center; gap: 0.5rem; }
+.dot-wrap { position: relative; display: inline-flex; }
+.sz-sm { height: 0.5rem; width: 0.5rem; }
+.sz-md { height: 0.625rem; width: 0.625rem; }
+.dot {
+  position: relative;
+  display: inline-flex;
+  height: 100%;
+  width: 100%;
+  border-radius: 9999px;
+  background: var(--dot);
+}
+.ring {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  border-radius: 9999px;
+  background: var(--dot);
+  opacity: 0.6;
+  animation: tring-pulse-ring 1.8s ease-out infinite;
+}
+.lbl { font-size: var(--text-8); color: var(--muted-foreground); }
+@media (prefers-reduced-motion: reduce) {
+  .ring { animation: none; }
+}
+</style>
