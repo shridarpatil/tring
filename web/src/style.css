@@ -1,24 +1,16 @@
-@import "tailwindcss";
-
-/* Oat loads alongside Tailwind during the migration (Tailwind removed at
-   cutover). oat-theme.css re-points Oat's vars onto the Operator palette. */
+/* Oat is the console's UI library; oat-theme.css re-points Oat's variables onto
+   the Operator palette (colours only — no utility framework). */
 @import "@knadh/oat/oat.min.css";
 @import "./oat-theme.css";
 
 /*
  * Tring console — "Operator" design tokens.
  *
- * Tailwind v4 is CSS-first: tokens declared in @theme both (a) become CSS
- * variables and (b) generate utilities by namespace —
- *   --color-surface  -> bg-surface / text-surface / border-surface
- *   --radius-lg      -> rounded-lg
- *   --font-mono      -> font-mono
- * The utilities resolve through var(), so a theme is just a re-declaration of
- * the same variables. LIGHT is the default (defined here in @theme); DARK is
- * an override applied via html[data-theme="dark"] (see below). lib/theme.ts
- * sets the attribute and persists the choice.
+ * Plain CSS custom properties. LIGHT is the default (:root); DARK is an override
+ * applied via html[data-theme="dark"] (below). lib/theme.ts sets the attribute
+ * and persists the choice. Components reference these as var(--color-*).
  */
-@theme {
+:root {
   /* ── Light (default) ─────────────────────────────────────────────── */
   --color-base: #f6f7f9; /* app background */
   --color-surface: #ffffff; /* cards / panels */
