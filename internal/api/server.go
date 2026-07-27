@@ -277,6 +277,15 @@ func (s *Server) Router() http.Handler {
 	// from browsers don't carry `Authorization`, so they'd otherwise 401.
 	r.Use(corsMiddleware)
 
+	// gzip on the wire (Accept-Encoding permitting) for the compressible
+	// responses. Applied selectively below — to the embedded static mounts
+	// (/sdk, /admin) and to the /v1 JSON group — but deliberately NOT to the
+	// SSE stream (/v1/stream/dashboard sits outside the compressed group so
+	// its chunked frames are never buffered) nor to audio/recording bytes
+	// (their content-types fall outside Compress's default list, so they pass
+	// through uncompressed and stay Range-seekable).
+	compress := middleware.Compress(5)
+
 	r.Get("/healthz", s.handleHealthz)
 
 	// FreeSWITCH-facing endpoints. Basic Auth shared with mod_xml_curl;
@@ -305,6 +314,10 @@ func (s *Server) Router() http.Handler {
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Timeout(30 * time.Second))
+				// gzip the JSON list/detail payloads (calls, events,
+				// deliveries, agents, flows, …). The SSE stream is a sibling
+				// of this group, so it's structurally excluded.
+				r.Use(compress)
 				r.Get("/tenants/me", s.handleGetMyTenant)
 				r.Patch("/tenants/me", s.handlePatchMyTenant)
 				r.Get("/guest-config", s.handleGetGuestConfig)
@@ -414,13 +427,11 @@ func (s *Server) Router() http.Handler {
 	// http.FileServer sets ETag/Last-Modified; "no-cache" tells the browser
 	// to revalidate every time — it still gets a cheap 304 when unchanged,
 	// but picks up a new bundle the instant we ship one.
+	//
 	// The embedded JS/CSS/HTML bundles ship uncompressed on disk, so gzip
-	// them on the wire (Accept-Encoding permitting). ~2.5x fewer bytes per
-	// asset. Scoped to the static mounts only — the /v1 SSE stream and JSON
-	// paths are deliberately left out of this group. Fonts (woff2) are
-	// already compressed and fall outside Compress's default type list.
-	compress := middleware.Compress(5)
-
+	// them on the wire (Accept-Encoding permitting) via the shared `compress`
+	// middleware defined above. Fonts (woff2) are already compressed and fall
+	// outside Compress's default type list, so they pass through untouched.
 	if wFS, ok := widget.FS(); ok {
 		sdk := http.StripPrefix("/sdk/", http.FileServer(http.FS(wFS)))
 		r.With(compress).Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
