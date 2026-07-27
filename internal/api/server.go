@@ -414,9 +414,16 @@ func (s *Server) Router() http.Handler {
 	// http.FileServer sets ETag/Last-Modified; "no-cache" tells the browser
 	// to revalidate every time — it still gets a cheap 304 when unchanged,
 	// but picks up a new bundle the instant we ship one.
+	// The embedded JS/CSS/HTML bundles ship uncompressed on disk, so gzip
+	// them on the wire (Accept-Encoding permitting). ~2.5x fewer bytes per
+	// asset. Scoped to the static mounts only — the /v1 SSE stream and JSON
+	// paths are deliberately left out of this group. Fonts (woff2) are
+	// already compressed and fall outside Compress's default type list.
+	compress := middleware.Compress(5)
+
 	if wFS, ok := widget.FS(); ok {
 		sdk := http.StripPrefix("/sdk/", http.FileServer(http.FS(wFS)))
-		r.Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
+		r.With(compress).Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache")
 			sdk.ServeHTTP(w, req)
 		})
@@ -436,7 +443,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
 			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
 		})
-		r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+		r.With(compress).Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
 			// If it's a known asset (has a file extension), serve it
 			// directly; otherwise serve index.html for SPA routing.
 			path := strings.TrimPrefix(req.URL.Path, "/admin/")
