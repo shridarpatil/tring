@@ -2,11 +2,16 @@ package api
 
 import (
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/shridarpatil/tring/internal/dbtest"
+	"github.com/shridarpatil/tring/internal/events"
 )
 
 // TestStaticAssetsGzipped verifies the embedded static mounts (/sdk/* and
@@ -62,5 +67,71 @@ func TestStaticAssetsNotGzippedWithoutAcceptEncoding(t *testing.T) {
 	}
 	if enc := rec.Header().Get("Content-Encoding"); strings.Contains(enc, "gzip") {
 		t.Fatalf("Content-Encoding = %q, want no gzip when not accepted", enc)
+	}
+}
+
+// TestV1JSONGzipped verifies the /v1 JSON list endpoints are gzip-compressed
+// when the client advertises it. DB-gated (skips without TRING_TEST_DSN).
+func TestV1JSONGzipped(t *testing.T) {
+	f := dbtest.Setup(t)
+	insertOutboundForHandlerTest(t, f, "+918001234567", true)
+	s := newTestServer(f)
+
+	req := authedRequest(t, s, f, "GET", "/v1/numbers", "")
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v1/numbers = %d, want 200", rec.Code)
+	}
+	if enc := rec.Header().Get("Content-Encoding"); enc != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", enc)
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("reading gzip body: %v", err)
+	}
+	// The decoded payload must be the real JSON, not garbage — the inserted
+	// number's E.164 proves gzip round-tripped actual content.
+	if !strings.Contains(string(body), "+918001234567") {
+		t.Fatalf("decoded gzip body missing expected content: %s", body)
+	}
+}
+
+// TestV1SSEStreamNotGzipped is the guardrail that keeps the compression scope
+// off the live dashboard stream: gzip-buffering an SSE response would stall
+// the event frames. The stream sits outside the compressed group, so even
+// with Accept-Encoding: gzip it must come back uncompressed. DB-gated.
+func TestV1SSEStreamNotGzipped(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	s.hub = events.NewTestHub() // handler calls hub.Subscribe; nil would panic
+
+	req := authedRequest(t, s, f, "GET", "/v1/stream/dashboard", "")
+	req.Header.Set("Accept-Encoding", "gzip")
+	// The stream blocks until the request context ends; give it a short
+	// lifetime so ServeHTTP returns after the snapshot frame is written.
+	ctx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+
+	if enc := rec.Header().Get("Content-Encoding"); strings.Contains(enc, "gzip") {
+		t.Fatalf("SSE stream Content-Encoding = %q, want uncompressed", enc)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
+		t.Fatalf("SSE Content-Type = %q, want text/event-stream (did the handler run?)", ct)
+	}
+	// Sanity: the snapshot frame really was emitted (proves we exercised the
+	// stream path, not an auth/error short-circuit).
+	if !strings.Contains(rec.Body.String(), "event: snapshot") {
+		t.Fatalf("no snapshot frame in SSE body:\n%s", rec.Body.String())
 	}
 }
