@@ -76,6 +76,23 @@ func TestValidatePrincipalRejectsWrongAudience(t *testing.T) {
 	}
 }
 
+func TestValidatePrincipalRejectsExpiredAgentToken(t *testing.T) {
+	// The agent JWT lives ~5 minutes while an agent's presence socket stays up for
+	// hours. A client that replays its go-online token on a later call join is
+	// rejected here — it must mint a fresh one per join (see sdk/js RtcAgent).
+	stale, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"tenant": uuid.New().String(), "sip_user": "alice",
+		"iss": jwtIssuer, "aud": agentAudience,
+		"exp": time.Now().Add(-time.Minute).Unix(),
+	}).SignedString(authSecret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if _, err := validatePrincipal(stale, authSecret); err == nil {
+		t.Fatal("expected rejection of an expired agent token")
+	}
+}
+
 func TestValidatePrincipalRejectsBadSecret(t *testing.T) {
 	tok := mintVisitorTok(t, uuid.New(), "f", "", "j", time.Now().Add(time.Minute))
 	if _, err := validatePrincipal(tok, []byte("wrong-secret")); err == nil {
