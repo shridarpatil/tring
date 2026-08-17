@@ -137,8 +137,8 @@ func (s *SFU) publicationsExcept(roomID room.RoomID, pid room.ParticipantID) []s
 		if opid == pid {
 			continue
 		}
-		if !r.audienceHears(opid, pid) {
-			continue // supervisor gating: this subscriber isn't in the publisher's audience
+		if !r.canHear(opid, pid) {
+			continue // gated: supervisor audience, or this subscriber is deafened (on hold)
 		}
 		tracks := make([]*webrtc.TrackLocalStaticRTP, 0, len(pub.tracks))
 		for _, t := range pub.tracks {
@@ -205,6 +205,70 @@ func (s *SFU) SetAudience(roomID room.RoomID, pid room.ParticipantID, all bool, 
 			s.unsubscribe(d.q, pid) // drop pid's tracks from this subscriber
 		}
 	}
+}
+
+// setDeafState records whether pid hears its room and returns pid's live peer
+// (nil if the room or peer is gone). Pure w.r.t. media — SetDeaf does the
+// re-wiring.
+func (s *SFU) setDeafState(roomID room.RoomID, pid room.ParticipantID, deaf bool) *Peer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil {
+		return nil
+	}
+	if deaf {
+		if r.deaf == nil {
+			r.deaf = make(map[room.ParticipantID]bool)
+		}
+		r.deaf[pid] = true
+	} else {
+		delete(r.deaf, pid)
+	}
+	return r.peers[pid]
+}
+
+// SetDeaf sets whether pid hears the room at all and re-wires it to match:
+// deafening drops every source it is subscribed to, undeafening re-subscribes.
+// Unlike SetAudience (which gates one PUBLISHER's reach), this gates one
+// SUBSCRIBER — the agent-initiated hold, where the holding agent must hear
+// neither the held party nor the hold music injected for them. Recorded even
+// with no live peer, so a reconnect (page refresh mid-hold) stays deaf.
+func (s *SFU) SetDeaf(roomID room.RoomID, pid room.ParticipantID, deaf bool) {
+	q := s.setDeafState(roomID, pid, deaf)
+	if q == nil {
+		return
+	}
+	if deaf {
+		s.unsubscribeAll(q)
+		return
+	}
+	q.Negotiate() // publicationsExcept yields the room's sources again
+}
+
+// unsubscribeAll removes every source's tracks from subscriber q in ONE
+// renegotiation (deafening). No-op if q wasn't subscribed to anything.
+func (s *SFU) unsubscribeAll(q *Peer) {
+	q.mu.Lock()
+	var senders []*webrtc.RTPSender
+	for pid, byTrack := range q.subs {
+		for _, sender := range byTrack {
+			senders = append(senders, sender)
+		}
+		delete(q.subs, pid)
+	}
+	if len(senders) == 0 {
+		q.mu.Unlock()
+		return
+	}
+	q.dirty = true
+	q.mu.Unlock()
+	for _, sender := range senders {
+		if err := q.pc.RemoveTrack(sender); err != nil {
+			q.log.Debug("remove track on deafen", "err", err)
+		}
+	}
+	q.Negotiate()
 }
 
 // unsubscribe removes every track of source pid from subscriber q and

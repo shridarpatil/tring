@@ -90,6 +90,11 @@ type sfuRoom struct {
 	// "everyone" (the default for ordinary participants); a supervisor's entry is
 	// set by SetAudience to none/agent-only/all for monitor/whisper/barge.
 	audience map[room.ParticipantID]*audience
+	// deaf is the SUBSCRIBER-side mirror of audience: a pid marked deaf hears
+	// nobody in this room, whatever the publishers' audiences allow. Set by
+	// SetDeaf for the agent-initiated hold — the held party hears the hold music,
+	// the holding agent hears nothing. Lazily allocated; absent = hears normally.
+	deaf map[room.ParticipantID]bool
 }
 
 // publication is one participant's fan-out tracks, one per codec kind. The
@@ -121,6 +126,12 @@ func (a *audience) hears(sub room.ParticipantID) bool {
 // audienceHears reports whether sub may hear pub in this room (nil-safe).
 func (r *sfuRoom) audienceHears(pub, sub room.ParticipantID) bool {
 	return r.audience[pub].hears(sub)
+}
+
+// canHear is the full audibility rule for one (publisher, subscriber) pair: the
+// publisher's audience must admit sub, and sub must not be deafened.
+func (r *sfuRoom) canHear(pub, sub room.ParticipantID) bool {
+	return !r.deaf[sub] && r.audienceHears(pub, sub)
 }
 
 // New builds an SFU. It validates the media config by building one API up front
