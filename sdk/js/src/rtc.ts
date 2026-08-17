@@ -52,6 +52,14 @@ export interface RtcCallOpts {
   room: string;
   /** Auth token: a gateway call token (visitor) or an agent JWT (agent leg). */
   token: string;
+  /**
+   * Mint a fresh token for each (re)connect. Preferred for an agent leg: the
+   * agent JWT lives ~5 minutes while the presence socket stays up for hours, so
+   * a token captured at go-online is expired by the time a later call rings and
+   * the /rtc join 401s. A visitor's gateway call token is single-use and can't
+   * be re-minted client-side — that path keeps using `token`.
+   */
+  getToken?: () => Promise<string>;
   /** Display name shown to peers. */
   name?: string;
   /** Pin an IVR flow to run in this room (visitor calls). */
@@ -129,12 +137,14 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         throw micError(e);
       }
     }
-    this.openSocket();
+    await this.openSocket();
   }
 
-  private openSocket(): void {
+  private async openSocket(): Promise<void> {
     this.emit({ type: "connecting" });
-    const ws = new WebSocket(wsURL(this.opts.gatewayUrl, this.opts.token));
+    const token = this.opts.getToken ? await this.opts.getToken() : this.opts.token;
+    if (this.closedByUser) return; // hung up while the token was being minted
+    const ws = new WebSocket(wsURL(this.opts.gatewayUrl, token));
     this.ws = ws;
     ws.onopen = () => {
       this.send({
@@ -340,7 +350,12 @@ export class RtcCall extends Emitter<RtcCallEvent> {
       this.pendingIce = [];
       this.pc?.close();
       this.pc = null;
-      setTimeout(() => this.openSocket(), 500);
+      setTimeout(() => {
+        void this.openSocket().catch((e) => {
+          this.teardown();
+          this.emit({ type: "ended", reason: e instanceof Error ? e.message : "reconnect failed" });
+        });
+      }, 500);
       return;
     }
     this.teardown();
@@ -540,7 +555,12 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     const call = new RtcCall({
       gatewayUrl: this.opts.gatewayUrl,
       room,
+      // The presence socket is long-lived, so this.token was minted whenever it
+      // last connected — likely well past the agent JWT's ~5-min TTL. Mint a
+      // fresh one for the call socket (and for its reconnects), else the join
+      // 401s and the ring rolls on to the next agent.
       token: this.token,
+      getToken: this.opts.getToken,
       name: this.opts.name,
       iceServers: this.opts.iceServers,
       mic: this.mic ?? undefined, // reuse the go-online mic (gesture-safe)

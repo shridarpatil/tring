@@ -102,7 +102,17 @@ export class Tring extends Emitter<TringEvent> {
         // Committing to this call — drop the ringing ref so a late incoming-cancel
         // (e.g. the server's answer catch-all) can't end the call we're answering.
         this.ringing = null;
-        rtc = await this.agent.accept();
+        try {
+          rtc = await this.agent.accept();
+        } catch (err) {
+          // Answering failed before the call socket came up (token mint, mic).
+          // Surface it and end the ring — the widget's Accept handler swallows
+          // the rejection, so without this the panel would hang on "Connecting…".
+          call.status = "ended";
+          this.emit({ type: "error", error: err as Error });
+          this.emit({ type: "call:ended", call });
+          throw err;
+        }
         if (!rtc) return;
         rtc.on("connected", () => {
           call.status = "connected";
