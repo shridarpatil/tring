@@ -114,11 +114,20 @@ func (s *Server) tenantHoldMusic(roomID room.RoomID) string {
 }
 
 // holdParty starts hold music for a room on an agent's msgHold (the agent mutes
-// its own mic client-side, so the held party then hears only the music). A
+// its own mic client-side, so the held party then hears only the music) and
+// DEAFENS the holding agent: the music is an ordinary room publication, so
+// without this the agent would hear both the music and the held party. Deafness
+// is server-side, so it survives the agent refreshing the page mid-hold. A
 // second hold while already held is a no-op.
-func (s *Server) holdParty(roomID room.RoomID) {
+func (s *Server) holdParty(roomID room.RoomID, holder room.ParticipantID) {
+	// Deafen BEFORE the music starts, so not one frame of it reaches the agent.
+	s.sfu.SetDeaf(roomID, holder, true)
 	moh := s.tenantHoldMusic(roomID)
-	stop := s.playHold(roomID, moh)
+	stopMusic := s.playHold(roomID, moh)
+	stop := func() {
+		stopMusic()
+		s.sfu.SetDeaf(roomID, holder, false)
+	}
 
 	s.mu.Lock()
 	if _, held := s.holds[roomID]; held {
@@ -130,7 +139,8 @@ func (s *Server) holdParty(roomID room.RoomID) {
 	s.mu.Unlock()
 }
 
-// resumeParty stops a room's hold music on msgResume (idempotent).
+// resumeParty stops a room's hold music and restores the holder's hearing on
+// msgResume (idempotent).
 func (s *Server) resumeParty(roomID room.RoomID) { s.clearHold(roomID) }
 
 // clearHold stops and forgets a room's hold music if any is playing. Called on
