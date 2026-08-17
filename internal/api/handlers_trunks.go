@@ -188,29 +188,15 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 		tr.SIPPassword = ""
 		out = append(out, tr)
 	}
-	// Best-effort: enrich with live FS gateway state. If ESL is down
-	// (dev offline), trunks still list with status="unknown".
-	states, _ := s.fs.GatewayStatuses(r.Context())
+	// Best-effort: enrich with live FS gateway health. If ESL is down
+	// (dev offline), no gateway is found and trunks list as not_loaded.
+	// For IP-auth trunks the reg-state is meaningless, so freeswitch.Status
+	// reads sofia's OPTIONS-ping verdict instead — see gateway_status.go.
+	healths, _ := s.fs.GatewayHealths(r.Context())
 	for i := range out {
-		gw := freeswitch.GatewayName(out[i].ID)
-		raw := states[gw]
-		out[i].StateRaw = raw
-		out[i].Status = freeswitch.StatusFromState(raw, out[i].Register)
-
-		// For IP-auth trunks, sofia state is uninformative about peer
-		// reachability (NOREG even when the SBC is down). Probe with a
-		// SIP OPTIONS to find out for real. ~1s budget per probe; only
-		// runs when the trunk has a configured proxy and is "online"
-		// per state — flips to offline if the probe times out.
-		if !out[i].Register && out[i].ProxyIP != "" && out[i].Status == "online" {
-			ctx, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
-			ok := freeswitch.OptionsPing(ctx, out[i].ProxyIP, 1*time.Second)
-			cancel()
-			if !ok {
-				out[i].Status = "offline"
-				out[i].StateRaw = raw + " (probe failed)"
-			}
-		}
+		h := healths[freeswitch.GatewayName(out[i].ID)]
+		out[i].Status = freeswitch.Status(h, out[i].Register)
+		out[i].StateRaw = h.Detail()
 	}
 	writeJSON(w, http.StatusOK, out)
 }
