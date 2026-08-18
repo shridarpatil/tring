@@ -490,8 +490,9 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 			// 90s read deadline and get dropped mid-call.
 		case msgHold:
 			// The agent muted its own mic client-side; play the tenant's hold music
-			// into the room so the held party hears music, not dead air.
-			s.holdParty(p.Room().ID())
+			// into the room so the held party hears music, not dead air — and deafen
+			// the agent, which must hear neither that music nor the held party.
+			s.holdParty(p.Room().ID(), p.ID())
 		case msgResume:
 			s.resumeParty(p.Room().ID())
 		case msgTransfer:
