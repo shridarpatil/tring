@@ -466,13 +466,22 @@
 
   <!-- Internal SIP Profile -->
   <X-PRE-PROCESS cmd="set" data="internal_auth_calls=true"/>
-  <X-PRE-PROCESS cmd="set" data="internal_sip_port=5060"/>
+  <!-- internal_sip_port: default 5060 (stock FS convention). Override via
+       TRING_INTERNAL_SIP_PORT when a carrier owns 5060 on the same IP and the
+       internal profile must move aside (e.g. Tata SIP-over-AWS, where the
+       external trunk profile takes 10.54.229.182:5060 and internal is pushed
+       to 5080 — or set TRING_INTERNAL_IP=127.0.0.1 to keep 5060 on loopback). -->
+  <X-PRE-PROCESS cmd="exec-set" data="internal_sip_port=sh -c 'echo ${TRING_INTERNAL_SIP_PORT:-5060}'"/>
   <X-PRE-PROCESS cmd="set" data="internal_tls_port=5061"/>
   <X-PRE-PROCESS cmd="set" data="internal_ssl_enable=false"/>
 
   <!-- External SIP Profile -->
   <X-PRE-PROCESS cmd="set" data="external_auth_calls=false"/>
-  <X-PRE-PROCESS cmd="set" data="external_sip_port=5080"/>
+  <!-- external_sip_port: default 5080 (stock FS convention). Override via
+       TRING_EXTERNAL_SIP_PORT to the port the carrier signals on. Tata
+       SIP-over-AWS is fixed at 5060, so set TRING_EXTERNAL_SIP_PORT=5060
+       there (and move internal aside — see internal_sip_port above). -->
+  <X-PRE-PROCESS cmd="exec-set" data="external_sip_port=sh -c 'echo ${TRING_EXTERNAL_SIP_PORT:-5080}'"/>
   <X-PRE-PROCESS cmd="set" data="external_tls_port=5081"/>
   <X-PRE-PROCESS cmd="set" data="external_ssl_enable=false"/>
 
