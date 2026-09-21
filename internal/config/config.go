@@ -62,6 +62,12 @@ var defaults = map[string]any{
 	// longest call; 4h05m = 4h call + setup buffer.
 	"turn_ttl_seconds": 14700,
 	"api_addr": ":8085",
+	// Comma-separated CIDRs of the reverse proxies in front of the API
+	// (e.g. "127.0.0.1/32,10.0.0.0/8"). Only X-Forwarded-For hops inside
+	// these ranges are trusted when resolving the client IP for the access
+	// log. Empty (the default) = no proxy: XFF is ignored entirely so a
+	// direct caller can't forge its own address. See internal/api realIP.
+	"trusted_proxies": "",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).

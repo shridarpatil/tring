@@ -99,6 +99,13 @@ type Config struct {
 
 	// Logger is the structured logger; nil falls back to slog.Default().
 	Logger *slog.Logger
+
+	// TrustedProxies are the CIDR prefixes of the reverse proxies sitting in
+	// front of the API (e.g. "10.0.0.0/8", "127.0.0.1/32"). Only hops inside
+	// these ranges are trusted to have set X-Forwarded-For; see realIP. Empty
+	// (the default) means "no proxy" — the transport address is the client
+	// and XFF is ignored entirely.
+	TrustedProxies []string
 }
 
 type Server struct {
@@ -158,6 +165,10 @@ type Server struct {
 	hub    *events.Hub
 	events *events.Publisher
 
+	// trustedProxies are the CIDRs whose X-Forwarded-For entries we believe.
+	// Empty = trust none. See realIP.
+	trustedProxies []string
+
 	log *slog.Logger
 }
 
@@ -202,7 +213,38 @@ func NewServer(cfg Config) *Server {
 		simManager:       brain.NewSimManager(),
 		hub:              cfg.Hub,
 		events:           cfg.Events,
+		trustedProxies:   cfg.TrustedProxies,
 		log:              logger,
+	}
+}
+
+// realIP returns the middleware that makes r.RemoteAddr the real client IP.
+//
+// It replaces chi's middleware.RealIP, which is deprecated and spoofable
+// (GHSA-3fxj-6jh8-hvhx, GHSA-rjr7-jggh-pgcp, GHSA-9g5q-2w5x-hmxf): RealIP
+// believes True-Client-IP / X-Real-IP / X-Forwarded-For from ANY caller, so
+// anyone who can reach the API directly forges the IP in our access log.
+//
+// With trustedProxies set we walk X-Forwarded-For right-to-left and skip only
+// hops inside those CIDRs; the first untrusted entry is the client. With none
+// set we leave RemoteAddr alone — an unproxied deployment must not let callers
+// invent their own address. Panics at startup on an invalid CIDR, which is the
+// right time to find out.
+func realIP(trustedProxies []string) func(http.Handler) http.Handler {
+	if len(trustedProxies) == 0 {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	fromXFF := middleware.ClientIPFromXFF(trustedProxies...)
+	return func(next http.Handler) http.Handler {
+		return fromXFF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// chi's ClientIPFrom* deliberately never mutate RemoteAddr, but
+			// middleware.Logger (and anything else reading the transport
+			// address) still wants the resolved client — copy it across.
+			if ip := middleware.GetClientIP(r.Context()); ip != "" {
+				r.RemoteAddr = ip
+			}
+			next.ServeHTTP(w, r)
+		}))
 	}
 }
 
@@ -270,7 +312,7 @@ func (s *Server) turnTTLFor(ctx context.Context, tenantID uuid.UUID) time.Durati
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(realIP(s.trustedProxies))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	// CORS must come BEFORE the auth wall — preflight OPTIONS requests
