@@ -9,7 +9,7 @@
 # binary is statically linked; the runtime carries glibc only for the bundled
 # Piper TTS (+ its onnxruntime). No shell, no package manager in the image.
 
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 ARG NODE_VERSION=22
 
 # ---- web UI build --------------------------------------------------------

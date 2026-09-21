@@ -26,6 +26,19 @@ import (
 	"github.com/shridarpatil/tring/internal/tts"
 )
 
+// csv splits a comma-separated config value into trimmed, non-empty entries.
+// koanf hands env vars through as plain strings, so a list-valued setting
+// (trusted_proxies) is split here at the wiring layer.
+func csv(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // migrateRun is a tiny shim so the call site reads `migrateRun(...)`
 // rather than the long aliased package name everywhere.
 var migrateRun = tringmigrate.Run
@@ -151,6 +164,7 @@ func main() {
 		Cache:            flowCache,
 		Hub:              hub,
 		Events:           eventsPub,
+		TrustedProxies:   csv(k.String("trusted_proxies")),
 		Logger:           logger,
 	})
 
