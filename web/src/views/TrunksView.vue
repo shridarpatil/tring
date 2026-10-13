@@ -62,8 +62,11 @@ const form = ref({
   sip_realm: "",
   proxy_ip: "",
   auth_acl_cidr: "",
+  from_domain: "",
   active: true,
 });
+// The edited trunk's other extra_params keys, carried through save untouched.
+const extraParams = ref<Record<string, unknown>>({});
 
 const providerTypes = ["generic", "exotel", "airtel", "jio", "tata"];
 const providerOptions = providerTypes.map((p) => ({ value: p, label: p }));
@@ -82,8 +85,10 @@ function newTrunk() {
     sip_realm: "",
     proxy_ip: "",
     auth_acl_cidr: "",
+    from_domain: "",
     active: true,
   };
+  extraParams.value = {};
   showForm.value = true;
 }
 
@@ -100,15 +105,21 @@ async function startEdit(t: Trunk) {
     sip_realm: full.sip_realm,
     proxy_ip: full.proxy_ip,
     auth_acl_cidr: full.auth_acl_cidr,
+    from_domain: typeof full.extra_params?.from_domain === "string" ? full.extra_params.from_domain : "",
     active: full.active,
   };
+  extraParams.value = { ...(full.extra_params || {}) };
   showForm.value = true;
 }
 
 async function save() {
   saving.value = true;
   try {
-    const body = { ...form.value };
+    const { from_domain, ...fields } = form.value;
+    const extra_params = { ...extraParams.value };
+    if (from_domain.trim()) extra_params.from_domain = from_domain.trim();
+    else delete extra_params.from_domain;
+    const body = { ...fields, extra_params };
     if (editing.value) {
       await api.patch<Trunk>(`/v1/trunks/${editing.value.id}`, body);
     } else {
@@ -257,11 +268,20 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
               hint="For the inbound ACL."
             />
           </div>
-          <TextField
-            v-model="form.sip_realm"
-            label="SIP realm (optional — defaults to proxy IP)"
-            mono
-          />
+          <div class="grid grid-2">
+            <TextField
+              v-model="form.sip_realm"
+              label="SIP realm (optional — defaults to proxy IP)"
+              mono
+            />
+            <TextField
+              v-model="form.from_domain"
+              label="From domain (optional)"
+              mono
+              placeholder="10.0.0.5"
+              hint="Host sent in From — e.g. your circuit IP. Empty = SIP realm."
+            />
+          </div>
         </template>
       </form>
       <template #footer>
