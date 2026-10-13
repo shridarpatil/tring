@@ -81,7 +81,16 @@ func scanTrunk(scanner interface{ Scan(...interface{}) error }) (Trunk, error) {
 // the XML writer consumes. Kept in this package so the API layer owns
 // the field mapping; internal/freeswitch only knows about the rendered
 // gateway, not Tring's DB schema.
+//
+// extra_params may carry {"from_domain"} for carriers that check the From
+// host; a missing or malformed value just omits it.
 func trunkToGateway(t Trunk) freeswitch.Gateway {
+	var extra struct {
+		FromDomain string `json:"from_domain"`
+	}
+	if json.Unmarshal(t.ExtraParams, &extra) != nil {
+		extra.FromDomain = ""
+	}
 	return freeswitch.Gateway{
 		ID:          t.ID.String(),
 		Name:        freeswitch.GatewayName(t.ID),
@@ -92,6 +101,7 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 		Realm:       t.SIPRealm,
 		ProxyIP:     t.ProxyIP,
 		AuthACLCIDR: t.AuthACLCIDR,
+		FromDomain:  extra.FromDomain,
 	}
 }
 
