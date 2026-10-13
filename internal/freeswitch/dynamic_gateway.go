@@ -34,6 +34,7 @@ type Gateway struct {
 	Realm       string // register mode + IP-mode (used as both realm and the contact host)
 	ProxyIP     string // IP-auth mode: SBC IP to send to
 	AuthACLCIDR string // IP-auth mode: SBC /29 to trust inbound from (documentary; ACL is configured separately)
+	FromDomain  string // optional sofia from-domain: host part of From on calls + OPTIONS pings (empty = omit)
 }
 
 // GatewayName builds a sofia-safe gateway name from a trunk UUID. The
@@ -122,6 +123,12 @@ func renderGateway(g Gateway) ([]byte, error) {
 			xmlGatewayParam{Name: "proxy", Value: g.ProxyIP},
 			xmlGatewayParam{Name: "realm", Value: realm},
 		)
+	}
+	// From host for carriers that expect our circuit IP rather than their
+	// own realm (Tata). The From USER stays per-call: caller-id-in-from below
+	// puts each call's caller-ID DID there, so no trunk-level from-user.
+	if g.FromDomain != "" {
+		params = append(params, xmlGatewayParam{Name: "from-domain", Value: g.FromDomain})
 	}
 	// SIP OPTIONS keepalive — sofia sends OPTIONS every N seconds; if
 	// the peer doesn't reply, the gateway state moves to FAIL_WAIT and
