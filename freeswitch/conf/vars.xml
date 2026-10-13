@@ -341,7 +341,16 @@
        expands that macro to the real LAN IP before the shell runs). `set`
        (not stun-set) so the $${...} macro expands first.
   -->
-  <X-PRE-PROCESS cmd="exec-set" data="tring_public_ip=sh -c 'echo ${TRING_PUBLIC_IP:-$${local_ip_v4}}'"/>
+  <!-- tring_trunk_ip: the IP the EXTERNAL (carrier) profile BINDS for SIP +
+       RTP. Default $${local_ip_v4} (the primary interface). Set TRING_TRUNK_IP
+       when the carrier arrives on a different interface — e.g. Tata
+       SIP-over-AWS, a private circuit on a secondary ENI. Binding the primary
+       IP there sends packets out the wrong ENI (AWS drops them) and never
+       receives the carrier's replies. A private circuit has no NAT, so when
+       set it is also what we advertise (wins over TRING_PUBLIC_IP, which then
+       stays free for the browser-facing gateway). -->
+  <X-PRE-PROCESS cmd="exec-set" data="tring_trunk_ip=sh -c 'echo ${TRING_TRUNK_IP:-$${local_ip_v4}}'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="tring_public_ip=sh -c 'echo ${TRING_TRUNK_IP:-${TRING_PUBLIC_IP:-$${local_ip_v4}}}'"/>
   <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${tring_public_ip}"/>
   <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${tring_public_ip}"/>
 
