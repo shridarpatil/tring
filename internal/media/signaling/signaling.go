@@ -379,7 +379,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			// Record the caller so a later transfer handoff can tell the caller apart
 			// from the answering agent (post-call IVR runs to the caller). See handoff.go.
 			s.setCaller(roomID, p.ID())
-			s.startIVR(roomID, flowID, princ.clientRef) // brain runs the IVR in-process
+			s.startIVR(roomID, flowID, princ.clientRef, map[string]string{"caller": princ.clientRef}) // brain runs the IVR in-process
 		}
 	}
 	// A flow-pinned FRESH join is a web CALL — open its CDR (and attach the

@@ -86,7 +86,7 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 
 	// Run the IVR locally — the brain is embedded in-process. The caller's number
 	// rides as the name/label the agent sees on a transfer ring.
-	s.startIVR(roomID, flowID, ic.From)
+	s.startIVR(roomID, flowID, ic.From, map[string]string{"caller": ic.From, "did": ic.To})
 	s.log.Info("pstn: call attached", "room", roomID, "did", ic.To, "from", ic.From, "flow", flowID)
 
 	// Pump the caller's keypresses into the same DTMF path a browser uses, and

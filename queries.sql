@@ -681,6 +681,14 @@ FROM calls WHERE leg_id = $1;
 -- orchestrator: IVR executor (ivr_executor.go)
 -- ===========================================================================
 
+-- name: tenant-owns-number
+-- Is e164 one of the tenant's active numbers (any type)? Gates an explicit
+-- caller-ID override (masked calling) so a tenant can only present numbers it
+-- holds — an inbound mask number (e.g. one an agent calls back) counts too.
+SELECT EXISTS (
+    SELECT 1 FROM numbers WHERE tenant_id = $1 AND e164 = $2 AND active
+);
+
 -- name: resolve-inbound-number
 -- Inbound DID → owning tenant + attached flow id (NULL if none). The flow
 -- DEFINITION is loaded separately by id (get-active-flow-by-id) so it can be
