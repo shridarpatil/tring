@@ -145,7 +145,10 @@ each participant's audio to the others.
    and plays the greeting/menu — the visitor hears it via the SFU. Key presses go
    up as `dtmf` messages and drive the flow graph.
 7. **Flow decides to reach an agent.** A `transfer` node picks who to ring: one
-   agent, a team, or every online agent (ring-all).
+   agent, a team, or every online agent (ring-all). Or it dials a phone
+   `number` over the outbound trunk (`ivrdial.go`) — often a `{{var}}` an
+   earlier `http_callback` returned; the answered callee joins the room as a
+   port in place of an agent, and busy/no answer takes `no_answer`.
 8. **The ring.** Each online agent already holds a quiet **presence socket**
    (registered at login). To ring them the gateway just **pushes an `incoming`
    message** down those sockets and their widget rings — no phone network, just a

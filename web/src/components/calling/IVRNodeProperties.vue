@@ -78,11 +78,13 @@ function commit() {
 watch(label, commit);
 watch(config, commit, { deep: true });
 
-// ─── Transfer target (team | specific agent | all) ──────────────────
-// One select drives two mutually-exclusive config keys: config.team (a team
-// name) or config.agent_sip (one agent). Empty = ring all available agents.
+// ─── Transfer target (team | specific agent | phone number | all) ───
+// One select drives mutually-exclusive config keys: config.team (a team name),
+// config.agent_sip (one agent) or config.number (dial a phone number, may hold
+// {{vars}}). Empty = ring all available agents.
 const transferTarget = computed<string>({
   get() {
+    if (config.value.number !== undefined) return "number";
     if (config.value.team) return `team:${config.value.team}`;
     if (config.value.agent_sip) return `agent:${config.value.agent_sip}`;
     return "";
@@ -91,7 +93,10 @@ const transferTarget = computed<string>({
     const next = { ...config.value };
     delete next.team;
     delete next.agent_sip;
-    if (v.startsWith("team:")) next.team = v.slice(5);
+    delete next.number;
+    delete next.ring_seconds;
+    if (v === "number") next.number = "";
+    else if (v.startsWith("team:")) next.team = v.slice(5);
     else if (v.startsWith("agent:")) next.agent_sip = v.slice(6);
     config.value = next;
   },
@@ -319,6 +324,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           <span class="fl">Transfer to</span>
           <select v-model="transferTarget">
             <option value="">All available agents (ring everyone)</option>
+            <option value="number">Phone number…</option>
             <optgroup v-if="availableTeams && availableTeams.length" label="Teams">
               <option v-for="t in availableTeams" :key="t.name" :value="`team:${t.name}`">
                 {{ t.name }} ({{ t.strategy }})
@@ -331,6 +337,26 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             </optgroup>
           </select>
         </label>
+
+        <!-- Phone number: dialed over the outbound trunk; answer → completed. -->
+        <template v-if="transferTarget === 'number'">
+          <div class="grid grid-2">
+            <label class="fld">
+              <span class="fl">Number to dial</span>
+              <input v-model="config.number" class="mono" placeholder="+919812345678 or {{dest}}" />
+            </label>
+            <label class="fld">
+              <span class="fl">Ring for (s)</span>
+              <input v-model.number="config.ring_seconds" type="number" min="5" max="120" placeholder="30" />
+            </label>
+          </div>
+          <p class="sub-note">
+            Use a variable such as <code v-pre>{{dest}}</code> to dial a number returned by an earlier
+            <strong>HTTP callback</strong>. The caller sees one of your outbound numbers. Busy, no answer
+            or a bad number takes the <strong>no answer</strong> branch.
+          </p>
+          <p v-if="!String(config.number || '').trim()" class="warn-note">Enter a number or variable to dial.</p>
+        </template>
 
         <!-- Queue explainer + Priority checkbox — only meaningful for a team. -->
         <template v-if="transferTarget.startsWith('team:')">
@@ -354,7 +380,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           </label>
         </template>
 
-        <p v-if="!availableTeams || !availableTeams.length" class="warn-note">
+        <p v-if="transferTarget !== 'number' && (!availableTeams || !availableTeams.length)" class="warn-note">
           No teams yet — create one under <strong>Teams</strong> to ring a group with a strategy.
         </p>
       </template>
