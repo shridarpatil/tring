@@ -53,6 +53,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
 		},
 		Agents:    s.agentRouter, // brain.AgentRouter drives team-resolution + routing loop
+		Dialer:    ivrDialer{s},  // transfer-to-number (ivrdial.go)
 		Room:      string(roomID),
 		ClientRef: callerRef,
 		Logger:    s.log,

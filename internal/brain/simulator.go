@@ -281,6 +281,9 @@ func stepFor(node *ivrNode, in *SimInput, dtmfIdx *int, vars map[string]string) 
 // suffix when the Priority checkbox is on), or "all agents". Kept in sync with
 // runTransfer's stepDetail in ivr_executor.go.
 func transferDetail(c map[string]interface{}) string {
+	if number := stringFromConfig(c, "number"); number != "" {
+		return "dial " + number // shown unresolved: the simulator makes no HTTP calls
+	}
 	if sip := stringFromConfig(c, "agent_sip"); sip != "" {
 		return sip
 	}
