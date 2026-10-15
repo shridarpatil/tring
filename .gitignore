@@ -15,6 +15,9 @@
 .env.local
 !.env.example
 
+# FreeSWITCH TLS certs/keys (host-managed)
+/freeswitch/tls/
+
 # Node
 node_modules/
 sdk/js/dist/

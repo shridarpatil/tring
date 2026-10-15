@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Tring 'whatsapp' dialplan context — bound to the whatsapp SIP profile
+    (sip_profiles/whatsapp/profile.xml). Meta dials the business number as
+    sip:+<E.164>@<host>, so destination_number is "+91…": store the WhatsApp
+    number in Tring with the leading + (inbound lookup is an exact match).
+
+    The WhatsApp leg must be SRTP (SDES — set srtp_key_exchange_protocol=SDES
+    on the business number); the hop to the gateway plug is plain RTP, as in
+    the public context.
+-->
+<include>
+  <context name="whatsapp">
+    <extension name="whatsapp_inbound_to_gateway">
+      <condition field="destination_number" expression="^(\+?\d+)$">
+        <action application="set" data="outside_call=true"/>
+        <action application="set" data="rtp_secure_media_inbound=mandatory:AES_CM_128_HMAC_SHA1_80"/>
+        <action application="set" data="absolute_codec_string=opus"/>
+        <action application="bridge" data="{rtp_secure_media=false}sofia/gateway/tring-gw/${destination_number}"/>
+      </condition>
+    </extension>
+
+    <!-- Anything else (no number, a BSUID in the RURI, probes) is refused. -->
+    <extension name="whatsapp_reject">
+      <condition field="destination_number" expression="^.*$">
+        <action application="respond" data="404"/>
+      </condition>
+    </extension>
+  </context>
+</include>

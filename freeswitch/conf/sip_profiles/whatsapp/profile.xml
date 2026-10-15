@@ -1,0 +1,78 @@
+<!--
+    WhatsApp Business Calling over SIP — INBOUND only.
+
+    Meta's SIP edge (wa.meta.vc) sends the INVITE for a user-initiated call to
+    the hostname:port configured on the business number, over TLS, with SDES
+    SRTP + Opus media. This profile terminates that and hands the call to the
+    'whatsapp' dialplan context, which bridges it into the gateway plug exactly
+    like a carrier DID.
+
+    It is public-facing, so it is locked down to Meta and nothing else:
+      * TLS only (no UDP/TCP listener), TLS 1.2+.
+      * mTLS: Meta presents a client cert for client.sip.fbclientcerts.com
+        when asked; anything else fails the handshake. cafile.pem must be the
+        Meta outbound API CA.
+      * No registrations, no outbound gateways, its own dialplan context.
+      * The security group should still restrict the TLS port + RTP range to
+        Meta's published IP ranges.
+
+    Certs live in $${certs_dir}/whatsapp (mounted from the host):
+      agent.pem   server cert chain + private key for the hostname set on the
+                  business number (public CA, e.g. Let's Encrypt)
+      cafile.pem  Meta outbound API CA (verifies Meta's client cert)
+    FreeSWITCH reads them when the profile starts; after renewing, run
+    `sofia profile whatsapp restart`.
+-->
+<profile name="whatsapp">
+  <domains>
+    <domain name="all" alias="false" parse="false"/>
+  </domains>
+
+  <settings>
+    <param name="debug" value="0"/>
+    <param name="sip-trace" value="no"/>
+    <param name="dialplan" value="XML"/>
+    <param name="context" value="whatsapp"/>
+    <param name="rfc2833-pt" value="101"/>
+    <param name="dtmf-duration" value="2000"/>
+    <param name="inbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
+    <param name="outbound-codec-prefs" value="OPUS,PCMU,PCMA"/>
+    <param name="inbound-codec-negotiation" value="generous"/>
+    <!-- Late negotiation so the dialplan's rtp_secure_media_inbound applies
+         before the SDP answer is built. -->
+    <param name="inbound-late-negotiation" value="true"/>
+    <param name="rtp-timer-name" value="soft"/>
+    <param name="manage-presence" value="false"/>
+    <param name="accept-blind-reg" value="false"/>
+    <param name="accept-blind-auth" value="false"/>
+    <param name="disable-register" value="true"/>
+    <param name="auth-calls" value="false"/>
+    <param name="nonce-ttl" value="60"/>
+
+    <!-- DO NOT USE HOSTNAMES, ONLY IP ADDRESSES IN THESE SETTINGS! -->
+    <param name="sip-ip" value="$${whatsapp_ip}"/>
+    <param name="rtp-ip" value="$${whatsapp_ip}"/>
+    <param name="ext-sip-ip" value="$${whatsapp_public_ip}"/>
+    <param name="ext-rtp-ip" value="$${whatsapp_public_ip}"/>
+    <!-- Meta is never on our LAN: always advertise ext-*-ip, even to a peer
+         that happens to share the private range (default localnet.auto would
+         hand it the bind IP). -->
+    <param name="local-network-acl" value="loopback.auto"/>
+    <param name="rtp-timeout-sec" value="300"/>
+    <param name="rtp-hold-timeout-sec" value="1800"/>
+
+    <!-- sip-port is required but never bound: tls-only. -->
+    <param name="sip-port" value="$${whatsapp_tls_port}"/>
+    <param name="tls" value="true"/>
+    <param name="tls-only" value="true"/>
+    <param name="tls-bind-params" value="transport=tls"/>
+    <param name="tls-sip-port" value="$${whatsapp_tls_port}"/>
+    <param name="tls-cert-dir" value="$${certs_dir}/whatsapp"/>
+    <param name="tls-version" value="tlsv1.2"/>
+    <param name="tls-ciphers" value="ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL"/>
+    <param name="tls-verify-date" value="true"/>
+    <param name="tls-verify-policy" value="subjects_in"/>
+    <param name="tls-verify-in-subjects" value="client.sip.fbclientcerts.com"/>
+    <param name="tls-verify-depth" value="4"/>
+  </settings>
+</profile>
