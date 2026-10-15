@@ -108,6 +108,14 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 func (s *Server) endPstnRoom(roomID room.RoomID) {
 	s.forgetPstn(roomID)
 	s.stopIVR(roomID)
+	// A callee the IVR dialed (ivrdial.go) is left talking to nobody — hang it
+	// up; its Done then runs endOutboundRoom.
+	s.mu.Lock()
+	calleePID, hasCallee := s.outboundLegs[roomID]
+	s.mu.Unlock()
+	if hasCallee && s.cfg.Originator != nil {
+		_ = s.cfg.Originator.HangupOutbound(calleePID)
+	}
 	if s.cfg.Calls != nil {
 		s.cfg.Calls.Ended(string(roomID), "caller_hangup")
 	}
@@ -135,6 +143,12 @@ func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 	}
 	if r, ok := s.rooms.Get(roomID); ok && len(r.Participants()) > 0 {
 		return // an agent is (still) on the call
+	}
+	s.mu.Lock()
+	_, hasCallee := s.outboundLegs[roomID]
+	s.mu.Unlock()
+	if hasCallee {
+		return // a number the IVR dialed (ivrdial.go) is serving the caller
 	}
 	// Also no IVR running? Then nothing is serving the caller — hang up. (While
 	// the IVR runs, the room legitimately has zero human participants.)

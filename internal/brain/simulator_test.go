@@ -189,3 +189,10 @@ func TestSimulateTimingUsesSuppliedClock(t *testing.T) {
 		t.Errorf("night ended_at = %s, want 'closed'", closed.EndedAt)
 	}
 }
+
+func TestTransferDetailNumber(t *testing.T) {
+	got := transferDetail(map[string]interface{}{"number": "{{dest}}", "team": "sales"})
+	if got != "dial {{dest}}" {
+		t.Fatalf("detail = %q, want the number (it takes precedence over team)", got)
+	}
+}

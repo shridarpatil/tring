@@ -2,6 +2,8 @@ package ivrdrive_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -402,5 +404,199 @@ func TestTimingUsesInjectedClock(t *testing.T) {
 	path := runFlow(t, d, fake, flow, nil)
 	if want := []string{"s", "tm", "closed"}; !eq(ids(path), want) {
 		t.Fatalf("path = %v, want %v (timing should be out_of_hours on Sunday)", ids(path), want)
+	}
+}
+
+// fakeDialer records the dial request and returns a scripted outcome.
+type fakeDialer struct {
+	outcome string
+	calls   int
+	gotRoom string
+	gotNum  string
+	gotRing time.Duration
+}
+
+func (f *fakeDialer) Dial(_ context.Context, room, number string, ring time.Duration) (string, error) {
+	f.calls++
+	f.gotRoom, f.gotNum, f.gotRing = room, number, ring
+	return f.outcome, nil
+}
+
+func dialFlow(cfg map[string]interface{}) *ivr.Flow {
+	return &ivr.Flow{
+		EntryNode: "x",
+		Nodes: []ivr.Node{
+			{ID: "x", Type: ivr.NodeTransfer, Config: cfg},
+			{ID: "done", Type: ivr.NodeHangup},
+			{ID: "na", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "x", To: "done", Condition: "completed"},
+			{From: "x", To: "na", Condition: "no_answer"},
+		},
+	}
+}
+
+func TestTransferDialsNumberFromHTTPVar(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"dest":"+919812345678"}`))
+	}))
+	defer srv.Close()
+
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "completed"}
+	dialer := &fakeDialer{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Dialer: dialer, Room: "tenant/call"})
+	flow := &ivr.Flow{
+		EntryNode: "h",
+		Nodes: []ivr.Node{
+			{ID: "h", Type: ivr.NodeHTTPCallback, Config: map[string]interface{}{"url": srv.URL}},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"number": "{{dest}}", "ring_seconds": float64(20)}},
+			{ID: "done", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "h", To: "x", Condition: "http:2xx"},
+			{From: "x", To: "done", Condition: "completed"},
+		},
+	}
+	path := runFlow(t, d, fake, flow, nil)
+	if want := []string{"h", "x", "done"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v", ids(path), want)
+	}
+	if dialer.gotNum != "+919812345678" || dialer.gotRoom != "tenant/call" || dialer.gotRing != 20*time.Second {
+		t.Fatalf("dial = %+v, want +919812345678 in tenant/call ringing 20s", dialer)
+	}
+	if path[1].Detail != "+919812345678" {
+		t.Fatalf("trace detail = %q, want the dialed number", path[1].Detail)
+	}
+	if agents.gotRoom != "" {
+		t.Fatal("a number transfer must not ring agents")
+	}
+}
+
+func TestTransferDialDefaultsRingTo30s(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	dialer := &fakeDialer{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r"})
+	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678"}), nil)
+	if dialer.gotRing != 30*time.Second {
+		t.Fatalf("ring = %v, want 30s default", dialer.gotRing)
+	}
+}
+
+func TestTransferDialNoAnswerBranches(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	dialer := &fakeDialer{outcome: "no_answer"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r"})
+	path := runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678"}), nil)
+	if want := []string{"x", "na"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v", ids(path), want)
+	}
+}
+
+func TestTransferDialWithoutDialerOrUnresolvedVarReportsNoAnswer(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	// No Dialer configured → no_answer.
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Room: "r"})
+	if path := runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678"}), nil); !eq(ids(path), []string{"x", "na"}) {
+		t.Fatalf("no dialer: path = %v", ids(path))
+	}
+	// Var never set → the template stays unresolved → no dial, no_answer.
+	dialer := &fakeDialer{outcome: "completed"}
+	d = ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r"})
+	if path := runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "{{dest}}"}), nil); !eq(ids(path), []string{"x", "na"}) {
+		t.Fatalf("unresolved var: path = %v", ids(path))
+	}
+	if dialer.calls != 0 {
+		t.Fatalf("dialer called %d times for an unresolved number", dialer.calls)
+	}
+}
+
+func TestTransferTeamFromVar(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r"})
+	d.Vars()["team"] = "sales"
+	runFlow(t, d, fake, dialFlow(map[string]interface{}{"team": "{{team}}"}), nil)
+	if agents.gotTgt.Team != "sales" {
+		t.Fatalf("team = %q, want sales (substituted)", agents.gotTgt.Team)
+	}
+}
+
+func TestTransferBlankNumberDoesNotRingAgents(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "completed"}
+	dialer := &fakeDialer{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Dialer: dialer, Room: "r"})
+	path := runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": ""}), nil)
+	if !eq(ids(path), []string{"x", "na"}) {
+		t.Fatalf("path = %v, want no_answer for a blank number", ids(path))
+	}
+	if agents.gotRoom != "" || dialer.calls != 0 {
+		t.Fatal("a blank number must neither ring agents nor dial")
+	}
+}
+
+// gateDialer blocks Dial until release closes — a callee still ringing.
+type gateDialer struct {
+	release chan struct{}
+	outcome string
+}
+
+func (g *gateDialer) Dial(ctx context.Context, _, _ string, _ time.Duration) (string, error) {
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+	}
+	return g.outcome, nil
+}
+
+func TestTransferDialPlaysHoldAudioWhileRinging(t *testing.T) {
+	prompts := newBlockingPrompts()
+	dialer := &gateDialer{release: make(chan struct{}), outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{
+		Prompts: prompts, Dialer: dialer, Room: "r",
+		DialAudio: func() string { return "moh.ogg" },
+	})
+	flow := dialFlow(map[string]interface{}{"number": "+919812345678"})
+	done := make(chan []ivr.Step, 1)
+	go func() { p, _ := ivr.Walk(context.Background(), flow, flow.EntryNode, d); done <- p }()
+
+	select {
+	case f := <-prompts.started:
+		if f != "moh.ogg" {
+			t.Fatalf("played %q while ringing, want moh.ogg", f)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no hold audio while the number rang")
+	}
+	close(dialer.release) // the callee answers
+	select {
+	case p := <-done:
+		if !eq(ids(p), []string{"x", "done"}) {
+			t.Fatalf("path = %v", ids(p))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("walk hung after the callee answered")
+	}
+	if prompts.stopCount() == 0 {
+		t.Fatal("hold audio was not stopped when the callee answered")
+	}
+}
+
+func TestTransferDialWithoutDialAudioPlaysNothing(t *testing.T) {
+	prompts := newBlockingPrompts()
+	d := ivrdrive.New(ivrdrive.Config{
+		Prompts: prompts, Dialer: &fakeDialer{outcome: "no_answer"}, Room: "r",
+		DialAudio: func() string { return "" }, // tenant has no hold music file
+	})
+	flow := dialFlow(map[string]interface{}{"number": "+919812345678"})
+	if p, _ := ivr.Walk(context.Background(), flow, flow.EntryNode, d); !eq(ids(p), []string{"x", "na"}) {
+		t.Fatalf("path = %v", ids(p))
+	}
+	select {
+	case f := <-prompts.started:
+		t.Fatalf("played %q with no hold music configured", f)
+	default:
 	}
 }

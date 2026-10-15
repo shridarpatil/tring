@@ -52,7 +52,11 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 			player:    player,
 			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
 		},
-		Agents:    s.agentRouter, // brain.AgentRouter drives team-resolution + routing loop
+		Agents: s.agentRouter, // brain.AgentRouter drives team-resolution + routing loop
+		Dialer: ivrDialer{s},  // transfer-to-number (ivrdial.go)
+		// While a dialed number rings, the caller hears the tenant's hold music
+		// (silence when it isn't a playable file — see holdFile).
+		DialAudio: func() string { return holdFile(s.tenantHoldMusic(roomID)) },
 		Room:      string(roomID),
 		ClientRef: callerRef,
 		Logger:    s.log,
