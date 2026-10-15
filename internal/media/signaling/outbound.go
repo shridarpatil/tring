@@ -12,6 +12,8 @@ package signaling
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,14 +39,21 @@ type TrunkResolver interface {
 	OutboundTrunks(ctx context.Context, tenant uuid.UUID) ([]trunkselect.Trunk, error)
 }
 
-// handleAgentDial places an outbound call on behalf of an agent already in
-// roomID and plugs the resulting leg into that SAME room. Run in its own
-// goroutine by the read loop (msgDial) since Originate blocks until answered,
-// failed, or the call ends.
-func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID room.ParticipantID, to string) {
+// Why an outbound originate failed — handleAgentDial maps these to the error
+// shown to the agent; the IVR dial reports any of them as no_answer.
+var (
+	errDialUnavailable   = errors.New("outbound calling not available")
+	errDialInvalidNumber = errors.New("invalid destination number")
+	errDialNoTrunk       = errors.New("no outbound trunk")
+)
+
+// originateOut normalizes `to`, resolves the tenant's outbound trunk(s) and
+// places the call, blocking until it is answered, fails, or ctx ends. Shared
+// by agent dials (handleAgentDial) and IVR transfer-to-number (dialFromIVR).
+// Returns the answered leg, the caller-ID presented, and the normalized number.
+func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
 	if s.cfg.Originator == nil || s.cfg.Trunks == nil {
-		s.sendError(agentPID, "outbound calling not available")
-		return
+		return nil, "", to, errDialUnavailable
 	}
 
 	// India-primary normalization, matching the ESL/API originate path
@@ -59,19 +68,15 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 	// trunks (Twilio/Plivo).
 	normalized, err := dial.India(to)
 	if err != nil {
-		s.log.Warn("outbound: invalid destination number", "room", roomID, "to", to, "err", err)
-		s.sendError(agentPID, "invalid destination number")
-		return
+		return nil, "", to, fmt.Errorf("%w: %v", errDialInvalidNumber, err)
 	}
 	to = normalized
 
-	tctx, tcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
 	selected, err := s.cfg.Trunks.OutboundTrunks(tctx, tenant)
 	tcancel()
 	if err != nil || len(selected) == 0 {
-		s.log.Warn("outbound: no trunk available", "room", roomID, "tenant", tenant, "err", err)
-		s.sendError(agentPID, "no outbound trunk")
-		return
+		return nil, "", to, fmt.Errorf("%w: %v", errDialNoTrunk, err)
 	}
 	callerID := selected[0].E164
 	names := make([]string, len(selected))
@@ -89,16 +94,37 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 			"tenant", tenant, "trunk_count", len(selected), "trunk", names[0])
 	}
 
-	leg, err := s.cfg.Originator.Originate(context.Background(), room.OriginateRequest{
+	leg, err := s.cfg.Originator.Originate(ctx, room.OriginateRequest{
 		To:       to,
 		CallerID: callerID,
 		Trunks:   names,
-	}, func(room.Progress) {
+	}, onProgress)
+	return leg, callerID, to, err
+}
+
+// handleAgentDial places an outbound call on behalf of an agent already in
+// roomID and plugs the resulting leg into that SAME room. Run in its own
+// goroutine by the read loop (msgDial) since Originate blocks until answered,
+// failed, or the call ends.
+func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID room.ParticipantID, to string) {
+	leg, callerID, to, err := s.originateOut(context.Background(), tenant, to, func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})
 		}
 	})
-	if err != nil {
+	switch {
+	case errors.Is(err, errDialUnavailable):
+		s.sendError(agentPID, "outbound calling not available")
+		return
+	case errors.Is(err, errDialInvalidNumber):
+		s.log.Warn("outbound: invalid destination number", "room", roomID, "to", to, "err", err)
+		s.sendError(agentPID, "invalid destination number")
+		return
+	case errors.Is(err, errDialNoTrunk):
+		s.log.Warn("outbound: no trunk available", "room", roomID, "tenant", tenant, "err", err)
+		s.sendError(agentPID, "no outbound trunk")
+		return
+	case err != nil:
 		s.log.Warn("outbound: originate failed", "room", roomID, "to", to, "err", err)
 		s.sendError(agentPID, "call failed")
 		return

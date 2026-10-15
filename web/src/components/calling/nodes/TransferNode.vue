@@ -9,6 +9,7 @@ const props = defineProps<{ data: Record<string, any> }>();
 
 const summary = computed(() => {
   const c = props.data?.config || {};
+  if (c.number !== undefined) return `→ dial ${c.number || "?"}`;
   if (c.team) return `→ team ${c.team}${c.priority ? " ★ priority" : ""}`;
   if (c.agent_sip) return `→ agent ${c.agent_sip}`;
   return "→ all agents";
