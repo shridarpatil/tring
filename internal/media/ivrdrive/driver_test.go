@@ -536,3 +536,67 @@ func TestTransferBlankNumberDoesNotRingAgents(t *testing.T) {
 		t.Fatal("a blank number must neither ring agents nor dial")
 	}
 }
+
+// gateDialer blocks Dial until release closes — a callee still ringing.
+type gateDialer struct {
+	release chan struct{}
+	outcome string
+}
+
+func (g *gateDialer) Dial(ctx context.Context, _, _ string, _ time.Duration) (string, error) {
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+	}
+	return g.outcome, nil
+}
+
+func TestTransferDialPlaysHoldAudioWhileRinging(t *testing.T) {
+	prompts := newBlockingPrompts()
+	dialer := &gateDialer{release: make(chan struct{}), outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{
+		Prompts: prompts, Dialer: dialer, Room: "r",
+		DialAudio: func() string { return "moh.ogg" },
+	})
+	flow := dialFlow(map[string]interface{}{"number": "+919812345678"})
+	done := make(chan []ivr.Step, 1)
+	go func() { p, _ := ivr.Walk(context.Background(), flow, flow.EntryNode, d); done <- p }()
+
+	select {
+	case f := <-prompts.started:
+		if f != "moh.ogg" {
+			t.Fatalf("played %q while ringing, want moh.ogg", f)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no hold audio while the number rang")
+	}
+	close(dialer.release) // the callee answers
+	select {
+	case p := <-done:
+		if !eq(ids(p), []string{"x", "done"}) {
+			t.Fatalf("path = %v", ids(p))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("walk hung after the callee answered")
+	}
+	if prompts.stopCount() == 0 {
+		t.Fatal("hold audio was not stopped when the callee answered")
+	}
+}
+
+func TestTransferDialWithoutDialAudioPlaysNothing(t *testing.T) {
+	prompts := newBlockingPrompts()
+	d := ivrdrive.New(ivrdrive.Config{
+		Prompts: prompts, Dialer: &fakeDialer{outcome: "no_answer"}, Room: "r",
+		DialAudio: func() string { return "" }, // tenant has no hold music file
+	})
+	flow := dialFlow(map[string]interface{}{"number": "+919812345678"})
+	if p, _ := ivr.Walk(context.Background(), flow, flow.EntryNode, d); !eq(ids(p), []string{"x", "na"}) {
+		t.Fatalf("path = %v", ids(p))
+	}
+	select {
+	case f := <-prompts.started:
+		t.Fatalf("played %q with no hold music configured", f)
+	default:
+	}
+}

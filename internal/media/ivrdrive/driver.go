@@ -76,6 +76,7 @@ type Driver struct {
 	prompts   Prompts
 	agents    Agents
 	dialer    Dialer
+	dialAudio func() string     // audio file to loop while a number rings ("" = silence)
 	room      string            // the call's room id (where a transfer admits the agent)
 	clientRef string            // caller label shown to the agent on transfer
 	dtmf      chan string       // caller DTMF digits (fed by DTMF())
@@ -92,6 +93,7 @@ type Config struct {
 	Prompts   Prompts
 	Agents    Agents           // rings agents on Transfer; nil → transfer reports no_answer
 	Dialer    Dialer           // dials a number on Transfer; nil → number transfer reports no_answer
+	DialAudio func() string    // file looped to the caller while a number rings (tenant hold music); nil/"" → silence
 	Room      string           // the call's room id (transfer admits the agent here)
 	ClientRef string           // caller label shown to the agent (empty → "Web Caller")
 	Now       func() time.Time // nil → time.Now
@@ -115,6 +117,7 @@ func New(cfg Config) *Driver {
 		prompts:   cfg.Prompts,
 		agents:    cfg.Agents,
 		dialer:    cfg.Dialer,
+		dialAudio: cfg.DialAudio,
 		room:      cfg.Room,
 		clientRef: cfg.ClientRef,
 		dtmf:      make(chan string, 4),
@@ -387,9 +390,44 @@ func (d *Driver) transferToNumber(ctx context.Context, n *ivr.Node, number strin
 		return ivr.NodeResult{Outcome: "no_answer", Action: "transfer", Detail: number}, nil
 	}
 	ring := time.Duration(ivr.IntFromConfig(n.Config, "ring_seconds", defaultRingSeconds)) * time.Second
+	stopAudio := d.loopDialAudio(ctx)
 	outcome, err := d.dialer.Dial(ctx, d.room, number, ring)
+	stopAudio()
 	if err != nil {
 		return ivr.NodeResult{Action: "transfer", Detail: number}, err
 	}
 	return ivr.NodeResult{Outcome: outcome, Action: "transfer", Detail: number}, nil
+}
+
+// loopDialAudio plays the dial audio (the tenant's hold music) on repeat through
+// the IVR's own voice until the returned stop func runs — so the caller isn't
+// left in silence while the number rings. It rides the IVR player rather than a
+// separate source because a phone caller's port hears one publisher at a time,
+// and during the walk that's the IVR. No-op when no audio is configured.
+func (d *Driver) loopDialAudio(ctx context.Context) func() {
+	file := ""
+	if d.dialAudio != nil {
+		file = d.dialAudio()
+	}
+	if file == "" || d.prompts == nil {
+		return func() {}
+	}
+	actx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for actx.Err() == nil {
+			if err := d.prompts.Play(actx, file); err != nil {
+				if actx.Err() == nil {
+					d.log.Warn("ivrdrive transfer: dial audio failed", "file", file, "err", err)
+				}
+				return
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		d.prompts.Stop() // flush the clip already queued on the player
+		<-done
+	}
 }

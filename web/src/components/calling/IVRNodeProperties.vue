@@ -352,8 +352,8 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           </div>
           <p class="sub-note">
             Use a variable such as <code v-pre>{{dest}}</code> to dial a number returned by an earlier
-            <strong>HTTP callback</strong>. The caller sees one of your outbound numbers. Busy, no answer
-            or a bad number takes the <strong>no answer</strong> branch.
+            <strong>HTTP callback</strong>. The caller sees one of your outbound numbers and hears your hold music while it rings.
+            Busy, no answer or a bad number takes the <strong>no answer</strong> branch.
           </p>
           <p v-if="!String(config.number || '').trim()" class="warn-note">Enter a number or variable to dial.</p>
         </template>
