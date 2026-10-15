@@ -95,6 +95,7 @@ const transferTarget = computed<string>({
     delete next.agent_sip;
     delete next.number;
     delete next.ring_seconds;
+    delete next.caller_id;
     if (v === "number") next.number = "";
     else if (v.startsWith("team:")) next.team = v.slice(5);
     else if (v.startsWith("agent:")) next.agent_sip = v.slice(6);
@@ -296,8 +297,12 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             v-model="config.body_template"
             rows="4"
             class="mono"
-            placeholder='{"caller":"{{caller_id}}","digits":"{{account_number}}"}'
+            placeholder='{"caller":"{{caller}}","did":"{{did}}","digits":"{{account_number}}"}'
           />
+          <span class="sub-note">
+            Variables: <code v-pre>{{caller}}</code> (who's calling), <code v-pre>{{did}}</code> (the number
+            they dialed), digits saved by a Gather step, and fields returned by earlier callbacks.
+          </span>
         </label>
         <div>
           <div class="fl" style="margin-bottom: 0.5rem">Headers</div>
@@ -350,13 +355,24 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
               <input v-model.number="config.ring_seconds" type="number" min="5" max="120" placeholder="30" />
             </label>
           </div>
+          <label class="fld">
+            <span class="fl">Caller ID to show (optional)</span>
+            <input v-model="config.caller_id" class="mono" placeholder="One of your numbers, or {{cid}}" />
+          </label>
           <p class="sub-note">
             Use a variable such as <code v-pre>{{dest}}</code> to dial a number returned by an earlier
-            <strong>HTTP callback</strong>. The caller sees one of your outbound numbers and hears your hold music while it rings.
-            Busy, no answer or a bad number takes the <strong>no answer</strong> branch.
+            <strong>HTTP callback</strong>. The person dialed sees the caller ID above (it must be one of
+            your numbers), or one of your outbound numbers if empty. The caller hears your hold music while it
+            rings. Busy, no answer or a bad number takes the <strong>no answer</strong> branch.
           </p>
           <p v-if="!String(config.number || '').trim()" class="warn-note">Enter a number or variable to dial.</p>
         </template>
+
+        <!-- Agent ring label: replaces the caller's number on the agent's screen. -->
+        <label v-if="transferTarget !== 'number'" class="fld">
+          <span class="fl">Label shown to agent (optional)</span>
+          <input v-model="config.label" placeholder="e.g. Customer {{mask}} — empty shows the caller's number" />
+        </label>
 
         <!-- Queue explainer + Priority checkbox — only meaningful for a team. -->
         <template v-if="transferTarget.startsWith('team:')">

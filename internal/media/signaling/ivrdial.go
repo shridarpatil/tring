@@ -19,15 +19,16 @@ import (
 // ivrDialer adapts the server to ivrdrive.Dialer.
 type ivrDialer struct{ s *Server }
 
-func (d ivrDialer) Dial(ctx context.Context, roomID, number string, ring time.Duration) (string, error) {
-	return d.s.dialFromIVR(ctx, room.RoomID(roomID), number, ring)
+func (d ivrDialer) Dial(ctx context.Context, roomID, number, callerID string, ring time.Duration) (string, error) {
+	return d.s.dialFromIVR(ctx, room.RoomID(roomID), number, callerID, ring)
 }
 
 // dialFromIVR rings number for up to ring and, on answer, attaches it to roomID.
+// callerID ("" = the trunk's own DID) must be one of the tenant's numbers.
 // ctx is the IVR walk's: it ends when the caller leaves, which stops the ring.
 // Any failure (invalid number, no trunk, busy, no answer) is "no_answer" so the
 // flow's fallback branch runs; errors are only logged.
-func (s *Server) dialFromIVR(ctx context.Context, roomID room.RoomID, number string, ring time.Duration) (string, error) {
+func (s *Server) dialFromIVR(ctx context.Context, roomID room.RoomID, number, callerID string, ring time.Duration) (string, error) {
 	tenantStr, _, _ := strings.Cut(string(roomID), "/")
 	tenant, err := uuid.Parse(tenantStr)
 	if err != nil {
@@ -41,7 +42,7 @@ func (s *Server) dialFromIVR(ctx context.Context, roomID room.RoomID, number str
 	octx, ocancel := context.WithCancel(context.Background())
 	timer := time.AfterFunc(ring, ocancel)
 	stopWatch := context.AfterFunc(ctx, ocancel)
-	leg, callerID, to, err := s.originateOut(octx, tenant, number, nil)
+	leg, callerID, to, err := s.originateOut(octx, tenant, number, callerID, nil)
 	timer.Stop()
 	stopWatch()
 	if err != nil {

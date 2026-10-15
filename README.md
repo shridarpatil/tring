@@ -87,6 +87,8 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
      https://api.tring.io/v1/calls
 ```
 
+Add `"caller_id":"<one of your numbers>"` to choose the number the customer sees (e.g. your support number for a masked callback); it must be one of the tenant's active numbers.
+
 Visitor "call us" calling uses `voice.js` the same way — a `data-credentials-url` that mints a short-lived, **single-use** gateway call token server-side (`POST /v1/guest-credentials`), pinning the IVR flow server-side.
 
 See [`examples/demo-portal/`](examples/demo-portal/) for a runnable end-to-end demo (anonymous "call us", logged-in support, and the agent CRM in one app), and [`sdk/js/README.md`](sdk/js/README.md) for the full SDK reference.

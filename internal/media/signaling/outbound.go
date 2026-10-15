@@ -37,6 +37,9 @@ type Originator interface {
 // ordered names ride as X-Tring-Trunk for carrier-side failover.
 type TrunkResolver interface {
 	OutboundTrunks(ctx context.Context, tenant uuid.UUID) ([]trunkselect.Trunk, error)
+	// OwnsNumber reports whether e164 is one of the tenant's active numbers —
+	// the gate on an explicit caller-ID override (masked calling).
+	OwnsNumber(ctx context.Context, tenant uuid.UUID, e164 string) (bool, error)
 }
 
 // Why an outbound originate failed — handleAgentDial maps these to the error
@@ -45,13 +48,16 @@ var (
 	errDialUnavailable   = errors.New("outbound calling not available")
 	errDialInvalidNumber = errors.New("invalid destination number")
 	errDialNoTrunk       = errors.New("no outbound trunk")
+	errDialCallerID      = errors.New("caller id is not one of the tenant's numbers")
 )
 
 // originateOut normalizes `to`, resolves the tenant's outbound trunk(s) and
 // places the call, blocking until it is answered, fails, or ctx ends. Shared
 // by agent dials (handleAgentDial) and IVR transfer-to-number (dialFromIVR).
-// Returns the answered leg, the caller-ID presented, and the normalized number.
-func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
+// callerID overrides the trunk's own DID when set, but only with a number the
+// tenant holds. Returns the answered leg, the caller-ID presented, and the
+// normalized number.
+func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
 	if s.cfg.Originator == nil || s.cfg.Trunks == nil {
 		return nil, "", to, errDialUnavailable
 	}
@@ -78,7 +84,16 @@ func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to string, 
 	if err != nil || len(selected) == 0 {
 		return nil, "", to, fmt.Errorf("%w: %v", errDialNoTrunk, err)
 	}
-	callerID := selected[0].E164
+	if callerID == "" {
+		callerID = selected[0].E164
+	} else {
+		octx, ocancel := context.WithTimeout(ctx, 5*time.Second)
+		owned, err := s.cfg.Trunks.OwnsNumber(octx, tenant, callerID)
+		ocancel()
+		if err != nil || !owned {
+			return nil, "", to, fmt.Errorf("%w: %s (%v)", errDialCallerID, callerID, err)
+		}
+	}
 	names := make([]string, len(selected))
 	for i, t := range selected {
 		names[i] = t.Name
@@ -107,7 +122,7 @@ func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to string, 
 // goroutine by the read loop (msgDial) since Originate blocks until answered,
 // failed, or the call ends.
 func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID room.ParticipantID, to string) {
-	leg, callerID, to, err := s.originateOut(context.Background(), tenant, to, func(room.Progress) {
+	leg, callerID, to, err := s.originateOut(context.Background(), tenant, to, "", func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})
 		}

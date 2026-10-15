@@ -60,6 +60,10 @@ type createCallRequest struct {
 	// ticket/account ref). The agent NEVER receives the dialed number — the
 	// backend holds it. Optional; empty ⇒ the agent sees a generic "Incoming call".
 	AgentLabel string `json:"agent_label"`
+	// CallerID is the number the callee sees, overriding the trunk's own DID —
+	// e.g. the support number for a masked callback. Must be one of the tenant's
+	// active numbers. Optional; empty ⇒ the trunk's DID.
+	CallerID string `json:"caller_id"`
 }
 
 // handleCreateCall is the originate surface. The CRM's backend calls this with
@@ -77,7 +81,7 @@ func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent_id and to are required")
 		return
 	}
-	c, code, err := s.originateForAgent(r.Context(), t, req.AgentID, req.To, req.AgentLabel)
+	c, code, err := s.originateForAgent(r.Context(), t, req.AgentID, req.To, req.AgentLabel, req.CallerID)
 	if err != nil {
 		writeError(w, code, err.Error())
 		return
@@ -112,7 +116,12 @@ func (s *Server) originateForAgent(
 	agentID uuid.UUID,
 	to string,
 	agentLabel string,
+	callerID string,
 ) (Call, int, error) {
+	if err := s.checkCallerID(ctx, t.ID, callerID); err != nil {
+		return Call{}, http.StatusBadRequest, err
+	}
+
 	var sipUsername string
 	err := s.db.Pool.QueryRow(ctx, s.q.GetAgentSipUsername,
 		agentID, t.ID,
@@ -163,10 +172,17 @@ func (s *Server) originateForAgent(
 		bLegs = append(bLegs, provider.For("loopback").DialString(to))
 	} else {
 		primaryDID = trunks[0].E164
+		if callerID != "" {
+			primaryDID = callerID
+		}
 		for _, tr := range trunks {
 			dial := fmt.Sprintf("sofia/gateway/%s/%s", tr.Gateway, to)
+			cid := tr.E164
+			if callerID != "" {
+				cid = callerID // explicit override applies on every trunk leg
+			}
 			bLegs = append(bLegs,
-				fmt.Sprintf("[effective_caller_id_number=%s]%s", tr.E164, dial),
+				fmt.Sprintf("[effective_caller_id_number=%s]%s", cid, dial),
 			)
 		}
 	}
@@ -571,4 +587,20 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		out = append(out, c)
 	}
 	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
+}
+
+// checkCallerID accepts an empty caller ID (use the trunk's DID) or one of the
+// tenant's active numbers, so a tenant can only present numbers it holds.
+func (s *Server) checkCallerID(ctx context.Context, tenant uuid.UUID, callerID string) error {
+	if callerID == "" {
+		return nil
+	}
+	var owned bool
+	if err := s.db.Pool.QueryRow(ctx, s.q.TenantOwnsNumber, tenant, callerID).Scan(&owned); err != nil {
+		return fmt.Errorf("check caller_id: %w", err)
+	}
+	if !owned {
+		return fmt.Errorf("caller_id %q is not one of this tenant's numbers", callerID)
+	}
+	return nil
 }

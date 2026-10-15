@@ -89,10 +89,15 @@ func (f *fakeOriginator) HangupOutbound(pid room.ParticipantID) error {
 type fakeTrunkResolver struct {
 	trunks []trunkselect.Trunk
 	err    error
+	owned  map[string]bool // numbers the tenant holds (caller-ID overrides)
 }
 
 func (f fakeTrunkResolver) OutboundTrunks(_ context.Context, _ uuid.UUID) ([]trunkselect.Trunk, error) {
 	return f.trunks, f.err
+}
+
+func (f fakeTrunkResolver) OwnsNumber(_ context.Context, _ uuid.UUID, e164 string) (bool, error) {
+	return f.owned[e164], nil
 }
 
 func newOutboundServer(t *testing.T, orig Originator, trunks TrunkResolver) *Server {

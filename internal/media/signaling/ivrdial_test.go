@@ -50,7 +50,7 @@ func TestIVRDialAnswerAttachesLegAndCompletes(t *testing.T) {
 	s := newOutboundServer(t, orig, tataTrunk)
 	rid := room.RoomID(uuid.NewString() + "/pstn-a")
 
-	outcome, err := s.dialFromIVR(context.Background(), rid, "9812345678", time.Second)
+	outcome, err := s.dialFromIVR(context.Background(), rid, "9812345678", "", time.Second)
 	if err != nil || outcome != "completed" {
 		t.Fatalf("outcome = %q, err = %v; want completed", outcome, err)
 	}
@@ -82,7 +82,7 @@ func TestIVRDialFailuresReportNoAnswer(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := newOutboundServer(t, tc.orig, tc.trunks)
 			rid := room.RoomID(uuid.NewString() + "/pstn-b")
-			outcome, err := s.dialFromIVR(context.Background(), rid, tc.number, time.Second)
+			outcome, err := s.dialFromIVR(context.Background(), rid, tc.number, "", time.Second)
 			if err != nil || outcome != "no_answer" {
 				t.Fatalf("outcome = %q, err = %v; want no_answer", outcome, err)
 			}
@@ -107,7 +107,7 @@ func (c *ctxOriginator) Originate(ctx context.Context, _ room.OriginateRequest, 
 func TestIVRDialRingTimeoutReportsNoAnswer(t *testing.T) {
 	s := newOutboundServer(t, &ctxOriginator{}, tataTrunk)
 	start := time.Now()
-	outcome, _ := s.dialFromIVR(context.Background(), room.RoomID(uuid.NewString()+"/pstn-c"), "9812345678", 50*time.Millisecond)
+	outcome, _ := s.dialFromIVR(context.Background(), room.RoomID(uuid.NewString()+"/pstn-c"), "9812345678", "", 50*time.Millisecond)
 	if outcome != "no_answer" {
 		t.Fatalf("outcome = %q, want no_answer", outcome)
 	}
@@ -125,7 +125,7 @@ func TestIVRDialCallerGoneBeforeAnswerHangsUpCallee(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	res := make(chan string, 1)
-	go func() { o, _ := s.dialFromIVR(ctx, rid, "9812345678", 5*time.Second); res <- o }()
+	go func() { o, _ := s.dialFromIVR(ctx, rid, "9812345678", "", 5*time.Second); res <- o }()
 	<-orig.calls
 	cancel()            // the caller hung up while the callee was ringing
 	close(orig.release) // …and the callee answers anyway
@@ -151,7 +151,7 @@ func TestIVRDialCalleeHangupHangsUpPhoneCaller(t *testing.T) {
 	plug := &hangupPlug{hangups: make(chan room.CallID, 2)}
 	pstnRoom(s, plug, rid, "call-e")
 
-	if o, _ := s.dialFromIVR(context.Background(), rid, "9812345678", time.Second); o != "completed" {
+	if o, _ := s.dialFromIVR(context.Background(), rid, "9812345678", "", time.Second); o != "completed" {
 		t.Fatalf("outcome = %q, want completed", o)
 	}
 	// While the callee is on the line the phone caller must stay up, even though
@@ -182,7 +182,7 @@ func TestIVRDialPhoneCallerHangupHangsUpCallee(t *testing.T) {
 	rid := room.RoomID(uuid.NewString() + "/pstn-f")
 	pstnRoom(s, &hangupPlug{hangups: make(chan room.CallID, 2)}, rid, "call-f")
 
-	if o, _ := s.dialFromIVR(context.Background(), rid, "9812345678", time.Second); o != "completed" {
+	if o, _ := s.dialFromIVR(context.Background(), rid, "9812345678", "", time.Second); o != "completed" {
 		t.Fatalf("outcome = %q, want completed", o)
 	}
 	s.endPstnRoom(rid) // the phone caller hung up
@@ -196,4 +196,36 @@ func TestIVRDialPhoneCallerHangupHangsUpCallee(t *testing.T) {
 	}
 	src.Close()
 	close(done)
+}
+
+func TestIVRDialPresentsOwnedCallerID(t *testing.T) {
+	leg, src, done := newDialLeg("out-ivr-5")
+	orig := newFakeOriginator(leg)
+	trunks := tataTrunk
+	trunks.owned = map[string]bool{"02265915123": true}
+	s := newOutboundServer(t, orig, trunks)
+
+	o, _ := s.dialFromIVR(context.Background(), room.RoomID(uuid.NewString()+"/pstn-g"), "9812345678", "02265915123", time.Second)
+	if o != "completed" {
+		t.Fatalf("outcome = %q, want completed", o)
+	}
+	if req := <-orig.calls; req.CallerID != "02265915123" {
+		t.Fatalf("caller id = %q, want the override", req.CallerID)
+	}
+	src.Close()
+	close(done)
+}
+
+func TestIVRDialRefusesUnownedCallerID(t *testing.T) {
+	orig := newFakeOriginator(nil)
+	s := newOutboundServer(t, orig, tataTrunk) // owns nothing beyond its trunk DID
+	o, _ := s.dialFromIVR(context.Background(), room.RoomID(uuid.NewString()+"/pstn-h"), "9812345678", "02299999999", time.Second)
+	if o != "no_answer" {
+		t.Fatalf("outcome = %q, want no_answer for a caller id the tenant doesn't hold", o)
+	}
+	select {
+	case req := <-orig.calls:
+		t.Fatalf("originated with an unowned caller id: %+v", req)
+	default:
+	}
 }

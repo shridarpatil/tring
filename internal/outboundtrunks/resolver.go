@@ -111,3 +111,13 @@ func (r *Resolver) nextRR(tenant uuid.UUID, n int) int {
 	r.rr[tenant] = (idx + 1) % n
 	return idx
 }
+
+// OwnsNumber reports whether e164 is one of tenant's active numbers (any type).
+// Gates an explicit caller-ID override so a tenant only presents numbers it holds.
+func (r *Resolver) OwnsNumber(ctx context.Context, tenant uuid.UUID, e164 string) (bool, error) {
+	var ok bool
+	if err := r.db.Pool.QueryRow(ctx, r.q.TenantOwnsNumber, tenant, e164).Scan(&ok); err != nil {
+		return false, fmt.Errorf("check number ownership: %w", err)
+	}
+	return ok, nil
+}
