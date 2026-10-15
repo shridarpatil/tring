@@ -413,12 +413,13 @@ type fakeDialer struct {
 	calls   int
 	gotRoom string
 	gotNum  string
+	gotCID  string
 	gotRing time.Duration
 }
 
-func (f *fakeDialer) Dial(_ context.Context, room, number string, ring time.Duration) (string, error) {
+func (f *fakeDialer) Dial(_ context.Context, room, number, callerID string, ring time.Duration) (string, error) {
 	f.calls++
-	f.gotRoom, f.gotNum, f.gotRing = room, number, ring
+	f.gotRoom, f.gotNum, f.gotCID, f.gotRing = room, number, callerID, ring
 	return f.outcome, nil
 }
 
@@ -543,7 +544,7 @@ type gateDialer struct {
 	outcome string
 }
 
-func (g *gateDialer) Dial(ctx context.Context, _, _ string, _ time.Duration) (string, error) {
+func (g *gateDialer) Dial(ctx context.Context, _, _, _ string, _ time.Duration) (string, error) {
 	select {
 	case <-g.release:
 	case <-ctx.Done():
@@ -598,5 +599,57 @@ func TestTransferDialWithoutDialAudioPlaysNothing(t *testing.T) {
 	case f := <-prompts.started:
 		t.Fatalf("played %q with no hold music configured", f)
 	default:
+	}
+}
+
+func TestTransferDialPassesCallerIDFromVar(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	dialer := &fakeDialer{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r"})
+	d.Vars()["cid"] = "02265915000"
+	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678", "caller_id": "{{cid}}"}), nil)
+	if dialer.gotCID != "02265915000" {
+		t.Fatalf("caller id = %q, want 02265915000", dialer.gotCID)
+	}
+	// Unset caller_id → "" (the trunk's rotation picks one).
+	dialer2 := &fakeDialer{outcome: "completed"}
+	d = ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer2, Room: "r"})
+	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678"}), nil)
+	if dialer2.gotCID != "" {
+		t.Fatalf("caller id = %q, want empty", dialer2.gotCID)
+	}
+}
+
+func TestTransferDialUnresolvedCallerIDReportsNoAnswer(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	dialer := &fakeDialer{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r"})
+	path := runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678", "caller_id": "{{cid}}"}), nil)
+	if !eq(ids(path), []string{"x", "na"}) || dialer.calls != 0 {
+		t.Fatalf("path = %v, dials = %d; an unresolved caller_id must not dial", ids(path), dialer.calls)
+	}
+}
+
+func TestTransferLabelOverridesCallerRef(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r", ClientRef: "+919812345678"})
+	d.Vars()["mask"] = "456"
+	runFlow(t, d, fake, dialFlow(map[string]interface{}{"team": "sales", "label": "Customer {{mask}}"}), nil)
+	if agents.gotTgt.Label != "Customer 456" {
+		t.Fatalf("label = %q, want the masked label, never the caller's number", agents.gotTgt.Label)
+	}
+}
+
+func TestSeededVarsAreAvailableToTheFlow(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	dialer := &fakeDialer{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{
+		Prompts: fake, Dialer: dialer, Room: "r",
+		Vars: map[string]string{"caller": "+919812345678", "did": "02265915000"},
+	})
+	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "{{caller}}", "caller_id": "{{did}}"}), nil)
+	if dialer.gotNum != "+919812345678" || dialer.gotCID != "02265915000" {
+		t.Fatalf("dial = %+v, want caller/did vars substituted", dialer)
 	}
 }

@@ -37,9 +37,10 @@ func devTransferFlow() *ivr.Flow {
 // per room — a second flow-pinned join is a no-op (brain.Runner enforces this).
 // The IVR's prompt player is injected via the SFU so the caller hears it; the
 // caller's DTMF (routeDTMF) drives menus. callerRef is what a transfer ring shows
-// the agent (a phone caller's number / a trusted client_ref; "" → generic). When
-// the flow ends (or the caller leaves) the IVR is torn down.
-func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
+// the agent (a phone caller's number / a trusted client_ref; "" → generic). vars
+// seed the flow's variables ({{caller}}, {{did}}). When the flow ends (or the
+// caller leaves) the IVR is torn down.
+func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map[string]string) {
 	if s.brain.Running(roomID) {
 		return // an IVR is already running for this room
 	}
@@ -59,6 +60,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string) {
 		DialAudio: func() string { return holdFile(s.tenantHoldMusic(roomID)) },
 		Room:      string(roomID),
 		ClientRef: callerRef,
+		Vars:      vars,
 		Logger:    s.log,
 	})
 

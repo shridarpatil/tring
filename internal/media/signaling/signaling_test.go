@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -902,3 +903,66 @@ func TestDeclineAdvancesToNextAgent(t *testing.T) {
 
 // ensure the handler is a real http.Handler (compile guard).
 var _ http.Handler = signaling.New(signaling.Config{}).Handler()
+
+// maskFlows: an http_callback (told {{caller}} and {{did}}) returns a mask,
+// then the transfer rings agents labelled with it instead of the caller's number.
+type maskFlows struct{ url string }
+
+func (m maskFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
+	return &ivr.Flow{
+		EntryNode: "h",
+		Nodes: []ivr.Node{
+			{ID: "h", Type: ivr.NodeHTTPCallback, Config: map[string]any{
+				"url": m.url, "method": "POST", "body_template": `{"caller":"{{caller}}","did":"{{did}}"}`,
+			}},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]any{"label": "Customer {{mask}}"}},
+		},
+		Edges: []ivr.Edge{{From: "h", To: "x", Condition: "http:2xx"}},
+	}, nil
+}
+
+func (maskFlows) FlowName(_ context.Context, _ string) (string, error) { return "Masked", nil }
+
+// TestInboundPhoneCallMasksCallerForAgent: the flow learns who called which
+// number ({{caller}}, {{did}}), and the agent's ring shows the masked label —
+// never the caller's real number.
+func TestInboundPhoneCallMasksCallerForAgent(t *testing.T) {
+	gotBody := make(chan string, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody <- string(b)
+		_, _ = w.Write([]byte(`{"mask":"456"}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: maskFlows{url: backend.URL}})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+	fp := newFakePstn()
+	sig.AttachPstn(fp, fakeDIDs{tenant: tenant, flow: "f1"})
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+
+	fp.inbound(room.InboundCall{CallID: "m1", From: "+919900112233", To: "02265915000"})
+
+	select {
+	case b := <-gotBody:
+		if b != `{"caller":"+919900112233","did":"02265915000"}` {
+			t.Fatalf("callback body = %s, want caller and did filled", b)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("http_callback never ran")
+	}
+	if inc := agent.readUntil("incoming"); inc["from"] != "Customer 456" {
+		t.Fatalf("incoming from = %v, want the masked label", inc["from"])
+	}
+	fp.src.Close()
+	close(fp.done)
+}

@@ -68,3 +68,27 @@ func TestOutboundTrunks_NoTrunks(t *testing.T) {
 		t.Fatalf("want 0 trunks, got %d (%+v)", len(trunks), trunks)
 	}
 }
+
+// TestOwnsNumber: any active number of the tenant — inbound included (a mask
+// number agents call back) — may be presented; others' and inactive ones not.
+func TestOwnsNumber(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `
+		INSERT INTO numbers (tenant_id, e164, type, active) VALUES
+		  ($1, '02200000001', 'inbound', true),
+		  ($1, '02200000002', 'inbound', false)
+	`, fx.TenantID); err != nil {
+		t.Fatalf("insert numbers: %v", err)
+	}
+	r := New(fx.DB)
+	for num, want := range map[string]bool{"02200000001": true, "02200000002": false, "02299999999": false} {
+		got, err := r.OwnsNumber(ctx, fx.TenantID, num)
+		if err != nil || got != want {
+			t.Errorf("OwnsNumber(%s) = %v, %v; want %v", num, got, err, want)
+		}
+	}
+	if got, _ := r.OwnsNumber(ctx, uuid.New(), "02200000001"); got {
+		t.Error("another tenant must not own this tenant's number")
+	}
+}
