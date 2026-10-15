@@ -155,6 +155,7 @@ type Queries struct {
 
 	// ---- orchestrator: IVR executor (ivr_executor.go) ----
 	ResolveInboundNumber  string `query:"resolve-inbound-number"`
+	TenantOwnsNumber      string `query:"tenant-owns-number"`
 	GetActiveFlowByID     string `query:"get-active-flow-by-id"`
 	ListAgentSipUsernames string `query:"list-agent-sip-usernames"`
 	GetTeamMOH            string `query:"get-team-moh"`

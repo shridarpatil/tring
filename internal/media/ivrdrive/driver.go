@@ -40,7 +40,7 @@ type Prompts interface {
 type Target struct {
 	Team     string // ring a team (with its strategy/queue) — takes precedence
 	AgentSIP string // ring one specific agent
-	Label    string // what the agent's incoming-call UI shows (never an internal id)
+	Label    string // what the agent's incoming-call UI shows (never an internal id); the node's `label` overrides the caller ref
 }
 
 // Agents rings an agent into the call's room — the transfer membership change.
@@ -58,9 +58,10 @@ type Agents interface {
 // blocks until the callee answers ("completed") or the ring fails — busy, no
 // answer within ring, invalid number, no trunk ("no_answer"). The signaling
 // layer implements it on the PSTN originator; tests fake it. A nil Dialer means
-// a number transfer reports no_answer.
+// a number transfer reports no_answer. callerID is the number to present ("" =
+// the trunk's own pick); the Dialer must refuse one the tenant doesn't hold.
 type Dialer interface {
-	Dial(ctx context.Context, room, number string, ring time.Duration) (outcome string, err error)
+	Dial(ctx context.Context, room, number, callerID string, ring time.Duration) (outcome string, err error)
 }
 
 // defaultRingSeconds bounds a transfer-to-number ring when the node sets none.
@@ -99,6 +100,10 @@ type Config struct {
 	Now       func() time.Time // nil → time.Now
 	HTTP      *http.Client     // nil → http.DefaultClient
 	Logger    *slog.Logger
+	// Vars seeds the flow vars before the walk — {{caller}} (the caller's
+	// number / client ref) and {{did}} (the number they dialed) — so an
+	// http_callback can tell the backend who is calling which number.
+	Vars map[string]string
 }
 
 // New builds a pion IVR driver. The DTMF inbox is buffered so a digit that
@@ -113,6 +118,10 @@ func New(cfg Config) *Driver {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	vars := make(map[string]string, len(cfg.Vars))
+	for k, v := range cfg.Vars {
+		vars[k] = v
+	}
 	return &Driver{
 		prompts:   cfg.Prompts,
 		agents:    cfg.Agents,
@@ -123,7 +132,7 @@ func New(cfg Config) *Driver {
 		dtmf:      make(chan string, 4),
 		now:       cfg.Now,
 		http:      cfg.HTTP,
-		vars:      map[string]string{},
+		vars:      vars,
 		log:       cfg.Logger.With("component", "ivrdrive"),
 	}
 }
@@ -327,6 +336,9 @@ func (d *Driver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, err
 		return d.transferToNumber(ctx, n, ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "number"), d.vars))
 	}
 	label := d.clientRef
+	if l := ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "label"), d.vars); l != "" {
+		label = l // a masked label: the agent never sees the caller's real number
+	}
 	if label == "" {
 		label = "Web Caller"
 	}
@@ -381,17 +393,20 @@ func (d *Driver) HTTPCallback(ctx context.Context, n *ivr.Node) (ivr.NodeResult,
 	return ivr.NodeResult{Outcome: outcome, Action: "http_call", Detail: detail}, nil
 }
 
-// transferToNumber dials number via the Dialer, ringing up to ring_seconds. A
-// blank number, or one still holding an unresolved {{var}} (the var was never
-// set), is not dialed — it reports no_answer so the flow's fallback runs.
+// transferToNumber dials number via the Dialer, ringing up to ring_seconds and
+// presenting caller_id when set. A blank number, or a number/caller_id still
+// holding an unresolved {{var}} (the var was never set), is not dialed — it
+// reports no_answer so the flow's fallback runs.
 func (d *Driver) transferToNumber(ctx context.Context, n *ivr.Node, number string) (ivr.NodeResult, error) {
-	if d.dialer == nil || number == "" || strings.Contains(number, "{{") {
-		d.log.Warn("ivrdrive transfer: number not dialable, reporting no_answer", "number", number, "dialer", d.dialer != nil)
+	callerID := ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "caller_id"), d.vars)
+	if d.dialer == nil || number == "" || strings.Contains(number, "{{") || strings.Contains(callerID, "{{") {
+		d.log.Warn("ivrdrive transfer: number not dialable, reporting no_answer",
+			"number", number, "caller_id", callerID, "dialer", d.dialer != nil)
 		return ivr.NodeResult{Outcome: "no_answer", Action: "transfer", Detail: number}, nil
 	}
 	ring := time.Duration(ivr.IntFromConfig(n.Config, "ring_seconds", defaultRingSeconds)) * time.Second
 	stopAudio := d.loopDialAudio(ctx)
-	outcome, err := d.dialer.Dial(ctx, d.room, number, ring)
+	outcome, err := d.dialer.Dial(ctx, d.room, number, callerID, ring)
 	stopAudio()
 	if err != nil {
 		return ivr.NodeResult{Action: "transfer", Detail: number}, err

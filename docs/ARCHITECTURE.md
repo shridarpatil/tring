@@ -149,6 +149,10 @@ each participant's audio to the others.
    `number` over the outbound trunk (`ivrdial.go`) — often a `{{var}}` an
    earlier `http_callback` returned; the answered callee joins the room as a
    port in place of an agent, and busy/no answer takes `no_answer`.
+   **Masking:** flows start with `{{caller}}` and `{{did}}` set, so a callback
+   can pick a mask; `caller_id` on a number transfer (and on `POST /v1/calls`)
+   presents one of the tenant's own numbers, and `label` replaces the caller's
+   number on the agent's ring.
 8. **The ring.** Each online agent already holds a quiet **presence socket**
    (registered at login). To ring them the gateway just **pushes an `incoming`
    message** down those sockets and their widget rings — no phone network, just a
