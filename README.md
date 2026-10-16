@@ -109,6 +109,8 @@ The next outbound call routes through the new trunk and stamps the new DID as ca
 
 WhatsApp users can call your WhatsApp Business number and land in the same IVR flows and agent queues as phone calls, via Meta's [SIP calling](https://developers.facebook.com/docs/whatsapp/cloud-api/calling/sip). FreeSWITCH runs a separate, TLS-only `whatsapp` SIP profile next to the carrier trunk.
 
+Full end-to-end guide (Meta setup, certificates, firewall, testing, troubleshooting): [`site/whatsapp-sip.md`](site/whatsapp-sip.md), also published on the docs site.
+
 1. **Hostname + cert.** Point a hostname (e.g. `wa-sip.example.com`) at the server's public IP and get a public-CA certificate for it. Put the cert chain + private key in `freeswitch/tls/whatsapp/agent.pem` (`cat fullchain.pem privkey.pem > agent.pem`) and Meta's outbound API CA certificate in `freeswitch/tls/whatsapp/cafile.pem`. Only connections presenting Meta's client certificate (`client.sip.fbclientcerts.com`) are accepted.
 2. **Enable** in `.env`: `TRING_WHATSAPP_ENABLED=true`, plus `TRING_WHATSAPP_IP` / `TRING_WHATSAPP_PUBLIC_IP` / `TRING_WHATSAPP_TLS_PORT` if the defaults don't fit (see `.env.example`). Recreate FreeSWITCH.
 3. **Firewall.** Open the TLS port (default 5061/tcp) and the RTP range only to Meta's published IP ranges.
