@@ -1,19 +1,15 @@
 ---
 title: WhatsApp calls over SIP (inbound)
+description: Connect a WhatsApp Business number to Tring so WhatsApp callers reach your IVR flows and agents.
 ---
-
-# WhatsApp calls over SIP (inbound)
 
 This guide connects a WhatsApp Business phone number to a self-hosted Tring deployment, end to end. When it's done, a WhatsApp user who taps **Call** on your business chat lands in a Tring IVR flow and can reach your agents, just like a phone caller.
 
-**Scope:** inbound (user-initiated) calls only. Outbound (business-initiated) WhatsApp calls are not supported yet.
+:::note[Scope]
+Inbound (user-initiated) calls only. Outbound (business-initiated) WhatsApp calls are not supported yet.
+:::
 
 All IP addresses, hostnames and numbers below are placeholders (`203.0.113.10`, `wa-sip.example.com`, `+91XXXXXXXXXX`). Replace them with your own.
-
-* TOC
-{:toc}
-
----
 
 ## 1. How it works
 
@@ -41,8 +37,6 @@ All IP addresses, hostnames and numbers below are placeholders (`203.0.113.10`, 
 
 The `whatsapp` profile is independent of your carrier trunk profile. Both run at the same time on different IPs and ports.
 
----
-
 ## 2. Before you start
 
 ### Meta side
@@ -53,7 +47,9 @@ The `whatsapp` profile is independent of your carrier trunk profile. Both run at
 - A **system user access token** with `whatsapp_business_management` (and `whatsapp_business_messaging`) for that app.
 - The **phone number ID** of the business number.
 
-> Once SIP is enabled on a number, Meta's Graph API calling endpoints stop working for it. A number can have only **one** SIP server.
+:::caution
+Once SIP is enabled on a number, Meta's Graph API calling endpoints stop working for it. A number can have only **one** SIP server.
+:::
 
 ### Tring side
 
@@ -67,8 +63,6 @@ The `whatsapp` profile is independent of your carrier trunk profile. Both run at
 - A **public IPv4 address** that reaches the server (on AWS, an Elastic IP on the instance's primary interface).
 - A **DNS name** you control, e.g. `wa-sip.example.com`.
 - The ability to edit the **firewall / security group**.
-
----
 
 ## 3. Network and firewall
 
@@ -89,7 +83,11 @@ If you also have a carrier trunk on a separate private interface (e.g. a SIP-ove
 | Inbound | UDP **RTP range** (`TRING_RTP_START_PORT`–`TRING_RTP_END_PORT`, default 16384–32768) | Meta IP ranges only | Audio |
 | Outbound | Same ports | Meta IP ranges | Replies and audio (default "allow all egress" covers this) |
 
-**Do not open these to `0.0.0.0/0`.** Meta's SIP and media IPs are the same as its webhook IPs ([Cloud API webhook IP addresses](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks)). Meta publishes them through its AS number:
+:::danger
+Do not open these to `0.0.0.0/0`.
+:::
+
+Meta's SIP and media IPs are the same as its webhook IPs ([Cloud API webhook IP addresses](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/set-up-webhooks)). Meta publishes them through its AS number:
 
 ```bash
 whois -h whois.radb.net -- '-i origin AS32934' | awk '/^route:/ {print $2}' | sort -u > meta-v4.txt
@@ -108,8 +106,6 @@ Narrow the RTP range if you can (e.g. `TRING_RTP_START_PORT=16384`, `TRING_RTP_E
 
 Publish only an **A record** (IPv4) for the hostname unless your server is reachable over IPv6 too.
 
----
-
 ## 4. DNS
 
 Create an A record:
@@ -123,8 +119,6 @@ Check it:
 ```bash
 dig +short wa-sip.example.com
 ```
-
----
 
 ## 5. TLS certificates
 
@@ -153,7 +147,9 @@ sudo sh -c 'umask 077; cat /etc/letsencrypt/live/wa-sip.example.com/fullchain.pe
                           > freeswitch/tls/whatsapp/agent.pem'
 ```
 
+:::caution
 `agent.pem` contains the private key. Keep it readable by root only, never commit it, and don't copy it anywhere else.
+:::
 
 ### 5.2 Meta's CA certificate
 
@@ -187,11 +183,11 @@ mv "$DEST/agent.pem.new" "$DEST/agent.pem"
 docker exec tring-fs fs_cli -x "sofia profile whatsapp restart"
 ```
 
+:::caution
 A profile restart **drops WhatsApp calls in progress** and takes about 30 seconds to come back. Phone calls on the carrier profile are not affected. If that matters, run renewals at a quiet hour instead of relying on certbot's random schedule.
+:::
 
 If you used `--manual` DNS validation, renewals also need manual DNS steps. Use your DNS provider's certbot plugin for unattended renewal.
-
----
 
 ## 6. Configure Tring
 
@@ -258,8 +254,6 @@ curl -sS -X POST "$TRING_URL/v1/numbers" \
 
 Keep `TRING_API_KEY` in an environment variable or secret manager, not in scripts or shell history.
 
----
-
 ## 7. Configure Meta
 
 Keep the Meta token in an environment variable:
@@ -306,8 +300,6 @@ Check that `calling.status`, `calling.sip.status` are `ENABLED`, `srtp_key_excha
 
 You don't need the Meta-generated SIP password (`include_sip_credentials=true`) for inbound calls: Tring authenticates Meta with mutual TLS instead of digest auth.
 
----
-
 ## 8. Test a call
 
 1. Turn on SIP tracing for the profile:
@@ -337,17 +329,13 @@ You don't need the Meta-generated SIP password (`include_sip_credentials=true`) 
 
 The call appears in Tring's call history with the WhatsApp number as the dialed number.
 
----
-
 ## 9. Caller identity
 
-The caller's identity comes from the SIP `From` header and is available in flows as {% raw %}`{{caller}}`{% endraw %} (and the dialed business number as {% raw %}`{{did}}`{% endraw %}).
+The caller's identity comes from the SIP `From` header and is available in flows as `{{caller}}` (and the dialed business number as `{{did}}`).
 
-Meta may identify a user by a **business-scoped user ID (BSUID)** instead of a phone number, for example when the user has a WhatsApp username. In that case {% raw %}`{{caller}}`{% endraw %} holds that ID, not a number. Don't assume it's dialable, and don't pass it to a "transfer to number" node.
+Meta may identify a user by a **business-scoped user ID (BSUID)** instead of a phone number, for example when the user has a WhatsApp username. In that case `{{caller}}` holds that ID, not a number. Don't assume it's dialable, and don't pass it to a "transfer to number" node.
 
 Meta's extra headers (`x-wa-meta-user-id`, `x-wa-meta-username`, `x-wa-meta-wacid`, call-button payloads) are not passed into flow variables yet.
-
----
 
 ## 10. Troubleshooting
 
@@ -372,8 +360,6 @@ docker exec tring-fs fs_cli -x "show channels"
 docker exec tring-fs fs_cli -x "sofia profile whatsapp restart"
 ```
 
----
-
 ## 11. Security notes
 
 - **Mutual TLS** is the authentication. The profile accepts only clients with a certificate whose subject is `client.sip.fbclientcerts.com`, signed by the CA in `cafile.pem`. Other clients, including ones with valid certificates from other CAs or for other names, are refused during the handshake.
@@ -383,8 +369,6 @@ docker exec tring-fs fs_cli -x "sofia profile whatsapp restart"
 - **Secrets:** `agent.pem` (private key), the Meta access token and the Tring API key must stay out of git, tickets and chat. Use a secret manager where you can, and rotate the Meta token and Tring API key if they're ever exposed.
 - Turn on **MFA** for the Meta Business account and the cloud account that hosts Tring, and keep cloud audit logging (e.g. CloudTrail) on for changes to the security group.
 
----
-
 ## 12. Limitations
 
 - **Inbound only.** Business-initiated WhatsApp calls (which need user call permission and digest auth towards Meta) aren't supported yet.
@@ -392,8 +376,6 @@ docker exec tring-fs fs_cli -x "sofia profile whatsapp restart"
 - **Graph API calling endpoints are disabled** for a number while SIP is enabled.
 - Meta's `x-wa-meta-*` headers aren't exposed to flows yet.
 - Renewing the certificate restarts the profile and drops WhatsApp calls in progress.
-
----
 
 ## Reference: files
 

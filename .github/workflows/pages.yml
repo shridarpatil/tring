@@ -1,6 +1,7 @@
 name: docs site
 
-# Publishes site/ (only) to GitHub Pages. docs/ stays repo-internal.
+# Builds site/ (Astro Starlight, same setup as the whatomate docs) and
+# publishes it to GitHub Pages. docs/ stays repo-internal.
 # One-time setup: Settings → Pages → Source: "GitHub Actions".
 on:
   push:
@@ -20,12 +21,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/jekyll-build-pages@v1
+      - uses: actions/setup-node@v4
         with:
-          source: ./site
-          destination: ./_site
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - uses: actions/configure-pages@v5
+      # Exact versions from the lockfile; no install scripts run.
+      - name: Install
+        working-directory: site
+        run: npm ci --ignore-scripts
+      - name: Audit
+        working-directory: site
+        run: npm audit --omit=dev --audit-level=high
+      - name: Build
+        working-directory: site
+        run: npm run build
       - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
 
   deploy:
     needs: build
