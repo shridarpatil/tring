@@ -1,0 +1,57 @@
+---
+title: Introduction
+description: Tring — open-source, API-first voice calling for any CRM.
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## What is Tring?
+
+Tring is an open-source, API-first voice platform. Drop a `<script>` tag and a `<button>` into your app, and your agents make and take real phone calls in the browser. Bring your own trunk (Exotel, Airtel, Jio, Tata, or any SIP carrier), and Tring handles the API, browser SDK, IVR, agent routing, recording and call webhooks.
+
+It is multi-tenant, India-first, and self-hosted with the same binaries you'd run as a hosted service. Licensed under Apache 2.0.
+
+## Key features
+
+<CardGrid>
+  <Card title="Browser calling" icon="laptop">
+    Visitors and agents call over raw WebRTC. No SIP in the browser, no plugins.
+  </Card>
+  <Card title="Visual IVR builder" icon="pencil">
+    Node-graph flow editor with a live simulator. Prompt text is synthesized to audio when you save.
+  </Card>
+  <Card title="Agent routing" icon="random">
+    Ring-all, round-robin, sequential and longest-wait strategies, with live presence and queue depth.
+  </Card>
+  <Card title="Bring your own trunk" icon="phone">
+    Indian carriers pre-configured, multi-trunk failover, and a config-only swap between providers.
+  </Card>
+  <Card title="WhatsApp calls" icon="whatsApp">
+    WhatsApp users call your business number and reach the same flows and agents as phone callers.
+  </Card>
+  <Card title="Recording & webhooks" icon="analytics">
+    Stereo call recording, one call log for every source, and signed `call.*` webhooks.
+  </Card>
+</CardGrid>
+
+## How it fits together
+
+Tring is two Go binaries, one Postgres and one Redis, plus FreeSWITCH as a private edge to the phone network.
+
+| Service | Role |
+|---|---|
+| `tring-api` (`:8085`) | REST API, admin console, browser SDK bundles |
+| `tring-gateway` (`:8087`) | The media plane and the "brain": IVR, agent routing, recording, call records |
+| `tring-fs` | FreeSWITCH: the SIP edge to your carrier trunks (and WhatsApp) |
+| `tring-db`, `tring-redis` | Postgres for data, Redis for agent presence and call tokens |
+
+Every call, whether from a browser, a phone or WhatsApp, becomes a room on one media plane, so IVR, transfers, recording and call records work the same way regardless of where the call came from.
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Quickstart" description="Run Tring on your machine or a server in a few minutes." href="/tring/getting-started/quickstart/" />
+  <LinkCard title="WhatsApp calls over SIP" description="Connect a WhatsApp Business number to your flows." href="/tring/guides/whatsapp-sip/" />
+  <LinkCard title="Architecture" description="How the media plane, brain and SIP edge fit together." href="/tring/architecture/overview/" />
+  <LinkCard title="Code style" description="Conventions for contributing to Tring." href="/tring/contributing/code-style/" />
+</CardGrid>
