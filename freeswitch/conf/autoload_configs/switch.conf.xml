@@ -146,9 +146,12 @@
     <!-- <param name="timer-affinity" value="disabled"/> -->
     <!-- NEEDS DOCUMENTATION -->
 
-    <!-- RTP port range -->
-    <!-- <param name="rtp-start-port" value="16384"/> -->
-    <!-- <param name="rtp-end-port" value="32768"/> -->
+    <!-- RTP port range: TRING_RTP_START_PORT / TRING_RTP_END_PORT via vars.xml
+         (default 16384-32768). Must stay active — with these commented out FS
+         ignored the env and used its compiled range, so media landed on ports
+         a narrowed firewall rule didn't open (no audio from the carrier). -->
+    <param name="rtp-start-port" value="$${rtp_start_port}"/>
+    <param name="rtp-end-port" value="$${rtp_end_port}"/>
 
     <!-- Test each port to make sure it is not in use by some other process before allocating it to RTP -->
     <!-- <param name="rtp-port-usage-robustness" value="true"/> -->
