@@ -293,6 +293,23 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.checkNumberRefs(w, r, t.ID, req.TrunkID, req.FlowID) {
+		return
+	}
+	// Inbound routing is by DID alone, so a DID another tenant already
+	// receives on can't be claimed here (it would take over their calls).
+	if req.Type == "inbound" {
+		var held bool
+		if err := s.db.Pool.QueryRow(r.Context(), s.q.InboundHeldElsewhere, req.E164, t.ID).Scan(&held); err != nil {
+			writeError(w, http.StatusInternalServerError, "lookup failed")
+			return
+		}
+		if held {
+			writeError(w, http.StatusConflict, "number is already in use")
+			return
+		}
+	}
+
 	priority := 100
 	if req.Priority != nil {
 		priority = *req.Priority
@@ -308,6 +325,36 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, n)
+}
+
+// checkNumberRefs confirms the trunk and flow a number points at (either may be
+// nil) belong to the caller's tenant. The foreign keys only prove the rows
+// exist, so without this a tenant could route its number through another
+// tenant's trunk or flow by UUID. Writes a 400/500 and returns false on failure.
+func (s *Server) checkNumberRefs(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, trunkID, flowID *uuid.UUID) bool {
+	refs := []struct {
+		id    *uuid.UUID
+		query string
+		msg   string
+	}{
+		{trunkID, s.q.TenantOwnsTrunk, "trunk not found in this tenant"},
+		{flowID, s.q.TenantOwnsFlow, "flow not found in this tenant"},
+	}
+	for _, ref := range refs {
+		if ref.id == nil {
+			continue
+		}
+		var owned bool
+		if err := s.db.Pool.QueryRow(r.Context(), ref.query, *ref.id, tenantID).Scan(&owned); err != nil {
+			writeError(w, http.StatusInternalServerError, "lookup failed")
+			return false
+		}
+		if !owned {
+			writeError(w, http.StatusBadRequest, ref.msg)
+			return false
+		}
+	}
+	return true
 }
 
 type patchNumberRequest struct {
@@ -345,6 +392,9 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Priority == nil && req.Active == nil && req.FlowID == nil && !req.ClearFlow {
 		writeError(w, http.StatusBadRequest, "at least one of priority, active, flow_id, or clear_flow is required")
+		return
+	}
+	if !s.checkNumberRefs(w, r, t.ID, nil, req.FlowID) {
 		return
 	}
 
