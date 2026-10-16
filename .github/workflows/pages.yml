@@ -1,12 +1,12 @@
 name: docs site
 
-# Builds site/ (Astro Starlight, same setup as the whatomate docs) and
-# publishes it to GitHub Pages. docs/ stays repo-internal.
+# Builds docs/ (Astro Starlight, same setup as the whatomate docs) and
+# publishes it to GitHub Pages.
 # One-time setup: Settings → Pages → Source: "GitHub Actions".
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths: ["docs/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -25,21 +25,21 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: site/package-lock.json
+          cache-dependency-path: docs/package-lock.json
       - uses: actions/configure-pages@v5
       # Exact versions from the lockfile; no install scripts run.
       - name: Install
-        working-directory: site
+        working-directory: docs
         run: npm ci --ignore-scripts
       - name: Audit
-        working-directory: site
+        working-directory: docs
         run: npm audit --omit=dev --audit-level=high
       - name: Build
-        working-directory: site
+        working-directory: docs
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/dist
+          path: docs/dist
 
   deploy:
     needs: build

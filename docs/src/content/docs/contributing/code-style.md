@@ -1,4 +1,7 @@
-# Tring — Code Style & Conventions
+---
+title: "Code style & conventions"
+description: "The Go style and conventions Tring follows."
+---
 
 Tring follows the **Zerodha / Kailash Nadh Go style** — pragmatic, flat,
 minimal-dependency, no-magic. References: [knadh/koanf](https://github.com/knadh/koanf)

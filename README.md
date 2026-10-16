@@ -5,7 +5,7 @@
 
 **Open-source, API-first voice calling for any CRM.** Drop a `<script>` tag and a `<button>` into your app — your agents make and take real phone calls in minutes, not weeks. Multi-tenant. India-primary. Self-host or hosted, same binaries.
 
-> The system has converged on **one pion media plane** with FreeSWITCH demoted to a pluggable PSTN trunk edge. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the architectural source of truth; [`docs/STATE_AND_HA.md`](docs/STATE_AND_HA.md) covers what survives a restart and how the plane scales.
+> The system has converged on **one pion media plane** with FreeSWITCH demoted to a pluggable PSTN trunk edge. [`docs/src/content/docs/architecture/overview.md`](docs/src/content/docs/architecture/overview.md) is the architectural source of truth; [`docs/src/content/docs/architecture/state-and-ha.md`](docs/src/content/docs/architecture/state-and-ha.md) covers what survives a restart and how the plane scales.
 
 ## Why Tring
 
@@ -103,13 +103,13 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
      http://localhost:8085/v1/numbers
 ```
 
-The next outbound call routes through the new trunk and stamps the new DID as caller-ID. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for procurement and `<PROV>_REGISTER=true` activation.
+The next outbound call routes through the new trunk and stamps the new DID as caller-ID. See [`docs/src/content/docs/architecture/overview.md`](docs/src/content/docs/architecture/overview.md) for procurement and `<PROV>_REGISTER=true` activation.
 
 ## WhatsApp calls (inbound)
 
 WhatsApp users can call your WhatsApp Business number and land in the same IVR flows and agent queues as phone calls, via Meta's [SIP calling](https://developers.facebook.com/docs/whatsapp/cloud-api/calling/sip). FreeSWITCH runs a separate, TLS-only `whatsapp` SIP profile next to the carrier trunk.
 
-Full end-to-end guide (Meta setup, certificates, firewall, testing, troubleshooting): [`site/src/content/docs/guides/whatsapp-sip.md`](site/src/content/docs/guides/whatsapp-sip.md), also published on the docs site.
+Full end-to-end guide (Meta setup, certificates, firewall, testing, troubleshooting): [`docs/src/content/docs/guides/whatsapp-sip.md`](docs/src/content/docs/guides/whatsapp-sip.md), also published on the docs site.
 
 1. **Hostname + cert.** Point a hostname (e.g. `wa-sip.example.com`) at the server's public IP and get a public-CA certificate for it. Put the cert chain + private key in `freeswitch/tls/whatsapp/agent.pem` (`cat fullchain.pem privkey.pem > agent.pem`) and Meta's outbound API CA certificate in `freeswitch/tls/whatsapp/cafile.pem`. Only connections presenting Meta's client certificate (`client.sip.fbclientcerts.com`) are accepted.
 2. **Enable** in `.env`: `TRING_WHATSAPP_ENABLED=true`, plus `TRING_WHATSAPP_IP` / `TRING_WHATSAPP_PUBLIC_IP` / `TRING_WHATSAPP_TLS_PORT` if the defaults don't fit (see `.env.example`). Recreate FreeSWITCH.
@@ -133,7 +133,7 @@ After renewing the certificate, run `fs_cli -x "sofia profile whatsapp restart"`
                          REST + admin console + /sdk + webhooks   (outbound PSTN edge, private)
 ```
 
-**Two Go binaries, one Postgres, one Redis, one private FreeSWITCH.** Every call — browser today, phone/WhatsApp later — converges on one pion media plane: a call is a `room` with N participants, so a visitor, the IVR, and an agent are all just participants, and "route to a human" is a membership change, not a re-bridge. The **brain** (IVR + agent routing + CDR) runs **in-process** in the gateway — there is no separate orchestrator service. FreeSWITCH is a swappable PSTN plug behind a Go interface, reached by the API over ESL for **outbound** originate. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+**Two Go binaries, one Postgres, one Redis, one private FreeSWITCH.** Every call — browser today, phone/WhatsApp later — converges on one pion media plane: a call is a `room` with N participants, so a visitor, the IVR, and an agent are all just participants, and "route to a human" is a membership change, not a re-bridge. The **brain** (IVR + agent routing + CDR) runs **in-process** in the gateway — there is no separate orchestrator service. FreeSWITCH is a swappable PSTN plug behind a Go interface, reached by the API over ESL for **outbound** originate. See [`docs/src/content/docs/architecture/overview.md`](docs/src/content/docs/architecture/overview.md).
 
 | Path | What it is |
 |------|-----------|
@@ -186,4 +186,4 @@ See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo g
 
 ## Status
 
-Alpha. Works end-to-end locally and on a single server; suitable for proof-of-concept and pilot. Production hardening (multi-region, live-call HA, billing) is ongoing — see [`docs/STATE_AND_HA.md`](docs/STATE_AND_HA.md).
+Alpha. Works end-to-end locally and on a single server; suitable for proof-of-concept and pilot. Production hardening (multi-region, live-call HA, billing) is ongoing — see [`docs/src/content/docs/architecture/state-and-ha.md`](docs/src/content/docs/architecture/state-and-ha.md).

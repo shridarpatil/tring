@@ -165,7 +165,7 @@ and follow its README.
 
 ## Note: no browser WSS / cert dance
 
-Since the ADR-001 cutover the browser peers with the **media gateway** over raw WebRTC (HTTP signaling on `:8087`) — there's no SIP-over-WSS to FreeSWITCH and no self-signed `:7443` cert to pre-accept. For local dev on one machine, point everything at loopback (`TRING_INTERNAL_IP=127.0.0.1`); for production, put TLS in front of the gateway (`https://` + WSS on `:8087`) and set `TRING_GATEWAY_PUBLIC_URL`. See `docs/ARCHITECTURE.md`.
+Since the ADR-001 cutover the browser peers with the **media gateway** over raw WebRTC (HTTP signaling on `:8087`) — there's no SIP-over-WSS to FreeSWITCH and no self-signed `:7443` cert to pre-accept. For local dev on one machine, point everything at loopback (`TRING_INTERNAL_IP=127.0.0.1`); for production, put TLS in front of the gateway (`https://` + WSS on `:8087`) and set `TRING_GATEWAY_PUBLIC_URL`. See `docs/src/content/docs/architecture/overview.md`.
 
 ## How it works — protocol reference (port the SDK to any platform)
 

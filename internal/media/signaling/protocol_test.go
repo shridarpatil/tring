@@ -10,7 +10,7 @@ import (
 // these exactly (sdk/js/src/rtc-protocol.ts), and the Phase-2 brain/edge split is
 // a SERVER-INTERNAL change that must not alter the client contract. If this
 // fails, the public wire contract changed — update the SDK contract deliberately
-// (and version it), don't just relax the test. See docs/ARCHITECTURE.md.
+// (and version it), don't just relax the test. See docs/src/content/docs/architecture/overview.md.
 func TestWireContractFrozen(t *testing.T) {
 	m := msg{
 		Type: "x", Room: "r", Name: "n", Token: "t", FlowID: "f", Digit: "1",
