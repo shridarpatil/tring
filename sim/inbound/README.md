@@ -100,6 +100,6 @@ real stack up.
 - DTMF over the inbound leg (RFC 2833 -> internal DTMF bridging is
   covered by `internal/fsplug`'s own unit tests, `dtmf_test.go`).
 - Outbound-trunk CDR settlement (still unwired; see
-  `docs/ARCHITECTURE.md` / the outbound plan).
+  `docs/src/content/docs/architecture/overview.md` / the outbound plan).
 - Real PSTN connectivity — this is still carrier-simulator-to-FreeSWITCH,
   not a live circuit.

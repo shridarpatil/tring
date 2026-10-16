@@ -1,8 +1,11 @@
-# Tring — State & High-Availability Posture
+---
+title: "State & high availability"
+description: "What state Tring holds, what survives a restart, and how it scales and deploys."
+---
 
 **Status:** design / decision doc. Defines what state Tring holds, what survives a
 restart, how we scale, and how we deploy without dropping the world. Companion to
-[`ARCHITECTURE.md`](ARCHITECTURE.md).
+[Architecture](/tring/architecture/overview/).
 
 ---
 
@@ -174,7 +177,7 @@ eventually correct even after an ungraceful crash.
 2. **Operability:** graceful drain + readiness probes (P4). Makes deploys
    non-disruptive on a single cell.
 3. **Scale-out:** cell-pinned mints + edge router (P2, P6). Only when one cell's
-   ceiling (≈150–300 concurrent calls, per `ARCHITECTURE.md` §12) is in sight.
+   ceiling (≈150–300 concurrent calls, per [Architecture](/tring/architecture/overview/) §12) is in sight.
 
 ## 9. Open questions
 

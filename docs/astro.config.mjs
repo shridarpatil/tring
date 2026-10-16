@@ -23,6 +23,25 @@ export default defineConfig({
           label: 'Guides',
           items: [{ label: 'WhatsApp calls over SIP', slug: 'guides/whatsapp-sip' }],
         },
+        {
+          label: 'Architecture',
+          items: [
+            { label: 'Overview', slug: 'architecture/overview' },
+            { label: 'State & high availability', slug: 'architecture/state-and-ha' },
+          ],
+        },
+        {
+          label: 'Contributing',
+          items: [{ label: 'Code style', slug: 'contributing/code-style' }],
+        },
+        {
+          label: 'Design notes',
+          collapsed: true,
+          items: [
+            { label: 'Call-log pagination', slug: 'design/call-log-pagination' },
+            { label: 'Dashboard: Live Ops cockpit', slug: 'design/dashboard-live-ops-cockpit' },
+          ],
+        },
       ],
     }),
   ],

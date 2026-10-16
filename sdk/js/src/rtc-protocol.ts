@@ -4,7 +4,7 @@
 // STABLE contract between any browser client and the media edge: the Phase-2
 // brain/edge split (moving the IVR/routing into the orchestrator) is a
 // server-internal change and MUST NOT alter these messages. Freeze it. See
-// docs/ARCHITECTURE.md.
+// docs/src/content/docs/architecture/overview.md.
 //
 // The SFU is the sole offerer, so the directions are:
 //   client → server:  join | register | answer | ice | publish | unpublish | dtmf | bye
