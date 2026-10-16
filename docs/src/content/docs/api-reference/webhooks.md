@@ -13,9 +13,16 @@ All management routes take a tenant API key or a console session. See [Authentic
 |---|---|---|
 | `call.ringing` | Your backend places a call with [`POST /v1/calls`](/tring/api-reference/calls/#post-v1calls) or [`POST /v1/calls/connect`](/tring/api-reference/calls/#post-v1callsconnect). | API |
 | `agent.status` | An agent's availability changes through `POST /v1/agents/{id}/availability`. | API |
+| `call.answered` | An agent answers a web call, an inbound phone call (including WhatsApp) or a call an agent dialed. | Gateway |
+| `call.ended` | One of those calls ends, answered or not. | Gateway |
+
+All three `call.*` events carry the same `{ "call": <call object> }` data, the [call object](/tring/api-reference/calls/#the-call-object) as `GET /v1/calls/{id}` returns it at that moment.
 
 :::caution
-`call.answered` and `call.ended` are defined as event names, and the console lets you subscribe to them, but the current code never sends them as webhooks. Inbound, web and IVR calls don't send `call.ringing` either. For live call state, use the dashboard event stream (`GET /v1/stream/dashboard`) or poll [`GET /v1/calls`](/tring/api-reference/calls/#get-v1calls) and [`GET /v1/calls/{id}/events`](/tring/api-reference/calls/#get-v1callsidevents).
+- Inbound, web and IVR calls don't send `call.ringing`; their first webhook is `call.answered`, or `call.ended` if nobody answers.
+- Calls placed with `POST /v1/calls` or `/v1/calls/connect` go straight through FreeSWITCH and only send `call.ringing`. Poll [`GET /v1/calls/{id}`](/tring/api-reference/calls/#get-v1callsid) for their outcome.
+- `call.ended` has no `recording_url`: the recording is merged after the call ends.
+- For finer-grained live state (routing, ringing agents), use the dashboard event stream (`GET /v1/stream/dashboard`) or [`GET /v1/calls/{id}/events`](/tring/api-reference/calls/#get-v1callsidevents).
 :::
 
 ## The request Tring sends
@@ -278,7 +285,7 @@ curl -sS -X POST "$TRING_URL/v1/webhooks" \
 | `500` | `insert webhook: …` |
 
 :::caution
-Only register HTTPS endpoints you control. Tring sends to whatever URL is registered, including private and internal addresses reachable from the API server, so operators should restrict who can hold API keys and consider egress filtering. Treat the secret like a password: if it leaks, delete the webhook and create a new one. There's no way to rotate a secret in place.
+Only register HTTPS endpoints you control. Tring sends to whatever URL is registered, including private and internal addresses reachable from the API and gateway servers (both send webhooks), so operators should restrict who can hold API keys and consider egress filtering. Treat the secret like a password: if it leaks, delete the webhook and create a new one. There's no way to rotate a secret in place.
 :::
 
 ### GET /v1/webhooks

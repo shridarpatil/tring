@@ -11,11 +11,13 @@ Webhooks push events from Tring to your backend as signed HTTP `POST` requests. 
 |---|---|---|
 | `call.ringing` | Your backend starts a call with `POST /v1/calls` or `POST /v1/calls/connect` | `{ "call": <call record> }` |
 | `agent.status` | An agent's availability changes (`POST /v1/agents/{id}/availability`) | `{ "agent_id", "sip_username", "available_for_calls" }` |
-| `call.answered` | Reserved | |
-| `call.ended` | Reserved | |
+| `call.answered` | An agent answers a web, inbound phone (including WhatsApp) or agent-dialed call | `{ "call": <call record> }` |
+| `call.ended` | One of those calls ends, answered or not | `{ "call": <call record> }` |
 
 :::note[Current coverage]
-`call.answered` and `call.ended` are defined event names you can subscribe to, but no part of Tring sends them yet, and inbound and browser calls do not send `call.ringing`. For call outcomes today, poll `GET /v1/calls/{id}` or `GET /v1/calls?status=ended`, or watch the [dashboard stream](/tring/features/recording-and-call-logs/#live-dashboard).
+- Inbound and browser calls don't send `call.ringing`; their first webhook is `call.answered`, or `call.ended` if nobody answers.
+- Calls your backend places with `POST /v1/calls` or `/v1/calls/connect` send `call.ringing` only. They go straight through FreeSWITCH and don't reach answered/ended yet, so poll `GET /v1/calls/{id}` for their outcome.
+- `call.ended` arrives before the recording is merged, so it has no `recording_url`. Fetch the call later for that.
 :::
 
 When you register a webhook, `events` lists the events it wants. An empty list subscribes to **all** events.
