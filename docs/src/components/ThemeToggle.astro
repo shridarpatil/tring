@@ -1,0 +1,87 @@
+---
+// Replaces Starlight's Auto/Dark/Light <select> with one light/dark toggle.
+// Same storage key as Starlight ('starlight-theme'), so its inline head script
+// (ThemeProvider) still applies the saved choice before first paint. With no
+// saved choice the page follows the system setting until the user clicks.
+import { Icon } from '@astrojs/starlight/components';
+---
+
+<tring-theme-toggle>
+	<button type="button" class="toggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+		<Icon name="moon" class="moon" />
+		<Icon name="sun" class="sun" />
+	</button>
+</tring-theme-toggle>
+
+<style>
+	.toggle {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 2rem;
+		height: 2rem;
+		padding: 0;
+		border: 0;
+		border-radius: 999rem;
+		background: transparent;
+		color: var(--sl-color-gray-1);
+		cursor: pointer;
+		font-size: 1.25rem;
+	}
+	.toggle:hover {
+		color: var(--sl-color-accent-high);
+		background: var(--sl-color-gray-6);
+	}
+	.toggle:focus-visible {
+		outline: 2px solid var(--sl-color-accent);
+		outline-offset: 2px;
+	}
+	/* Show the theme you'd switch TO: moon in light mode, sun in dark mode.
+	   Pure CSS on data-theme, so the right icon shows before any JS runs. */
+	:global([data-theme='light']) .sun,
+	:global([data-theme='dark']) .moon {
+		display: none;
+	}
+</style>
+
+<script>
+	const storageKey = 'starlight-theme';
+
+	const current = (): 'light' | 'dark' =>
+		document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+
+	function save(theme: 'light' | 'dark'): void {
+		try {
+			localStorage.setItem(storageKey, theme);
+		} catch {
+			/* storage blocked: the toggle still works for this page view */
+		}
+	}
+
+	function saved(): string | null {
+		try {
+			return localStorage.getItem(storageKey);
+		} catch {
+			return null;
+		}
+	}
+
+	// No explicit choice yet: keep following the system setting.
+	matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+		if (saved() !== 'light' && saved() !== 'dark') {
+			document.documentElement.dataset.theme = e.matches ? 'light' : 'dark';
+		}
+	});
+
+	class TringThemeToggle extends HTMLElement {
+		constructor() {
+			super();
+			this.querySelector('button')?.addEventListener('click', () => {
+				const next = current() === 'dark' ? 'light' : 'dark';
+				document.documentElement.dataset.theme = next;
+				save(next);
+			});
+		}
+	}
+	customElements.define('tring-theme-toggle', TringThemeToggle);
+</script>

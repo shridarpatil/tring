@@ -14,6 +14,8 @@ export default defineConfig({
         { icon: 'github', label: 'GitHub', href: 'https://github.com/shridarpatil/tring' },
       ],
       customCss: ['./src/styles/custom.css'],
+      // One light/dark toggle instead of the Auto/Dark/Light dropdown.
+      components: { ThemeSelect: './src/components/ThemeToggle.astro' },
       sidebar: [
         {
           label: 'Getting Started',
