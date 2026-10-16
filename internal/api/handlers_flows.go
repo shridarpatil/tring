@@ -423,7 +423,7 @@ func (s *Server) handleSimulateStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	snap, err := s.simManager.Start(defJSON, input)
+	snap, err := s.simManager.Start(t.ID, defJSON, input)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -435,6 +435,7 @@ func (s *Server) handleSimulateStart(w http.ResponseWriter, r *http.Request) {
 // 404 if the session was GC'd (idle past TTL) — the UI restarts in
 // that case.
 func (s *Server) handleSimulateInput(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
 	sid := chi.URLParam(r, "sid")
 	var body struct {
 		DTMF string `json:"dtmf"`
@@ -443,7 +444,7 @@ func (s *Server) handleSimulateInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	snap, err := s.simManager.Input(sid, body.DTMF)
+	snap, err := s.simManager.Input(t.ID, sid, body.DTMF)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
