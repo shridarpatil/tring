@@ -32,7 +32,7 @@ The response includes the sound's `file_path`. That value is what goes into a fl
 |---|---|
 | `GET /v1/audio` | List sounds. |
 | `GET /v1/audio/{id}/file` | Download or play a sound. |
-| `GET /v1/audio/preview?path=<file_path>` | Play any sound by its path inside the audio directory, including synthesized prompts. |
+| `GET /v1/audio/preview?path=<file_path>` | Play one of your sounds, or a synthesized prompt, by its path. |
 | `DELETE /v1/audio/{id}` | Delete a sound and its file. Flows or settings that still point at it will play nothing. |
 
 ## Hold music

@@ -137,7 +137,7 @@ If the database entry exists but the file is missing from disk, you get a plain-
 
 ### GET /v1/audio/preview
 
-Play any stored sound by its `file_path`. This also works for sounds that aren't in the library, such as text-to-speech prompts generated when a flow is saved. Use it to preview whatever a flow node, team or the tenant's hold music currently points at.
+Play one of your tenant's stored sounds by its `file_path`. This also works for sounds that aren't in the library, such as text-to-speech prompts generated when a flow is saved. Use it to preview whatever a flow node, team or the tenant's hold music currently points at.
 
 **Auth:** API key or console session.
 
@@ -156,13 +156,13 @@ curl -sS -G "$TRING_URL/v1/audio/preview" \
 
 **Response** `200 OK` with the raw file, as for `GET /v1/audio/{id}/file`.
 
-Only files inside the server's audio directory can be read. A path that tries to climb out with `../` is kept inside that directory. Stream URLs such as `local_stream://moh` aren't files and can't be previewed.
+Only your own tenant's sounds (`<audio_dir>/<tenant-id>/…`) and text-to-speech prompts (`<audio_dir>/tts/…`) can be read. Paths into another tenant's folder, or that try to climb out with `../`, are refused. Stream URLs such as `local_stream://moh` aren't files and can't be previewed.
 
 **Errors**
 
 | Status | `error` |
 |---|---|
-| `400` | `not a previewable sound path` (empty `path`, a stream URL, or no audio directory configured) |
+| `400` | `not a previewable sound path` (empty `path`, a stream URL, a path outside your tenant's sounds and the TTS cache, or no audio directory configured) |
 | `404` | `sound not found` |
 
 ### DELETE /v1/audio/{id}
