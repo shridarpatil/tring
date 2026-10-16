@@ -66,6 +66,3 @@ __pycache__/
 *.pyc
 .superpowers/
 /api
-
-# Old Jekyll/Starlight location, superseded by docs/ (local leftovers)
-/site/
