@@ -1,0 +1,136 @@
+---
+title: Quickstart
+description: Run Tring with Docker Compose, sign in to the console and place your first call.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Tring runs as a set of Docker containers. You need **Docker** with the **Compose** plugin.
+
+## Install
+
+<Tabs>
+  <TabItem label="Pre-built images">
+
+<Steps>
+
+1. Download the installer, read it, then run it. It only creates a `tring/` directory with `docker-compose.yml`, `.env.example` and a few empty data folders.
+
+   ```bash
+   curl -fsSLO https://raw.githubusercontent.com/shridarpatil/tring/main/install.sh
+   less install.sh
+   sh install.sh
+   cd tring
+   ```
+
+   Set `TRING_DIR=/srv/tring` before `sh install.sh` to install somewhere else.
+
+2. Create your config:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   For a first local run the defaults work. Change the admin password (`TRING_ADMIN_PASSWORD`) before anyone else can reach the machine.
+
+3. Start everything:
+
+   ```bash
+   docker compose pull && docker compose up -d
+   ```
+
+</Steps>
+
+  </TabItem>
+  <TabItem label="From source">
+
+<Steps>
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/shridarpatil/tring && cd tring
+   cp .env.example .env
+   ```
+
+2. Build and start:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. For hot-reload while developing, run the Go services on the host against the same Postgres, Redis and FreeSWITCH:
+
+   ```bash
+   make api        # REST API + admin console on :8085
+   make gateway    # media plane + brain on :8087
+   ```
+
+   `make help` lists all targets. After changing Go code or `freeswitch/conf/*`, run `make images` so `docker compose up` picks up the changes.
+
+</Steps>
+
+  </TabItem>
+</Tabs>
+
+<Aside type="caution">
+Avoid piping the installer straight into `sh` (`curl … | sh`). Download it and read it first, as above.
+</Aside>
+
+## What's running
+
+| Container | Port | What it does |
+|---|---|---|
+| `tring-api` | `8085` | REST API, admin console (`/admin/`), SDK bundles (`/sdk/`) |
+| `tring-gateway` | `8087` | Media plane and brain: IVR, routing, recording, call records |
+| `tring-fs` | `5060` SIP, `8021` ESL | FreeSWITCH, the edge to phone trunks. **Keep it private.** |
+| `tring-db` | `5434` | Postgres |
+| `tring-redis` | `6379` | Agent presence and single-use call tokens |
+
+Follow the logs with `docker compose logs -f`. Stop everything with `docker compose down`.
+
+## Sign in
+
+<Steps>
+
+1. Open [http://localhost:8085/admin/](http://localhost:8085/admin/).
+
+2. Sign in with `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` from `.env`. The first start creates this tenant and user automatically (default `admin@tring.local`). If you kept the default password, change it now.
+
+3. Create an **API key** in the console for your backend. Keep it in an environment variable or secret manager, never in front-end code.
+
+</Steps>
+
+## Make a test call
+
+<Steps>
+
+1. In the console, build a small **IVR flow**: a greeting, then a transfer to a team. Use the **Test** panel to simulate it.
+
+2. Add yourself as an **agent** in that team.
+
+3. Embed the agent widget in a page and the visitor widget in another, as described in the [browser SDK docs](https://github.com/shridarpatil/tring/blob/main/sdk/js/README.md), or use the demo portal in [`examples/demo-portal/`](https://github.com/shridarpatil/tring/tree/main/examples/demo-portal).
+
+4. Call from the visitor page: you hear the greeting, then the agent widget rings.
+
+</Steps>
+
+## Running on a server
+
+For anything beyond localhost, the network settings are what people get wrong. Set at least these in `.env` (section 5 of `.env.example` explains each):
+
+```bash
+TRING_GATEWAY_PUBLIC_URL=https://gw.example.com   # browser-reachable, must reach /rtc
+TRING_PUBLIC_IP=203.0.113.10                      # public / Elastic IP of the gateway
+TRING_REDIS_ADDR=127.0.0.1:6379                   # required when gateway auth is on
+```
+
+<Aside type="danger">
+Never expose FreeSWITCH's ESL port (`8021`), Postgres or Redis to the internet. Put TLS in front of the API and gateway, and only open the ports your trunk provider needs, from their IP ranges.
+</Aside>
+
+## Next steps
+
+- Connect a phone trunk: add it in the console under **Trunks**, then add your numbers.
+- [Take WhatsApp calls](/tring/guides/whatsapp-sip/) on your business number.
+- Read the [architecture overview](/tring/architecture/overview/) to understand how calls flow.
