@@ -1,0 +1,13 @@
+/* Starlight's default theme (as on the whatomate docs), with only the accent
+   switched to Tring's signal teal. Plain :root is the dark theme. */
+:root {
+  --sl-color-accent-low: #0f3d39;
+  --sl-color-accent: #14b8a6;
+  --sl-color-accent-high: #ccfbf1;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #ccfbf1;
+  --sl-color-accent: #0d9488;
+  --sl-color-accent-high: #134e4a;
+}

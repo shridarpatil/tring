@@ -7,7 +7,7 @@ import (
 
 // The IVR flow model + pure helpers live in internal/ivr (transport-agnostic).
 // These aliases keep the brain's flow simulator working under its existing
-// local names — only the definitions moved. See docs/ARCHITECTURE.md (M7).
+// local names — only the definitions moved. See docs/src/content/docs/architecture/overview.md (M7).
 
 type (
 	ivrNode     = ivr.Node

@@ -1,8 +1,11 @@
-# Tring — Architecture
+---
+title: "Architecture"
+description: "How Tring is built: one pion media plane, the in-process brain, and FreeSWITCH as the PSTN edge."
+---
 
 The single source of architectural truth for Tring. For code conventions see
-[`STYLE.md`](STYLE.md); for how to operate the repo (commands, gotchas) see the
-root [`CLAUDE.md`](../CLAUDE.md).
+[Code style](/tring/contributing/code-style/); for how to run the repo see the
+[README](https://github.com/shridarpatil/tring#readme).
 
 ---
 
@@ -169,7 +172,7 @@ each participant's audio to the others.
 A brief socket blip won't drop the call: while the page stays open, a ~30s grace
 window + reattach token (`media_grace_seconds`) lets the browser rejoin the same
 room. A full page reload or a gateway restart *does* end it — live media can't be
-relocated (see [`STATE_AND_HA.md`](STATE_AND_HA.md)).
+relocated (see [State & high availability](/tring/architecture/state-and-ha/)).
 
 ### 6b. Inbound phone (target design — FS plug pending)
 This is the shape the `room.Plug` seam is built for, once an FS adapter is wired
@@ -315,7 +318,7 @@ Scale by adding **gateway** instances (horizontal); FS scales vertically.
 > Call/media state is **in-process and not migratable** — scaling and restart
 > behaviour follow from that. The state classification, cell-based scaling model,
 > graceful-drain and orphan-reconciliation posture are in
-> [`STATE_AND_HA.md`](STATE_AND_HA.md). Read it before adding a second cell or
+> [State & high availability](/tring/architecture/state-and-ha/). Read it before adding a second cell or
 > assuming calls survive a restart.
 
 ## 13. Testing

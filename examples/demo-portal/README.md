@@ -23,7 +23,7 @@ agent clicks a customer row (sends an id, NOT a number)
 browser → Tring widget → raw WebRTC to the media gateway → call placed (FreeSWITCH stays private)
 ```
 
-See `docs/ARCHITECTURE.md` (trusted-identity sequence) and the SDK README's
+See `docs/src/content/docs/architecture/overview.md` (trusted-identity sequence) and the SDK README's
 "How it works — protocol reference" for the full wire details.
 
 ## Prerequisites

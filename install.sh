@@ -79,7 +79,7 @@ Next steps:
   cp .env.example .env
 
   # Edit .env — for a SERVER (not localhost) the network IPs are what people
-  # get wrong (see section 5 of .env.example and docs/STATE_AND_HA.md):
+  # get wrong (see section 5 of .env.example and docs/src/content/docs/architecture/state-and-ha.md):
   #   TRING_GATEWAY_PUBLIC_URL=https://gw.your-domain  # browser-reachable, must hit /rtc
   #   TRING_PUBLIC_IP=<public/elastic ip>   # rewrites the gateway's WebRTC ICE candidate
   #   TRING_REDIS_ADDR=127.0.0.1:6379       # gateway HARD-dep when REQUIRE_AUTH=true (default)
