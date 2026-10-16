@@ -49,6 +49,9 @@ services:
       # writes t_<uuid>.xml here and rescans the external profile; the api shares
       # the same host path. Static config is baked into the image above.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
+      # WhatsApp SIP TLS certs (agent.pem, cafile.pem) — host-managed so they
+      # can be renewed without a rebuild. Unused unless TRING_WHATSAPP_ENABLED.
+      - ./freeswitch/tls/whatsapp:/etc/freeswitch/tls/whatsapp:ro
     # network_mode: host is simplest for SIP/RTP during dev.
     # Ports: 5060 (SIP), 5080 (external SIP), 8021 (ESL),
     #        7443 (WSS for WebRTC), 16384-32768 (RTP).

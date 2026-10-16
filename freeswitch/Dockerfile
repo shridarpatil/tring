@@ -20,6 +20,7 @@ FROM safarov/freeswitch:latest
 COPY conf/vars.xml                               /usr/share/freeswitch/conf/vanilla/vars.xml
 COPY conf/dialplan/default.xml                   /usr/share/freeswitch/conf/vanilla/dialplan/default.xml
 COPY conf/dialplan/public.xml                     /usr/share/freeswitch/conf/vanilla/dialplan/public.xml
+COPY conf/dialplan/whatsapp.xml                  /usr/share/freeswitch/conf/vanilla/dialplan/whatsapp.xml
 COPY conf/directory/default.xml                  /usr/share/freeswitch/conf/vanilla/directory/default.xml
 COPY conf/autoload_configs/modules.conf.xml      /usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml
 COPY conf/autoload_configs/acl.conf.xml          /usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml
@@ -29,6 +30,8 @@ COPY conf/autoload_configs/switch.conf.xml       /usr/share/freeswitch/conf/vani
 COPY conf/sip_profiles/external.xml              /usr/share/freeswitch/conf/vanilla/sip_profiles/external.xml
 COPY conf/sip_profiles/internal.xml              /usr/share/freeswitch/conf/vanilla/sip_profiles/internal.xml
 COPY conf/sip_profiles/external/tring-gw.xml     /usr/share/freeswitch/conf/vanilla/sip_profiles/external/tring-gw.xml
+COPY conf/sip_profiles/whatsapp.xml              /usr/share/freeswitch/conf/vanilla/sip_profiles/whatsapp.xml
+COPY conf/sip_profiles/whatsapp/profile.xml      /usr/share/freeswitch/conf/vanilla/sip_profiles/whatsapp/profile.xml
 
 # Dynamic trunk dir stays a runtime volume — just ensure the (empty) path exists.
 RUN mkdir -p /usr/share/freeswitch/conf/vanilla/sip_profiles/external/dynamic \

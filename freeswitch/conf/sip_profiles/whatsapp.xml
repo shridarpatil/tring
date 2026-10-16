@@ -1,0 +1,6 @@
+<!-- Loader for the WhatsApp profile: includes sip_profiles/whatsapp/profile.xml
+     when TRING_WHATSAPP_ENABLED=true, otherwise a glob that matches nothing
+     (see whatsapp_profile in vars.xml). -->
+<include>
+  <X-PRE-PROCESS cmd="include" data="$${whatsapp_profile}"/>
+</include>
