@@ -18,40 +18,15 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/shridarpatil/tring/internal/agentleg"
+	"github.com/shridarpatil/tring/internal/callrow"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/provider"
 	"github.com/shridarpatil/tring/internal/webhook"
 )
 
-type Call struct {
-	ID           uuid.UUID  `json:"id"`
-	TenantID     uuid.UUID  `json:"tenant_id"`
-	Direction    string     `json:"direction"`
-	Status       string     `json:"status"`
-	FromNumber   string     `json:"from_number"`
-	ToNumber     string     `json:"to_number"`
-	AgentID      *uuid.UUID `json:"agent_id,omitempty"`
-	AgentName    *string    `json:"agent_name,omitempty"` // display_name|sip of the handling agent
-	ClientRef    *string    `json:"client_ref,omitempty"` // embedder-supplied caller identity (vs guest_*)
-	Source       string     `json:"source"`               // call channel: web | phone | whatsapp
-	LegID        string     `json:"leg_id"`               // opaque per-call leg id (FS channel UUID or pion leg)
-	StartedAt    time.Time  `json:"started_at"`
-	AnsweredAt   *time.Time `json:"answered_at,omitempty"`
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
-	DurationSec  *int       `json:"duration_seconds,omitempty"`
-	HangupCause  *string    `json:"hangup_cause,omitempty"`
-	RecordingURL *string    `json:"recording_url,omitempty"`
-	// IVRPath is the recorded IVR journey for inbound/IVR calls — an ordered
-	// JSON array of steps (node, DTMF pressed, transfer target, outcome).
-	// Passed through verbatim from the calls.ivr_path JSONB column; empty
-	// array for outbound calls. Shape: see brain.SimStep / the
-	// console's IvrStep type.
-	IVRPath json.RawMessage `json:"ivr_path,omitempty"`
-	// RoomID is the pion room id ("<tenant>/<name>") for media-plane calls —
-	// lets the dashboard match a call.supervised event to its row. Empty for
-	// FreeSWITCH-only calls.
-	RoomID string `json:"room_id,omitempty"`
-}
+// Call is a call-log row; the shared definition lives in callrow so the
+// gateway's call.answered / call.ended webhooks carry the identical object.
+type Call = callrow.Call
 
 type createCallRequest struct {
 	AgentID uuid.UUID `json:"agent_id"`
@@ -338,9 +313,7 @@ func buildBridgeLegs(trunks []trunk, agentNumber, clientNumber string) (aLeg str
 
 // callPayload is the data shape we ship in webhook envelopes. Mirrors the
 // REST response so integrators can use one decoder for both surfaces.
-func callPayload(c Call) map[string]interface{} {
-	return map[string]interface{}{"call": c}
-}
+func callPayload(c Call) map[string]interface{} { return callrow.Payload(c) }
 
 const (
 	callsDefaultLimit = 50
@@ -353,21 +326,7 @@ const (
 )
 
 func scanCall(scanner interface{ Scan(...interface{}) error }) (Call, error) {
-	var c Call
-	// Scan the jsonb ivr_path into a plain []byte, then hand it to the
-	// RawMessage field — pgx returns jsonb as raw bytes and we pass them
-	// through to the client unchanged.
-	var ivrPath []byte
-	err := scanner.Scan(
-		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
-		&c.AgentID, &c.LegID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
-		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef, &c.Source,
-		&c.RoomID,
-	)
-	if len(ivrPath) > 0 {
-		c.IVRPath = ivrPath
-	}
-	return c, err
+	return callrow.Scan(scanner)
 }
 
 func (s *Server) handleGetCall(w http.ResponseWriter, r *http.Request) {

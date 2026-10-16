@@ -165,7 +165,7 @@ See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo g
 | **Agent routing** | Shared queue/ring engine: `ring_all` / `round_robin` / `sequential` / `longest_wait`, Redis-backed presence + reservations, live queue depth (phone + web summed). |
 | **Call control** | Hold / resume / blind transfer (to an agent or a team) from the agent SDK or the CRM backend. |
 | **Recording** | Opt-in per tenant (`record_calls`). Stereo (agent **left**, customer **right**), captured on the media plane and merged on hangup. Starts at agent answer. Served by the API; optional S3 upload. |
-| **CDR + webhooks** | One `calls` table for every source. `call.ringing` (API on originate), `call.answered` / `call.ended` (gateway on media events). HMAC-SHA256 signed (Stripe pattern), 6 retries with backoff, delivery log. |
+| **CDR + webhooks** | One `calls` table for every source. `call.ringing` (API on originate), `call.answered` / `call.ended` (gateway on media events). HMAC-SHA256 signed (Stripe pattern), up to 6 attempts with backoff, delivery log. |
 | **Trunk providers** | Exotel, Airtel, Jio, Tata pre-baked + Loopback for dev. Multi-trunk failover / round-robin / manual strategies. Config-only swap. |
 | **Browser SDK** | `voice.js` (visitor), `agent.js` (agent), bare `tring.js` + ESM. Served by the API at `/sdk/*` — no CDN needed. |
 | **Multi-tenant** | Per-tenant SIP domain, API keys (SHA-256 hashed), tenant scoping on every query, `mod_xml_curl` dynamic directory, admin console. |
