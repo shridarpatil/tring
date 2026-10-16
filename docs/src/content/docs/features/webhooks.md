@@ -1,0 +1,221 @@
+---
+title: Webhooks
+description: Event types, payload shape, HMAC-SHA256 signature verification in Go and Node, retries and the delivery log.
+---
+
+Webhooks push events from Tring to your backend as signed HTTP `POST` requests. Register endpoints in the console (**Webhooks**) or with the API; the endpoints are documented in the [Webhooks API](/tring/api-reference/webhooks/).
+
+## Events
+
+| Event | Sent when | `data` |
+|---|---|---|
+| `call.ringing` | Your backend starts a call with `POST /v1/calls` or `POST /v1/calls/connect` | `{ "call": <call record> }` |
+| `agent.status` | An agent's availability changes (`POST /v1/agents/{id}/availability`) | `{ "agent_id", "sip_username", "available_for_calls" }` |
+| `call.answered` | Reserved | |
+| `call.ended` | Reserved | |
+
+:::note[Current coverage]
+`call.answered` and `call.ended` are defined event names you can subscribe to, but no part of Tring sends them yet, and inbound and browser calls do not send `call.ringing`. For call outcomes today, poll `GET /v1/calls/{id}` or `GET /v1/calls?status=ended`, or watch the [dashboard stream](/tring/features/recording-and-call-logs/#live-dashboard).
+:::
+
+When you register a webhook, `events` lists the events it wants. An empty list subscribes to **all** events.
+
+```bash
+curl -sS -X POST https://api.example.com/v1/webhooks \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://crm.example.com/hooks/tring","events":["call.ringing","agent.status"]}'
+```
+
+If you do not pass a `secret`, Tring generates one (`whsec_…`). The secret is returned **only in this response**; store it in your secret manager.
+
+## Payload
+
+```http
+POST /hooks/tring HTTP/1.1
+Content-Type: application/json
+User-Agent: Tring-Webhook/0.1
+Tring-Event: call.ringing
+Tring-Delivery: 6f1c2d3e-0000-4000-8000-000000000001
+Tring-Signature: t=1760000000,v1=5d41402abc4b2a76b9719d911017c592...
+```
+
+```json
+{
+  "event": "call.ringing",
+  "delivery_id": "6f1c2d3e-0000-4000-8000-000000000001",
+  "created": "2026-10-16T09:30:00Z",
+  "data": {
+    "call": {
+      "id": "…",
+      "tenant_id": "…",
+      "direction": "outbound",
+      "status": "ringing",
+      "from_number": "+919800000002",
+      "to_number": "+919800000001",
+      "agent_id": "…",
+      "source": "phone",
+      "leg_id": "…",
+      "started_at": "2026-10-16T09:30:00Z"
+    }
+  }
+}
+```
+
+The call object has the same shape as the [Calls API](/tring/api-reference/calls/) response, so one decoder works for both. `delivery_id` matches the `Tring-Delivery` header; use it to drop duplicates, because a retry resends the same delivery.
+
+## Signature
+
+The `Tring-Signature` header is `t=<unix seconds>,v1=<hex>`, where:
+
+```
+v1 = hex( HMAC-SHA256( secret, "<t>.<raw request body>" ) )
+```
+
+To verify:
+
+1. Read the **raw** body bytes. Do not parse and re-serialize the JSON first.
+2. Split the header into `t` and `v1`.
+3. Compute the HMAC over `t + "." + body` with your secret and compare it to `v1` in **constant time**.
+4. Reject requests where `t` is too old (for example more than 5 minutes), to block replays.
+
+### Go
+
+```go
+package hooks
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const tolerance = 5 * time.Minute
+
+func verify(secret, header string, body []byte, now time.Time) bool {
+	var ts, sig string
+	for _, part := range strings.Split(header, ",") {
+		k, v, _ := strings.Cut(part, "=")
+		switch k {
+		case "t":
+			ts = v
+		case "v1":
+			sig = v
+		}
+	}
+	t, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil || sig == "" {
+		return false
+	}
+	if d := now.Sub(time.Unix(t, 0)); d > tolerance || d < -tolerance {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(want), []byte(sig))
+}
+
+func Handler(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	secret := os.Getenv("TRING_WEBHOOK_SECRET")
+	if !verify(secret, r.Header.Get("Tring-Signature"), body, time.Now()) {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+	// Decode body, dedupe on delivery_id, then hand off to a queue.
+	w.WriteHeader(http.StatusNoContent)
+}
+```
+
+### Node.js
+
+Uses only the built-in `crypto` module, no extra packages.
+
+```js
+import crypto from "node:crypto";
+import http from "node:http";
+
+const SECRET = process.env.TRING_WEBHOOK_SECRET;
+const TOLERANCE_S = 300;
+
+function verify(header, rawBody) {
+  const parts = Object.fromEntries(
+    (header || "").split(",").map((p) => p.split("=", 2)),
+  );
+  const t = Number(parts.t);
+  if (!Number.isInteger(t) || !parts.v1) return false;
+  if (Math.abs(Date.now() / 1000 - t) > TOLERANCE_S) return false;
+
+  const expected = crypto
+    .createHmac("sha256", SECRET)
+    .update(`${parts.t}.`)
+    .update(rawBody)
+    .digest("hex");
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(parts.v1, "hex");
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+http
+  .createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks);
+      if (!verify(req.headers["tring-signature"], raw)) {
+        res.writeHead(401).end();
+        return;
+      }
+      const event = JSON.parse(raw.toString("utf8"));
+      // Dedupe on event.delivery_id, then process asynchronously.
+      res.writeHead(204).end();
+    });
+  })
+  .listen(3000);
+```
+
+If you use a framework, make sure the route gets the raw body (for example `express.raw({ type: "application/json" })`), not a parsed object.
+
+## Delivery and retries
+
+- Tring records each delivery as `pending`, then sends it in the background, so your endpoint's speed never slows a call.
+- Each attempt has a 10-second timeout. Any `2xx` response is success; anything else (including a timeout or connection error) is a failure.
+- A failed delivery is retried up to **5 more times**, waiting 1, 2, 4, 8 and 16 seconds between attempts (6 attempts, about 30 seconds in total).
+- After the last failure the delivery is marked `exhausted`. There is no automatic redelivery later and no replay endpoint yet.
+
+Respond with `2xx` quickly and do the work asynchronously. Make your handler idempotent.
+
+## Delivery log
+
+`GET /v1/webhooks/{id}/deliveries` returns the latest 100 deliveries for a webhook, newest first:
+
+| Field | What it is |
+|---|---|
+| `id` | Delivery id (the `Tring-Delivery` header). |
+| `event_type` | The event. |
+| `status` | `pending`, `success` or `exhausted`. |
+| `attempts` | Attempts made so far. |
+| `response_status` | Last HTTP status from your endpoint. |
+| `last_error` | Last error, for example `non-2xx: 500`. |
+| `delivered_at`, `created_at` | Timestamps. |
+
+The console shows the same log under **Webhooks**.
+
+## Security checklist
+
+- Use an `https://` endpoint.
+- Verify every signature and enforce the timestamp tolerance.
+- Keep the webhook secret in a secret manager, never in front-end code or source control. To rotate it, register a new webhook with a new secret, switch your receiver to accept both, then delete the old webhook.
+- Treat payloads as data: validate fields before using them.
