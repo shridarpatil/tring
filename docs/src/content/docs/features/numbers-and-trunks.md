@@ -38,6 +38,8 @@ Update with `PATCH /v1/numbers/{id}`: `priority`, `active`, `flow_id`, or `"clea
 
 When a call arrives, Tring looks up the dialed number (the SIP `To` user) among `inbound` numbers with an exact string match (this lookup does not check the `active` flag), then runs that number's flow. There is no normalization, so `+919800000001`, `919800000001` and `09800000001` are three different numbers. Register the number in the exact form your carrier sends. If no inbound number matches, or it has no flow, the call is rejected.
 
+An inbound number belongs to one tenant: Tring refuses to register an inbound number another tenant on the same deployment already holds, and a number only ever runs a flow of its own tenant.
+
 Inbound phone calls need the SIP plug enabled (`TRING_FSPLUG_ENABLED=true`); see [Configuration](/tring/getting-started/configuration/#inbound-phone-calls-sip-plug).
 
 ## Trunks

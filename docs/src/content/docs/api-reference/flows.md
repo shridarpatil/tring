@@ -590,7 +590,7 @@ curl -sS -X POST "$TRING_URL/v1/flows/simulate/sessions/8f0e4d2c-5555-4b00-9e00-
 | Status | Message |
 |---|---|
 | `400` | `invalid JSON body` |
-| `404` | `invalid session id` or `session not found`. Sessions expire after 10 minutes idle. Start a new one. |
+| `404` | `invalid session id` or `session not found`. Sessions expire after 10 minutes idle, and only the tenant that started a session can drive it. Start a new one. |
 
 :::note
 Sessions live in the memory of the API process that started them. They're lost on restart, and if you run more than one API replica, send a session's requests to the same replica.

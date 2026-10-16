@@ -47,13 +47,15 @@ All routes on this page take a tenant API key or a console session. See [Authent
 ## Uniqueness and inbound matching
 
 - A number is unique per tenant: the pair (`tenant_id`, `e164`) can only exist once. Registering the same `e164` twice in one tenant fails with `409`.
-- Uniqueness is **not** global. Two tenants can register the same `e164`.
+- An **inbound** number can belong to only one tenant on a deployment: registering an inbound number another tenant already holds returns `409`. Outbound and masking numbers are only unique within your tenant.
 - When a phone call arrives, the gateway looks up the dialed number (the user part of the SIP `To` header) with an **exact string match** against `e164` among `inbound` numbers. There is no normalisation: `+919800000001`, `919800000001` and `09800000001` are three different strings. Register the number in exactly the format your carrier sends.
 - If no `inbound` number matches, or the match has no `flow_id`, the gateway rejects the call.
 
 :::caution
-The inbound lookup doesn't check `active` and doesn't check which tenant owns the number. Deactivating an inbound number does not stop it receiving calls; clear its flow (`clear_flow`) instead. If two tenants on one deployment register the same inbound number, which one gets the call is undefined. Operators running several tenants should keep inbound numbers unique across the whole deployment.
+The inbound lookup doesn't check `active`. Deactivating an inbound number does not stop it receiving calls; clear its flow (`clear_flow`) instead.
 :::
+
+If duplicate inbound numbers exist from before the cross-tenant check, the number registered first gets the call. A number only ever runs a flow of its own tenant.
 
 ### POST /v1/numbers
 
@@ -67,16 +69,12 @@ Register a number with your tenant.
 |---|---|---|---|
 | `e164` | string | yes | The number. Stored as sent, not validated or normalised. Use E.164 (`+919800000001`) unless your carrier sends inbound calls in another format (see above). |
 | `type` | string | yes | `inbound`, `outbound` or `masking`. |
-| `trunk_id` | UUID | for `outbound` | The trunk this number dials out through. Required when `type` is `outbound`. Optional for the other types. |
-| `flow_id` | UUID | no | IVR flow to run for inbound calls. |
+| `trunk_id` | UUID | for `outbound` | The trunk this number dials out through. Must be one of your tenant's trunks. Required when `type` is `outbound`. Optional for the other types. |
+| `flow_id` | UUID | no | IVR flow to run for inbound calls. Must be one of your tenant's flows. |
 | `provider_did_id` | string | no | Your carrier's ID for the DID, for your own reference. |
 | `priority` | integer | no | Lower is preferred. Defaults to `100`. |
 
 New numbers start with `active: true`.
-
-:::caution
-The API doesn't check that `trunk_id` and `flow_id` belong to your tenant, only that they exist. Always pass IDs you got from your own [`GET /v1/trunks`](/tring/api-reference/trunks/#get-v1trunks) and [`GET /v1/flows`](/tring/api-reference/flows/#get-v1flows).
-:::
 
 ```bash
 curl -sS -X POST "$TRING_URL/v1/numbers" \
@@ -114,7 +112,10 @@ curl -sS -X POST "$TRING_URL/v1/numbers" \
 | `400` | `e164 and type are required` |
 | `400` | `type must be inbound\|outbound\|masking` |
 | `400` | `trunk_id is required for outbound numbers` |
-| `409` | `number already registered for this tenant: …` followed by the database error. Any insert failure returns this, including a `trunk_id` or `flow_id` that doesn't exist, so read the appended detail. |
+| `400` | `trunk not found in this tenant` / `flow not found in this tenant`: the ID doesn't exist or belongs to another tenant |
+| `409` | `number is already in use`: another tenant already has this inbound number |
+| `409` | `number already registered for this tenant: …` followed by the database error. Returned when the insert fails, usually because you already have this number. |
+| `500` | `lookup failed` |
 
 ### GET /v1/numbers
 
@@ -221,6 +222,7 @@ curl -sS -X PATCH "$TRING_URL/v1/numbers/0b6f2a4e-1111-4c1d-9a00-000000000001" \
 | `400` | `invalid id` |
 | `400` | `invalid JSON body` |
 | `400` | `at least one of priority, active, flow_id, or clear_flow is required` |
+| `400` | `flow not found in this tenant` |
 | `404` | `number not found` |
 | `409` | `cannot deactivate the last active outbound trunk for this tenant; register another outbound number first`. Returned when you set `active: false` on the only active outbound number. Without it, every outbound call would fail. |
 | `500` | `lookup failed: …` / `update failed: …` |
