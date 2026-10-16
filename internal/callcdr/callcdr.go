@@ -28,12 +28,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/callrow"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/record"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 // Log is the media-plane call logger. One instance per gateway; safe for
@@ -45,20 +47,51 @@ type Log struct {
 	dir    string           // local recordings spool (shared with the API's serve)
 	log    *slog.Logger
 	events events.Sink // nil = events disabled (no-op)
+	hooks  Webhooks    // nil = tenant webhooks off (no-op)
 
 	mu    sync.Mutex
 	calls map[string]*activeCall // by room id
 }
 
 type activeCall struct {
-	id        uuid.UUID // calls.id
-	legID     string    // stored in calls.leg_id; names the recording file
-	tenant    uuid.UUID
-	startedAt time.Time
-	callerPID room.ParticipantID
+	id         uuid.UUID // calls.id
+	legID      string    // stored in calls.leg_id; names the recording file
+	tenant     uuid.UUID
+	startedAt  time.Time
+	callerPID  room.ParticipantID
 	rec        *record.Recorder // nil = tenant doesn't record
 	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
 	ringAgents []string         // agents rung in the current window — names the no_answer event
+}
+
+// Webhooks delivers tenant-registered webhooks; *webhook.Notifier implements
+// it. The call log is the one place that knows when a media-plane call is
+// answered or ends, so it emits call.answered / call.ended (the api emits
+// call.ringing when it places a call).
+type Webhooks interface {
+	Emit(ctx context.Context, tenantID uuid.UUID, eventType string, data interface{})
+}
+
+// WithWebhooks turns on call.answered / call.ended delivery and returns l for
+// chaining.
+func (l *Log) WithWebhooks(w Webhooks) *Log {
+	l.hooks = w
+	return l
+}
+
+// emitCall sends a call.* webhook carrying the call's current row, the same
+// {"call": …} object the api's call.ringing carries. Best-effort: a missing
+// row or a lookup error logs and skips the event.
+func (l *Log) emitCall(ctx context.Context, ac *activeCall, event string) {
+	if l.hooks == nil {
+		return
+	}
+	c, err := callrow.Get(ctx, l.db, l.q, ac.tenant, ac.id)
+	if err != nil {
+		l.log.Warn("cdr: webhook payload lookup failed", "event", event, "call", ac.id, "err", err)
+		return
+	}
+	l.hooks.Emit(ctx, ac.tenant, event, callrow.Payload(c))
 }
 
 // New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
@@ -229,6 +262,7 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	if l.events != nil {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, answeredAgentName, time.Now()))
 	}
+	l.emitCall(ctx, ac, webhook.EventCallAnswered)
 	if ac.rec == nil {
 		return nil
 	}
@@ -423,6 +457,9 @@ func (l *Log) Ended(roomID, cause string) {
 	if l.events != nil {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallEnded, endedEvent(ac.id, duration, cause, time.Now()))
 	}
+	// recording_url isn't in this payload yet: the recording is merged and
+	// stamped after the call ends (finalizeRecording, below).
+	l.emitCall(ctx, ac, webhook.EventCallEnded)
 	if ac.rec != nil {
 		go l.finalizeRecording(ac)
 	}
