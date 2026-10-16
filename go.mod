@@ -3,7 +3,7 @@ module github.com/shridarpatil/tring
 go 1.26.0
 
 require (
-	github.com/emiago/sipgo v1.4.0
+	github.com/emiago/sipgo v1.4.3
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/gobwas/ws v1.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
