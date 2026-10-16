@@ -56,6 +56,7 @@ type SimSnapshot struct {
 // the SimSnapshot view.
 type simSession struct {
 	id          uuid.UUID
+	owner       uuid.UUID // tenant that started it; only it may drive the session
 	flow        *ivrFlowData
 	currentNode string // where to resume; "" once ended
 	vars        map[string]string
@@ -79,9 +80,9 @@ type SimManager struct {
 
 func NewSimManager() *SimManager { return &SimManager{} }
 
-// Start creates a new session, walks until the first pause / end, and
-// returns the snapshot.
-func (m *SimManager) Start(flowJSON []byte, in SimInput) (*SimSnapshot, error) {
+// Start creates a new session owned by tenant owner, walks until the first
+// pause / end, and returns the snapshot.
+func (m *SimManager) Start(owner uuid.UUID, flowJSON []byte, in SimInput) (*SimSnapshot, error) {
 	flow, err := parseFlow(flowJSON)
 	if err != nil {
 		return nil, err
@@ -94,6 +95,7 @@ func (m *SimManager) Start(flowJSON []byte, in SimInput) (*SimSnapshot, error) {
 	}
 	s := &simSession{
 		id:          uuid.New(),
+		owner:       owner,
 		flow:        flow,
 		currentNode: flow.EntryNode,
 		vars:        copyVars(in.Vars),
@@ -108,15 +110,16 @@ func (m *SimManager) Start(flowJSON []byte, in SimInput) (*SimSnapshot, error) {
 }
 
 // Input feeds the supplied DTMF into the paused node and continues
-// walking. Returns ErrNotFound if the session has been GC'd; the UI
-// should restart in that case.
-func (m *SimManager) Input(sessionID string, dtmf string) (*SimSnapshot, error) {
+// walking. Returns "session not found" if the session has been GC'd or
+// belongs to another tenant (indistinguishable, so a foreign session id
+// reveals nothing); the UI should restart in that case.
+func (m *SimManager) Input(owner uuid.UUID, sessionID string, dtmf string) (*SimSnapshot, error) {
 	id, err := uuid.Parse(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid session id")
 	}
 	v, ok := m.sessions.Load(id)
-	if !ok {
+	if !ok || v.(*simSession).owner != owner {
 		return nil, fmt.Errorf("session not found")
 	}
 	s := v.(*simSession)

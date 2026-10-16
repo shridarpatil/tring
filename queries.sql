@@ -635,7 +635,7 @@ DELETE FROM trunks WHERE id = $1 AND tenant_id = $2;
 -- Active outbound DIDs joined to their active trunk, priority order.
 SELECT n.e164, tk.id, tk.provider_type
 FROM numbers n
-JOIN trunks tk ON tk.id = n.trunk_id
+JOIN trunks tk ON tk.id = n.trunk_id AND tk.tenant_id = n.tenant_id
 WHERE n.tenant_id = $1
   AND n.type = 'outbound'
   AND n.active
@@ -689,15 +689,36 @@ SELECT EXISTS (
     SELECT 1 FROM numbers WHERE tenant_id = $1 AND e164 = $2 AND active
 );
 
+-- name: tenant-owns-trunk
+SELECT EXISTS (SELECT 1 FROM trunks WHERE id = $1 AND tenant_id = $2);
+
+-- name: tenant-owns-flow
+SELECT EXISTS (SELECT 1 FROM flows WHERE id = $1 AND tenant_id = $2);
+
+-- name: inbound-number-held-elsewhere
+-- Is e164 already an inbound number of ANOTHER tenant? Inbound routing is by
+-- DID alone, so a second tenant registering it could take the first's calls.
+SELECT EXISTS (
+    SELECT 1 FROM numbers WHERE e164 = $1 AND type = 'inbound' AND tenant_id <> $2
+);
+
 -- name: resolve-inbound-number
 -- Inbound DID → owning tenant + attached flow id (NULL if none). The flow
 -- DEFINITION is loaded separately by id (get-active-flow-by-id) so it can be
 -- served from the cache; this stays a cheap indexed point read that always
 -- hits the DB, since a number's flow assignment can change independently of
 -- the flow's contents.
-SELECT n.tenant_id, n.flow_id
+--
+-- Cross-tenant guards: the flow must belong to the number's own tenant (a
+-- foreign flow_id resolves to NULL → call rejected), and if two tenants ever
+-- hold the same inbound DID the first registrant wins (create-number refuses
+-- new duplicates; this keeps routing deterministic for any that predate it).
+SELECT n.tenant_id, f.id
 FROM numbers n
-WHERE n.e164 = $1 AND n.type = 'inbound';
+LEFT JOIN flows f ON f.id = n.flow_id AND f.tenant_id = n.tenant_id
+WHERE n.e164 = $1 AND n.type = 'inbound'
+ORDER BY n.created_at ASC, n.id ASC
+LIMIT 1;
 
 -- name: get-active-flow-by-id
 -- Guest web-call path: flow pinned by UUID via tring_flow_id channel var.

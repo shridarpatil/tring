@@ -2,6 +2,8 @@ package brain
 
 import (
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // Interactive sessions: walker pauses on every Menu/Gather, surfaces an
@@ -32,7 +34,7 @@ const interactiveMenuFlow = `{
 
 func TestSessionStartPausesAtFirstMenu(t *testing.T) {
 	m := NewSimManager()
-	snap, err := m.Start([]byte(interactiveMenuFlow), SimInput{})
+	snap, err := m.Start(simOwner, []byte(interactiveMenuFlow), SimInput{})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -50,8 +52,8 @@ func TestSessionStartPausesAtFirstMenu(t *testing.T) {
 
 func TestSessionInputAdvancesToTerminal(t *testing.T) {
 	m := NewSimManager()
-	snap, _ := m.Start([]byte(interactiveMenuFlow), SimInput{})
-	snap, err := m.Input(snap.SessionID, "1")
+	snap, _ := m.Start(simOwner, []byte(interactiveMenuFlow), SimInput{})
+	snap, err := m.Input(simOwner, snap.SessionID, "1")
 	if err != nil {
 		t.Fatalf("Input: %v", err)
 	}
@@ -65,7 +67,7 @@ func TestSessionInputAdvancesToTerminal(t *testing.T) {
 
 func TestSessionUnknownIDReturns404Style(t *testing.T) {
 	m := NewSimManager()
-	_, err := m.Input("00000000-0000-0000-0000-000000000000", "1")
+	_, err := m.Input(simOwner, "00000000-0000-0000-0000-000000000000", "1")
 	if err == nil {
 		t.Errorf("expected error for unknown session id; got nil")
 	}
@@ -89,17 +91,37 @@ const interactiveTwoMenus = `{
 
 func TestSessionPausesBetweenSuccessiveMenus(t *testing.T) {
 	m := NewSimManager()
-	snap, _ := m.Start([]byte(interactiveTwoMenus), SimInput{})
+	snap, _ := m.Start(simOwner, []byte(interactiveTwoMenus), SimInput{})
 	if snap.AwaitingNode == nil || snap.AwaitingNode.NodeID != "m1" {
 		t.Fatalf("first pause should be m1, got %+v", snap.AwaitingNode)
 	}
-	snap, _ = m.Input(snap.SessionID, "1")
+	snap, _ = m.Input(simOwner, snap.SessionID, "1")
 	if snap.AwaitingNode == nil || snap.AwaitingNode.NodeID != "m2" {
 		t.Fatalf("after m1 we should pause at m2, got status=%s awaiting=%+v",
 			snap.Status, snap.AwaitingNode)
 	}
-	snap, _ = m.Input(snap.SessionID, "2")
+	snap, _ = m.Input(simOwner, snap.SessionID, "2")
 	if snap.Status != StatusEnded {
 		t.Errorf("after m2 should end; got %s", snap.Status)
+	}
+}
+
+// simOwner is the tenant the session tests run as.
+var simOwner = uuid.MustParse("11111111-1111-1111-1111-111111111111")
+
+func TestSessionInputFromAnotherTenantIsNotFound(t *testing.T) {
+	m := NewSimManager()
+	snap, err := m.Start(simOwner, []byte(interactiveMenuFlow), SimInput{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	other := uuid.MustParse("22222222-2222-2222-2222-222222222222")
+	if _, err := m.Input(other, snap.SessionID, "1"); err == nil {
+		t.Fatal("another tenant drove the session; want session not found")
+	}
+	// The owner's session is untouched and still waiting for input.
+	got, err := m.Input(simOwner, snap.SessionID, "1")
+	if err != nil || len(got.Steps) <= len(snap.Steps) {
+		t.Fatalf("owner input after foreign attempt: err=%v steps %d→%d", err, len(snap.Steps), len(got.Steps))
 	}
 }
