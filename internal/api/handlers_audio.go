@@ -212,7 +212,8 @@ func (s *Server) handleGetAudioFile(w http.ResponseWriter, r *http.Request) {
 // confined to the audio dir (no traversal); stream URLs (local_stream://…) and
 // anything outside the dir are rejected.
 func (s *Server) handlePreviewAudio(w http.ResponseWriter, r *http.Request) {
-	disk, ok := s.previewDiskPath(r.URL.Query().Get("path"))
+	t := tenantFromCtx(r.Context())
+	disk, ok := s.previewDiskPath(t.ID, r.URL.Query().Get("path"))
 	if !ok {
 		writeError(w, http.StatusBadRequest, "not a previewable sound path")
 		return
@@ -227,14 +228,21 @@ func (s *Server) handlePreviewAudio(w http.ResponseWriter, r *http.Request) {
 // previewDiskPath maps an untrusted file_path query param to a local disk path,
 // CONFINED to audioDir. Clean("/"+rel) anchors at root so any "../" is dropped
 // before the join, so the result can't escape audioDir (same guard as the pion
-// filePrompts loader). Returns ok=false for empty / stream-URL paths.
-func (s *Server) previewDiskPath(filePath string) (string, bool) {
+// filePrompts loader). It must also sit in the caller's own tenant dir
+// (audioDir/<tenant>/…, where uploads go) or the shared TTS cache
+// (audioDir/tts/<sha256>.ogg, content-addressed, so a name reveals nothing the
+// caller doesn't already know). Returns ok=false for empty / stream-URL paths
+// and for anything else, including another tenant's sounds.
+func (s *Server) previewDiskPath(tenantID uuid.UUID, filePath string) (string, bool) {
 	if filePath == "" || s.audioDir == "" || strings.Contains(filePath, "://") {
 		return "", false
 	}
-	rel := strings.TrimPrefix(filePath, s.audioDir)
-	disk := filepath.Join(s.audioDir, filepath.Clean("/"+rel))
-	return disk, true
+	rel := filepath.Clean("/" + strings.TrimPrefix(filePath, s.audioDir))
+	top, _, _ := strings.Cut(strings.TrimPrefix(rel, "/"), "/")
+	if top != tenantID.String() && top != ttsSubdir {
+		return "", false
+	}
+	return filepath.Join(s.audioDir, rel), true
 }
 
 func (s *Server) handleDeleteAudio(w http.ResponseWriter, r *http.Request) {
