@@ -1,4 +1,7 @@
-# Call-log pagination + reusable `<Pagination>` — design
+---
+title: "Call-log pagination"
+description: "Design: numbered pagination for the call log via a reusable Pagination component."
+---
 
 **Date:** 2026-06-22
 **Status:** Approved (ready for implementation plan)

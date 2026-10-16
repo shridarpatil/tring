@@ -1,0 +1,19 @@
+{
+  "name": "tring-docs",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.2",
+    "astro": "7.3.3"
+  },
+  "overrides": {
+    "esbuild": "0.28.2",
+    "postcss-selector-parser": "7.1.6"
+  }
+}

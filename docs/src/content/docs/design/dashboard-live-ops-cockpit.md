@@ -1,4 +1,7 @@
-# Dashboard redesign — Live Ops cockpit
+---
+title: "Dashboard: Live Ops cockpit"
+description: "Design: a real-time operations dashboard for the admin console."
+---
 
 **Date:** 2026-06-23
 **Status:** Approved design, ready for implementation plan

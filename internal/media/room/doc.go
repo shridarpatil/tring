@@ -8,7 +8,7 @@
 // joins as an ordinary participant that publishes prompt audio and consumes the caller's
 // audio + DTMF; the phone leg (FreeSWITCH or other PSTN adapter, behind
 // Plug) joins as an Opus ParticipantSource; routing a call to a human is
-// just a membership change. See docs/ARCHITECTURE.md.
+// just a membership change. See docs/src/content/docs/architecture/overview.md.
 //
 // Milestone 1 (this package) builds the model only: the participant state
 // machine (joining → connected → reconnecting → left), the grace window that

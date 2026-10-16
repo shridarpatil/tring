@@ -7,7 +7,7 @@
 // via SFU.AddSink(room, pid, rec); it demuxes by participant id. This is the ONE
 // recorder for every call type (web / WhatsApp / phone-as-pion-leg) — the
 // orchestrator owns when to start/stop and the resulting CDR reference. See
-// docs/ARCHITECTURE.md (Phase 1).
+// docs/src/content/docs/architecture/overview.md (Phase 1).
 package record
 
 import (
