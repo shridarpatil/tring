@@ -105,6 +105,18 @@ curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
 
 The next outbound call routes through the new trunk and stamps the new DID as caller-ID. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for procurement and `<PROV>_REGISTER=true` activation.
 
+## WhatsApp calls (inbound)
+
+WhatsApp users can call your WhatsApp Business number and land in the same IVR flows and agent queues as phone calls, via Meta's [SIP calling](https://developers.facebook.com/docs/whatsapp/cloud-api/calling/sip). FreeSWITCH runs a separate, TLS-only `whatsapp` SIP profile next to the carrier trunk.
+
+1. **Hostname + cert.** Point a hostname (e.g. `wa-sip.example.com`) at the server's public IP and get a public-CA certificate for it. Put the cert chain + private key in `freeswitch/tls/whatsapp/agent.pem` (`cat fullchain.pem privkey.pem > agent.pem`) and Meta's outbound API CA certificate in `freeswitch/tls/whatsapp/cafile.pem`. Only connections presenting Meta's client certificate (`client.sip.fbclientcerts.com`) are accepted.
+2. **Enable** in `.env`: `TRING_WHATSAPP_ENABLED=true`, plus `TRING_WHATSAPP_IP` / `TRING_WHATSAPP_PUBLIC_IP` / `TRING_WHATSAPP_TLS_PORT` if the defaults don't fit (see `.env.example`). Recreate FreeSWITCH.
+3. **Firewall.** Open the TLS port (default 5061/tcp) and the RTP range only to Meta's published IP ranges.
+4. **Meta side** (`POST /<PHONE_NUMBER_ID>/settings`): enable SIP with your hostname and port, and set `"srtp_key_exchange_protocol": "SDES"`.
+5. **Number.** Add the WhatsApp number as an inbound number with its flow, written with the leading `+` (e.g. `+9122XXXXXXXX`) — Meta dials `sip:+<E.164>@<host>` and lookup is an exact match.
+
+After renewing the certificate, run `fs_cli -x "sofia profile whatsapp restart"` (the profile takes ~30 s to come back). Outbound (business-initiated) WhatsApp calls are not supported yet. A caller without a visible phone number may appear in `{{caller}}` as a WhatsApp user ID rather than a number.
+
 ## Architecture
 
 ```

@@ -354,6 +354,20 @@
   <X-PRE-PROCESS cmd="set" data="external_rtp_ip=$${tring_public_ip}"/>
   <X-PRE-PROCESS cmd="set" data="external_sip_ip=$${tring_public_ip}"/>
 
+  <!-- WhatsApp Business Calling over SIP (inbound only) — the 'whatsapp'
+       profile (sip_profiles/whatsapp/profile.xml). Off unless
+       TRING_WHATSAPP_ENABLED=true: whatsapp_profile then names the profile
+       file, otherwise a glob that matches nothing, so the profile never binds.
+       TRING_WHATSAPP_IP     IP the profile binds (default: primary interface)
+       TRING_WHATSAPP_PUBLIC_IP  IP it advertises in SIP/SDP (default:
+                             TRING_PUBLIC_IP, else the bind IP) — the
+                             elastic/NAT IP Meta reaches
+       TRING_WHATSAPP_TLS_PORT   TLS port (default 5061) -->
+  <X-PRE-PROCESS cmd="exec-set" data="whatsapp_profile=sh -c 'set -f; if [ x${TRING_WHATSAPP_ENABLED} = xtrue ]; then echo whatsapp/profile.xml; else echo whatsapp/disabled-*.xml; fi'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="whatsapp_ip=sh -c 'echo ${TRING_WHATSAPP_IP:-$${local_ip_v4}}'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="whatsapp_public_ip=sh -c 'echo ${TRING_WHATSAPP_PUBLIC_IP:-${TRING_PUBLIC_IP:-${TRING_WHATSAPP_IP:-$${local_ip_v4}}}}'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="whatsapp_tls_port=sh -c 'echo ${TRING_WHATSAPP_TLS_PORT:-5061}'"/>
+
   <!-- RTP UDP port range. Defaults match FS's compiled defaults
        (16384-32768) but can be narrowed via TRING_RTP_START_PORT /
        TRING_RTP_END_PORT in .env. Narrowing is recommended on a VPS:
