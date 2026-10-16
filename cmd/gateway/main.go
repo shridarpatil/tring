@@ -32,6 +32,7 @@ import (
 	"github.com/shridarpatil/tring/internal/media/signaling"
 	"github.com/shridarpatil/tring/internal/outboundtrunks"
 	"github.com/shridarpatil/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 func main() {
@@ -136,7 +137,11 @@ func main() {
 		// each interface-typed var from its concrete type so a nil DB leaves BOTH
 		// unset (a typed-nil stored in an interface would compare != nil and break
 		// the "Calls != nil"/"Supervisors != nil" best-effort checks downstream).
-		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub)
+		// The call log emits call.answered / call.ended webhooks: the gateway is
+		// the one process that sees each media-plane call answer and end, so
+		// each fires exactly once however many api replicas run.
+		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub).
+			WithWebhooks(webhook.New(database).WithLogger(logger))
 		calls = cdrLog
 		supervisors = cdrLog
 	}

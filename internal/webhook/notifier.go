@@ -1,6 +1,7 @@
 // Package webhook delivers tenant-registered HTTP webhooks for Tring
-// events. Both the API service (call.ringing) and the orchestrator
-// (call.answered, call.ended) use the same Notifier — events flow:
+// events. Both the API service (call.ringing, agent.status) and the gateway's
+// call log (call.answered, call.ended — internal/callcdr) use the same
+// Notifier — events flow:
 //
 //	Caller    Notifier.Emit                Background goroutine
 //	------    -------------                --------------------
