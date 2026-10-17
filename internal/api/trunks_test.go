@@ -237,3 +237,11 @@ func TestCheckCallerID(t *testing.T) {
 		t.Error("unowned caller_id accepted")
 	}
 }
+
+// The agent's leg must truly answer before the client is dialed: a carrier's
+// 183 early media (always sent by Tata) must not count as answered.
+func TestBridgeOriginateWaitsForRealAnswer(t *testing.T) {
+	if got := bridgeOriginateVars()["ignore_early_media"]; got != "true" {
+		t.Fatalf("ignore_early_media = %q, want true", got)
+	}
+}
