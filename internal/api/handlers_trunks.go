@@ -36,8 +36,10 @@ type Trunk struct {
 	UpdatedAt    time.Time       `json:"updated_at"`
 	// Live state from sofia status — populated on responses, not in DB.
 	// Values: online | offline | connecting | not_loaded | unknown.
-	Status   string `json:"status,omitempty"`
-	StateRaw string `json:"state_raw,omitempty"` // raw FS state for debugging
+	Status   string   `json:"status,omitempty"`
+	StateRaw string   `json:"state_raw,omitempty"` // raw FS state for debugging
+	RegState string   `json:"reg_state,omitempty"` // sofia registration state: REGED, NOREG, FAIL_WAIT, …
+	PingMS   *float64 `json:"ping_ms,omitempty"`   // last OPTIONS round trip; nil until a ping is answered
 }
 
 type createTrunkRequest struct {
@@ -83,25 +85,29 @@ func scanTrunk(scanner interface{ Scan(...interface{}) error }) (Trunk, error) {
 // gateway, not Tring's DB schema.
 //
 // extra_params may carry {"from_domain"} for carriers that check the From
-// host; a missing or malformed value just omits it.
+// host and {"auth_username"} for register-mode carriers whose digest user
+// differs from the registered identity (IMS); a missing or malformed value
+// just omits them.
 func trunkToGateway(t Trunk) freeswitch.Gateway {
 	var extra struct {
-		FromDomain string `json:"from_domain"`
+		FromDomain   string `json:"from_domain"`
+		AuthUsername string `json:"auth_username"`
 	}
 	if json.Unmarshal(t.ExtraParams, &extra) != nil {
-		extra.FromDomain = ""
+		extra.FromDomain, extra.AuthUsername = "", ""
 	}
 	return freeswitch.Gateway{
-		ID:          t.ID.String(),
-		Name:        freeswitch.GatewayName(t.ID),
-		Active:      t.Active,
-		Register:    t.Register,
-		Username:    t.SIPUsername,
-		Password:    t.SIPPassword,
-		Realm:       t.SIPRealm,
-		ProxyIP:     t.ProxyIP,
-		AuthACLCIDR: t.AuthACLCIDR,
-		FromDomain:  extra.FromDomain,
+		ID:           t.ID.String(),
+		Name:         freeswitch.GatewayName(t.ID),
+		Active:       t.Active,
+		Register:     t.Register,
+		Username:     t.SIPUsername,
+		AuthUsername: extra.AuthUsername,
+		Password:     t.SIPPassword,
+		Realm:        t.SIPRealm,
+		ProxyIP:      t.ProxyIP,
+		AuthACLCIDR:  t.AuthACLCIDR,
+		FromDomain:   extra.FromDomain,
 	}
 }
 
@@ -207,6 +213,11 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 		h := healths[freeswitch.GatewayName(out[i].ID)]
 		out[i].Status = freeswitch.Status(h, out[i].Register)
 		out[i].StateRaw = h.Detail()
+		out[i].RegState = h.State
+		if h.PingUp && h.PingRTT > 0 {
+			ms := h.PingRTT
+			out[i].PingMS = &ms
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

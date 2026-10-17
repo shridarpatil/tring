@@ -291,4 +291,6 @@ export interface Trunk {
   // Live state from FS (sofia status). Populated on every API response.
   status?: "online" | "offline" | "connecting" | "not_loaded" | "unknown";
   state_raw?: string;
+  reg_state?: string; // REGED, NOREG, FAIL_WAIT, …
+  ping_ms?: number; // last OPTIONS round trip (ms); absent until answered
 }
