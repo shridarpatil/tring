@@ -15,7 +15,7 @@ The `register` flag picks how the carrier authenticates you.
 
 | Mode | `register` | Fields used | Typical carrier |
 |---|---|---|---|
-| **REGISTER** | `true` | `sip_username`, `sip_password`, `sip_realm` | Aggregators that issue SIP credentials. FreeSWITCH registers to the realm and keeps the registration alive. |
+| **REGISTER** | `true` | `sip_username`, `sip_password`, `sip_realm`; optionally `proxy_ip` and `extra_params.auth_username` | Aggregators and IMS carriers that issue SIP credentials. FreeSWITCH registers and keeps the registration alive: to the realm, or to `proxy_ip` when set. |
 | **IP-authenticated** | `false` (default) | `proxy_ip`, optionally `sip_realm` | Private circuits where the carrier trusts your IP. No REGISTER, no credentials. Calls are sent to `proxy_ip`. |
 
 `auth_acl_cidr` (the carrier's SBC range, for example `198.51.100.8/29`) is stored with the trunk for reference only. It is **not** rendered into FreeSWITCH. Allowing inbound INVITEs from that range is configured separately in FreeSWITCH's ACL.
@@ -59,6 +59,7 @@ An IP-authenticated trunk with `from_domain` set:
 ```
 
 - In IP mode, `realm` is `sip_realm`, or `proxy_ip` when `sip_realm` is empty.
+- In REGISTER mode, `proxy_ip` (when set) adds `<param name="proxy">`: REGISTER and calls go to that address while `realm` stays the SIP domain. Use it when the realm isn't resolvable from your network, as with a carrier's IMS domain. `extra_params.auth_username` adds `<param name="auth-username">`.
 - `ping` makes FreeSWITCH send SIP OPTIONS every 25 seconds. That's how an IP-auth trunk's `status` is known (see below).
 - `caller-id-in-from` puts each call's caller ID (the outbound number's DID) in the `From` user, so there's no trunk-level `from-user`.
 
@@ -68,13 +69,14 @@ Both the API container (which writes) and FreeSWITCH (which reads) must mount th
 
 ## `extra_params`
 
-`extra_params` is a free-form JSON object stored with the trunk. Today Tring reads one key from it:
+`extra_params` is a free-form JSON object stored with the trunk. Tring reads these keys from it:
 
 | Key | Type | Rendered as | Use |
 |---|---|---|---|
-| `from_domain` | string | `<param name="from-domain">` | Sets the host part of `From` on calls and OPTIONS pings. Some carriers require your own circuit IP there rather than their realm. |
+| `from_domain` | string | `<param name="from-domain">` | Sets the host part of `From` on calls, OPTIONS pings and REGISTER. Some carriers require your own circuit IP there rather than their realm. |
+| `auth_username` | string | `<param name="auth-username">` | REGISTER mode: the digest username when it differs from `sip_username`. IMS carriers register a public identity (`sip_username`) but authenticate a private one (`auth_username`). |
 
-Other keys are stored and returned but ignored. A missing or malformed `from_domain` is simply left out of the XML.
+Other keys are stored and returned but ignored. A missing or malformed value is simply left out of the XML.
 
 ## The trunk object
 
@@ -88,14 +90,16 @@ Other keys are stored and returned but ignored. A missing or malformed `from_dom
 | `sip_password` | string | REGISTER mode password. Returned by create, get and update; left out of list responses. |
 | `sip_realm` | string | REGISTER realm, or the IP-mode realm override. |
 | `register` | boolean | `true` = REGISTER auth, `false` = IP auth. |
-| `proxy_ip` | string | IP mode: the carrier SBC to send calls to. |
+| `proxy_ip` | string | IP mode: the carrier SBC to send calls to. REGISTER mode (optional): the registrar/SBC to send REGISTER and calls to. |
 | `auth_acl_cidr` | string | The carrier's SBC range, stored for reference. |
 | `active` | boolean | Only active trunks are rendered to FreeSWITCH. |
 | `extra_params` | object | See above. |
 | `created_at` | timestamp | |
 | `updated_at` | timestamp | |
 | `status` | string | List responses only. Live health: `online`, `offline`, `connecting`, `not_loaded` or `unknown`. |
-| `state_raw` | string | List responses only. FreeSWITCH's raw view, for example `REGED ping=UP 0.04s` or `NOREG ping=DOWN`. Omitted when FreeSWITCH has no such gateway. |
+| `state_raw` | string | List responses only. FreeSWITCH's raw view, for example `REGED ping=UP 2.74ms` or `NOREG ping=DOWN`. Omitted when FreeSWITCH has no such gateway. |
+| `reg_state` | string | List responses only. Registration state: `REGED` (registered), `NOREG` (not registering, normal for IP auth), `TRYING`, `FAIL_WAIT`, `NOAUTH`, `EXPIRED`, … Omitted when FreeSWITCH has no such gateway. |
+| `ping_ms` | number | List responses only. Last OPTIONS round trip in milliseconds. Omitted until a ping is answered. |
 
 How `status` is worked out:
 
@@ -132,7 +136,7 @@ Create a trunk, then re-render every gateway file and rescan FreeSWITCH.
 | `sip_username` | string | REGISTER mode | |
 | `sip_password` | string | REGISTER mode | |
 | `sip_realm` | string | REGISTER mode | In IP mode, optional realm override. |
-| `proxy_ip` | string | IP mode | Carrier SBC address. |
+| `proxy_ip` | string | IP mode; optional in REGISTER mode | Carrier SBC address. In REGISTER mode, the registrar to send REGISTER and calls to. |
 | `auth_acl_cidr` | string | no | Carrier SBC range, for reference. |
 | `active` | boolean | no | Default `true`. |
 | `extra_params` | object | no | Default `{}`. See [`extra_params`](#extra_params). |
@@ -232,7 +236,9 @@ curl -sS "$TRING_URL/v1/trunks" \
     "created_at": "2026-10-16T10:02:31.220114+05:30",
     "updated_at": "2026-10-16T10:02:31.220114+05:30",
     "status": "online",
-    "state_raw": "NOREG ping=UP 0.04s"
+    "state_raw": "NOREG ping=UP 2.74ms",
+    "reg_state": "NOREG",
+    "ping_ms": 2.74
   }
 ]
 ```
