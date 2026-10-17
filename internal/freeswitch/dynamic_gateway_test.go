@@ -1,8 +1,12 @@
 package freeswitch
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestRenderGatewayFromDomain(t *testing.T) {
@@ -81,5 +85,45 @@ func TestRenderGatewayRegisterRealmDefaultsToProxy(t *testing.T) {
 	}
 	if strings.Contains(string(out), `name="realm" value=""`) {
 		t.Errorf("empty realm rendered:\n%s", out)
+	}
+}
+
+// sofia's rescan won't reload an already-loaded gateway or unload a removed
+// one, so WriteGateways must report exactly the gateways that changed or
+// went away (to killgw), and leave new/unchanged ones out.
+func TestWriteGatewaysReportsChangedAndRemoved(t *testing.T) {
+	old := GatewayDir
+	GatewayDir = t.TempDir()
+	defer func() { GatewayDir = old }()
+
+	idA, idB := uuid.New(), uuid.New()
+	a := Gateway{ID: idA.String(), Name: GatewayName(idA), ProxyIP: "198.51.100.20"}
+	b := Gateway{ID: idB.String(), Name: GatewayName(idB), Register: true, Username: "u", Password: "p", ProxyIP: "198.51.100.30"}
+
+	stale, err := WriteGateways([]Gateway{a, b})
+	if err != nil || len(stale) != 0 {
+		t.Fatalf("first write: stale=%v err=%v, want none (both new)", stale, err)
+	}
+	pathA := filepath.Join(GatewayDir, "t_"+a.ID+".xml")
+	before, _ := os.Stat(pathA)
+
+	if stale, err = WriteGateways([]Gateway{a, b}); err != nil || len(stale) != 0 {
+		t.Fatalf("rewrite unchanged: stale=%v err=%v, want none", stale, err)
+	}
+	if after, _ := os.Stat(pathA); !after.ModTime().Equal(before.ModTime()) {
+		t.Error("unchanged gateway file was rewritten")
+	}
+
+	b.Username = "u2" // edit b
+	if stale, err = WriteGateways([]Gateway{a, b}); err != nil || len(stale) != 1 || stale[0] != b.Name {
+		t.Fatalf("edit b: stale=%v err=%v, want [%s]", stale, err, b.Name)
+	}
+
+	// a deleted/deactivated: its file goes and its gateway must be unloaded
+	if stale, err = WriteGateways([]Gateway{b}); err != nil || len(stale) != 1 || stale[0] != a.Name {
+		t.Fatalf("remove a: stale=%v err=%v, want [%s]", stale, err, a.Name)
+	}
+	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
+		t.Error("removed gateway's file still present")
 	}
 }
