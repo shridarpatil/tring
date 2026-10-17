@@ -25,16 +25,17 @@ import (
 // fields needed to produce a valid <gateway> XML block, regardless of
 // whether auth is REGISTER-based or IP-based.
 type Gateway struct {
-	ID          string // raw trunk UUID for filename
-	Name        string // sofia gateway name (must be unique within profile)
-	Active      bool
-	Register    bool   // true = REGISTER auth; false = IP-auth (Tata-style)
-	Username    string // register mode
-	Password    string // register mode
-	Realm       string // register mode + IP-mode (used as both realm and the contact host)
-	ProxyIP     string // IP-auth mode: SBC IP to send to
-	AuthACLCIDR string // IP-auth mode: SBC /29 to trust inbound from (documentary; ACL is configured separately)
-	FromDomain  string // optional sofia from-domain: host part of From on calls + OPTIONS pings (empty = omit)
+	ID           string // raw trunk UUID for filename
+	Name         string // sofia gateway name (must be unique within profile)
+	Active       bool
+	Register     bool   // true = REGISTER auth; false = IP-auth (Tata-style)
+	Username     string // register mode: the identity registered (IMS IMPU user part)
+	AuthUsername string // register mode: digest auth username when it differs (IMS IMPI); "" = Username
+	Password     string // register mode
+	Realm        string // register mode + IP-mode (used as both realm and the contact host)
+	ProxyIP      string // where to send: the SBC (IP-auth), or the registrar when Realm isn't resolvable (register)
+	AuthACLCIDR  string // IP-auth mode: SBC /29 to trust inbound from (documentary; ACL is configured separately)
+	FromDomain   string // optional sofia from-domain: host part of From on calls + OPTIONS pings (empty = omit)
 }
 
 // GatewayName builds a sofia-safe gateway name from a trunk UUID. The
@@ -107,6 +108,19 @@ func renderGateway(g Gateway) ([]byte, error) {
 			xmlGatewayParam{Name: "username", Value: g.Username},
 			xmlGatewayParam{Name: "password", Value: g.Password},
 			xmlGatewayParam{Name: "realm", Value: g.Realm},
+		)
+		// IMS carriers (Tata) register an identity (IMPU) but authenticate a
+		// separate private user (IMPI).
+		if g.AuthUsername != "" {
+			params = append(params, xmlGatewayParam{Name: "auth-username", Value: g.AuthUsername})
+		}
+		// Realm is the SIP domain (e.g. a carrier's IMS domain) and is often
+		// not resolvable from the circuit; proxy sends REGISTER and calls to
+		// the SBC instead (register-proxy defaults to it).
+		if g.ProxyIP != "" {
+			params = append(params, xmlGatewayParam{Name: "proxy", Value: g.ProxyIP})
+		}
+		params = append(params,
 			xmlGatewayParam{Name: "register", Value: "true"},
 			xmlGatewayParam{Name: "expire-seconds", Value: "600"},
 			xmlGatewayParam{Name: "retry-seconds", Value: "30"},

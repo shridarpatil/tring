@@ -50,9 +50,9 @@ Inbound phone calls need the SIP plug enabled (`TRING_FSPLUG_ENABLED=true`); see
 | `provider_type` | `generic` (default), `exotel`, `airtel`, `jio` or `tata`. |
 | `register` | `true` for REGISTER (username/password) authentication, `false` for IP authentication. |
 | `sip_username`, `sip_password`, `sip_realm` | REGISTER credentials and the registrar realm. |
-| `proxy_ip` | IP authentication: the carrier's SBC address calls are sent to. |
+| `proxy_ip` | IP authentication: the carrier's SBC address calls are sent to. REGISTER (optional): the registrar to send REGISTER and calls to, when the realm isn't resolvable. |
 | `auth_acl_cidr` | IP authentication: the carrier's address range, stored for reference. |
-| `extra_params` | JSON for extra settings. Today: `{"from_domain": "<host>"}`. |
+| `extra_params` | JSON for extra settings: `from_domain` (host in `From`) and `auth_username` (REGISTER digest user, when different). |
 | `active` | Inactive trunks are not loaded into FreeSWITCH. |
 
 Saving, updating or deleting a trunk writes FreeSWITCH gateway XML and rescans the trunk profile; live calls stay up. If FreeSWITCH could not reload, the API answers `502` even though the change was saved. Retry with `POST /v1/trunks/reload`. List responses include a live `status`: `online`, `offline`, `connecting`, `not_loaded` or `unknown`. Passwords are never returned in list responses. See the [Trunks API](/tring/api-reference/trunks/).
@@ -62,10 +62,21 @@ Saving, updating or deleting a trunk writes FreeSWITCH gateway XML and rescans t
 | | REGISTER | IP authentication |
 |---|---|---|
 | Typical for | Aggregators (for example Exotel) | Direct carrier circuits (for example Tata) |
-| You set | `sip_username`, `sip_password`, `sip_realm` | `proxy_ip` (and optionally `sip_realm`, defaulting to `proxy_ip`) |
-| FreeSWITCH | Registers every 600 s, retries every 30 s | Sends calls to `proxy_ip`, no registration |
+| You set | `sip_username`, `sip_password`, `sip_realm`; optionally `proxy_ip` and `auth_username` | `proxy_ip` (and optionally `sip_realm`, defaulting to `proxy_ip`) |
+| FreeSWITCH | Registers every 600 s, retries every 30 s, to the realm or `proxy_ip` | Sends calls to `proxy_ip`, no registration |
 
 Both kinds send a SIP OPTIONS keepalive every 25 seconds, which is what drives the `online`/`offline` status for IP-authenticated trunks. Each call puts its caller-ID number in the SIP `From` user.
+
+### IMS carriers (registered trunks)
+
+IMS carriers (for example Tata's IMS core) often need a registered trunk where:
+
+- the **SIP username** is the public identity, for example `+91XXXXXXXXXX`;
+- the **realm** is their IMS domain, which usually isn't resolvable from your network;
+- the **auth username** is a separate private identity;
+- REGISTER and calls go to their **SBC IP**.
+
+Set `register: true`, `sip_username`, `sip_password`, `sip_realm` (the IMS domain), `proxy_ip` (the SBC) and `extra_params.auth_username`. The Trunks page shows the registration state under each trunk's status, for example `registered · ping 2.7 ms` or `registration failed (FAIL_WAIT)`.
 
 ### `from_domain`
 
