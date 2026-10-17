@@ -227,7 +227,7 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
           </Badge>
         </template>
         <template #cell-endpoint="{ row }">
-          {{ row.register ? `${row.sip_username}@${row.sip_realm}${row.proxy_ip ? ` via ${row.proxy_ip}` : ""}` : row.proxy_ip || "—" }}
+          {{ row.register ? `${row.sip_username}@${row.sip_realm || row.proxy_ip}${row.sip_realm && row.proxy_ip ? ` via ${row.proxy_ip}` : ""}` : row.proxy_ip || "—" }}
         </template>
         <template #cell-active="{ row }">
           <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
@@ -274,9 +274,8 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
           </div>
           <TextField
             v-model="form.sip_realm"
-            label="SIP realm / domain"
+            label="SIP realm / domain (optional — defaults to registrar/proxy IP)"
             mono
-            required
             placeholder="account.pstn.exotel.com"
           />
           <div class="grid grid-2">
