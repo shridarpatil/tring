@@ -104,10 +104,18 @@ type xmlInclude struct {
 func renderGateway(g Gateway) ([]byte, error) {
 	params := []xmlGatewayParam{}
 	if g.Register {
+		// No realm = register to the proxy as the domain too, as IP mode does
+		// and as Tata's SIP-over-AWS guide configures it (proxy + username +
+		// password, no realm). Rendering an empty realm would leave sofia
+		// without a domain for the REGISTER.
+		realm := g.Realm
+		if realm == "" {
+			realm = g.ProxyIP
+		}
 		params = append(params,
 			xmlGatewayParam{Name: "username", Value: g.Username},
 			xmlGatewayParam{Name: "password", Value: g.Password},
-			xmlGatewayParam{Name: "realm", Value: g.Realm},
+			xmlGatewayParam{Name: "realm", Value: realm},
 		)
 		// IMS carriers (Tata) register an identity (IMPU) but authenticate a
 		// separate private user (IMPI).

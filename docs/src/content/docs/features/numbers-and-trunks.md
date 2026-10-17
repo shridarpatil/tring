@@ -76,7 +76,7 @@ IMS carriers (for example Tata's IMS core) often need a registered trunk where:
 - the **auth username** is a separate private identity;
 - REGISTER and calls go to their **SBC IP**.
 
-Set `register: true`, `sip_username`, `sip_password`, `sip_realm` (the IMS domain), `proxy_ip` (the SBC) and `extra_params.auth_username`. The Trunks page shows the registration state under each trunk's status, for example `registered · ping 2.7 ms` or `registration failed (FAIL_WAIT)`.
+Set `register: true`, `sip_username`, `sip_password`, `sip_realm` (the IMS domain), `proxy_ip` (the SBC) and `extra_params.auth_username`. Some carriers register with only `proxy_ip`, `sip_username` and `sip_password`; leave `sip_realm` empty and it defaults to `proxy_ip`. Use the exact values and number format your carrier provides. The Trunks page shows the registration state under each trunk's status, for example `registered · ping 2.7 ms` or `registration failed (FAIL_WAIT)`.
 
 ### `from_domain`
 

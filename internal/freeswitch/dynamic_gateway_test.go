@@ -63,3 +63,23 @@ func TestRenderGatewayRegisterWithoutProxyUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// Tata's SIP-over-AWS guide registers with proxy + username + password and no
+// realm: the realm must fall back to the proxy, never render empty.
+func TestRenderGatewayRegisterRealmDefaultsToProxy(t *testing.T) {
+	out, err := renderGateway(Gateway{Name: "t_x", Register: true, Username: "0091XXXXXXXXXX", Password: "p", ProxyIP: "198.51.100.20:5061"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`<param name="realm" value="198.51.100.20:5061"></param>`,
+		`<param name="proxy" value="198.51.100.20:5061"></param>`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("missing %s in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(string(out), `name="realm" value=""`) {
+		t.Errorf("empty realm rendered:\n%s", out)
+	}
+}
