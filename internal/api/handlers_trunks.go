@@ -132,10 +132,11 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 		}
 		gws = append(gws, trunkToGateway(t))
 	}
-	if err := freeswitch.WriteGateways(gws); err != nil {
+	stale, err := freeswitch.WriteGateways(gws)
+	if err != nil {
 		return fmt.Errorf("write gateway xml: %w", err)
 	}
-	if err := s.fs.RescanExternalProfile(ctx); err != nil {
+	if err := s.fs.RescanExternalProfile(ctx, stale); err != nil {
 		return fmt.Errorf("freeswitch rescan: %w", err)
 	}
 	return nil

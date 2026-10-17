@@ -8,6 +8,7 @@ package freeswitch
 // reload — zero-downtime gateway updates from the admin console.
 
 import (
+	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
@@ -173,9 +174,15 @@ func renderGateway(g Gateway) ([]byte, error) {
 // stale files for trunks no longer in the input. Atomic per file: writes
 // to .tmp then renames so a partial write can't leave half-finished XML
 // for sofia to choke on.
-func WriteGateways(gws []Gateway) error {
+//
+// It returns the gateway names whose XML changed or was removed. sofia's
+// rescan only ADDS gateways — an already-loaded one is skipped ("Ignoring
+// duplicate gateway") and keeps its old settings, and a removed file never
+// unloads it — so the caller must killgw these before rescanning (see
+// RescanExternalProfile). Brand-new and unchanged gateways aren't listed.
+func WriteGateways(gws []Gateway) (stale []string, err error) {
 	if err := os.MkdirAll(GatewayDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir gateway dir: %w", err)
+		return nil, fmt.Errorf("mkdir gateway dir: %w", err)
 	}
 	want := make(map[string]bool, len(gws))
 	for _, g := range gws {
@@ -183,20 +190,27 @@ func WriteGateways(gws []Gateway) error {
 		want[filepath.Base(path)] = true
 		body, err := renderGateway(g)
 		if err != nil {
-			return fmt.Errorf("render gateway %s: %w", g.Name, err)
+			return nil, fmt.Errorf("render gateway %s: %w", g.Name, err)
+		}
+		if old, err := os.ReadFile(path); err == nil {
+			if bytes.Equal(old, body) {
+				continue // unchanged: leave the loaded gateway alone
+			}
+			stale = append(stale, g.Name)
 		}
 		tmp := path + ".tmp"
 		if err := os.WriteFile(tmp, body, 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", tmp, err)
+			return nil, fmt.Errorf("write %s: %w", tmp, err)
 		}
 		if err := os.Rename(tmp, path); err != nil {
-			return fmt.Errorf("rename %s: %w", path, err)
+			return nil, fmt.Errorf("rename %s: %w", path, err)
 		}
 	}
-	// Sweep stale files (trunks deleted or now inactive).
+	// Sweep stale files (trunks deleted or now inactive) — and report their
+	// gateways so they're unloaded, not just orphaned in sofia.
 	entries, err := os.ReadDir(GatewayDir)
 	if err != nil {
-		return nil // gateway dir is fresh; nothing to sweep
+		return stale, nil // gateway dir is fresh; nothing to sweep
 	}
 	for _, e := range entries {
 		if !strings.HasPrefix(e.Name(), "t_") || !strings.HasSuffix(e.Name(), ".xml") {
@@ -204,21 +218,36 @@ func WriteGateways(gws []Gateway) error {
 		}
 		if !want[e.Name()] {
 			_ = os.Remove(filepath.Join(GatewayDir, e.Name()))
+			if id, err := uuid.Parse(strings.TrimSuffix(strings.TrimPrefix(e.Name(), "t_"), ".xml")); err == nil {
+				stale = append(stale, GatewayName(id))
+			}
 		}
 	}
-	return nil
+	return stale, nil
 }
 
-// RescanExternalProfile tells sofia to reread the external profile's
-// gateway dir — picks up newly-written XML files and notices removed
-// ones, without restarting the profile or dropping live calls.
-func (c *Client) RescanExternalProfile(ctx context.Context) error {
+// RescanExternalProfile applies the gateway dir to sofia without restarting
+// the profile: it unloads (killgw) each gateway in stale — changed or removed
+// since the last write, per WriteGateways — then rescans, which loads new and
+// changed gateways fresh. Gateways not in stale are left running, so other
+// trunks' registrations and calls are untouched.
+func (c *Client) RescanExternalProfile(ctx context.Context, stale []string) error {
 	conn, err := eslgo.Dial(c.addr, c.password, func() {})
 	if err != nil {
 		slog.Error("freeswitch dial for rescan failed", "component", "freeswitch", "err", err)
 		return err
 	}
 	defer conn.Close()
+	for _, name := range stale {
+		// -ERR (e.g. not loaded yet) is fine: the goal is "not loaded".
+		if _, err := conn.SendCommand(ctx, command.API{
+			Command:   "sofia",
+			Arguments: "profile external killgw " + name,
+		}); err != nil {
+			slog.Error("freeswitch killgw failed", "component", "freeswitch", "gateway", name, "err", err)
+			return err
+		}
+	}
 	_, err = conn.SendCommand(ctx, command.API{
 		Command:   "sofia",
 		Arguments: "profile external rescan",
