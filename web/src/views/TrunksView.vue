@@ -37,6 +37,32 @@ const statusLabels: Record<string, string> = {
   unknown: "unknown",
 };
 
+// Registration state → plain words for the status line under the badge.
+const regLabels: Record<string, string> = {
+  REGED: "registered",
+  TRYING: "registering…",
+  REGISTER: "registering…",
+  NOREG: "not registered",
+  UNREGED: "unregistered",
+  UNREGISTER: "unregistering…",
+  FAILED: "registration failed",
+  FAIL_WAIT: "registration failed, retrying",
+  REG_FAIL: "registration failed",
+  NOAUTH: "credentials rejected",
+  EXPIRED: "registration expired",
+};
+
+// One readable line: how the trunk authenticates, its registration state
+// (register mode) and the last keepalive round trip.
+function stateLine(t: Trunk): string {
+  if (!t.reg_state) return "not loaded in FreeSWITCH";
+  const ping = t.ping_ms ? ` · ping ${t.ping_ms.toFixed(1)} ms` : " · no ping reply";
+  if (!t.register) return `IP-auth${ping}`;
+  const label = regLabels[t.reg_state];
+  const state = label ? (t.reg_state === "REGED" ? label : `${label} (${t.reg_state})`) : t.reg_state;
+  return `${state}${ping}`;
+}
+
 const { items: trunks, loading, load } = useList<Trunk>("/v1/trunks");
 const reloadingFS = ref(false);
 
@@ -63,6 +89,7 @@ const form = ref({
   proxy_ip: "",
   auth_acl_cidr: "",
   from_domain: "",
+  auth_username: "",
   active: true,
 });
 // The edited trunk's other extra_params keys, carried through save untouched.
@@ -86,6 +113,7 @@ function newTrunk() {
     proxy_ip: "",
     auth_acl_cidr: "",
     from_domain: "",
+    auth_username: "",
     active: true,
   };
   extraParams.value = {};
@@ -106,6 +134,7 @@ async function startEdit(t: Trunk) {
     proxy_ip: full.proxy_ip,
     auth_acl_cidr: full.auth_acl_cidr,
     from_domain: typeof full.extra_params?.from_domain === "string" ? full.extra_params.from_domain : "",
+    auth_username: typeof full.extra_params?.auth_username === "string" ? full.extra_params.auth_username : "",
     active: full.active,
   };
   extraParams.value = { ...(full.extra_params || {}) };
@@ -115,10 +144,12 @@ async function startEdit(t: Trunk) {
 async function save() {
   saving.value = true;
   try {
-    const { from_domain, ...fields } = form.value;
+    const { from_domain, auth_username, ...fields } = form.value;
     const extra_params = { ...extraParams.value };
-    if (from_domain.trim()) extra_params.from_domain = from_domain.trim();
-    else delete extra_params.from_domain;
+    for (const [k, v] of Object.entries({ from_domain, auth_username })) {
+      if (v.trim()) extra_params[k] = v.trim();
+      else delete extra_params[k];
+    }
     const body = { ...fields, extra_params };
     if (editing.value) {
       await api.patch<Trunk>(`/v1/trunks/${editing.value.id}`, body);
@@ -188,6 +219,7 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
               {{ statusLabels[row.status || "unknown"] || row.status }}
             </Badge>
           </span>
+          <div class="trunk-state">{{ stateLine(row) }}</div>
         </template>
         <template #cell-auth="{ row }">
           <Badge :tone="row.register ? 'accent' : 'warning'">
@@ -195,7 +227,7 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
           </Badge>
         </template>
         <template #cell-endpoint="{ row }">
-          {{ row.register ? `${row.sip_username}@${row.sip_realm}` : row.proxy_ip || "—" }}
+          {{ row.register ? `${row.sip_username}@${row.sip_realm}${row.proxy_ip ? ` via ${row.proxy_ip}` : ""}` : row.proxy_ip || "—" }}
         </template>
         <template #cell-active="{ row }">
           <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
@@ -242,10 +274,31 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
           </div>
           <TextField
             v-model="form.sip_realm"
-            label="SIP realm"
+            label="SIP realm / domain"
             mono
             required
             placeholder="account.pstn.exotel.com"
+          />
+          <div class="grid grid-2">
+            <TextField
+              v-model="form.proxy_ip"
+              label="Registrar / proxy IP (optional)"
+              mono
+              placeholder="10.0.0.42:5060"
+              hint="Where REGISTER and calls go when the realm isn't resolvable (e.g. a carrier's IMS domain)."
+            />
+            <TextField
+              v-model="form.auth_username"
+              label="Auth username (optional)"
+              mono
+              hint="Digest user if different from the SIP username (IMS: private identity)."
+            />
+          </div>
+          <TextField
+            v-model="form.from_domain"
+            label="From domain (optional)"
+            mono
+            hint="Host sent in From. Empty = SIP realm."
           />
         </template>
 
@@ -293,3 +346,12 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
     </Modal>
   </div>
 </template>
+
+<style scoped>
+.trunk-state {
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--color-ink-muted);
+  white-space: nowrap;
+}
+</style>

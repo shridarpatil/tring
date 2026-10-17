@@ -30,7 +30,7 @@ import (
 type GatewayHealth struct {
 	State   string  // registration state: REGED, NOREG, FAIL_WAIT, …
 	PingUp  bool    // sofia's OPTIONS-ping verdict (<status>UP</status>)
-	PingRTT float64 // <pingtime>; >0 only once a ping was actually answered
+	PingRTT float64 // <pingtime> in milliseconds; >0 only once a ping was actually answered
 }
 
 // GatewayHealths returns gatewayName → live health. Use Status to
@@ -98,7 +98,7 @@ func (h GatewayHealth) Detail() string {
 	if !h.PingUp {
 		return h.State + " ping=DOWN"
 	}
-	return h.State + " ping=UP " + strconv.FormatFloat(h.PingRTT, 'f', 2, 64) + "s"
+	return h.State + " ping=UP " + strconv.FormatFloat(h.PingRTT, 'f', 2, 64) + "ms"
 }
 
 // Status maps a gateway's health to one of the labels the console

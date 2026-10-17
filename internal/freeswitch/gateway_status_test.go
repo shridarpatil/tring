@@ -120,9 +120,9 @@ func TestGatewayHealthDetail(t *testing.T) {
 		want string
 	}{
 		{"absent", GatewayHealth{}, ""},
-		{"ping answered", GatewayHealth{State: "NOREG", PingUp: true, PingRTT: 0.04}, "NOREG ping=UP 0.04s"},
+		{"ping answered", GatewayHealth{State: "NOREG", PingUp: true, PingRTT: 0.04}, "NOREG ping=UP 0.04ms"},
 		{"ping unanswered", GatewayHealth{State: "NOREG", PingUp: false}, "NOREG ping=DOWN"},
-		{"registered", GatewayHealth{State: "REGED", PingUp: true, PingRTT: 0.02}, "REGED ping=UP 0.02s"},
+		{"registered", GatewayHealth{State: "REGED", PingUp: true, PingRTT: 0.02}, "REGED ping=UP 0.02ms"},
 	}
 	for _, c := range cases {
 		if got := c.h.Detail(); got != c.want {
