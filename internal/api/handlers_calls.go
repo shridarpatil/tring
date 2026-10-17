@@ -271,6 +271,7 @@ func (s *Server) originateBridge(
 		BLegs:    bLegs,
 		UUID:     fsUUID.String(),
 		CallerID: callerID, // caller ID the agent's phone sees (the DID)
+		Vars:     bridgeOriginateVars(),
 	})
 	if err != nil {
 		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
@@ -288,6 +289,16 @@ func (s *Server) originateBridge(
 
 	s.notifier.Emit(ctx, t.ID, webhook.EventCallRinging, callPayload(c))
 	return c, 0, nil
+}
+
+// bridgeOriginateVars are the originate (A-leg) variables for a two-number
+// bridge. ignore_early_media makes FreeSWITCH wait for the agent's phone to
+// really ANSWER before dialing the client: carriers like Tata answer every
+// INVITE with 183 + early media (ringback/announcements), which FS otherwise
+// treats as success — it dialed the client while the agent's phone hadn't
+// even rung.
+func bridgeOriginateVars() map[string]string {
+	return map[string]string{"ignore_early_media": "true"}
 }
 
 // buildBridgeLegs constructs the originate legs for a two-PSTN-number bridge.
