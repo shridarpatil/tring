@@ -59,7 +59,7 @@ An IP-authenticated trunk with `from_domain` set:
 ```
 
 - In IP mode, `realm` is `sip_realm`, or `proxy_ip` when `sip_realm` is empty.
-- In REGISTER mode, `proxy_ip` (when set) adds `<param name="proxy">`: REGISTER and calls go to that address while `realm` stays the SIP domain. Use it when the realm isn't resolvable from your network, as with a carrier's IMS domain. `extra_params.auth_username` adds `<param name="auth-username">`.
+- In REGISTER mode, `realm` is `sip_realm`, or `proxy_ip` when `sip_realm` is empty. `proxy_ip` (when set) adds `<param name="proxy">`: REGISTER and calls go to that address while `realm` stays the SIP domain. Use it when the realm isn't resolvable from your network, as with a carrier's IMS domain. `extra_params.auth_username` adds `<param name="auth-username">`.
 - `ping` makes FreeSWITCH send SIP OPTIONS every 25 seconds. That's how an IP-auth trunk's `status` is known (see below).
 - `caller-id-in-from` puts each call's caller ID (the outbound number's DID) in the `From` user, so there's no trunk-level `from-user`.
 
