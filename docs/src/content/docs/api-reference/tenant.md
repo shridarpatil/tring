@@ -20,6 +20,7 @@ All endpoints on this page act on the tenant the credential belongs to. They acc
 | `record_calls` | boolean | Record calls once the agent and caller are connected. Default `true`. |
 | `max_call_seconds` | integer | Maximum call duration, in seconds. Default `14400` (4 hours). Also sets how long the TURN credentials handed to browsers stay valid. |
 | `transfer_failed_message` | string | What a caller hears when a transfer finds no one available. |
+| `recording_sample_rate` | integer | Sample rate, in Hz, that call recordings are encoded at. Default `8000`. |
 
 The default `failover_causes` are `NETWORK_OUT_OF_ORDER`, `GATEWAY_DOWN`, `USER_NOT_REGISTERED`, `SUBSCRIBER_ABSENT`, `NORMAL_TEMPORARY_FAILURE`, `RECOVERY_ON_TIMER_EXPIRE` and `NO_ROUTE_DESTINATION`.
 
@@ -54,7 +55,8 @@ curl -sS "$TRING_URL/v1/tenants/me" \
   "hold_music": "",
   "record_calls": true,
   "max_call_seconds": 14400,
-  "transfer_failed_message": "Sorry, no one is available to take your call right now. Please try again later."
+  "transfer_failed_message": "Sorry, no one is available to take your call right now. Please try again later.",
+  "recording_sample_rate": 8000
 }
 ```
 
@@ -76,6 +78,7 @@ Update one or more tenant settings. Fields you leave out keep their current valu
 | `record_calls` | boolean | no | Turn call recording on or off. |
 | `max_call_seconds` | integer | no | Maximum call duration in seconds, from `60` to `86400` (1 minute to 24 hours). |
 | `transfer_failed_message` | string | no | Text played when a transfer finds no one available. It's turned into speech when you save it. Sending `""` makes that moment silent. |
+| `recording_sample_rate` | integer | no | Recording sample rate in Hz: `8000`, `12000`, `16000`, `24000` or `48000`. Applies to calls that start after the change. |
 
 ```bash
 curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
@@ -96,7 +99,8 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 | Status | `error` |
 |---|---|
 | `400` | `invalid JSON body` |
-| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds or transfer_failed_message is required` |
+| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message or recording_sample_rate is required` |
+| `400` | `recording_sample_rate must be one of 8000, 12000, 16000, 24000, 48000` |
 | `400` | `max_call_seconds must be between 60 and 86400 (1 min–24 h)` |
 | `400` | `outbound_strategy must be failover\|round_robin\|manual\|load_based` |
 | `500` | `update failed: …` |

@@ -79,9 +79,6 @@ type Config struct {
 	// RecordingsDir is the shared-mount path the gateway writes call recordings
 	// to and the API serves them from. See handleGetCallRecording.
 	RecordingsDir string
-	// RecordingsFormat is the recording file extension (no dot) — "ogg"/"mp3"/
-	// "wav" — used to locate the local spool file. Empty defaults to "wav".
-	RecordingsFormat string
 	// Blob is the optional S3 store recordings are streamed from when uploaded.
 	Blob *blobstore.Store
 
@@ -139,8 +136,6 @@ type Server struct {
 	// recordingsDir: where FreeSWITCH writes call recordings; the API reads them
 	// back from the same shared-mount path to serve. See handleGetCallRecording.
 	recordingsDir string
-	// recordingsFormat: file extension (no dot) of the local spool — "ogg"/"mp3"/"wav".
-	recordingsFormat string
 	// blob: optional S3 store. When a call's recording lives in S3, the serve
 	// endpoint streams it from here instead of the local dir. nil = local only.
 	blob *blobstore.Store
@@ -205,7 +200,6 @@ func NewServer(cfg Config) *Server {
 		tts:              cfg.TTS,
 		audioDir:         cfg.AudioDir,
 		recordingsDir:    cfg.RecordingsDir,
-		recordingsFormat: cfg.RecordingsFormat,
 		blob:             cfg.Blob,
 		iceServers:       buildICEServers(cfg),
 		turnURL:          cfg.TURNURL,

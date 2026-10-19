@@ -124,19 +124,6 @@ var defaults = map[string]any{
 	// recording). A shared mount, like audio_dir; FreeSWITCH no longer writes
 	// recordings.
 	"recordings_dir": "/var/lib/tring/recordings",
-	// record_sample_rate: the recording sample rate (Hz). The gateway leg is
-	// Opus@48k, so without this FreeSWITCH records at the session-native 48kHz —
-	// a stereo 16-bit WAV is then ~192KB/s (~31MB for under 3 min). 8000
-	// (telephony narrowband) cuts that 6x with no audible loss for voice; bump
-	// to 16000 for wideband. 0 = leave at session rate.
-	"record_sample_rate": 8000,
-	// record_format: the recording file format / extension, which selects the
-	// FreeSWITCH file handler. "ogg" (mod_sndfile → Ogg Vorbis) records
-	// compressed stereo directly — ~25x smaller than WAV, both channels kept,
-	// no extra module. "mp3" (mod_shout) is similar size with universal browser
-	// playback (Safari/iOS can't play Ogg Vorbis). "wav" is the uncompressed
-	// fallback. True Opus needs mod_opusfile baked into the image (not present).
-	"record_format": "ogg",
 
 	// Text-to-speech (local Piper). On flow save, the API synthesizes IVR node
 	// prompt text (with no uploaded audio) to 48 kHz mono Opus-Ogg (piper + the

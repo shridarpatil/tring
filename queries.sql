@@ -145,21 +145,23 @@ SET outbound_strategy       = COALESCE($1, outbound_strategy),
     record_calls            = COALESCE($5, record_calls),
     max_call_seconds        = COALESCE($6, max_call_seconds),
     transfer_failed_message = COALESCE($7, transfer_failed_message),
-    transfer_failed_audio   = COALESCE($8, transfer_failed_audio)
+    transfer_failed_audio   = COALESCE($8, transfer_failed_audio),
+    recording_sample_rate   = COALESCE($9, recording_sample_rate)
 WHERE id = $3
-RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message;
+RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate;
 
 -- name: get-tenant-settings
 -- Tenant-level settings the Settings page reads (not carried in the auth context).
-SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message FROM tenants WHERE id = $1;
+SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate FROM tenants WHERE id = $1;
 
 -- name: get-tenant-max-call-seconds
 -- Tenant's max call duration — the ephemeral TURN credential lifetime basis.
 SELECT max_call_seconds FROM tenants WHERE id = $1;
 
 -- name: get-tenant-record-calls
--- Whether the orchestrator should record a connected call for this tenant.
-SELECT record_calls FROM tenants WHERE id = $1;
+-- Whether the orchestrator should record a connected call for this tenant, and
+-- the sample rate (Hz) the finished recording is encoded at.
+SELECT record_calls, recording_sample_rate FROM tenants WHERE id = $1;
 
 -- name: set-call-recording
 -- Mark a call as recording: point recording_url at the authenticated serve
