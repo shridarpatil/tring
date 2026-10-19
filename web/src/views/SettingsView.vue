@@ -18,6 +18,15 @@ const strategyOptions = strategies.map((s) => ({ value: s, label: s }));
 const holdMusic = ref("");
 // Record a call once the agent and client connect.
 const recordCalls = ref(true);
+// Sample rate (Hz) the recording is encoded at; a string because <Select> emits one.
+const recordingSampleRate = ref("8000");
+const sampleRateOptions = [
+  { value: "8000", label: "8 kHz (phone quality, smallest files)" },
+  { value: "12000", label: "12 kHz" },
+  { value: "16000", label: "16 kHz (wideband)" },
+  { value: "24000", label: "24 kHz" },
+  { value: "48000", label: "48 kHz (full quality, largest files)" },
+];
 // Max call duration in MINUTES (UI); stored as seconds on the tenant.
 const maxCallMinutes = ref(240);
 // Played to the caller when a blind transfer finds no one available.
@@ -42,6 +51,7 @@ async function load() {
     strategy.value = tenant.value.outbound_strategy || "failover";
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
+    recordingSampleRate.value = String(tenant.value.recording_sample_rate ?? 8000);
     maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
     transferFailedMessage.value = tenant.value.transfer_failed_message || "";
   } catch (e) {
@@ -69,11 +79,13 @@ async function save() {
       outbound_strategy: strategy.value,
       hold_music: holdMusic.value,
       record_calls: recordCalls.value,
+      recording_sample_rate: Number(recordingSampleRate.value),
       max_call_seconds: Math.round(maxCallMinutes.value * 60),
       transfer_failed_message: transferFailedMessage.value,
     });
     holdMusic.value = tenant.value.hold_music || "";
     recordCalls.value = tenant.value.record_calls ?? true;
+    recordingSampleRate.value = String(tenant.value.recording_sample_rate ?? 8000);
     maxCallMinutes.value = Math.round((tenant.value.max_call_seconds ?? 14400) / 60);
     transferFailedMessage.value = tenant.value.transfer_failed_message || "";
     toast.success("Saved");
@@ -150,6 +162,18 @@ onMounted(load);
         <p class="text-lighter" style="margin-top: 0.5rem">
           Record each call once the agent and caller connect. Recordings appear in the
           <strong>Calls</strong> log. Make sure recording is permitted and disclosed where you operate.
+        </p>
+      </div>
+
+      <div>
+        <Select
+          v-model="recordingSampleRate"
+          label="Recording quality"
+          :options="sampleRateOptions"
+        />
+        <p class="text-lighter" style="margin-top: 0.5rem">
+          Sample rate of the saved recording. Phone calls carry 8 kHz audio, so higher rates only
+          help browser and WhatsApp calls. Applies to calls that start after you save.
         </p>
       </div>
 

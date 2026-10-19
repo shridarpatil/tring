@@ -21,6 +21,7 @@ How it works:
 - The setting is read when a call **starts**; changing it does not affect calls in progress.
 - Capture begins when an **agent answers** (or the number dialed by an IVR transfer answers). The IVR, ringing and queue time are not recorded, so a call nobody answered has no recording.
 - Each leg is captured as-is (Opus, no re-encoding) during the call. At hangup the legs are merged into **one stereo Ogg/Opus file: agent on the left channel, customer on the right**. If a call was transferred between agents, every agent leg is placed on the left channel at the moment it joined.
+- The final file is encoded at the tenant's **recording sample rate**: **Settings → Recording quality** in the console, or `recording_sample_rate` (Hz) on `PATCH /v1/tenants/me`. The default is 8 kHz, which is all a phone call carries; 16 kHz or higher only helps browser and WhatsApp calls, and makes files bigger. Allowed values: `8000`, `12000`, `16000`, `24000`, `48000`. Like the on/off setting, it is read when a call starts.
 - Merging needs `ffmpeg` on the gateway host (it ships in the images).
 - The file is named after the call's `leg_id` and written to `TRING_RECORDINGS_DIR`. When `TRING_S3_BUCKET` is set, it is uploaded to `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.ogg` and the local copy is deleted.
 

@@ -35,6 +35,9 @@ type Tenant struct {
 	// TransferFailedMessage is the copy played to a caller when a blind transfer
 	// finds no one available. Populated only by the tenant settings handlers.
 	TransferFailedMessage string `json:"transfer_failed_message"`
+	// RecordingSampleRate is the sample rate (Hz) the finished call recording is
+	// encoded at. Populated only by the tenant settings handlers.
+	RecordingSampleRate int `json:"recording_sample_rate"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API
