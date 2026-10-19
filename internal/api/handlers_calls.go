@@ -523,26 +523,20 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	// Two static queries instead of string-building: the status filter just
-	// swaps which named queries (and arg sets) we use. Positional args follow
-	// the query text: list-calls is ($1 tenant, $2 limit, $3 offset);
-	// list-calls-by-status is ($1 tenant, $2 limit, $3 status, $4 offset).
-	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID}
-	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset}
-	if status != "" {
-		countQuery, countArgs = s.q.CountCallsByStatus, []interface{}{t.ID, status}
-		listQuery, listArgs = s.q.ListCallsByStatus, []interface{}{t.ID, limit, status, offset}
-	}
+	// One parameterised query pair for every filter combination ('' = off).
+	idPrefix, digits := callSearch(r.URL.Query().Get("q"))
+	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID, status, idPrefix, digits}
+	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset, status, idPrefix, digits}
 
 	var total int
 	if err := s.db.Pool.QueryRow(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
-		writeError(w, http.StatusInternalServerError, "count failed: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "count failed")
 		return
 	}
 
 	rows, err := s.db.Pool.Query(r.Context(), listQuery, listArgs...)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query failed: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
 	defer rows.Close()
@@ -557,6 +551,36 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		out = append(out, c)
 	}
 	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
+}
+
+// callSearch splits the call-log search box into phone digits or a call-id
+// prefix. Input made only of phone characters (digits, space, + - ( ) .) is a
+// number: formatting is stripped and a national leading 0 dropped, so
+// "09741…", "+91 97410-…" and "9741…" all match a stored "+91…"/"91…".
+// Anything else is a call id (calls.id or the leg id), matched as a prefix
+// so a shortened id works.
+func callSearch(q string) (idPrefix, digits string) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return "", ""
+	}
+	if strings.Trim(q, "0123456789 +-().") != "" {
+		// Keep only id characters: no LIKE wildcards (% _) from the user.
+		var id strings.Builder
+		for _, r := range strings.ToLower(q) {
+			if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || r == '-' {
+				id.WriteRune(r)
+			}
+		}
+		return id.String(), ""
+	}
+	var b strings.Builder
+	for _, r := range q {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return "", strings.TrimLeft(b.String(), "0")
 }
 
 // checkCallerID accepts an empty caller ID (use the trunk's DID) or one of the

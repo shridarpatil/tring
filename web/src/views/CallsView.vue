@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
@@ -11,7 +12,16 @@ import { Button, Select, Badge, Modal, TextField, Pagination, CallDetailModal, C
 import { toCallDetail, toFullLog } from "../lib/callDetail";
 
 const statusFilter = ref("");
-const params = computed(() => ({ status: statusFilter.value }));
+// Search box: a call id (or its first characters) or a phone number in any
+// format. Debounced so typing doesn't fire a request per keystroke.
+const search = ref("");
+const searchQuery = ref("");
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+watch(search, (v) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => (searchQuery.value = v.trim()), 300);
+});
+const params = computed(() => ({ status: statusFilter.value, q: searchQuery.value }));
 const {
   items: calls,
   page,
@@ -60,11 +70,51 @@ const detailCall = ref<Call | null>(null);
 const detailOpen = ref(false);
 const fullLogOpen = ref(false);
 
+// The URL drives the popups so every call has a shareable link:
+// /calls/<id> = summary, /calls/<id>?view=log = full log, /calls = list only.
+const route = useRoute();
+const router = useRouter();
+
 function openDetail(c: Call) {
-  detailCall.value = c;
-  if (events.value[c.id] === undefined) loadEvents(c.id);
-  detailOpen.value = true;
+  detailCall.value = c; // already loaded: the watcher won't refetch it
+  router.push({ name: "calls", params: { id: c.id } });
 }
+function closeCall() {
+  router.replace({ name: "calls" });
+}
+function showFullLog() {
+  router.replace({ name: "calls", params: { id: detailCall.value?.id }, query: { view: "log" } });
+}
+function showSummary() {
+  router.replace({ name: "calls", params: { id: detailCall.value?.id } });
+}
+
+watch(
+  () => [route.params.id, route.query.view] as const,
+  async ([rawId, view]) => {
+    const id = typeof rawId === "string" ? rawId : "";
+    if (!id) {
+      detailOpen.value = false;
+      fullLogOpen.value = false;
+      return;
+    }
+    if (detailCall.value?.id !== id) {
+      // Opened from a link: the call may not be on the current list page.
+      const listed = calls.value.find((c) => c.id === id);
+      try {
+        detailCall.value = listed ?? (await api.get<Call>(`/v1/calls/${id}`));
+      } catch (e) {
+        toast.error(errMessage(e, "call not found"));
+        router.replace({ name: "calls" });
+        return;
+      }
+    }
+    if (events.value[id] === undefined) loadEvents(id);
+    fullLogOpen.value = view === "log";
+    detailOpen.value = view !== "log";
+  },
+  { immediate: true },
+);
 
 const detailProp = computed(() =>
   detailCall.value && events.value[detailCall.value.id] !== undefined
@@ -116,6 +166,13 @@ function fmt(d?: string) {
     </div>
 
     <div class="hstack">
+      <TextField
+        v-model="search"
+        type="search"
+        placeholder="Search call ID or phone number"
+        aria-label="Search calls by call ID or phone number"
+        style="min-width: 18rem"
+      />
       <span class="text-light">Status</span>
       <Select v-model="statusFilter" :options="statusOptions" />
     </div>
@@ -227,16 +284,16 @@ function fmt(d?: string) {
     <CallDetailModal
       :open="detailOpen"
       :call="detailProp"
-      @update:open="detailOpen = $event"
-      @view-full-log="detailOpen = false; fullLogOpen = true"
+      @update:open="(v) => { if (!v) closeCall(); }"
+      @view-full-log="showFullLog"
     />
     <CallFullLogModal
       :open="fullLogOpen"
       :rows="fullLogRows"
       :caller="detailCall?.client_ref || detailCall?.from_number || ''"
       :callee="detailCall?.to_number || ''"
-      @update:open="fullLogOpen = $event"
-      @back="fullLogOpen = false; detailOpen = true"
+      @update:open="(v) => { if (!v) closeCall(); }"
+      @back="showSummary"
     />
   </div>
 </template>
