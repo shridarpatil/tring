@@ -109,8 +109,12 @@ export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
   const startAt = started?.at ?? call.started_at;
   const firstRing = evs.find((e) => e.type === "ring");
 
-  // breakdown: IVR window before first ring; ring = Σ each ring→(answer|no_answer) gap.
-  const ivrSec = firstRing ? secsBetween(startAt, firstRing.at) : 0;
+  // breakdown: ring = Σ each ring→(answer|no_answer|end) gap. Once someone
+  // answered: IVR = start→first ring, talk = the rest. Never answered (IVR-only,
+  // or every agent missed): no talk; everything outside ringing is IVR/queue.
+  const durationSec = Math.round(call.duration_seconds ?? 0);
+  const ended = evs.find((e) => e.type === "ended");
+  const endAt = ended?.at ?? new Date(new Date(startAt).getTime() + durationSec * 1000).toISOString();
   let ringSec = 0;
   let pending: CallEvent | null = null;
   for (const e of evs) {
@@ -120,8 +124,14 @@ export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
       pending = null;
     }
   }
-  const durationSec = Math.round(call.duration_seconds ?? 0);
-  const talkSec = Math.max(0, durationSec - ringSec - ivrSec);
+  if (pending) ringSec += secsBetween(pending.at, endAt); // caller hung up while ringing
+  // Outbound rows are only created once the callee picks up (the carrier
+  // originate blocks until answer), so the whole call is talk.
+  const answered = call.direction === "outbound" || !!call.answered_at || evs.some((e) => e.type === "answered");
+  const ivrSec = answered
+    ? firstRing ? secsBetween(startAt, firstRing.at) : 0
+    : Math.max(0, durationSec - ringSec);
+  const talkSec = answered ? Math.max(0, durationSec - ringSec - ivrSec) : 0;
 
   // stats
   const failedIvr = failedIvrTransfers(ivr);
