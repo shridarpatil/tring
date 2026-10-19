@@ -326,7 +326,9 @@ onMounted(load);
 
 <style scoped>
 .settings {
+  width: 100%;
   max-width: 56rem;
+  margin-inline: auto;
   padding-bottom: 5rem; /* room for the save bar */
 }
 
