@@ -38,6 +38,9 @@ type Tenant struct {
 	// RecordingSampleRate is the sample rate (Hz) the finished call recording is
 	// encoded at. Populated only by the tenant settings handlers.
 	RecordingSampleRate int `json:"recording_sample_rate"`
+	// RecordingFormat is the finished recording's format: ogg, mp3 or wav.
+	// Populated only by the tenant settings handlers.
+	RecordingFormat string `json:"recording_format"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API

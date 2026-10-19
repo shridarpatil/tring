@@ -135,7 +135,7 @@ Recording and its sample rate are per-tenant settings (see [Recording and call l
 | `TRING_S3_REGION` | empty | Bucket region. |
 | `TRING_S3_ENDPOINT` | empty | Empty for AWS S3. Set to your host for an S3-compatible store (MinIO, Cloudflare R2). |
 | `TRING_S3_ACCESS_KEY` / `TRING_S3_SECRET_KEY` | empty | Static credentials. Leave **both** empty on AWS to use the instance's IAM role. |
-| `TRING_S3_PREFIX` | `recordings` | Key prefix. Objects are stored as `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.ogg`. |
+| `TRING_S3_PREFIX` | `recordings` | Key prefix. Objects are stored as `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>`. |
 | `TRING_S3_USE_SSL` | `true` | Use HTTPS to the S3 endpoint. Keep `true`. |
 
 :::tip[Least privilege for S3]
