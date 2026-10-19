@@ -16,7 +16,6 @@ package callcdr
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -61,6 +60,7 @@ type activeCall struct {
 	callerPID  room.ParticipantID
 	rec        *record.Recorder // nil = tenant doesn't record
 	recRate    int              // tenant's recording sample rate (Hz), read at call start
+	recFormat  string           // tenant's recording format (record.Formats), read at call start
 	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
 	ringAgents []string         // agents rung in the current window — names the no_answer event
 }
@@ -192,7 +192,7 @@ func (l *Log) StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, fro
 func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, roomID, from, to, source, direction, legID string, callerPID room.ParticipantID) room.TrackSink {
 	ac := &activeCall{id: callID, legID: legID, tenant: tenant, startedAt: time.Now(), callerPID: callerPID}
 	var recordOn bool
-	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&recordOn, &ac.recRate); err != nil {
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&recordOn, &ac.recRate, &ac.recFormat); err != nil {
 		l.log.Warn("cdr: record policy read failed", "err", err)
 	}
 	if recordOn {
@@ -616,9 +616,14 @@ func (l *Log) timelineEvent(tenant, callID uuid.UUID, typ string, detail map[str
 	}
 }
 
+// recordingMIME is the Content-Type of each served recording format.
+var recordingMIME = map[string]string{".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".wav": "audio/wav"}
+
 // finalizeRecording closes the per-leg captures and produces the single served
-// file <dir>/<legID>.ogg: agent-left/customer-right stereo when both legs exist,
-// or the customer's leg as-is for an IVR-only call. Uploads to S3 when enabled.
+// file <dir>/<legID>.<format>: agent-left/customer-right stereo when both legs
+// exist, or the customer's leg alone for an IVR-only call, in the tenant's
+// format and sample rate. If ffmpeg fails, the customer's capture is kept as
+// <legID>.ogg. Uploads to S3 when enabled.
 func (l *Log) finalizeRecording(ac *activeCall) {
 	_ = ac.rec.Close()
 	tracks := ac.rec.Tracks()
@@ -639,16 +644,22 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 	// Earliest-answering agent first, so the offsets read left-to-right on the timeline.
 	sort.Slice(agents, func(i, j int) bool { return agents[i].Delay < agents[j].Delay })
 
-	out := filepath.Join(l.dir, ac.legID+".ogg")
+	out := filepath.Join(l.dir, ac.legID+"."+ac.recFormat)
+	// keepCapture is the fallback when ffmpeg fails: the customer's capture,
+	// which is Ogg/Opus whatever the tenant's format.
+	keepCapture := func() error {
+		out = filepath.Join(l.dir, ac.legID+".ogg")
+		return os.Rename(customer, out)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	switch {
 	case len(agents) == 0:
-		// IVR-only call: the caller's leg IS the recording, re-encoded at the
-		// tenant's sample rate (kept as captured if ffmpeg fails).
+		// IVR-only call: the caller's leg IS the recording, re-encoded in the
+		// tenant's format and sample rate (kept as captured if ffmpeg fails).
 		if err := record.Encode(ctx, out, customer, ac.recRate); err != nil {
 			l.log.Error("cdr: recording encode failed, keeping capture", "err", err)
-			if err := os.Rename(customer, out); err != nil {
+			if err := keepCapture(); err != nil {
 				l.log.Error("cdr: recording finalize failed", "err", err)
 				return
 			}
@@ -666,7 +677,7 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 		}
 		if mergeErr != nil {
 			l.log.Error("cdr: stereo merge failed, keeping customer leg", "err", mergeErr, "agents", len(agents))
-			if err := os.Rename(customer, out); err != nil {
+			if err := keepCapture(); err != nil {
 				l.log.Error("cdr: recording finalize failed", "err", err)
 				return
 			}
@@ -685,8 +696,8 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 	}
 
 	if l.blob.Enabled() {
-		key := l.blob.Key(ac.tenant.String(), ac.startedAt, ac.legID+".ogg")
-		if err := l.blob.PutFile(ctx, key, out, "audio/ogg"); err != nil {
+		key := l.blob.Key(ac.tenant.String(), ac.startedAt, filepath.Base(out))
+		if err := l.blob.PutFile(ctx, key, out, recordingMIME[filepath.Ext(out)]); err != nil {
 			l.log.Error("cdr: s3 upload failed, recording stays local", "err", err)
 		} else {
 			if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecordingS3, ac.legID, key); err != nil {
@@ -696,5 +707,5 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 			}
 		}
 	}
-	l.log.Info("cdr: recording finalized", "call", ac.id, "file", fmt.Sprintf("%s.ogg", ac.legID))
+	l.log.Info("cdr: recording finalized", "call", ac.id, "file", filepath.Base(out))
 }

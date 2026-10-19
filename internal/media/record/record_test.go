@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +271,44 @@ func TestRecordingSampleRate(t *testing.T) {
 				t.Errorf("%s: 6 kHz tone audible=%v (rms=%.0f), want %v", filepath.Base(out), got, rms(left), tc.audible)
 			}
 		}
+	}
+}
+
+// TestRecordingFormats guards the tenant's recording format: the output file's
+// extension picks the codec (ogg → Opus, mp3, wav → 16-bit PCM), always at the
+// requested sample rate. Opus also gets a rate-matched bitrate, so 8 kHz is
+// actually small (libopus alone would spend ~96 kbps at any rate).
+func TestRecordingFormats(t *testing.T) {
+	for _, bin := range []string{"ffmpeg", "ffprobe"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skip(bin + " not installed")
+		}
+	}
+	dir := t.TempDir()
+	tone := filepath.Join(dir, "tone.ogg")
+	genToneDur(t, tone, 440, 10)
+
+	for _, tc := range []struct{ ext, codec, rate string }{
+		{"ogg", "opus", "48000"}, // Opus always decodes at 48 kHz; the encoder still band-limits
+		{"mp3", "mp3", "8000"},
+		{"wav", "pcm_s16le", "8000"},
+	} {
+		out := filepath.Join(dir, "rec."+tc.ext)
+		if err := record.MergeStereo(context.Background(), out, tone, tone, 8000); err != nil {
+			t.Fatalf("%s: merge: %v", tc.ext, err)
+		}
+		b, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "stream=codec_name,sample_rate,channels",
+			"-of", "csv=p=0", out).Output()
+		if err != nil {
+			t.Fatalf("%s: ffprobe: %v", tc.ext, err)
+		}
+		if got, want := strings.TrimSpace(string(b)), tc.codec+","+tc.rate+",2"; got != want {
+			t.Errorf("%s: codec,rate,channels = %q, want %q", tc.ext, got, want)
+		}
+	}
+	// 10 s of stereo Opus at 24 kbps is ~30 KB; at libopus's default it'd be ~110 KB.
+	if fi, err := os.Stat(filepath.Join(dir, "rec.ogg")); err != nil || fi.Size() > 60_000 {
+		t.Errorf("8 kHz ogg is %d bytes, want < 60000 (bitrate not scaled to the rate?)", fi.Size())
 	}
 }
 

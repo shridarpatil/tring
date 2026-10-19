@@ -29,7 +29,7 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// the auth context (hold music, record toggle) so the Settings page sees the
 	// current selection.
 	t := *tenantFromCtx(r.Context())
-	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate)
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -470,11 +470,19 @@ type patchTenantRequest struct {
 	// RecordingSampleRate sets the recording's sample rate in Hz (one of
 	// recordingSampleRates). nil = unchanged.
 	RecordingSampleRate *int `json:"recording_sample_rate,omitempty"`
+	// RecordingFormat sets the recording format (one of recordingFormats).
+	// nil = unchanged.
+	RecordingFormat *string `json:"recording_format,omitempty"`
 }
 
 // recordingSampleRates are the rates libopus can encode at (the recording is
 // Ogg/Opus); the tenants table CHECK constraint holds the same list.
 var recordingSampleRates = []int{8000, 12000, 16000, 24000, 48000}
+
+// recordingFormats mirrors record.Formats (the gateway's encoder), kept here so
+// the api binary doesn't pull in the media plane; the tenants table CHECK
+// constraint holds the same list.
+var recordingFormats = []string{"ogg", "mp3", "wav"}
 
 // handlePatchMyTenant updates tenant-level settings. Today: outbound
 // trunk strategy and the cause list that triggers fail-over.
@@ -485,12 +493,16 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message or recording_sample_rate is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil && req.RecordingFormat == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate or recording_format is required")
 		return
 	}
 	if req.RecordingSampleRate != nil && !slices.Contains(recordingSampleRates, *req.RecordingSampleRate) {
 		writeError(w, http.StatusBadRequest, "recording_sample_rate must be one of 8000, 12000, 16000, 24000, 48000")
+		return
+	}
+	if req.RecordingFormat != nil && !slices.Contains(recordingFormats, *req.RecordingFormat) {
+		writeError(w, http.StatusBadRequest, "recording_format must be one of ogg, mp3, wav")
 		return
 	}
 	if req.MaxCallSeconds != nil && (*req.MaxCallSeconds < 60 || *req.MaxCallSeconds > 86400) {
@@ -540,8 +552,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
 		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
-		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate)
+		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
 		return
