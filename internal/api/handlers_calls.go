@@ -456,14 +456,17 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Local spool fallback (S3 disabled, or not yet uploaded). The gateway always
-	// writes <leg_id>.ogg (internal/callcdr); http.ServeFile sets Content-Type.
-	path := filepath.Join(s.recordingsDir, fsUUID+".ogg")
-	if _, err := os.Stat(path); err != nil {
-		writeError(w, http.StatusNotFound, "recording not available")
-		return
+	// Local spool fallback (S3 disabled, or not yet uploaded). The gateway writes
+	// <leg_id>.<format> in the tenant's format at the time of the call
+	// (internal/callcdr), so look for each; http.ServeFile sets Content-Type.
+	for _, format := range recordingFormats {
+		path := filepath.Join(s.recordingsDir, fsUUID+"."+format)
+		if _, err := os.Stat(path); err == nil {
+			http.ServeFile(w, r, path)
+			return
+		}
 	}
-	http.ServeFile(w, r, path)
+	writeError(w, http.StatusNotFound, "recording not available")
 }
 
 // activeCallsList returns in-progress calls (ringing/answered) for a tenant,

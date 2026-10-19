@@ -26,6 +26,8 @@ export interface Tenant {
   transfer_failed_message?: string;
   // Sample rate (Hz) call recordings are encoded at: 8000/12000/16000/24000/48000.
   recording_sample_rate?: number;
+  // Format of call recordings: ogg (default), mp3 or wav.
+  recording_format?: string;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.
