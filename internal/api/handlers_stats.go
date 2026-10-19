@@ -26,7 +26,7 @@ type statsOverview struct {
 	AbandonedToday int               `json:"abandoned_today"`  // callers who hung up while waiting
 	FailedToday    int               `json:"failed_today"`     // calls that errored before connecting
 	AvgWaitSeconds int               `json:"avg_wait_seconds"` // time-to-answer (start→connect) of answered calls
-	AvgTalkSeconds int               `json:"avg_talk_seconds"` // average completed-call duration
+	AvgTalkSeconds int               `json:"avg_talk_seconds"` // average answer→end time of answered calls
 	Hourly         []statsHourBucket `json:"hourly"`           // always 12 buckets, oldest→newest
 }
 
