@@ -227,7 +227,7 @@ onMounted(load);
           </div>
           <Toggle v-model="form.recordCalls" :label="form.recordCalls ? 'On' : 'Off'" />
         </div>
-        <div class="srow" :class="{ off: !form.recordCalls }">
+        <div class="srow stacked" :class="{ off: !form.recordCalls }">
           <div>
             <div class="srow-label">Format</div>
             <p class="srow-desc">File type of the saved recording.</p>
@@ -262,11 +262,11 @@ onMounted(load);
             <p>How outgoing calls pick a trunk when you have more than one.</p>
           </div>
         </header>
-        <div class="srow">
+        <div class="srow stacked">
           <div>
             <div class="srow-label">Trunk strategy</div>
           </div>
-          <div class="choices choices-2" role="radiogroup" aria-label="Outbound trunk strategy">
+          <div class="choices choices-4" role="radiogroup" aria-label="Outbound trunk strategy">
             <label
               v-for="s in strategies"
               :key="s.value"
@@ -372,6 +372,11 @@ onMounted(load);
   align-items: start;
   padding: 1.125rem 1.5rem;
 }
+.srow.stacked {
+  /* Choice cards need the width: label above, cards below. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
 .srow + .srow {
   border-top: 1px solid var(--border);
 }
@@ -432,6 +437,14 @@ textarea {
 }
 .choices-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.choices-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .choices-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .choice {
   position: relative;
@@ -514,7 +527,8 @@ textarea {
     padding: 1rem;
   }
   .choices-2,
-  .choices-3 {
+  .choices-3,
+  .choices-4 {
     grid-template-columns: minmax(0, 1fr);
   }
 }
