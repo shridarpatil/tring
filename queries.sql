@@ -233,6 +233,9 @@ WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
 --   failed = status 'failed' (originate/connect error before the call got going).
 --   wait = time-to-answer (started_at→answered_at); not pure queue time (we don't
 --     persist a per-caller enqueue timestamp).
+--   talk = answer→end, over calls someone answered. IVR-only and unanswered
+--     calls have no talk time. Outbound rows only exist once the callee picks
+--     up, so they count from started_at.
 SELECT
   count(*),
   count(*) FILTER (WHERE answered_at IS NOT NULL),
@@ -240,7 +243,8 @@ SELECT
                      AND ivr_path @> '[{"node_type":"transfer"}]'),
   count(*) FILTER (WHERE status = 'failed'),
   COALESCE(avg(EXTRACT(EPOCH FROM (answered_at - started_at))) FILTER (WHERE answered_at IS NOT NULL), 0)::float8,
-  COALESCE(avg(duration_seconds) FILTER (WHERE duration_seconds IS NOT NULL), 0)::float8
+  COALESCE(avg(EXTRACT(EPOCH FROM (ended_at - COALESCE(answered_at, started_at))))
+             FILTER (WHERE ended_at IS NOT NULL AND (answered_at IS NOT NULL OR direction = 'outbound')), 0)::float8
 FROM calls
 WHERE tenant_id = $1 AND started_at >= date_trunc('day', now());
 
