@@ -140,3 +140,32 @@ func TestStatusAbsentGatewayIsNotLoaded(t *testing.T) {
 		}
 	}
 }
+
+// A trunk can answer every keepalive yet fail every call (carrier-side
+// provisioning): the call counters are what expose that.
+func TestParseGatewayHealthReadsCallCounters(t *testing.T) {
+	body := `<?xml version="1.0" encoding="ISO-8859-1"?>
+<gateways>
+  <gateway>
+    <name>t_calls</name>
+    <state>NOREG</state>
+    <status>UP</status>
+    <pingtime>2.74</pingtime>
+    <uptime-usec>7200000000</uptime-usec>
+    <calls-in>2</calls-in>
+    <calls-out>5</calls-out>
+    <failed-calls-in>1</failed-calls-in>
+    <failed-calls-out>5</failed-calls-out>
+  </gateway>
+</gateways>`
+	h := parseGatewayHealth([]byte(body))["t_calls"]
+	if h.CallsOut != 5 || h.FailedOut != 5 || h.CallsIn != 2 || h.FailedIn != 1 {
+		t.Errorf("counters: got out=%d/%d in=%d/%d", h.CallsOut, h.FailedOut, h.CallsIn, h.FailedIn)
+	}
+	if h.UptimeSec != 7200 {
+		t.Errorf("uptime: got %v s, want 7200", h.UptimeSec)
+	}
+	if !h.PingUp || h.PingRTT != 2.74 {
+		t.Errorf("ping: got up=%v rtt=%v", h.PingUp, h.PingRTT)
+	}
+}

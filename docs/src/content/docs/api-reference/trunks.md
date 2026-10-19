@@ -100,6 +100,7 @@ Other keys are stored and returned but ignored. A missing or malformed value is 
 | `state_raw` | string | List responses only. FreeSWITCH's raw view, for example `REGED ping=UP 2.74ms` or `NOREG ping=DOWN`. Omitted when FreeSWITCH has no such gateway. |
 | `reg_state` | string | List responses only. Registration state: `REGED` (registered), `NOREG` (not registering, normal for IP auth), `TRYING`, `FAIL_WAIT`, `NOAUTH`, `EXPIRED`, … Omitted when FreeSWITCH has no such gateway. |
 | `ping_ms` | number | List responses only. Last OPTIONS round trip in milliseconds. Omitted until a ping is answered. |
+| `calls` | object | List responses only. Calls through this trunk since FreeSWITCH (re)loaded it: `out`, `failed_out`, `since`, plus `in` and `failed_in` for **registered** trunks only (FreeSWITCH doesn't attribute inbound calls to IP-auth trunks). Omitted when FreeSWITCH has no such gateway. |
 
 How `status` is worked out:
 
@@ -238,7 +239,8 @@ curl -sS "$TRING_URL/v1/trunks" \
     "status": "online",
     "state_raw": "NOREG ping=UP 2.74ms",
     "reg_state": "NOREG",
-    "ping_ms": 2.74
+    "ping_ms": 2.74,
+    "calls": {"out": 5, "failed_out": 5, "since": "2026-10-19T08:00:00Z"}
   }
 ]
 ```
