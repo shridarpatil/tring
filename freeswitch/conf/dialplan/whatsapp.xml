@@ -15,8 +15,7 @@
       <condition field="destination_number" expression="^(\+?\d+)$">
         <action application="set" data="outside_call=true"/>
         <action application="set" data="rtp_secure_media_inbound=mandatory:AES_CM_128_HMAC_SHA1_80"/>
-        <action application="set" data="absolute_codec_string=opus"/>
-        <action application="bridge" data="{rtp_secure_media=false}sofia/gateway/tring-gw/${destination_number}"/>
+        <action application="bridge" data="{absolute_codec_string=opus,rtp_secure_media=false}sofia/gateway/tring-gw/${destination_number}"/>
       </condition>
     </extension>
 

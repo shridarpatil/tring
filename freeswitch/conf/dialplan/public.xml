@@ -21,9 +21,9 @@
     default 127.0.0.1:5090 — co-located dev). The gateway's SIP plug
     (internal/fsplug, fsplug_sip_listen, default :5090) answers, resolves the
     dialed DID to a flow via room.Plug, and the call runs on the pion media
-    plane exactly like a web call. absolute_codec_string=opus forces FreeSWITCH
-    to transcode the carrier's G.711 leg to Opus (the plug/pion side speaks
-    Opus only); rtp_secure_media=false because this is a plain-RTP loopback/LAN
+    plane exactly like a web call. absolute_codec_string=opus on the gateway leg makes
+    FreeSWITCH transcode the carrier's G.711 to Opus (the plug/pion side speaks
+    Opus only); rtp_secure_media=false because that is a plain-RTP loopback/LAN
     hop to the gateway, not a public-facing SRTP leg.
 -->
 <!-- http://wiki.freeswitch.org/wiki/Dialplan_XML -->
@@ -52,9 +52,14 @@
          the tring-gw gateway, forcing Opus for the plug leg. -->
     <extension name="tring_inbound_to_gateway">
       <condition field="destination_number" expression="^(\+?\d+)$">
-        <action application="set" data="absolute_codec_string=opus"/>
-        <action application="set" data="rtp_secure_media=false"/>
-        <action application="bridge" data="sofia/gateway/tring-gw/${destination_number}"/>
+        <!-- Opus (and plain RTP) on the GATEWAY leg only, as {} vars on the
+             bridge. Set on this (carrier) leg instead, absolute_codec_string
+             restricted the carrier side to Opus and the gateway leg was
+             offered the carrier's G.711; the plug answers Opus-only, so FS
+             dropped it (INCOMPATIBLE_DESTINATION) and sent the carrier 488.
+             Now the carrier leg negotiates its own codec (G.711) and FS
+             transcodes to Opus for the plug. -->
+        <action application="bridge" data="{absolute_codec_string=opus,rtp_secure_media=false}sofia/gateway/tring-gw/${destination_number}"/>
       </condition>
     </extension>
 
