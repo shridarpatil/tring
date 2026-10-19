@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="ISO-8859-1" ?>
 <!--
   SIPp UAC (client) scenario impersonating an Indian carrier SBC (Tata/
-  Exotel/Airtel/Jio) placing an inbound call to Tring's FreeSWITCH
+  Airtel/Jio) placing an inbound call to Tring's FreeSWITCH
   EXTERNAL profile (vars.xml: external_sip_port=5080).
 
   Unlike sim/sipp-uas.xml (a UAS that answers), THIS scenario ORIGINATES

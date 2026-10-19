@@ -18,7 +18,7 @@ sees SIP or FreeSWITCH.
 
 - **License** Apache 2.0 · **Tenancy** multi-tenant from day one · **Delivery**
   hosted SaaS *and* self-host, same binaries · **Geography** India-primary
-  (Exotel/Airtel/Jio/Tata trunks), international via raw-SIP.
+  (Airtel/Jio/Tata trunks), international via raw-SIP.
 
 ## 2. The big idea — one brain, one media plane, pluggable call sources
 

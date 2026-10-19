@@ -28,8 +28,8 @@ var stripper = regexp.MustCompile(`[^\d+]`)
 // (`+91XXXXXXXXXX`). Accepts +91-prefixed, 91-prefixed, 0-prefixed
 // (national format), and bare 10-digit forms. Returns ErrNotIndian for
 // anything else — including correctly-formatted numbers from other
-// countries. That is intentional: this function is only called from the
-// Exotel provider, which only carries Indian traffic.
+// countries. That is intentional: this function is only called for the
+// Indian trunk providers, which only carry Indian traffic.
 func India(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

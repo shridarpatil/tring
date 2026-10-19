@@ -87,7 +87,7 @@
        Each trunk row in the `trunks` table renders to
        external/dynamic/t_<uuid>.xml on save; `sofia profile external
        rescan` picks them up live. The previous env-set lines for
-       EXOTEL_/AIRTEL_/JIO_/TATA_SIP_USERNAME etc. have been removed. -->
+       AIRTEL_/JIO_/TATA_SIP_USERNAME etc. have been removed. -->
 
   <X-PRE-PROCESS cmd="set" data="rtp_sdes_suites=AEAD_AES_256_GCM_8|AEAD_AES_128_GCM_8|AES_CM_256_HMAC_SHA1_80|AES_CM_192_HMAC_SHA1_80|AES_CM_128_HMAC_SHA1_80|AES_CM_256_HMAC_SHA1_32|AES_CM_192_HMAC_SHA1_32|AES_CM_128_HMAC_SHA1_32|AES_CM_128_NULL_AUTH"/>
   <!--

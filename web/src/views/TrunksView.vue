@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // TrunksView — per-tenant SIP trunk management. Two auth modes covered:
-//   register=true  (Exotel/aggregator-style: user/pass/realm)
+//   register=true  (aggregator-style: user/pass/realm)
 //   register=false (Tata IP-auth style: proxy IP + SBC CIDR)
 // Saving any trunk triggers a server-side FreeSWITCH gateway re-render
 // + sofia profile rescan, so changes are live without restarting FS.
@@ -119,7 +119,7 @@ const form = ref({
 // The edited trunk's other extra_params keys, carried through save untouched.
 const extraParams = ref<Record<string, unknown>>({});
 
-const providerTypes = ["generic", "exotel", "airtel", "jio", "tata"];
+const providerTypes = ["generic", "airtel", "jio", "tata"];
 const providerOptions = providerTypes.map((p) => ({ value: p, label: p }));
 
 const formTitle = computed(() => (editing.value ? "Edit trunk" : "New trunk"));
@@ -309,7 +309,7 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
             v-model="form.sip_realm"
             label="SIP realm / domain (optional — defaults to registrar/proxy IP)"
             mono
-            placeholder="account.pstn.exotel.com"
+            placeholder="sip.example.com"
           />
           <div class="grid grid-2">
             <TextField

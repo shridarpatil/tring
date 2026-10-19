@@ -29,7 +29,7 @@ services:
       api:
         condition: service_started
     env_file:
-      # Per-deployment trunk credentials (Exotel etc.). Gitignored; see
+      # Per-deployment trunk credentials. Gitignored; see
       # .env.example for the schema. Missing file is fine — defaults
       # keep the trunk inert.
       - path: .env
