@@ -63,6 +63,30 @@ function stateLine(t: Trunk): string {
   return `${state}${ping}`;
 }
 
+// "12 min" / "3 h" / "2 d" since an ISO time — how long the counters cover.
+function since(iso: string): string {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "<1 min";
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  return `${Math.floor(s / 86400)} d`;
+}
+
+// Whether calls actually work — keepalives alone can't tell. Counts are
+// FreeSWITCH's since it (re)loaded the trunk.
+function callsLine(t: Trunk): string {
+  const c = t.calls;
+  if (!c) return "";
+  const out = c.out ? `calls out: ${c.out} tried, ${c.failed_out} failed` : "calls out: none yet";
+  const inb = c.in === undefined ? "" : ` · in: ${c.in}${c.failed_in ? ` (${c.failed_in} failed)` : ""}`;
+  return `${out}${inb} · last ${since(c.since)}`;
+}
+
+// Every outbound attempt failed: reachable or not, calls aren't working.
+function callsFailing(t: Trunk): boolean {
+  return !!t.calls && t.calls.out > 0 && t.calls.failed_out === t.calls.out;
+}
+
 const { items: trunks, loading, load } = useList<Trunk>("/v1/trunks");
 const reloadingFS = ref(false);
 
@@ -219,7 +243,16 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
               {{ statusLabels[row.status || "unknown"] || row.status }}
             </Badge>
           </span>
+          <Badge
+            v-if="callsFailing(row)"
+            tone="danger"
+            style="margin-left: 0.35rem"
+            title="Every outbound call through this trunk has failed since it was loaded"
+          >
+            calls failing
+          </Badge>
           <div class="trunk-state">{{ stateLine(row) }}</div>
+          <div v-if="row.calls" class="trunk-state">{{ callsLine(row) }}</div>
         </template>
         <template #cell-auth="{ row }">
           <Badge :tone="row.register ? 'accent' : 'warning'">
