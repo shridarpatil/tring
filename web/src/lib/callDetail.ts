@@ -227,9 +227,11 @@ function ivrEventCode(st: IvrStep): string {
   }
 }
 
-// ivrActor: caller-driven input rows are the visitor; prompts/transfers are the system.
-function ivrActor(st: IvrStep): string {
-  return st.node_type === "menu" || st.node_type === "gather" ? "Web visitor" : "system";
+// ivrActor: caller-driven input rows (menu/gather key presses) are the caller,
+// named as on the call.started row (the phone number for phone calls; the
+// visitor label or CRM ref for web calls); prompts/transfers are the system.
+function ivrActor(st: IvrStep, call: Call): string {
+  return st.node_type === "menu" || st.node_type === "gather" ? call.from_number || "caller" : "system";
 }
 
 // fullStepText is the human detail for an IVR row.
@@ -284,7 +286,7 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
       preWindowShown = true;
       offset = "—";
     }
-    rows.push({ timestamp, offset, source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+    rows.push({ timestamp, offset, source: "ivr", event: ivrEventCode(st), actor: ivrActor(st, call), detail: fullStepText(st) });
   }
 
   // 3. Timeline events (ring/answer/transfer/end), in time order.
@@ -361,7 +363,7 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
       postWindowShown = true;
       offset = "—";
     }
-    rows.push({ timestamp, offset, source: "ivr", event: ivrEventCode(st), actor: ivrActor(st), detail: fullStepText(st) });
+    rows.push({ timestamp, offset, source: "ivr", event: ivrEventCode(st), actor: ivrActor(st, call), detail: fullStepText(st) });
   }
 
   return rows.map((r, i) => ({ index: i + 1, ...r }));
