@@ -456,13 +456,9 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Local spool fallback (S3 disabled, or not yet uploaded). The extension
-	// matches the configured record format; http.ServeFile sets Content-Type.
-	format := s.recordingsFormat
-	if format == "" {
-		format = "wav"
-	}
-	path := filepath.Join(s.recordingsDir, fsUUID+"."+format)
+	// Local spool fallback (S3 disabled, or not yet uploaded). The gateway always
+	// writes <leg_id>.ogg (internal/callcdr); http.ServeFile sets Content-Type.
+	path := filepath.Join(s.recordingsDir, fsUUID+".ogg")
 	if _, err := os.Stat(path); err != nil {
 		writeError(w, http.StatusNotFound, "recording not available")
 		return

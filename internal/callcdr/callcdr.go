@@ -60,6 +60,7 @@ type activeCall struct {
 	startedAt  time.Time
 	callerPID  room.ParticipantID
 	rec        *record.Recorder // nil = tenant doesn't record
+	recRate    int              // tenant's recording sample rate (Hz), read at call start
 	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
 	ringAgents []string         // agents rung in the current window — names the no_answer event
 }
@@ -191,7 +192,7 @@ func (l *Log) StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, fro
 func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, roomID, from, to, source, direction, legID string, callerPID room.ParticipantID) room.TrackSink {
 	ac := &activeCall{id: callID, legID: legID, tenant: tenant, startedAt: time.Now(), callerPID: callerPID}
 	var recordOn bool
-	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&recordOn); err != nil {
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&recordOn, &ac.recRate); err != nil {
 		l.log.Warn("cdr: record policy read failed", "err", err)
 	}
 	if recordOn {
@@ -643,19 +644,25 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 	defer cancel()
 	switch {
 	case len(agents) == 0:
-		// IVR-only call: the caller's leg IS the recording.
-		if err := os.Rename(customer, out); err != nil {
-			l.log.Error("cdr: recording finalize failed", "err", err)
-			return
+		// IVR-only call: the caller's leg IS the recording, re-encoded at the
+		// tenant's sample rate (kept as captured if ffmpeg fails).
+		if err := record.Encode(ctx, out, customer, ac.recRate); err != nil {
+			l.log.Error("cdr: recording encode failed, keeping capture", "err", err)
+			if err := os.Rename(customer, out); err != nil {
+				l.log.Error("cdr: recording finalize failed", "err", err)
+				return
+			}
+		} else {
+			_ = os.Remove(customer)
 		}
 	default:
 		// One agent → agent L / customer R. More than one (blind transfer) → every
 		// agent laid onto L at its real offset so no leg is lost or misaligned.
 		var mergeErr error
 		if len(agents) == 1 {
-			mergeErr = record.MergeStereo(ctx, out, agents[0].Path, customer)
+			mergeErr = record.MergeStereo(ctx, out, agents[0].Path, customer, ac.recRate)
 		} else {
-			mergeErr = record.MergeCall(ctx, out, customer, agents)
+			mergeErr = record.MergeCall(ctx, out, customer, agents, ac.recRate)
 		}
 		if mergeErr != nil {
 			l.log.Error("cdr: stereo merge failed, keeping customer leg", "err", mergeErr, "agents", len(agents))

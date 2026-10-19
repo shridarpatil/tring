@@ -5,12 +5,35 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
 
 // ErrFFmpegMissing is returned by MergeStereo when ffmpeg isn't on PATH.
 var ErrFFmpegMissing = errors.New("ffmpeg not found on PATH")
+
+// encodeArgs are the output arguments shared by every finalize step: Opus at
+// the tenant's recording sample rate (Hz; libopus takes 8000/12000/16000/
+// 24000/48000). The per-leg captures are always 48 kHz (opusRate); this is
+// where the served file drops to e.g. 8 kHz narrowband.
+func encodeArgs(rate int, out string) []string {
+	return []string{"-ar", strconv.Itoa(rate), "-c:a", "libopus", out}
+}
+
+// Encode re-encodes a single leg (an IVR-only call's customer capture) to the
+// served file at the given sample rate. Returns ErrFFmpegMissing if ffmpeg is
+// absent so the caller can keep the capture as-is.
+func Encode(ctx context.Context, out, in string, rate int) error {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return ErrFFmpegMissing
+	}
+	args := append([]string{"-y", "-i", in}, encodeArgs(rate, out)...)
+	if b, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("ffmpeg encode: %w: %s", err, b)
+	}
+	return nil
+}
 
 // MergeStereo merges a left and right mono Ogg/Opus leg into one stereo
 // Ogg/Opus file (left→front-left, right→front-right) using ffmpeg. This is the
@@ -21,7 +44,7 @@ var ErrFFmpegMissing = errors.New("ffmpeg not found on PATH")
 // Requires ffmpeg on PATH (the FreeSWITCH image already ships it; a host doing
 // pion recording needs it installed). Returns ErrFFmpegMissing if absent so the
 // caller can fall back to keeping the two per-leg files.
-func MergeStereo(ctx context.Context, out, left, right string) error {
+func MergeStereo(ctx context.Context, out, left, right string, rate int) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return ErrFFmpegMissing
 	}
@@ -31,11 +54,12 @@ func MergeStereo(ctx context.Context, out, left, right string) error {
 	// fills the stereo output entirely from input 0 — silently dropping input 1
 	// (the customer), so both channels come out as the agent. `0.0`/`1.0` take
 	// channel 0 of each leg regardless of its declared channel count.
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	args := append([]string{"-y",
 		"-i", left, "-i", right,
 		"-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[a]",
-		"-map", "[a]", "-c:a", "libopus", out,
-	)
+		"-map", "[a]",
+	}, encodeArgs(rate, out)...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg merge: %w: %s", err, b)
 	}
@@ -58,7 +82,7 @@ type AgentLeg struct {
 // fixes: same-role legs shared one file, so only the last agent survived). For a
 // single agent this reduces to MergeStereo's "agent L / customer R". Requires
 // ffmpeg; returns ErrFFmpegMissing when absent so the caller can fall back.
-func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg) error {
+func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg, rate int) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return ErrFFmpegMissing
 	}
@@ -97,7 +121,8 @@ func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg) err
 	fc.WriteString(fmt.Sprintf("[%d:a]pan=mono|c0=c0[r];", len(agents)))
 	fc.WriteString("[l][r]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[a]")
 
-	args = append(args, "-filter_complex", fc.String(), "-map", "[a]", "-c:a", "libopus", out)
+	args = append(args, "-filter_complex", fc.String(), "-map", "[a]")
+	args = append(args, encodeArgs(rate, out)...)
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg merge-call: %w: %s", err, b)
