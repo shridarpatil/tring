@@ -102,10 +102,8 @@ type Queries struct {
 	GetCallAgentLabel   string `query:"get-call-agent-label"`
 	GetCall             string `query:"get-call"`
 	ListCalls           string `query:"list-calls"`
-	ListCallsByStatus   string `query:"list-calls-by-status"`
 	ListActiveCalls     string `query:"list-active-calls"`
 	CountCalls          string `query:"count-calls"`
-	CountCallsByStatus  string `query:"count-calls-by-status"`
 
 	// ---- api: mod_xml_curl directory (/fs) ----
 	GetTenantIDBySipDomain string `query:"get-tenant-id-by-sip-domain"`

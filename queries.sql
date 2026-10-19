@@ -397,6 +397,10 @@ FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
 -- name: list-calls
+-- One query for every filter combination (no string building): '' disables a
+-- filter. $4 status (compared as text, so an unknown value matches nothing
+-- instead of failing the enum cast); $5 call-id prefix (calls.id or leg_id);
+-- $6 phone digits, matched inside from/to with formatting stripped.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
@@ -404,17 +408,11 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        COALESCE(c.room_id, '')
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1
+  AND ($4 = '' OR c.status::text = $4)
+  AND ($5 = '' OR c.id::text LIKE $5 || '%' OR c.leg_id LIKE $5 || '%')
+  AND ($6 = '' OR regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
+               OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $6 || '%')
 ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
-
--- name: list-calls-by-status
-SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
-       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
-       c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
-       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
-       COALESCE(c.room_id, '')
-FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
-WHERE c.tenant_id = $1 AND c.status = $3::call_status
-ORDER BY c.started_at DESC LIMIT $2 OFFSET $4;
 
 -- name: list-active-calls
 -- In-progress calls for the cockpit "Live calls" panel: not yet ended, still
@@ -430,10 +428,13 @@ WHERE c.tenant_id = $1 AND c.ended_at IS NULL AND c.status IN ('ringing','answer
 ORDER BY c.started_at ASC LIMIT 100;
 
 -- name: count-calls
-SELECT count(*) FROM calls WHERE tenant_id = $1;
-
--- name: count-calls-by-status
-SELECT count(*) FROM calls WHERE tenant_id = $1 AND status = $2::call_status;
+-- Same filters as list-calls: $2 status, $3 call-id prefix, $4 phone digits.
+SELECT count(*) FROM calls c
+WHERE c.tenant_id = $1
+  AND ($2 = '' OR c.status::text = $2)
+  AND ($3 = '' OR c.id::text LIKE $3 || '%' OR c.leg_id LIKE $3 || '%')
+  AND ($4 = '' OR regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $4 || '%'
+               OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%');
 
 -- ===========================================================================
 -- mod_xml_curl directory (/fs) — FreeSWITCH SIP auth lookups

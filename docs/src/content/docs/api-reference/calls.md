@@ -182,6 +182,7 @@ List calls, newest first.
 | Param | Description |
 |---|---|
 | `status` | Only calls with this status: `ringing`, `answered`, `ended` or `failed`. |
+| `q` | Search. Digits (with any `+`, spaces, dashes or brackets) match the **caller or called number** in any format: `9800000001`, `+91 98000-00001` and `09800000001` all find a call stored as `+919800000001`. Anything else is a **call ID** (or FreeSWITCH leg ID), matched from the start, so a shortened ID works. |
 | `active` | `true` returns only in-progress calls (`ringing` or `answered`, not ended), **oldest first**, up to 100, unpaginated. `page`, `limit` and `status` are ignored. |
 | `page` | 1-based page number. See [Pagination](/tring/api-reference/overview/#pagination). |
 | `limit` | With `page`: page size, default `25`. Without `page`: how many of the newest calls to return, default `50`. Max `200` either way. |
@@ -234,7 +235,9 @@ curl -sS "$TRING_URL/v1/calls?status=ended&page=1&limit=25" \
 
 | Status | Message |
 |---|---|
-| `500` | `count failed: …` (also returned for an unknown `status` value) |
+| `500` | `count failed` / `query failed` |
+
+An unknown `status` value returns an empty list, not an error.
 | `500` | `query failed` / `query failed: …` / `scan failed` |
 
 ### GET /v1/calls/{id}

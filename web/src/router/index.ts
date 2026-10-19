@@ -34,7 +34,10 @@ const routes: RouteRecordRaw[] = [
       { path: "teams", name: "teams", component: () => import("../views/TeamsView.vue") },
       { path: "sounds", name: "sounds", component: () => import("../views/SoundsView.vue") },
       { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue") },
-      { path: "calls", name: "calls", component: () => import("../views/CallsView.vue") },
+      // calls/:id opens that call's detail (?view=log → full log), so a call
+      // has a URL that can be shared. Optional param = same view instance, so
+      // the list's page/filter survive opening and closing a call.
+      { path: "calls/:id?", name: "calls", component: () => import("../views/CallsView.vue") },
       { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue") },
       { path: "api-keys", name: "api-keys", component: () => import("../views/ApiKeysView.vue") },
       { path: "flows", name: "flows", component: () => import("../views/flows/FlowsListView.vue") },
@@ -54,7 +57,10 @@ const router = createRouter({
 
 router.beforeEach((to) => {
   if (to.name === "styleguide") return; // dev-only, no auth
-  if (to.name !== "login" && !auth.isAuthed()) return { name: "login" };
+  if (to.name !== "login" && !auth.isAuthed()) {
+    // Remember where they were going (e.g. a shared call link) for after login.
+    return to.fullPath === "/" ? { name: "login" } : { name: "login", query: { redirect: to.fullPath } };
+  }
   if (to.name === "login" && auth.isAuthed()) return { name: "dashboard" };
 });
 
