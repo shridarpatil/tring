@@ -24,6 +24,8 @@ export interface Tenant {
   max_call_seconds?: number;
   // Played to the caller when a blind transfer finds no one available.
   transfer_failed_message?: string;
+  // Sample rate (Hz) call recordings are encoded at: 8000/12000/16000/24000/48000.
+  recording_sample_rate?: number;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.

@@ -146,7 +146,7 @@ func TestMergeStereoGraceful(t *testing.T) {
 	left := filepath.Join(dir, "c-a.ogg")
 	right := filepath.Join(dir, "c-b.ogg")
 	out := filepath.Join(dir, "c-stereo.ogg")
-	err := record.MergeStereo(context.Background(), out, left, right)
+	err := record.MergeStereo(context.Background(), out, left, right, 8000)
 	if err == record.ErrFFmpegMissing {
 		t.Skip("ffmpeg not installed — merge skipped")
 	}
@@ -177,7 +177,7 @@ func TestMergeStereoSeparatesChannels(t *testing.T) {
 	genTone(t, customer, 1200)
 
 	out := filepath.Join(dir, "stereo.ogg")
-	if err := record.MergeStereo(context.Background(), out, agent, customer); err != nil {
+	if err := record.MergeStereo(context.Background(), out, agent, customer, 8000); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 
@@ -217,7 +217,7 @@ func TestMergeCallPlacesLaterAgentAtOffset(t *testing.T) {
 	if err := record.MergeCall(context.Background(), out, customer, []record.AgentLeg{
 		{Path: agentA, Delay: 0},
 		{Path: agentB, Delay: time.Second}, // B answered the transfer 1s in
-	}); err != nil {
+	}, 8000); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 
@@ -237,6 +237,39 @@ func TestMergeCallPlacesLaterAgentAtOffset(t *testing.T) {
 	// The customer must be present on the right for the whole call.
 	if rr := rms(right[:2*sr]); rr < 1000 {
 		t.Fatalf("customer missing from right channel (rms=%.0f)", rr)
+	}
+}
+
+// TestRecordingSampleRate guards the tenant's recording sample rate: the served
+// file is encoded at that rate, so at 8 kHz everything above the 4 kHz Nyquist
+// limit is gone while 48 kHz keeps it. A 6 kHz tone tells the two apart, for the
+// stereo merge and for the single-leg (IVR-only) encode alike.
+func TestRecordingSampleRate(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	tone := filepath.Join(dir, "tone.ogg")
+	genTone(t, tone, 6000)
+
+	for _, tc := range []struct {
+		rate    int
+		audible bool
+	}{{8000, false}, {48000, true}} {
+		stereo := filepath.Join(dir, fmt.Sprintf("stereo-%d.ogg", tc.rate))
+		if err := record.MergeStereo(context.Background(), stereo, tone, tone, tc.rate); err != nil {
+			t.Fatalf("merge at %d: %v", tc.rate, err)
+		}
+		single := filepath.Join(dir, fmt.Sprintf("single-%d.ogg", tc.rate))
+		if err := record.Encode(context.Background(), single, tone, tc.rate); err != nil {
+			t.Fatalf("encode at %d: %v", tc.rate, err)
+		}
+		for _, out := range []string{stereo, single} {
+			left, _ := decodeStereo(t, out)
+			if got := rms(left) > 1000; got != tc.audible {
+				t.Errorf("%s: 6 kHz tone audible=%v (rms=%.0f), want %v", filepath.Base(out), got, rms(left), tc.audible)
+			}
+		}
 	}
 }
 

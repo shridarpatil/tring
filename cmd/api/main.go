@@ -159,7 +159,6 @@ func main() {
 		GatewayPublicURL: k.String("gateway_public_url"),
 		AudioDir:         k.String("audio_dir"),
 		RecordingsDir:    k.String("recordings_dir"),
-		RecordingsFormat: k.String("record_format"),
 		Blob:             blob,
 		Cache:            flowCache,
 		Hub:              hub,

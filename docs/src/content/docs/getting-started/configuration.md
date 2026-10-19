@@ -126,13 +126,11 @@ If the FreeSWITCH pair (`TRING_GATEWAY_ADVERT_IP`, `TRING_GATEWAY_SIP_PORT`) and
 
 ## 6. Call recording storage
 
-Recording itself is a per-tenant setting (see [Recording and call logs](/tring/features/recording-and-call-logs/)). These variables decide where files go.
+Recording and its sample rate are per-tenant settings (see [Recording and call logs](/tring/features/recording-and-call-logs/)). These variables decide where files go.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `TRING_RECORDINGS_DIR` | `/var/lib/tring/recordings` | Local spool shared by the gateway (writes) and the api (serves). Compose bind-mounts `./recordings` here. |
-| `TRING_RECORD_FORMAT` | `ogg` | File extension the api looks for when serving a recording from the local spool. The gateway writes Ogg/Opus, so keep this at `ogg`. |
-| `TRING_RECORD_SAMPLE_RATE` | `8000` | Listed in `.env.example`; the gateway recorder does not read it (it captures Opus as sent). |
 | `TRING_S3_BUCKET` | empty | When set, finished recordings are uploaded to this bucket and the local copy is deleted. Empty keeps recordings local only. |
 | `TRING_S3_REGION` | empty | Bucket region. |
 | `TRING_S3_ENDPOINT` | empty | Empty for AWS S3. Set to your host for an S3-compatible store (MinIO, Cloudflare R2). |
