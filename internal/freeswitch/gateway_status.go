@@ -31,6 +31,14 @@ type GatewayHealth struct {
 	State   string  // registration state: REGED, NOREG, FAIL_WAIT, …
 	PingUp  bool    // sofia's OPTIONS-ping verdict (<status>UP</status>)
 	PingRTT float64 // <pingtime> in milliseconds; >0 only once a ping was actually answered
+
+	// Call counters since the gateway was (re)loaded — UptimeSec ago. A
+	// reachable trunk can still fail every call (carrier provisioning), so
+	// these are what tell "calls work" apart from "pings work". CallsIn is
+	// only attributed when sofia can tie an inbound call to the gateway
+	// (registered trunks); IP-auth inbound calls aren't counted here.
+	CallsIn, CallsOut, FailedIn, FailedOut int
+	UptimeSec                              float64
 }
 
 // GatewayHealths returns gatewayName → live health. Use Status to
@@ -60,10 +68,15 @@ func parseGatewayHealth(body []byte) map[string]GatewayHealth {
 	out := map[string]GatewayHealth{}
 	var doc struct {
 		Gateways []struct {
-			Name     string  `xml:"name"`
-			State    string  `xml:"state"`
-			Status   string  `xml:"status"`
-			PingTime float64 `xml:"pingtime"`
+			Name      string  `xml:"name"`
+			State     string  `xml:"state"`
+			Status    string  `xml:"status"`
+			PingTime  float64 `xml:"pingtime"`
+			Uptime    int64   `xml:"uptime-usec"`
+			CallsIn   int     `xml:"calls-in"`
+			CallsOut  int     `xml:"calls-out"`
+			FailedIn  int     `xml:"failed-calls-in"`
+			FailedOut int     `xml:"failed-calls-out"`
 		} `xml:"gateway"`
 	}
 	dec := xml.NewDecoder(strings.NewReader(string(body)))
@@ -78,9 +91,14 @@ func parseGatewayHealth(body []byte) map[string]GatewayHealth {
 			continue
 		}
 		out[g.Name] = GatewayHealth{
-			State:   strings.TrimSpace(g.State),
-			PingUp:  strings.EqualFold(strings.TrimSpace(g.Status), "UP"),
-			PingRTT: g.PingTime,
+			State:     strings.TrimSpace(g.State),
+			PingUp:    strings.EqualFold(strings.TrimSpace(g.Status), "UP"),
+			PingRTT:   g.PingTime,
+			CallsIn:   g.CallsIn,
+			CallsOut:  g.CallsOut,
+			FailedIn:  g.FailedIn,
+			FailedOut: g.FailedOut,
+			UptimeSec: float64(g.Uptime) / 1e6,
 		}
 	}
 	return out
