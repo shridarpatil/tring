@@ -1,5 +1,4 @@
-// Package provider abstracts trunk providers (Exotel/Plivo/Twilio/Knowlarity/
-// raw SIP). The Tring orchestration layer talks to FreeSWITCH only — providers
+// Package provider abstracts trunk providers (Indian carriers / raw SIP). The Tring orchestration layer talks to FreeSWITCH only — providers
 // describe themselves via FreeSWITCH gateway XML and a dial-string format. A
 // new provider implements this interface; no other code changes.
 package provider
@@ -16,7 +15,7 @@ package provider
 // for a destination E.164 number. The result is dropped into the originate
 // invocation verbatim, e.g.:
 //
-//	originate user/alice@t_dev.tring.local sofia/gateway/exotel/+919876543210
+//	originate user/alice@t_dev.tring.local sofia/gateway/tata/+919876543210
 //	                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 //	                                       provider.DialString("+91...")
 type Provider interface {
@@ -42,8 +41,6 @@ type Provider interface {
 // code touches the new provider.
 func For(name string) Provider {
 	switch name {
-	case "exotel":
-		return newExotel()
 	case "airtel":
 		return newAirtel()
 	case "jio":

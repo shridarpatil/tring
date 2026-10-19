@@ -47,7 +47,7 @@ Inbound phone calls need the SIP plug enabled (`TRING_FSPLUG_ENABLED=true`); see
 | Field | What it is |
 |---|---|
 | `name` | Your label. |
-| `provider_type` | `generic` (default), `exotel`, `airtel`, `jio` or `tata`. |
+| `provider_type` | `generic` (default), `airtel`, `jio` or `tata`. |
 | `register` | `true` for REGISTER (username/password) authentication, `false` for IP authentication. |
 | `sip_username`, `sip_password`, `sip_realm` | REGISTER credentials and the registrar realm. |
 | `proxy_ip` | IP authentication: the carrier's SBC address calls are sent to. REGISTER (optional): the registrar to send REGISTER and calls to, when the realm isn't resolvable. |
@@ -61,7 +61,7 @@ Saving, updating or deleting a trunk writes FreeSWITCH gateway XML and rescans t
 
 | | REGISTER | IP authentication |
 |---|---|---|
-| Typical for | Aggregators (for example Exotel) | Direct carrier circuits (for example Tata) |
+| Typical for | Aggregators that issue SIP credentials | Direct carrier circuits (for example Tata) |
 | You set | `sip_username`, `sip_password`, `sip_realm`; optionally `proxy_ip` and `auth_username` | `proxy_ip` (and optionally `sip_realm`, defaulting to `proxy_ip`) |
 | FreeSWITCH | Registers every 600 s, retries every 30 s, to the realm or `proxy_ip` | Sends calls to `proxy_ip`, no registration |
 
@@ -92,7 +92,7 @@ Some carriers check the host part of the `From` header and expect your own circu
 
 | Provider | Destination numbers |
 |---|---|
-| `exotel`, `airtel`, `jio`, `tata` | Indian numbers, normalized to `+91XXXXXXXXXX`. Accepts `+91`, `91`, `0`-prefixed and bare 10-digit forms of mobile numbers starting 6–9. Anything else is rejected before it reaches the carrier. |
+| `airtel`, `jio`, `tata` | Indian numbers, normalized to `+91XXXXXXXXXX`. Accepts `+91`, `91`, `0`-prefixed and bare 10-digit forms of mobile numbers starting 6–9. Anything else is rejected before it reaches the carrier. |
 | `generic` | No normalization; the number is passed as given. |
 
 Outbound calls dialed from the media plane (an IVR [transfer to a number](/tring/features/ivr-flows/#transfer)) always use the Indian rules.

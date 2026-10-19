@@ -7,8 +7,8 @@ import (
 )
 
 // indianSIPTrunk is the shared shape for any Indian-domestic SIP trunk
-// reachable via a registered FreeSWITCH gateway. The four named providers
-// below (Exotel/Airtel/Jio/Tata) differ only in:
+// reachable via a registered FreeSWITCH gateway. The named providers
+// below (Airtel/Jio/Tata) differ only in:
 //
 //   - their public `Name()` (used as the value of `numbers.provider` and
 //     as the gateway name FreeSWITCH dials through), and
