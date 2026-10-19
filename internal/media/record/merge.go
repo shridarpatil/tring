@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,17 +14,41 @@ import (
 // ErrFFmpegMissing is returned by MergeStereo when ffmpeg isn't on PATH.
 var ErrFFmpegMissing = errors.New("ffmpeg not found on PATH")
 
-// encodeArgs are the output arguments shared by every finalize step: Opus at
-// the tenant's recording sample rate (Hz; libopus takes 8000/12000/16000/
-// 24000/48000). The per-leg captures are always 48 kHz (opusRate); this is
-// where the served file drops to e.g. 8 kHz narrowband.
+// Formats are the served recording formats (the file extension); the tenants
+// table CHECK constraint holds the same list. The per-leg captures are always
+// Ogg/Opus; the format only applies to the finished file.
+var Formats = []string{"ogg", "mp3", "wav"}
+
+// opusBitrate is the stereo Opus bitrate per sample rate. libopus otherwise
+// picks ~96 kbps whatever the rate, so a lower rate alone barely shrinks the
+// file. MP3 (libmp3lame) already scales its default bitrate with the rate, and
+// WAV is uncompressed.
+var opusBitrate = map[int]string{8000: "24k", 12000: "32k", 16000: "40k", 24000: "64k", 48000: "96k"}
+
+// encodeArgs are the output arguments shared by every finalize step: the
+// codec follows out's extension (.ogg Opus, .mp3, .wav 16-bit PCM), at the
+// tenant's recording sample rate (Hz). The per-leg captures are always 48 kHz
+// (opusRate); this is where the served file drops to e.g. 8 kHz narrowband.
 func encodeArgs(rate int, out string) []string {
-	return []string{"-ar", strconv.Itoa(rate), "-c:a", "libopus", out}
+	args := []string{"-ar", strconv.Itoa(rate)}
+	switch filepath.Ext(out) {
+	case ".mp3":
+		args = append(args, "-c:a", "libmp3lame")
+	case ".wav":
+		args = append(args, "-c:a", "pcm_s16le")
+	default:
+		args = append(args, "-c:a", "libopus")
+		if br := opusBitrate[rate]; br != "" {
+			args = append(args, "-b:a", br)
+		}
+	}
+	return append(args, out)
 }
 
 // Encode re-encodes a single leg (an IVR-only call's customer capture) to the
-// served file at the given sample rate. Returns ErrFFmpegMissing if ffmpeg is
-// absent so the caller can keep the capture as-is.
+// served file at the given sample rate, in the format out's extension names.
+// Returns ErrFFmpegMissing if ffmpeg is absent so the caller can keep the
+// capture as-is.
 func Encode(ctx context.Context, out, in string, rate int) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return ErrFFmpegMissing
