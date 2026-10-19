@@ -40,6 +40,39 @@ type Trunk struct {
 	StateRaw string   `json:"state_raw,omitempty"` // raw FS state for debugging
 	RegState string   `json:"reg_state,omitempty"` // sofia registration state: REGED, NOREG, FAIL_WAIT, …
 	PingMS   *float64 `json:"ping_ms,omitempty"`   // last OPTIONS round trip; nil until a ping is answered
+	// Calls through this trunk since FreeSWITCH (re)loaded it — what shows
+	// whether calls actually work, not just keepalives. Nil when not loaded.
+	Calls *TrunkCalls `json:"calls,omitempty"`
+}
+
+// TrunkCalls are a trunk gateway's call counters, as FreeSWITCH counts them
+// since Since. Inbound counts are only reported for registered trunks: for
+// IP-auth trunks FreeSWITCH doesn't attribute inbound calls to the gateway,
+// so a zero there would wrongly read as "no calls arrived".
+type TrunkCalls struct {
+	Out       int       `json:"out"`
+	FailedOut int       `json:"failed_out"`
+	In        *int      `json:"in,omitempty"`
+	FailedIn  *int      `json:"failed_in,omitempty"`
+	Since     time.Time `json:"since"`
+}
+
+// trunkCalls builds a trunk's call counters from its gateway health; nil when
+// FreeSWITCH has no such gateway.
+func trunkCalls(h freeswitch.GatewayHealth, register bool, now time.Time) *TrunkCalls {
+	if h.State == "" {
+		return nil
+	}
+	c := &TrunkCalls{
+		Out:       h.CallsOut,
+		FailedOut: h.FailedOut,
+		Since:     now.Add(-time.Duration(h.UptimeSec * float64(time.Second))).Truncate(time.Second),
+	}
+	if register {
+		in, failed := h.CallsIn, h.FailedIn
+		c.In, c.FailedIn = &in, &failed
+	}
+	return c
 }
 
 type createTrunkRequest struct {
@@ -210,6 +243,7 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 	// For IP-auth trunks the reg-state is meaningless, so freeswitch.Status
 	// reads sofia's OPTIONS-ping verdict instead — see gateway_status.go.
 	healths, _ := s.fs.GatewayHealths(r.Context())
+	now := time.Now()
 	for i := range out {
 		h := healths[freeswitch.GatewayName(out[i].ID)]
 		out[i].Status = freeswitch.Status(h, out[i].Register)
@@ -219,6 +253,7 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 			ms := h.PingRTT
 			out[i].PingMS = &ms
 		}
+		out[i].Calls = trunkCalls(h, out[i].Register, now)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

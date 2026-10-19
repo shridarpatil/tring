@@ -293,4 +293,7 @@ export interface Trunk {
   state_raw?: string;
   reg_state?: string; // REGED, NOREG, FAIL_WAIT, …
   ping_ms?: number; // last OPTIONS round trip (ms); absent until answered
+  // Call counters since FreeSWITCH (re)loaded the trunk. in/failed_in only
+  // for registered trunks (IP-auth inbound calls aren't attributed).
+  calls?: { out: number; failed_out: number; in?: number; failed_in?: number; since: string };
 }
