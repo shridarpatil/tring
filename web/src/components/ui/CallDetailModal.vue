@@ -13,7 +13,10 @@ import {
   PhoneOutgoing,
   ListTree,
   X,
+  Link2,
 } from "lucide-vue-next";
+import { copyText } from "../../lib/clipboard";
+import { toast } from "../../lib/toast";
 import type { CallDetail, EventIcon, EventKind } from "../../lib/callDetail";
 
 const props = defineProps<{ open: boolean; call: CallDetail | null }>();
@@ -77,6 +80,12 @@ const dirIcon = computed(() => (props.call?.direction === "outbound" ? PhoneOutg
 function close() {
   emit("update:open", false);
 }
+
+// The page URL is this call's shareable link (/calls/<id>).
+async function copyLink() {
+  if (await copyText(window.location.href)) toast.success("Link copied");
+  else toast.error("Couldn't copy, copy the address bar instead");
+}
 </script>
 
 <template>
@@ -93,6 +102,9 @@ function close() {
           <div class="truncate text-light">→ {{ call.callee }}</div>
           <div class="text-lighter cd-started">{{ fmtStart(call.startedAt) }}</div>
         </div>
+        <button type="button" class="ghost icon small" aria-label="Copy link" title="Copy link to this call" @click="copyLink">
+          <Link2 :size="16" />
+        </button>
         <button type="button" class="ghost icon small" aria-label="Close" @click="close">
           <X :size="16" />
         </button>
