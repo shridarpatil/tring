@@ -34,7 +34,7 @@ curl -sS -X POST https://api.example.com/v1/calls \
 | Field | Required | What it does |
 |---|---|---|
 | `agent_id` | yes | The agent's UUID. |
-| `to` | yes | Destination. Normalized by the primary trunk's provider rules (Indian numbers for `exotel`, `airtel`, `jio`, `tata`). An invalid number is rejected with `400` before anything is dialed. |
+| `to` | yes | Destination. Normalized by the primary trunk's provider rules (Indian numbers for `airtel`, `jio`, `tata`). An invalid number is rejected with `400` before anything is dialed. |
 | `agent_label` | no | Non-sensitive text shown to the agent, such as a ticket or account reference. The agent never receives `to`. |
 | `caller_id` | no | The number the customer sees, instead of the trunk's own number. Must be one of your tenant's active numbers ([caller-ID rule](/tring/features/numbers-and-trunks/#caller-id-ownership)). Applied on every trunk attempt. |
 

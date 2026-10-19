@@ -114,7 +114,7 @@ How `status` is worked out:
 
 | Value | Normalisation |
 |---|---|
-| `exotel`, `airtel`, `jio`, `tata` | Indian mobile numbers only. Accepts `+91…`, `91…`, `0…` and bare 10-digit forms, with spaces or dashes. Normalises to `+91XXXXXXXXXX`. Anything else is rejected with `400`. |
+| `airtel`, `jio`, `tata` | Indian mobile numbers only. Accepts `+91…`, `91…`, `0…` and bare 10-digit forms, with spaces or dashes. Normalises to `+91XXXXXXXXXX`. Anything else is rejected with `400`. |
 | `generic` (default), `loopback`, or any other value | None. The trimmed input is dialed as is. |
 
 :::danger
@@ -166,7 +166,7 @@ curl -sS -X POST "$TRING_URL/v1/trunks" \
   -H "Content-Type: application/json" \
   -d "$(jq -n --arg pw "$CARRIER_SIP_PASSWORD" '{
     name: "aggregator-b",
-    provider_type: "exotel",
+    provider_type: "generic",
     register: true,
     sip_username: "tring-trunk-01",
     sip_password: $pw,

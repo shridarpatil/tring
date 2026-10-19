@@ -19,7 +19,7 @@ func insertOutboundForHandlerTest(t *testing.T, f *dbtest.Fixture, e164 string, 
 	var id string
 	err := f.DB.Pool.QueryRow(context.Background(), `
 		INSERT INTO numbers (tenant_id, e164, type, provider, priority, active)
-		VALUES ($1, $2, 'outbound', 'exotel', 100, $3)
+		VALUES ($1, $2, 'outbound', 'tata', 100, $3)
 		RETURNING id
 	`, f.TenantID, e164, active).Scan(&id)
 	if err != nil {

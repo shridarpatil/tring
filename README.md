@@ -9,17 +9,17 @@
 
 ## Why Tring
 
-The Indian voice-CPaaS market is dominated by closed-source platforms (Exotel, Knowlarity, MyOperator) that bundle the orchestration layer with their trunks. Tring decouples the two: **bring your own trunk** — Exotel, Airtel, Jio, Tata, or any raw SIP carrier — and Tring handles the API, browser SDK, IVR, recording, CDR webhooks, and TRAI/DLT-aware routing.
+The Indian voice-CPaaS market is dominated by closed-source platforms that bundle the orchestration layer with their trunks. Tring decouples the two: **bring your own trunk** — Airtel, Jio, Tata, or any raw SIP carrier — and Tring handles the API, browser SDK, IVR, recording, CDR webhooks, and TRAI/DLT-aware routing.
 
-| | Twilio Voice | Exotel | Tring |
-|---|---|---|---|
-| Source available | No | No | **Yes (Apache 2.0)** |
-| Self-host | No | No | **Yes** |
-| India trunk swap (Airtel ↔ Jio ↔ Tata) | n/a | locked-in | **Config-only, no code change** |
-| 1600 transactional series | n/a | Yes | Yes — via any licensed carrier (Tata, Airtel, Jio) |
-| Browser SDK | Yes | Limited | Yes (raw WebRTC, **no SIP in the browser**) |
-| Visual IVR builder | Limited | Yes | **Yes (node-graph editor + live simulator)** |
-| Per-tenant trunks | Yes | n/a | Planned (Phase 2) |
+| | Twilio Voice | Tring |
+|---|---|---|
+| Source available | No | **Yes (Apache 2.0)** |
+| Self-host | No | **Yes** |
+| India trunk swap (Airtel ↔ Jio ↔ Tata) | n/a | **Config-only, no code change** |
+| 1600 transactional series | n/a | Yes — via any licensed carrier (Tata, Airtel, Jio) |
+| Browser SDK | Yes | Yes (raw WebRTC, **no SIP in the browser**) |
+| Visual IVR builder | Limited | **Yes (node-graph editor + live simulator)** |
+| Per-tenant trunks | Yes | Planned (Phase 2) |
 
 ## Quickstart (no clone)
 
@@ -144,7 +144,7 @@ After renewing the certificate, run `fs_cli -x "sofia profile whatsapp restart"`
 | `internal/ivr/` | Transport-agnostic IVR flow model + walker (drives the runtime and the simulator). |
 | `internal/routing/` | Shared agent queue/ring engine (strategies, reservations, presence filter, queue depth). |
 | `internal/callcdr/` | Records media-plane calls into the same `calls` table / recording pipeline the PSTN path uses. |
-| `internal/provider/` | Trunk abstraction. Exotel, Airtel, Jio, Tata, Loopback. |
+| `internal/provider/` | Trunk abstraction. Airtel, Jio, Tata, Loopback. |
 | `internal/freeswitch/` | ESL wrapper for outbound originate. |
 | `internal/webhook/` | Notifier — signs, delivers, retries with backoff. |
 | `internal/tts/` | Piper + ffmpeg → cached Opus-Ogg synthesis of IVR prompt text at flow-save. |
@@ -168,7 +168,7 @@ See [CLAUDE.md](CLAUDE.md) for the deeper architectural map, auth model, eslgo g
 | **Call control** | Hold / resume / blind transfer (to an agent or a team) from the agent SDK or the CRM backend. |
 | **Recording** | Opt-in per tenant (`record_calls`). Stereo (agent **left**, customer **right**), captured on the media plane and merged on hangup. Starts at agent answer. Served by the API; optional S3 upload. |
 | **CDR + webhooks** | One `calls` table for every source. `call.ringing` (API on originate), `call.answered` / `call.ended` (gateway on media events). HMAC-SHA256 signed (Stripe pattern), up to 6 attempts with backoff, delivery log. |
-| **Trunk providers** | Exotel, Airtel, Jio, Tata pre-baked + Loopback for dev. Multi-trunk failover / round-robin / manual strategies. Config-only swap. |
+| **Trunk providers** | Airtel, Jio, Tata pre-baked + Loopback for dev. Multi-trunk failover / round-robin / manual strategies. Config-only swap. |
 | **Browser SDK** | `voice.js` (visitor), `agent.js` (agent), bare `tring.js` + ESM. Served by the API at `/sdk/*` — no CDN needed. |
 | **Multi-tenant** | Per-tenant SIP domain, API keys (SHA-256 hashed), tenant scoping on every query, `mod_xml_curl` dynamic directory, admin console. |
 

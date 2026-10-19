@@ -4,7 +4,7 @@
 
     Bound to the EXTERNAL sip profile (sip_profiles/external.xml sets
     context=public), which listens on $${external_sip_port} (5080) — carrier
-    trunk INVITEs (Tata/Exotel/Airtel/Jio) land here, never authenticated
+    trunk INVITEs (Tata/Airtel/Jio) land here, never authenticated
     agents (those go to 'internal' → 'default').
 
     This context did not exist in the repo before the SIP plug (THE PLUG,

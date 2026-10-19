@@ -2,7 +2,7 @@
   <!-- http://wiki.freeswitch.org/wiki/Sofia_Configuration_Files -->
   <!-- This profile is only for outbound registrations to providers -->
   <gateways>
-    <!-- Static, env-driven gateways (Exotel/Airtel/Jio/Tata from vars.xml). -->
+    <!-- Static, env-driven gateways (Airtel/Jio/Tata from vars.xml). -->
     <X-PRE-PROCESS cmd="include" data="external/*.xml"/>
     <!-- Dynamic, DB-driven gateways rendered by Tring on every trunk
          save. The api container writes t_<uuid>.xml files here; this

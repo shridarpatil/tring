@@ -25,7 +25,7 @@ import { toast } from "../lib/toast";
 
 const text = ref("");
 const area = ref("");
-const sel = ref("exotel");
+const sel = ref("tata");
 const on = ref(true);
 const modalOpen = ref(false);
 const tab = ref("one");
@@ -121,7 +121,6 @@ const rows = [
             v-model="sel"
             label="Provider"
             :options="[
-              { value: 'exotel', label: 'Exotel' },
               { value: 'airtel', label: 'Airtel' },
             ]"
           />
