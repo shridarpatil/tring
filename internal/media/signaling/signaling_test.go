@@ -966,3 +966,23 @@ func TestInboundPhoneCallMasksCallerForAgent(t *testing.T) {
 	fp.src.Close()
 	close(fp.done)
 }
+
+// Keepalives get a reply on both socket kinds, so a reverse proxy that times a
+// WebSocket out on silence from the server side (nginx proxy_read_timeout, 60s
+// by default) sees traffic both ways and doesn't drop idle agents every minute.
+func TestKeepaliveGetsPong(t *testing.T) {
+	ts := newServer(t)
+	tenant := uuid.New()
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+	agent.send(map[string]any{"type": "register"}) // the SDK's presence keepalive
+	agent.readUntil("pong")
+
+	call := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	call.send(map[string]any{"type": "join", "room": "room-ka", "name": "B"})
+	call.readUntil("joined")
+	call.send(map[string]any{"type": "ping"}) // the SDK's call keepalive
+	call.readUntil("pong")
+}

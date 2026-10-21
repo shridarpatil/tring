@@ -131,8 +131,15 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		// The presence socket carries keepalives and one call-control message: a
 		// decline, which advances the router to the next agent immediately (the
 		// answer happens on a separate join socket).
-		if m.Type == msgDecline {
+		switch m.Type {
+		case msgDecline:
 			s.handleDecline(tenant, sip, m.Room)
+		case msgRegister, msgPing:
+			// The SDK's keepalive. Reply so a proxy in front sees traffic from us
+			// too: otherwise this socket is silent after `ready` until a call
+			// rings, and nginx's default 60s proxy_read_timeout drops the agent
+			// offline every minute.
+			_ = c.send(msg{Type: msgPong})
 		}
 	}
 }

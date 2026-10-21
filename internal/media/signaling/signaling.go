@@ -485,9 +485,12 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 		case msgDTMF:
 			s.routeDTMF(p.Room().ID(), m.Digit)
 		case msgPing:
-			// Keepalive — the read above already reset the deadline; nothing to do.
-			// A quiet call (media rides RTP, not this socket) would otherwise hit the
-			// 90s read deadline and get dropped mid-call.
+			// Keepalive — the read above already reset the deadline. A quiet call
+			// (media rides RTP, not this socket) would otherwise hit the 90s read
+			// deadline. Reply too: a reverse proxy times a WebSocket out on silence
+			// from OUR side (nginx proxy_read_timeout, 60s by default), which the
+			// client's pings alone don't reset.
+			_ = c.send(msg{Type: msgPong})
 		case msgHold:
 			// The agent muted its own mic client-side; play the tenant's hold music
 			// into the room so the held party hears music, not dead air — and deafen

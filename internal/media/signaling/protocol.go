@@ -43,6 +43,7 @@ const (
 	msgTransferOK     = "transfer-ok"     // s→agent: blind transfer accepted; this leg will end
 	msgTransferFailed = "transfer-failed" // s→agent: transfer rejected — {reason}; agent keeps the call
 	msgSupervisor     = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
+	msgPong           = "pong"            // s→client: reply to a keepalive (ping, or an agent's re-sent register)
 	msgRinging        = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
 )
 

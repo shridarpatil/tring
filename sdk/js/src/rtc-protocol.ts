@@ -44,6 +44,8 @@ export const ServerMsgType = {
   Error: "error",
   Supervisor: "supervisor",
   TransferFailed: "transfer-failed",
+  /** Reply to a keepalive. Nothing to do: it exists so proxies see traffic both ways. */
+  Pong: "pong",
 } as const;
 
 /** Browser-facing STUN/TURN entry sent in `joined` (shape matches RTCIceServer). */

@@ -285,7 +285,8 @@ func (s *Server) supervisorReadLoop(c *conn, roomID room.RoomID, pid room.Partic
 				s.cfg.Supervisors.SuperviseMode(string(roomID), name, m.Mode)
 			}
 		case msgPing:
-			// keepalive
+			// keepalive; reply so a proxy sees traffic both ways (see readLoop)
+			_ = c.send(msg{Type: msgPong})
 		case msgBye:
 			return
 		default:

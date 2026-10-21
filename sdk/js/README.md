@@ -259,6 +259,7 @@ handshake can't set `Authorization` from a browser — native clients may use th
 | `type` | Direction | Fields | Meaning |
 |---|---|---|---|
 | `ready` | server→client | — | socket up, presence registered (you're "online") |
+| `pong` | server→client | — | reply to a keepalive (`ping`, or a re-sent `register`); ignore it. It keeps proxies from timing out the socket. |
 | `incoming` | server→client | `call_id`, `from`, `auto` | a call is ringing. `from` is a backend label, **never the dialed number** (may be empty → generic). `auto:true` ⇒ a backend click-to-call the agent already initiated → auto-answer instead of prompting Accept/Decline. |
 | `offer` | client→server | `call_id`, `sdp` | accept the call with your WebRTC offer |
 | `answer` | server→client | `call_id`, `sdp` | gateway's answer — apply it, call is connected |
