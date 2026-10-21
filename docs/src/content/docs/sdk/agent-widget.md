@@ -306,6 +306,29 @@ func main() {
 
 Run it behind TLS in production: agents need HTTPS for microphone access. Protect `/crm/call` against cross-site request forgery (CSRF) the same way you protect your CRM's other state-changing endpoints, for example with a CSRF token or `SameSite` session cookies.
 
+## Testing without a backend
+
+To take a test call before your token endpoint exists, use [`examples/agent-widget-test.html`](https://github.com/shridarpatil/tring/blob/main/examples/agent-widget-test.html). You mint a token by hand and paste it in; the page loads `agent.js` from your Tring API with it.
+
+1. Mint a token for an agent (valid for 5 minutes):
+
+   ```bash
+   curl -s -H "Authorization: Bearer $TRING_API_KEY" \
+     https://tring.example.com/v1/agents/<sip_username>/token
+   ```
+
+2. Serve the page from `localhost` (or over HTTPS; the browser blocks the microphone otherwise) and open it:
+
+   ```bash
+   python3 -m http.server 8000 --bind 127.0.0.1 --directory examples
+   # http://localhost:8000/agent-widget-test.html
+   ```
+
+3. Enter your Tring API URL, paste the whole JSON response, and click **Start widget**. The badge shows **Online** once the agent is connected.
+4. Call a number whose flow has a Transfer node targeting this agent, or a team they belong to, and accept the call in the panel.
+
+The token isn't refreshed on this page, so start the call within the 5 minutes, or mint a new token and reload. Don't use this page in production: it exists for testing, and real agents need a token endpoint on your backend.
+
 ## Styling
 
 The widget adds its CSS as `<style id="tring-styles">` in `<head>`, **unless an element with that id already exists**. To replace all the styles, put your own `<style id="tring-styles">` in the page first. To change some of them, override these selectors:
