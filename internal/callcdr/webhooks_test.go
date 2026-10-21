@@ -163,3 +163,47 @@ func TestCallWebhooksDeliveredAndSigned(t *testing.T) {
 		t.Fatalf("delivered = %v, want call.answered and call.ended", seen)
 	}
 }
+
+// An agent whose call socket reconnects rejoins as the same participant: that
+// is not another answer. Only the first join records "answered", fires
+// call.answered and attaches the recording sink; a different agent (after a
+// transfer) still counts. Regression for a call log listing "Answered" on every
+// reconnect.
+func TestAgentRejoinIsNotAnotherAnswer(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	seedAgent(t, fx, "alice")
+	seedAgent(t, fx, "bob")
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = true WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("enable recording: %v", err)
+	}
+	spy := &hookSpy{}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil).WithWebhooks(spy)
+
+	roomID := fx.TenantID.String() + "/pstn-rejoin"
+	l.Started(ctx, fx.TenantID, roomID, "+919800000001", "+919800000002", "phone", "", "caller-pid")
+	if l.Answered(roomID, "alice-pid", "alice") == nil {
+		t.Fatal("first answer: want the recording sink")
+	}
+	for range 4 { // four reconnects, as in the reported call
+		if sink := l.Answered(roomID, "alice-pid", "alice"); sink != nil {
+			t.Fatal("rejoin returned a sink: the recorder would get every agent packet twice")
+		}
+	}
+	if l.Answered(roomID, "bob-pid", "bob") == nil { // transferred to another agent
+		t.Fatal("second agent: want the recording sink")
+	}
+	l.Ended(roomID, "caller_hangup")
+
+	if want := "call.answered,call.answered,call.ended"; strings.Join(spy.got, ",") != want {
+		t.Fatalf("webhooks = %v, want %s", spy.got, want)
+	}
+	var answered int
+	if err := fx.DB.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM call_events WHERE tenant_id = $1 AND type = 'answered'`, fx.TenantID).Scan(&answered); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if answered != 2 {
+		t.Fatalf("answered timeline events = %d, want 2 (alice once, bob once)", answered)
+	}
+}

@@ -58,11 +58,12 @@ type activeCall struct {
 	tenant     uuid.UUID
 	startedAt  time.Time
 	callerPID  room.ParticipantID
-	rec        *record.Recorder // nil = tenant doesn't record
-	recRate    int              // tenant's recording sample rate (Hz), read at call start
-	recFormat  string           // tenant's recording format (record.Formats), read at call start
-	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
-	ringAgents []string         // agents rung in the current window — names the no_answer event
+	rec        *record.Recorder            // nil = tenant doesn't record
+	recRate    int                         // tenant's recording sample rate (Hz), read at call start
+	recFormat  string                      // tenant's recording format (record.Formats), read at call start
+	answered   bool                        // an agent has joined — gates RingStop's revert-to-ivr
+	answeredBy map[room.ParticipantID]bool // participants already counted as answering
+	ringAgents []string                    // agents rung in the current window — names the no_answer event
 }
 
 // Webhooks delivers tenant-registered webhooks; *webhook.Notifier implements
@@ -228,11 +229,22 @@ func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, r
 func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink {
 	l.mu.Lock()
 	ac := l.calls[roomID]
+	rejoin := false
 	if ac != nil && agentPID != ac.callerPID {
 		ac.answered = true // gate RingStop's revert-to-ivr (a late cleanup mustn't undo "talking")
+		if ac.answeredBy == nil {
+			ac.answeredBy = map[room.ParticipantID]bool{}
+		}
+		rejoin = ac.answeredBy[agentPID]
+		ac.answeredBy[agentPID] = true
 	}
 	l.mu.Unlock()
-	if ac == nil || agentPID == ac.callerPID {
+	// A rejoin is the same agent's socket reconnecting (a network blip or page
+	// refresh reattaches the same participant), not another answer: no second
+	// answered event or call.answered webhook, and no second recording sink (the
+	// first stays on the participant's publication, so re-adding it would write
+	// every agent packet twice).
+	if ac == nil || agentPID == ac.callerPID || rejoin {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
