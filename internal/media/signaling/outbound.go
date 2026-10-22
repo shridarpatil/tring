@@ -215,6 +215,11 @@ func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
 			s.removeParticipant(roomID, p.ID())
 		}
 	}
+	// A callee the IVR dialed leaves the phone caller's port behind: that call
+	// (and its supervisors) ends in endPstnRoom.
+	if !s.sfu.HasPort(roomID) {
+		s.closeSupervisors(roomID)
+	}
 	s.log.Info("outbound: room ended", "room", roomID)
 }
 

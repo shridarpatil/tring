@@ -135,7 +135,7 @@ The stream has no 30-second request timeout and stays open until you close it. A
 | `call.answered` | A call is answered | Call event from the media gateway |
 | `call.ended` | A call ends | Call event from the media gateway |
 | `call.transferred` | A call is transferred | Call event from the media gateway |
-| `call.supervised` | A supervisor joins or leaves a web call | `{"room", "mode", "present", "supervisor"}`. `present` is `false` when the supervisor left. |
+| `call.supervised` | A supervisor joins or leaves a call | `{"room", "mode", "present", "supervisor"}`. `present` is `false` when the supervisor left. |
 | `agent.presence` | An agent's connection state changes (connects, goes on or off a call, disconnects) | `{"sip_username", "status"}`, where `status` is `online`, `on_call` or `offline`. This is the raw connection state: combine it with `available_for_calls` to get `away`. |
 | `agent.status` | An agent's availability changes ([`POST /v1/agents/{id}/availability`](/tring/api-reference/agents/#post-v1agentsidavailability)) | `{"agent_id", "sip_username", "available_for_calls"}` |
 | `queues` | Queue depth or the on-call count may have changed | Same shape as [`GET /v1/queues`](#get-v1queues) |

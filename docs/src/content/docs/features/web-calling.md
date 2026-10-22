@@ -19,7 +19,7 @@ Every call is a **room** on the gateway. The visitor, the IVR and the agent are 
 |---|---|---|---|---|
 | Visitor | Gateway call token (`aud: tring.gateway`) | `POST /v1/guest-credentials`, called by **your backend** with an API key | 2 minutes, **single use** | Join one call, pinned to one IVR flow |
 | Agent | Agent token (`aud: tring.sdk`) | `GET /v1/agents/{id}/token`, called by **your backend** | 5 minutes | Go online, get rung, join calls |
-| Supervisor | Supervisor token (`aud: tring.supervisor`) | `POST /v1/calls/{id}/supervise`, console login only | 2 minutes, single use | Listen to, whisper on or barge into one live web call |
+| Supervisor | Supervisor token (`aud: tring.supervisor`) | `POST /v1/calls/{id}/supervise`, console login only | 2 minutes, single use | Listen to, whisper on or barge into one live call |
 
 All three are HS256 JWTs signed with `TRING_JWT_SECRET`. The gateway accepts them on `/rtc` as `Authorization: Bearer <token>` or `?token=<token>`. A request with no valid token gets `401`.
 
