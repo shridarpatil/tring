@@ -303,9 +303,9 @@ VALUES ($1, 'inbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLI
 RETURNING id;
 
 -- name: get-supervise-target
--- Resolve a call's pion room + status + source for a supervisor join. Scoped to
--- the tenant. room_id is NULL for non-media-plane calls (nothing to supervise).
-SELECT COALESCE(room_id, ''), status::text, source::text
+-- Resolve a call's pion room + status for a supervisor join. Scoped to the
+-- tenant. room_id is NULL for non-media-plane calls (nothing to supervise).
+SELECT COALESCE(room_id, ''), status::text
 FROM calls WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-user-supervise
@@ -407,7 +407,8 @@ WHERE c.id = $1 AND c.tenant_id = $2;
 -- One query for every filter combination (no string building): '' disables a
 -- filter. $4 status (compared as text, so an unknown value matches nothing
 -- instead of failing the enum cast); $5 call-id prefix (calls.id or leg_id);
--- $6 phone digits, matched inside from/to with formatting stripped.
+-- $6 phone digits, matched inside from/to with formatting stripped. A search
+-- sets $5, $6 or both (an all-digit id prefix); a call matching either is found.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
@@ -416,9 +417,10 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
 WHERE c.tenant_id = $1
   AND ($4 = '' OR c.status::text = $4)
-  AND ($5 = '' OR c.id::text LIKE $5 || '%' OR c.leg_id LIKE $5 || '%')
-  AND ($6 = '' OR regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
-               OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $6 || '%')
+  AND (($5 = '' AND $6 = '')
+       OR ($5 <> '' AND (c.id::text LIKE $5 || '%' OR c.leg_id LIKE $5 || '%'))
+       OR ($6 <> '' AND (regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
+                      OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $6 || '%')))
 ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 
 -- name: list-active-calls
@@ -439,9 +441,10 @@ ORDER BY c.started_at ASC LIMIT 100;
 SELECT count(*) FROM calls c
 WHERE c.tenant_id = $1
   AND ($2 = '' OR c.status::text = $2)
-  AND ($3 = '' OR c.id::text LIKE $3 || '%' OR c.leg_id LIKE $3 || '%')
-  AND ($4 = '' OR regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $4 || '%'
-               OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%');
+  AND (($3 = '' AND $4 = '')
+       OR ($3 <> '' AND (c.id::text LIKE $3 || '%' OR c.leg_id LIKE $3 || '%'))
+       OR ($4 <> '' AND (regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $4 || '%'
+                      OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%')));
 
 -- ===========================================================================
 -- mod_xml_curl directory (/fs) — FreeSWITCH SIP auth lookups

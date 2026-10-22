@@ -51,14 +51,10 @@ func (s *SFU) InjectSource(roomID room.RoomID, src room.ParticipantSource, cap w
 			others = append(others, q)
 		}
 	}
-	ports := s.portsForLocked(r, src.ID())
-	s.mu.Unlock()
-
 	// Ports (phone/WhatsApp legs) must hear injected sources too — the IVR voice
 	// playing to a phone caller rides exactly this path.
-	for _, port := range ports {
-		pub.addSink(port)
-	}
+	s.attachPortsLocked(r, src.ID(), pub)
+	s.mu.Unlock()
 
 	s.log.Info("source injected", "room", roomID, "participant", src.ID(), "codec", cap.MimeType)
 	for _, q := range others {
@@ -123,6 +119,50 @@ func (p *publication) addSink(sink room.TrackSink) {
 		next = append(next, sink)
 		if p.sinks.CompareAndSwap(old, &next) {
 			return
+		}
+	}
+}
+
+// addSinkOnce is addSink unless sink is already attached (a port must never get
+// a publisher's packets twice). Reports whether it added.
+func (p *publication) addSinkOnce(sink room.TrackSink) bool {
+	for {
+		old := p.sinks.Load()
+		var next []room.TrackSink
+		if old != nil {
+			for _, sk := range *old {
+				if sk == sink {
+					return false
+				}
+			}
+			next = append(next, *old...)
+		}
+		next = append(next, sink)
+		if p.sinks.CompareAndSwap(old, &next) {
+			return true
+		}
+	}
+}
+
+// removeSink detaches a sink (the CAS mirror of addSink). Reports whether it was
+// attached. The copy loop may still hand it one in-flight packet.
+func (p *publication) removeSink(sink room.TrackSink) bool {
+	for {
+		old := p.sinks.Load()
+		if old == nil {
+			return false
+		}
+		next := make([]room.TrackSink, 0, len(*old))
+		for _, sk := range *old {
+			if sk != sink {
+				next = append(next, sk)
+			}
+		}
+		if len(next) == len(*old) {
+			return false
+		}
+		if p.sinks.CompareAndSwap(old, &next) {
+			return true
 		}
 	}
 }

@@ -209,9 +209,10 @@ usePoll(() => (now.value = Date.now()), 1000);
             <span class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
               fmtDur(callSeconds(c))
             }}</span>
-            <!-- Supervisor controls: web calls only. Only ONE supervise session
-                 is supported at a time (the `active` ref, not per-row state). -->
-            <div v-if="c.source === 'web'" style="flex-shrink: 0; display: flex; align-items: center; gap: 0.25rem">
+            <!-- Supervisor controls: any call with a media room (web, phone,
+                 WhatsApp; calls placed over ESL have none). Only ONE supervise
+                 session is supported at a time (the `active` ref, not per-row state). -->
+            <div v-if="c.room_id" style="flex-shrink: 0; display: flex; align-items: center; gap: 0.25rem">
               <span v-if="c.supervised && active?.callId !== c.id" class="text-lighter" :title="'Supervised by ' + c.supervised"
                 >🎧 {{ c.supervised }}</span
               >

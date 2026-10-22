@@ -105,6 +105,14 @@ jobs:
         # constraint. Cheap to keep serial — total runtime is small.
         run: go test -race -p 1 -count=1 -timeout=90s ./...
 
+      - name: go test (libopus mixer)
+        # The gateway image links libopus so a supervisor's barge is mixed into
+        # phone calls (internal/media/sfu/mix_opus.go, build tag `opus`).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libopus-dev
+          go test -race -count=1 -timeout=90s -tags "opus nolibopusfile" ./internal/media/sfu/
+
   integration:
     name: FreeSWITCH integration
     # Runs on main pushes, manual dispatch, and PRs from branches in this

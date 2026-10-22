@@ -21,7 +21,7 @@ Trunks are configured in the database per tenant, but they are all loaded into t
 | **Console session** | JWT, `aud: tring.console` | `POST /v1/console/login` (email + password) | 12 hours | The api (`/v1/*`) | Same as an API key, plus supervision if the user is permitted |
 | **Agent token** | JWT, `aud: tring.sdk` | `GET /v1/agents/{id}/token` (API key) | 5 minutes | Gateway `/rtc`; api `/v1/sdk/*` | Go online as that agent, take calls, control the agent's own call |
 | **Visitor call token** | JWT, `aud: tring.gateway` | `POST /v1/guest-credentials` (API key) | 2 minutes, single use | Gateway `/rtc` | Join one call pinned to one flow |
-| **Supervisor token** | JWT, `aud: tring.supervisor` | `POST /v1/calls/{id}/supervise` (console session only) | 2 minutes, single use | Gateway `/rtc` | Listen to, whisper on or barge into one live web call |
+| **Supervisor token** | JWT, `aud: tring.supervisor` | `POST /v1/calls/{id}/supervise` (console session only) | 2 minutes, single use | Gateway `/rtc` | Listen to, whisper on or barge into one live call |
 | **FreeSWITCH basic auth** | `user:password` | `TRING_FS_BASIC_AUTH` | Static | The api (`/fs/*`) | FreeSWITCH directory lookups. Internal only |
 
 All JWTs are HS256, signed with `TRING_JWT_SECRET`, with issuer `tring`. Each kind has its own audience and is rejected anywhere else: an agent token cannot call the tenant API, and a visitor token cannot register as an agent.

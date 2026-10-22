@@ -127,6 +127,9 @@ func (s *Server) endPstnRoom(roomID room.RoomID) {
 			s.removeParticipant(roomID, p.ID())
 		}
 	}
+	// A call that ended in its IVR had no participant to leave, so routeEvent
+	// never closed its supervisors.
+	s.closeSupervisors(roomID)
 	s.log.Info("pstn: room ended", "room", roomID)
 }
 

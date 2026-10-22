@@ -12,18 +12,18 @@ import (
 	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
-// insertSuperviseCall inserts a minimal 'calls' row with the given status
-// and room_id so handleSupervise has a live web call to resolve. Fills
-// every NOT NULL column per 0001_initial_schema.up.sql / 0019 (source) /
-// 0020 (room_id).
-func insertSuperviseCall(t *testing.T, f *dbtest.Fixture, status, roomID string) uuid.UUID {
+// insertSuperviseCall inserts a minimal 'calls' row with the given source,
+// status and room_id ("" stores NULL) so handleSupervise has a call to
+// resolve. Fills every NOT NULL column per 0001_initial_schema.up.sql / 0019
+// (source) / 0020 (room_id).
+func insertSuperviseCall(t *testing.T, f *dbtest.Fixture, source, status, roomID string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	err := f.DB.Pool.QueryRow(context.Background(), `
 		INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, source, room_id)
-		VALUES ($1, 'inbound', $2, 'visitor', 'Support', $3, 'web', $4)
+		VALUES ($1, 'inbound', $2, 'visitor', 'Support', $3, $4, NULLIF($5, ''))
 		RETURNING id
-	`, f.TenantID, status, uuid.NewString(), roomID).Scan(&id)
+	`, f.TenantID, status, uuid.NewString(), source, roomID).Scan(&id)
 	if err != nil {
 		t.Fatalf("insert call: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestSuperviseMintsToken(t *testing.T) {
 	if _, err := f.DB.Pool.Exec(ctx, "UPDATE users SET can_supervise=true WHERE id=$1", f.UserID); err != nil {
 		t.Fatalf("grant can_supervise: %v", err)
 	}
-	callID := insertSuperviseCall(t, f, "answered", f.TenantID.String()+"/room-42")
+	callID := insertSuperviseCall(t, f, "web", "answered", f.TenantID.String()+"/room-42")
 	s := newTestServer(f)
 
 	req := authedRequest(t, s, f, "POST", "/v1/calls/"+callID.String()+"/supervise", "")
@@ -72,7 +72,7 @@ func TestSuperviseDeniedWithoutPermission(t *testing.T) {
 	if _, err := f.DB.Pool.Exec(ctx, "UPDATE users SET can_supervise=false WHERE id=$1", f.UserID); err != nil {
 		t.Fatalf("revoke can_supervise: %v", err)
 	}
-	callID := insertSuperviseCall(t, f, "answered", f.TenantID.String()+"/room-9")
+	callID := insertSuperviseCall(t, f, "web", "answered", f.TenantID.String()+"/room-9")
 	s := newTestServer(f)
 
 	req := authedRequest(t, s, f, "POST", "/v1/calls/"+callID.String()+"/supervise", "")
@@ -95,5 +95,38 @@ func TestSuperviseRejectsAPIKey(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// superviseStatus POSTs /supervise for callID as a console user who may
+// supervise, returning the HTTP status.
+func superviseStatus(t *testing.T, f *dbtest.Fixture, callID uuid.UUID) (int, string) {
+	t.Helper()
+	if _, err := f.DB.Pool.Exec(context.Background(), "UPDATE users SET can_supervise=true WHERE id=$1", f.UserID); err != nil {
+		t.Fatalf("grant can_supervise: %v", err)
+	}
+	s := newTestServer(f)
+	req := authedRequest(t, s, f, "POST", "/v1/calls/"+callID.String()+"/supervise", "")
+	rec := httptest.NewRecorder()
+	s.Router().ServeHTTP(rec, req)
+	return rec.Code, rec.Body.String()
+}
+
+// TestSupervisePhoneCall: a live phone call with a media room can be supervised.
+func TestSupervisePhoneCall(t *testing.T) {
+	f := dbtest.Setup(t)
+	callID := insertSuperviseCall(t, f, "phone", "ringing", f.TenantID.String()+"/pstn-abc")
+	if code, body := superviseStatus(t, f, callID); code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", code, body)
+	}
+}
+
+// TestSuperviseCallWithoutRoom: a call with no media room (placed over ESL) has
+// nothing to join.
+func TestSuperviseCallWithoutRoom(t *testing.T) {
+	f := dbtest.Setup(t)
+	callID := insertSuperviseCall(t, f, "phone", "answered", "")
+	if code, body := superviseStatus(t, f, callID); code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", code, body)
 	}
 }
