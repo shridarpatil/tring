@@ -65,4 +65,5 @@ sdk/js/dist/
 __pycache__/
 *.pyc
 .superpowers/
+docs/superpowers/
 /api
