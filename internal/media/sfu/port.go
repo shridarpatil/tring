@@ -2,6 +2,7 @@ package sfu
 
 import (
 	"sync"
+	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
@@ -21,10 +22,10 @@ import (
 // One-active-feed is deliberate: the out stream is a single RTP flow (one SSRC),
 // and interleaving two simultaneous publishers without decoding would garble.
 // For call-center calls (caller ↔ IVR, then caller ↔ agent) one speaker stream
-// at a time is correct; true N-party mixing toward PSTN needs an Opus mixer and
-// is future work. Switchover happens when the active publisher unpublishes or
-// leaves (e.g. the IVR voice is removed after a transfer → the agent's audio
-// takes over).
+// at a time is correct. Switchover happens when the active publisher unpublishes
+// or leaves (e.g. the IVR voice is removed after a transfer → the agent's audio
+// takes over). While a supervisor barges, the port mixes instead (mix.go): every
+// publisher it hears is decoded, summed and re-encoded onto the same stream.
 type roomPort struct {
 	pid   room.ParticipantID // the port's own participant id (never echoed back)
 	write func(*rtp.Packet) error
@@ -35,6 +36,11 @@ type roomPort struct {
 	seq    uint16
 	ts     uint32
 	closed bool
+
+	barging map[room.ParticipantID]struct{} // supervisors barging in; the port mixes while any are
+	mixer   *portMixer                      // non-nil while mixing
+	pt      uint8                           // payload type for mixed packets (the publishers')
+	stopMix chan struct{}                   // ends the mixing loop
 }
 
 // WriteRTP implements room.TrackSink: forward the active publisher's packets to
@@ -49,6 +55,12 @@ func (p *roomPort) WriteRTP(from room.ParticipantID, pkt *rtp.Packet) error {
 	if _, dead := p.gone[from]; dead {
 		p.mu.Unlock()
 		return nil // a removed publisher's lingering tail — never re-claim
+	}
+	if p.mixer != nil {
+		p.pt = pkt.PayloadType
+		p.mixer.push(from, pkt.Payload)
+		p.mu.Unlock()
+		return nil // mixLoop sends the mix
 	}
 	if p.active == "" {
 		p.active = from
@@ -74,8 +86,85 @@ func (p *roomPort) WriteRTP(from room.ParticipantID, pkt *rtp.Packet) error {
 func (p *roomPort) Close() error {
 	p.mu.Lock()
 	p.closed = true
+	p.stopMixingLocked()
 	p.mu.Unlock()
 	return nil
+}
+
+// setBarge records whether supervisor pid is barging. The port mixes while any
+// supervisor is, and goes back to forwarding one publisher when the last stops.
+// Returns false if mixing was wanted but this binary can't (no libopus).
+func (p *roomPort) setBarge(pid room.ParticipantID, on bool) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if on {
+		if p.barging == nil {
+			p.barging = make(map[room.ParticipantID]struct{})
+		}
+		p.barging[pid] = struct{}{}
+	} else {
+		delete(p.barging, pid)
+	}
+	if len(p.barging) == 0 {
+		p.stopMixingLocked()
+		return true
+	}
+	if p.mixer != nil || p.closed {
+		return true
+	}
+	m, err := newPortMixer()
+	if m == nil || err != nil {
+		return false
+	}
+	p.mixer, p.stopMix = m, make(chan struct{})
+	go p.mixLoop(m, p.stopMix)
+	return true
+}
+
+// stopMixingLocked ends mixing; the next packet to arrive claims the single
+// feed again (the agent, once the supervisor stopped barging). Caller holds p.mu.
+func (p *roomPort) stopMixingLocked() {
+	if p.mixer == nil {
+		return
+	}
+	close(p.stopMix)
+	p.mixer, p.stopMix = nil, nil
+	p.active = ""
+}
+
+// mixLoop sends one mixed frame every 20ms, on the port's own seq/ts/SSRC so
+// the leg sees one unbroken stream across the switch to and from mixing.
+func (p *roomPort) mixLoop(m *portMixer, stop chan struct{}) {
+	t := time.NewTicker(20 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+		}
+		p.mu.Lock()
+		if p.mixer != m {
+			p.mu.Unlock()
+			return
+		}
+		payload, ok := m.frame()
+		if !ok {
+			p.mu.Unlock()
+			continue
+		}
+		p.seq++
+		p.ts += opusFrameSamplesPort
+		out := &rtp.Packet{
+			Header: rtp.Header{
+				Version: 2, PayloadType: p.pt,
+				SequenceNumber: p.seq, Timestamp: p.ts, SSRC: portSSRC,
+			},
+			Payload: payload,
+		}
+		p.mu.Unlock()
+		_ = p.write(out)
+	}
 }
 
 // clearActive releases the active feed if it was `gone` (so the next publisher
@@ -90,6 +179,18 @@ func (p *roomPort) clearActive(gone room.ParticipantID) {
 	if p.active == gone {
 		p.active = ""
 	}
+	if p.mixer != nil {
+		p.mixer.drop(gone)
+	}
+	p.mu.Unlock()
+	p.setBarge(gone, false) // a barging supervisor left or was cut off
+}
+
+// restore lifts clearActive's ban on a publisher, so a publisher the port hears
+// again (a supervisor barging a second time) can claim the feed.
+func (p *roomPort) restore(pid room.ParticipantID) {
+	p.mu.Lock()
+	delete(p.gone, pid)
 	p.mu.Unlock()
 }
 
@@ -121,17 +222,14 @@ func (s *SFU) AttachPort(roomID room.RoomID, src room.ParticipantSource, out fun
 		r.ports = make(map[room.ParticipantID]*roomPort)
 	}
 	r.ports[src.ID()] = port
-	// Hear every EXISTING publication (future ones attach in onPublish/InjectSource).
-	existing := make([]*publication, 0, len(r.pubs))
+	// Hear every EXISTING publication its audience admits (future ones attach in
+	// onPublish/InjectSource; audience changes in SetAudience).
 	for pid, pub := range r.pubs {
-		if pid != src.ID() {
-			existing = append(existing, pub)
+		if pid != src.ID() && r.audienceHears(pid, port.pid) {
+			pub.addSinkOnce(port)
 		}
 	}
 	s.mu.Unlock()
-	for _, pub := range existing {
-		pub.addSink(port)
-	}
 
 	// And publish the leg's audio into the room.
 	return s.InjectSource(roomID, src, webrtc.RTPCodecCapability{
@@ -156,20 +254,16 @@ func (s *SFU) DetachPort(roomID room.RoomID, pid room.ParticipantID) {
 	s.RemoveSource(roomID, pid)
 }
 
-// attachPortsLocked subscribes every room port (except the publisher itself) as
-// a sink on a fresh publication. Caller holds s.mu; sinks are attached after
-// unlock by the caller via the returned list.
-func (s *SFU) portsForLocked(r *sfuRoom, publisher room.ParticipantID) []*roomPort {
-	if r == nil || r.ports == nil {
-		return nil
-	}
-	out := make([]*roomPort, 0, len(r.ports))
+// attachPortsLocked subscribes every room port (except the publisher itself)
+// that the publisher's audience admits as a sink on its publication — so a
+// supervisor in monitor/whisper never reaches the phone caller. Caller holds
+// s.mu, which keeps it ordered against SetAudience's re-wiring.
+func (s *SFU) attachPortsLocked(r *sfuRoom, publisher room.ParticipantID, pub *publication) {
 	for pid, port := range r.ports {
-		if pid != publisher {
-			out = append(out, port)
+		if pid != publisher && r.audienceHears(publisher, pid) {
+			pub.addSinkOnce(port)
 		}
 	}
-	return out
 }
 
 // HasPort reports whether a room has an attached external leg (a phone/WhatsApp

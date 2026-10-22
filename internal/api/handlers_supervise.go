@@ -54,9 +54,10 @@ type superviseResponse struct {
 	ICEServers []iceServer `json:"ice_servers"`
 }
 
-// handleSupervise mints a supervisor RTC token for a live web call. The console
-// operator must have can_supervise; the call must be a live (ringing/answered)
-// web call with a resolvable pion room. The returned token pins that room.
+// handleSupervise mints a supervisor RTC token for a live call with a media
+// room — web, phone or WhatsApp. The console operator must have can_supervise;
+// the call must be live (ringing/answered) with a resolvable pion room (calls
+// placed over ESL with POST /calls have none). The returned token pins that room.
 func (s *Server) handleSupervise(w http.ResponseWriter, r *http.Request) {
 	claims := consoleFromCtx(r.Context())
 	if claims == nil {
@@ -87,18 +88,14 @@ func (s *Server) handleSupervise(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve the live call → pion room.
-	var roomID, status, source string
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetSuperviseTarget, callID, claims.TenantID).Scan(&roomID, &status, &source)
+	var roomID, status string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetSuperviseTarget, callID, claims.TenantID).Scan(&roomID, &status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return
 	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "call lookup failed")
-		return
-	}
-	if source != "web" {
-		writeError(w, http.StatusConflict, "only web calls can be supervised")
 		return
 	}
 	if status != "answered" && status != "ringing" {

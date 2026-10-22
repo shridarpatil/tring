@@ -163,19 +163,19 @@ type Server struct {
 
 	mu           sync.Mutex
 	conns        map[room.ParticipantID]*conn
-	agents       map[string]map[string]*conn                  // online agents: tenant → sip → presence socket
-	rings        map[room.RoomID]chan struct{}                // pending transfer rings → closed when an agent joins
-	declines     map[room.RoomID]func(sip string)             // registered per active ring → an agent rejecting advances the router now
-	pstnCalls    map[room.RoomID]room.CallID                  // live phone legs by room (pstn.go)
-	outboundLegs map[room.RoomID]room.ParticipantID           // agent-initiated outbound legs by room (outbound.go)
-	onCall       map[string]int                               // "tenant|sip" → active call legs (drives on_call presence)
-	callers      map[room.RoomID]room.ParticipantID           // the IVR caller per room (flow-pinned joiner) — see handoff.go
-	handoffs     map[room.RoomID]*handoff                     // rooms waiting for a transfer handoff to end (handoff.go)
-	holds        map[room.RoomID]func()                       // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
-	transfers    map[room.RoomID]context.CancelFunc           // rooms with a blind transfer ringing → cancel (transfer.go)
-	roles        map[room.ParticipantID]partRole              // signaling-only participant roles (supervisor.go)
-	supers       map[room.RoomID]map[room.ParticipantID]*conn // supervisor conns per room (supervisor.go)
-	hangupBy     map[room.RoomID]string                       // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
+	agents       map[string]map[string]*conn                          // online agents: tenant → sip → presence socket
+	rings        map[room.RoomID]chan struct{}                        // pending transfer rings → closed when an agent joins
+	declines     map[room.RoomID]func(sip string)                     // registered per active ring → an agent rejecting advances the router now
+	pstnCalls    map[room.RoomID]room.CallID                          // live phone legs by room (pstn.go)
+	outboundLegs map[room.RoomID]room.ParticipantID                   // agent-initiated outbound legs by room (outbound.go)
+	onCall       map[string]int                                       // "tenant|sip" → active call legs (drives on_call presence)
+	callers      map[room.RoomID]room.ParticipantID                   // the IVR caller per room (flow-pinned joiner) — see handoff.go
+	handoffs     map[room.RoomID]*handoff                             // rooms waiting for a transfer handoff to end (handoff.go)
+	holds        map[room.RoomID]func()                               // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
+	transfers    map[room.RoomID]context.CancelFunc                   // rooms with a blind transfer ringing → cancel (transfer.go)
+	roles        map[room.ParticipantID]partRole                      // signaling-only participant roles (supervisor.go)
+	supers       map[room.RoomID]map[room.ParticipantID]*superSession // supervisor sessions per room (supervisor.go)
+	hangupBy     map[room.RoomID]string                               // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -371,6 +371,13 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	// Kick off the initial server offer.
 	peer.Negotiate()
+
+	// An agent joining a call a supervisor is already watching (a phone call is
+	// often watched from its IVR) must hear a whisper in progress and see the
+	// supervisor indicator. Also re-sends the indicator after a page refresh.
+	if role == roleAgent && s.supervisorsRemain(roomID) {
+		s.syncSupervisors(roomID)
+	}
 
 	// Flow-pinned room → run the IVR as a participant (once per room). The dev
 	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.

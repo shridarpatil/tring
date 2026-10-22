@@ -303,9 +303,9 @@ VALUES ($1, 'inbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLI
 RETURNING id;
 
 -- name: get-supervise-target
--- Resolve a call's pion room + status + source for a supervisor join. Scoped to
--- the tenant. room_id is NULL for non-media-plane calls (nothing to supervise).
-SELECT COALESCE(room_id, ''), status::text, source::text
+-- Resolve a call's pion room + status for a supervisor join. Scoped to the
+-- tenant. room_id is NULL for non-media-plane calls (nothing to supervise).
+SELECT COALESCE(room_id, ''), status::text
 FROM calls WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-user-supervise

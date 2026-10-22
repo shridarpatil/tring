@@ -70,7 +70,7 @@ The agent-token REST endpoints `POST /v1/sdk/calls/hold`, `POST /v1/sdk/calls/re
 
 ## Supervision
 
-A console user with the supervise permission can join a live **web** call silently and switch modes:
+A console user with the supervise permission can join a live call silently and switch modes. This works on web, phone and WhatsApp calls: any call whose audio runs through the gateway. Calls placed with `POST /v1/calls` go through FreeSWITCH only and can't be supervised.
 
 | Mode | Supervisor hears | Who hears the supervisor |
 |---|---|---|
@@ -78,8 +78,12 @@ A console user with the supervise permission can join a live **web** call silent
 | `whisper` | Everyone | The agent only |
 | `barge` | Everyone | Everyone |
 
-1. From the live calls list, the console calls `POST /v1/calls/{id}/supervise`. This endpoint accepts **only a console session**, never an API key, because the permission belongs to a user. The call must be a live (`ringing` or `answered`) call with source `web`.
+1. From the live calls list, the console calls `POST /v1/calls/{id}/supervise`. This endpoint accepts **only a console session**, never an API key, because the permission belongs to a user. The call must be live (`ringing` or `answered`) and have a media room.
 2. Tring returns a single-use supervisor token (2 minutes) pinned to that call's room, plus `gateway_url` and ICE servers.
 3. The console joins in `monitor` and can switch modes. The agent's widget shows that a supervisor is present, with the mode and name.
+
+On a phone call, a supervisor can listen from the IVR onwards, before any agent has answered. An agent who answers later is shown the supervisor and hears a whisper already in progress. The phone caller never hears a supervisor in `monitor` or `whisper`.
+
+Barge on a phone call needs the gateway to mix the agent's and the supervisor's audio into the one stream the caller receives. The gateway image does this: it is built with libopus (`-tags opus`). A gateway built without it, such as `go run ./cmd/gateway` or a release binary, logs a warning on barge, and the caller hears one of them at a time.
 
 Every session is audited (who, which call, when, which modes) and appears on the call's timeline. The first console admin created at bootstrap has the supervise permission; other users do not by default.

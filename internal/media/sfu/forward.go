@@ -159,9 +159,11 @@ type audienceDecision struct {
 
 // setAudienceState records pid's audience for the room and returns, for every
 // OTHER live peer, whether it should now hear pid — plus whether pid currently
-// has a publication to wire. Pure w.r.t. media: it only mutates the audience map
-// and snapshots peers. SetAudience (Task 2) turns the decisions into add/remove.
-func (s *SFU) setAudienceState(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) (decisions []audienceDecision, hasPub bool) {
+// has a publication to wire. Ports are re-wired here, under s.mu, so a
+// concurrent publish can't attach one the new audience excludes; the ports that
+// lost pid are returned so SetAudience can release pid as their active feed.
+// Peers are only snapshotted: SetAudience turns their decisions into add/remove.
+func (s *SFU) setAudienceState(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) (decisions []audienceDecision, hasPub bool, deafPorts []*roomPort, cantMix bool) {
 	aud := &audience{all: all}
 	if !all {
 		aud.allowed = make(map[room.ParticipantID]bool, len(allowed))
@@ -173,30 +175,59 @@ func (s *SFU) setAudienceState(roomID room.RoomID, pid room.ParticipantID, all b
 	defer s.mu.Unlock()
 	r := s.rooms[roomID]
 	if r == nil {
-		return nil, false
+		return nil, false, nil, false
 	}
 	r.audience[pid] = aud
-	_, hasPub = r.pubs[pid]
+	pub, hasPub := r.pubs[pid]
 	for opid, q := range r.peers {
 		if opid == pid {
 			continue
 		}
 		decisions = append(decisions, audienceDecision{q: q, hear: aud.hears(opid)})
 	}
-	return decisions, hasPub
+	// Barge (all) on a phone call: the caller must hear the agent and pid at
+	// once, so the ports mix. Recorded even before pid publishes.
+	for opid, port := range r.ports {
+		if opid != pid && !port.setBarge(pid, all) {
+			cantMix = true
+		}
+	}
+	if hasPub {
+		for opid, port := range r.ports {
+			if opid == pid {
+				continue
+			}
+			if aud.hears(opid) {
+				port.restore(pid) // re-admitted (e.g. a second barge): may claim the feed again
+				pub.addSinkOnce(port)
+			} else if pub.removeSink(port) {
+				deafPorts = append(deafPorts, port)
+			}
+		}
+	}
+	return decisions, hasPub, deafPorts, cantMix
 }
 
 // SetAudience sets who may hear pid and re-wires live subscribers to match:
 // peers that should now hear pid but don't get Negotiate()d (publicationsExcept
 // now includes pid); peers that must no longer hear pid have pid's tracks
-// removed. Safe to call before pid has published — it just records the audience,
-// which the eventual publish honors via publicationsExcept. This is the single
-// entry point for monitor (all=false, allowed=nil), whisper (all=false,
-// allowed=agent pids) and barge (all=true).
+// removed. Ports (phone legs) are attached to or detached from pid's
+// publication the same way. Safe to call before pid has published — it just
+// records the audience, which the eventual publish honors via
+// publicationsExcept and attachPortsLocked. This is the single entry point for
+// monitor (all=false, allowed=nil), whisper (all=false, allowed=agent pids) and
+// barge (all=true).
 func (s *SFU) SetAudience(roomID room.RoomID, pid room.ParticipantID, all bool, allowed []room.ParticipantID) {
-	decisions, hasPub := s.setAudienceState(roomID, pid, all, allowed)
+	decisions, hasPub, deafPorts, cantMix := s.setAudienceState(roomID, pid, all, allowed)
+	if cantMix {
+		s.log.Warn("barge on a phone call needs a gateway built with -tags opus; the caller hears one speaker at a time",
+			"room", roomID, "participant", pid)
+	}
 	if !hasPub {
 		return // nothing wired yet; publish-time Negotiate will honor the audience
+	}
+	for _, port := range deafPorts {
+		port.clearActive(pid) // the agent's feed takes over at once
 	}
 	for _, d := range decisions {
 		if d.hear {
@@ -339,22 +370,18 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 		}
 	}
 	var others []*Peer
-	var ports []*roomPort
 	if fresh {
 		for opid, q := range r.peers {
 			if opid != p.pid {
 				others = append(others, q)
 			}
 		}
-		ports = s.portsForLocked(r, p.pid)
+		// Ports (phone/WhatsApp legs) hear every publisher its audience admits —
+		// attach them as sinks on a fresh publication so the external caller hears
+		// this participant.
+		s.attachPortsLocked(r, p.pid, pub)
 	}
 	s.mu.Unlock()
-
-	// Ports (phone/WhatsApp legs) hear every publisher — attach them as sinks on
-	// a fresh publication so the external caller hears this participant.
-	for _, port := range ports {
-		pub.addSink(port)
-	}
 
 	p.log.Info("participant published", "codec", remote.Codec().MimeType, "kind", kind.String(), "fresh", fresh)
 
