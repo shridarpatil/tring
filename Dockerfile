@@ -5,9 +5,10 @@
 #   docker build --build-arg CMD=api      -t tring-api     .
 #   docker build --build-arg CMD=gateway  -t tring-gateway .
 #
-# Final images are distroless/cc running as non-root. CGO is off so the Go
-# binary is statically linked; the runtime carries glibc only for the bundled
-# Piper TTS (+ its onnxruntime). No shell, no package manager in the image.
+# Final images are distroless/cc running as non-root. CGO is off for the api, so
+# it is statically linked; the gateway links libopus (cgo) to mix a supervisor's
+# barge into phone calls. The runtime carries glibc for the gateway and for the
+# bundled Piper TTS (+ its onnxruntime). No shell, no package manager in the image.
 
 ARG GO_VERSION=1.26
 ARG NODE_VERSION=22
@@ -56,7 +57,9 @@ RUN npm run build && \
 # (always amd64 on a stock GitHub runner). Combined with GOARCH=$TARGETARCH
 # below, this turns multi-arch builds into native Go cross-compilation
 # instead of QEMU-emulated `go build`, which is ~10x faster for arm64.
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
+# Debian bookworm, not alpine: the gateway's libopus must match the glibc of
+# the distroless/cc-debian12 runtime.
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS builder
 
 ARG CMD=api
 # TARGETOS and TARGETARCH are auto-populated by BuildKit to the target
@@ -64,6 +67,23 @@ ARG CMD=api
 # reads these via the GOOS/GOARCH env vars below.
 ARG TARGETOS
 ARG TARGETARCH
+ARG BUILDARCH
+
+# The gateway only: a C compiler for the target arch and the target's libopus
+# (Debian multiarch), so arm64 stays a native cross-build with cgo on.
+RUN set -eux; \
+    if [ "$CMD" = gateway ]; then \
+      case "$TARGETARCH" in \
+        amd64) cross=gcc-x86-64-linux-gnu ;; \
+        arm64) cross=gcc-aarch64-linux-gnu ;; \
+        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+      esac; \
+      if [ "$TARGETARCH" = "$BUILDARCH" ]; then cross=gcc; fi; \
+      dpkg --add-architecture "$TARGETARCH"; \
+      apt-get update; \
+      apt-get install -y --no-install-recommends "$cross" pkg-config "libc6-dev:$TARGETARCH" "libopus-dev:$TARGETARCH"; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /src
 
@@ -84,11 +104,26 @@ COPY --from=sdk /widget-dist /src/internal/widget/dist
 
 # -s -w strips DWARF + symbol tables; saves ~30% binary size.
 # Trimpath removes absolute paths from binaries (reproducibility +
-# slightly smaller binary).
+# slightly smaller binary). The gateway is built with cgo and `-tags opus` so
+# ports can mix (internal/media/sfu/mix.go; nolibopusfile: only libopus is
+# needed), and its libopus.so.0 is staged in /out/lib for the runtime.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/tring ./cmd/${CMD}
+    set -eux; \
+    mkdir -p /out/lib; \
+    if [ "$CMD" = gateway ]; then \
+      case "$TARGETARCH" in \
+        amd64) triple=x86_64-linux-gnu ;; \
+        arm64) triple=aarch64-linux-gnu ;; \
+      esac; \
+      CGO_ENABLED=1 CC="$triple-gcc" PKG_CONFIG_PATH="/usr/lib/$triple/pkgconfig" \
+      GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+      go build -trimpath -tags "opus nolibopusfile" -ldflags="-s -w" -o /out/tring ./cmd/gateway; \
+      cp -L "/usr/lib/$triple/libopus.so.0" /out/lib/; \
+    else \
+      CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+      go build -trimpath -ldflags="-s -w" -o /out/tring ./cmd/${CMD}; \
+    fi
 
 # ---- piper TTS stage -----------------------------------------------------
 # Fetches the Piper release (self-contained: binary + libonnxruntime +
@@ -132,7 +167,9 @@ COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 # is found relative to the binary.
 COPY --from=piper /opt/piper /opt/piper
 COPY --from=piper /usr/local/share/piper /usr/local/share/piper
-ENV LD_LIBRARY_PATH=/opt/piper
+# libopus for the gateway (empty for the api).
+COPY --from=builder /out/lib/ /opt/tring/lib/
+ENV LD_LIBRARY_PATH=/opt/piper:/opt/tring/lib
 
 # Distroless ships /etc/passwd with `nonroot` mapped to UID 65532.
 USER nonroot:nonroot

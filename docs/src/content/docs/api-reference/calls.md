@@ -390,11 +390,11 @@ curl -sS -X POST "$TRING_URL/v1/calls/c0ffee00-6666-4a00-8f00-000000000003/resum
 
 ### POST /v1/calls/{id}/supervise
 
-Get a short-lived token for a supervisor to join a live web call through the media gateway.
+Get a short-lived token for a supervisor to join a live call through the media gateway.
 
 **Auth:** **console session only**. API keys are rejected, because the permission is per user. The signed-in user must have the supervise permission.
 
-Only `web` calls that are `ringing` or `answered` and have a media room can be supervised.
+Any call that is `ringing` or `answered` and has a media room can be supervised: web, phone and WhatsApp calls. Calls placed with `POST /v1/calls` have no media room.
 
 **Request body:** none.
 
@@ -431,7 +431,6 @@ curl -sS -X POST "$TRING_URL/v1/calls/c0ffee00-6666-4a00-8f00-000000000004/super
 | `401` | `console session required` / `invalid console session` / `bad user id` |
 | `403` | `not permitted to supervise` |
 | `404` | `call not found` |
-| `409` | `only web calls can be supervised` |
 | `409` | `call is not live` |
 | `409` | `call has no media room` |
 | `500` | `permission lookup failed` / `call lookup failed` / `token issue failed` |

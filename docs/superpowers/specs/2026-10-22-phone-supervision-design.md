@@ -1,7 +1,7 @@
 # Supervision (listen / whisper / barge) for phone calls
 
 Date: 2026-10-22
-Status: approved design, pending implementation
+Status: implemented
 
 ## Goal
 

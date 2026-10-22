@@ -103,18 +103,59 @@ func (s *Server) notifyAgentsSupervisor(roomID room.RoomID, present bool, mode, 
 	}
 }
 
-// registerSupervisor / unregisterSupervisor track supervisor conns per room so
-// they can be closed when the call ends.
-func (s *Server) registerSupervisor(roomID room.RoomID, pid room.ParticipantID, c *conn) {
+// superSession is one supervisor watching a room: its socket plus its current
+// mode, so an agent who joins later can be wired into it (syncSupervisors).
+type superSession struct {
+	c    *conn
+	mode string
+	name string
+}
+
+// registerSupervisor / unregisterSupervisor track supervisor sessions per room
+// so they can be closed when the call ends.
+func (s *Server) registerSupervisor(roomID room.RoomID, pid room.ParticipantID, c *conn, name string) {
 	s.mu.Lock()
 	if s.supers == nil {
-		s.supers = make(map[room.RoomID]map[room.ParticipantID]*conn)
+		s.supers = make(map[room.RoomID]map[room.ParticipantID]*superSession)
 	}
 	if s.supers[roomID] == nil {
-		s.supers[roomID] = make(map[room.ParticipantID]*conn)
+		s.supers[roomID] = make(map[room.ParticipantID]*superSession)
 	}
-	s.supers[roomID][pid] = c
+	s.supers[roomID][pid] = &superSession{c: c, mode: "monitor", name: name}
 	s.mu.Unlock()
+}
+
+// setSupervisorMode records a supervisor's current mode.
+func (s *Server) setSupervisorMode(roomID room.RoomID, pid room.ParticipantID, mode string) {
+	s.mu.Lock()
+	if ss := s.supers[roomID][pid]; ss != nil {
+		ss.mode = mode
+	}
+	s.mu.Unlock()
+}
+
+// syncSupervisors brings an agent who joined after a supervisor up to date: a
+// whispering supervisor's audience is recomputed so the new agent hears the
+// whisper, and the agents are re-sent the supervisor indicator. On a phone call
+// the supervisor often joins during the IVR, before any agent is in the room.
+func (s *Server) syncSupervisors(roomID room.RoomID) {
+	type sup struct {
+		pid        room.ParticipantID
+		mode, name string
+	}
+	s.mu.Lock()
+	sups := make([]sup, 0, len(s.supers[roomID]))
+	for pid, ss := range s.supers[roomID] {
+		sups = append(sups, sup{pid, ss.mode, ss.name})
+	}
+	s.mu.Unlock()
+	for _, sp := range sups {
+		if sp.mode == "whisper" {
+			all, allowed := superviseAudience(sp.mode, s.agentPIDs(roomID))
+			s.sfu.SetAudience(roomID, sp.pid, all, allowed)
+		}
+		s.notifyAgentsSupervisor(roomID, true, sp.mode, sp.name)
+	}
 }
 
 func (s *Server) unregisterSupervisor(roomID room.RoomID, pid room.ParticipantID) {
@@ -141,14 +182,25 @@ func (s *Server) closeSupervisors(roomID room.RoomID) {
 	s.mu.Lock()
 	m := s.supers[roomID]
 	conns := make([]*conn, 0, len(m))
-	for _, c := range m {
-		conns = append(conns, c)
+	for _, ss := range m {
+		conns = append(conns, ss.c)
 	}
 	s.mu.Unlock()
 	for _, c := range conns {
 		_ = c.send(msg{Type: msgEnded, Reason: "call ended"})
 		_ = c.Close()
 	}
+}
+
+// callLive reports whether roomID is a live call on this gateway, returning its
+// room participants. A phone caller is an SFU port, not a room participant, so
+// a phone call still in its IVR is live with no participants.
+func (s *Server) callLive(roomID room.RoomID) ([]*room.Participant, bool) {
+	var ps []*room.Participant
+	if r, ok := s.rooms.Get(roomID); ok {
+		ps = r.Participants()
+	}
+	return ps, len(ps) > 0 || s.sfu.HasPort(roomID)
 }
 
 // handleSupervisor joins a console supervisor to a live room as an SFU-only
@@ -182,13 +234,13 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 	s.mu.Lock()
 	s.conns[pid] = c
 	s.mu.Unlock()
-	s.registerSupervisor(roomID, pid, c)
+	s.registerSupervisor(roomID, pid, c, princ.name)
 
 	// The call must be live on THIS gateway (media is process-bound). Checked
 	// AFTER registration: if the room was already empty, closeSupervisors never
 	// ran (nothing was registered yet) so we catch it here instead.
-	r, ok := s.rooms.Get(roomID)
-	if !ok || len(r.Participants()) == 0 {
+	others, live := s.callLive(roomID)
+	if !live {
 		_ = c.send(msg{Type: msgError, Reason: "call not active"})
 		s.teardownSupervisor(roomID, pid)
 		return
@@ -208,7 +260,7 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 
 	_ = c.send(msg{Type: msgJoined, Participant: string(pid), ICEServers: s.iceServers(tenant)})
 	// Show the supervisor who's on the call.
-	for _, other := range r.Participants() {
+	for _, other := range others {
 		if other.ID() != pid {
 			_ = c.send(msg{Type: msgPeerJoined, Participant: string(other.ID()), Name: other.Name()})
 		}
@@ -275,6 +327,7 @@ func (s *Server) supervisorReadLoop(c *conn, roomID room.RoomID, pid room.Partic
 			}
 			all, allowed := superviseAudience(m.Mode, s.agentPIDs(roomID))
 			s.sfu.SetAudience(roomID, pid, all, allowed)
+			s.setSupervisorMode(roomID, pid, m.Mode)
 			// changed is computed BEFORE the append, against the current (last)
 			// mode — clicking the same mode logs nothing on the timeline.
 			changed := len(*modes) == 0 || (*modes)[len(*modes)-1] != m.Mode
