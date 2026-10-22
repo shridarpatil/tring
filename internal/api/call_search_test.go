@@ -13,10 +13,12 @@ import (
 func TestCallSearch(t *testing.T) {
 	cases := []struct{ in, id, digits string }{
 		{"", "", ""},
-		{"9800000001", "", "9800000001"},
+		{"9800000001", "9800000001", "9800000001"}, // a number, or an all-digit id prefix
 		{"+91 98000-00001", "", "919800000001"},
-		{"09800000001", "", "9800000001"}, // national leading 0 dropped
-		{"3F2B9A1C", "3f2b9a1c", ""},      // call id prefix, case-insensitive
+		{"09800000001", "09800000001", "9800000001"}, // national leading 0 dropped
+		{"9800", "", "9800"},                         // too short to be an id prefix
+		{"15693408-4339", "15693408-4339", "156934084339"},
+		{"3F2B9A1C", "3f2b9a1c", ""}, // call id prefix, case-insensitive
 		{"3f2b9a1c-0000-4000", "3f2b9a1c-0000-4000", ""},
 		{"ab%_cd", "abcd", ""}, // no LIKE wildcards from the user
 	}
@@ -84,5 +86,29 @@ func TestListCallsSearch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestListCallsSearchDigitID: a call id whose first block is all digits is
+// found by that prefix, not mistaken for a phone number only.
+func TestListCallsSearchDigitID(t *testing.T) {
+	f := dbtest.Setup(t)
+	const id = "15693408-4339-4bbc-917e-c554501827fd"
+	if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO calls (id, tenant_id, direction, status, from_number, to_number, leg_id)
+		VALUES ($1, $2, 'inbound', 'ended', '+919800000001', '+919800000089', 'leg-d')`, id, f.TenantID); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	s := newTestServer(f)
+	for _, q := range []string{id[:8], id[:13]} {
+		rec := httptest.NewRecorder()
+		s.Router().ServeHTTP(rec, authedRequest(t, s, f, "GET", "/v1/calls?page=1&q="+q, ""))
+		var env struct {
+			Items []struct{ ID string } `json:"items"`
+			Total int                   `json:"total"`
+		}
+		_ = json.Unmarshal(rec.Body.Bytes(), &env)
+		if rec.Code != http.StatusOK || env.Total != 1 || len(env.Items) != 1 || env.Items[0].ID != id {
+			t.Fatalf("q=%s: status %d, got %+v", q, rec.Code, env)
+		}
 	}
 }

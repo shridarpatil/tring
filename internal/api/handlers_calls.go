@@ -557,7 +557,9 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 // number: formatting is stripped and a national leading 0 dropped, so
 // "09741…", "+91 97410-…" and "9741…" all match a stored "+91…"/"91…".
 // Anything else is a call id (calls.id or the leg id), matched as a prefix
-// so a shortened id works.
+// so a shortened id works. Digits and hyphens alone, at least as long as a
+// UUID's first block, could be either (an id like "15693408-…"), so both are
+// returned and a call matching either is found.
 func callSearch(q string) (idPrefix, digits string) {
 	q = strings.TrimSpace(q)
 	if q == "" {
@@ -579,7 +581,10 @@ func callSearch(q string) (idPrefix, digits string) {
 			b.WriteRune(r)
 		}
 	}
-	return "", strings.TrimLeft(b.String(), "0")
+	if len(q) >= 8 && strings.Trim(q, "0123456789-") == "" {
+		idPrefix = q
+	}
+	return idPrefix, strings.TrimLeft(b.String(), "0")
 }
 
 // checkCallerID accepts an empty caller ID (use the trunk's DID) or one of the
