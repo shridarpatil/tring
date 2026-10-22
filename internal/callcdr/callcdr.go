@@ -212,7 +212,7 @@ func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, r
 		"from": from, "to": to, "source": source, "direction": direction,
 	})
 	if l.events != nil {
-		l.events.Publish(ctx, tenant.String(), events.TypeCallRinging, ringingEvent(callID, from, to, source, direction, ac.startedAt))
+		l.events.Publish(ctx, tenant.String(), events.TypeCallRinging, ringingEvent(callID, roomID, from, to, source, direction, ac.startedAt))
 	}
 	if ac.rec == nil {
 		return nil
@@ -526,8 +526,11 @@ func (l *Log) SuperviseEnd(sessionID, callRoomID, name string, modes []string) {
 	}
 }
 
-func ringingEvent(callID uuid.UUID, from, to, source, direction string, startedAt time.Time) map[string]any {
-	return map[string]any{
+// ringingEvent is the dashboard's new live-call row. It carries room_id (as
+// the snapshot does) because the supervisor controls show only for calls with a
+// media room.
+func ringingEvent(callID uuid.UUID, roomID, from, to, source, direction string, startedAt time.Time) map[string]any {
+	m := map[string]any{
 		"id":          callID,
 		"status":      "ringing",
 		"phase":       openPhase(direction),
@@ -537,6 +540,10 @@ func ringingEvent(callID uuid.UUID, from, to, source, direction string, startedA
 		"source":      source,
 		"started_at":  startedAt,
 	}
+	if roomID != "" {
+		m["room_id"] = roomID
+	}
+	return m
 }
 
 // openPhase is the live-dashboard phase a call is in the instant it opens. An

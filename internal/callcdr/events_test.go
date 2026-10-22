@@ -13,7 +13,7 @@ import (
 func TestRingingEvent(t *testing.T) {
 	id := uuid.New()
 	at := time.Unix(1700000000, 0)
-	m := ringingEvent(id, "+15551234567", "Support flow", "web", "inbound", at)
+	m := ringingEvent(id, "t/web-room", "+15551234567", "Support flow", "web", "inbound", at)
 	if m["id"] != id || m["status"] != "ringing" || m["source"] != "web" || m["direction"] != "inbound" {
 		t.Fatalf("bad ringing event: %+v", m)
 	}
@@ -25,9 +25,21 @@ func TestRingingEvent(t *testing.T) {
 func TestRingingEventOutboundDirection(t *testing.T) {
 	id := uuid.New()
 	at := time.Unix(1700000000, 0)
-	m := ringingEvent(id, "16001122", "+919900112233", "phone", "outbound", at)
+	m := ringingEvent(id, "t/pstn-call", "16001122", "+919900112233", "phone", "outbound", at)
 	if m["direction"] != "outbound" || m["source"] != "phone" {
 		t.Fatalf("bad outbound ringing event: %+v", m)
+	}
+}
+
+// TestRingingEventCarriesRoom: the dashboard shows supervisor controls only for
+// calls with a room, so a call added from this event needs room_id.
+func TestRingingEventCarriesRoom(t *testing.T) {
+	m := ringingEvent(uuid.New(), "t/pstn-call", "+919800000001", "Support", "phone", "inbound", time.Unix(1700000000, 0))
+	if m["room_id"] != "t/pstn-call" {
+		t.Fatalf("room_id = %v, want t/pstn-call", m["room_id"])
+	}
+	if _, ok := ringingEvent(uuid.New(), "", "a", "b", "phone", "inbound", time.Unix(1700000000, 0))["room_id"]; ok {
+		t.Fatal("room_id set for a call with no room")
 	}
 }
 
@@ -43,7 +55,7 @@ func TestOpenPhase(t *testing.T) {
 }
 
 func TestRingingEventCarriesPhase(t *testing.T) {
-	m := ringingEvent(uuid.New(), "+15551234567", "Support flow", "web", "inbound", time.Unix(1700000000, 0))
+	m := ringingEvent(uuid.New(), "", "+15551234567", "Support flow", "web", "inbound", time.Unix(1700000000, 0))
 	if m["phase"] != "ivr" {
 		t.Fatalf("inbound ringing event phase = %v, want ivr", m["phase"])
 	}
