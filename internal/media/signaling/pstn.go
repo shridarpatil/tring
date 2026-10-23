@@ -108,6 +108,13 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 func (s *Server) endPstnRoom(roomID room.RoomID) {
 	s.forgetPstn(roomID)
 	s.stopIVR(roomID)
+	// The leg ended on its own unless we hung it up (hangupPstnIfAbandoned
+	// recorded "system", or the agent's leave recorded "agent"). Settle BEFORE
+	// hanging up an IVR-dialed callee, whose Done would otherwise race in and
+	// settle the call as "callee_hangup".
+	if cause := s.endCauseOr(roomID, "caller_hangup"); s.cfg.Calls != nil {
+		s.cfg.Calls.Ended(string(roomID), cause)
+	}
 	// A callee the IVR dialed (ivrdial.go) is left talking to nobody — hang it
 	// up; its Done then runs endOutboundRoom.
 	s.mu.Lock()
@@ -115,9 +122,6 @@ func (s *Server) endPstnRoom(roomID room.RoomID) {
 	s.mu.Unlock()
 	if hasCallee && s.cfg.Originator != nil {
 		_ = s.cfg.Originator.HangupOutbound(calleePID)
-	}
-	if s.cfg.Calls != nil {
-		s.cfg.Calls.Ended(string(roomID), "caller_hangup")
 	}
 	if r, ok := s.rooms.Get(roomID); ok {
 		for _, p := range r.Participants() {
@@ -159,6 +163,7 @@ func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 		return
 	}
 	s.log.Info("pstn: no one serving the caller, hanging up", "room", roomID)
+	s.setHangupBy(roomID, "system") // no-op if the agent's leave was recorded first
 	_ = s.pstnGW.Hangup(callID)
 }
 
