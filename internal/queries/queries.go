@@ -145,6 +145,13 @@ type Queries struct {
 	DeleteTrunk          string `query:"delete-trunk"`
 	SelectOutboundTrunks string `query:"select-outbound-trunks"`
 
+	// ---- api startup: SIP password encryption at rest (api/secrets.go) ----
+	CountStoredSecrets        string `query:"count-stored-secrets"`
+	ListPlaintextTrunkSecrets string `query:"list-plaintext-trunk-secrets"`
+	SetTrunkSecret            string `query:"set-trunk-secret"`
+	ListPlaintextAgentSecrets string `query:"list-plaintext-agent-secrets"`
+	SetAgentSecret            string `query:"set-agent-secret"`
+
 	// ---- orchestrator: CDR settlement (runner.go) ----
 	FailCallByJob     string `query:"fail-call-by-job"`
 	MarkCallAnswered  string `query:"mark-call-answered"`

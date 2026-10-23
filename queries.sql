@@ -649,6 +649,35 @@ RETURNING id, tenant_id, name, provider_type, sip_username, sip_password, sip_re
 -- name: delete-trunk
 DELETE FROM trunks WHERE id = $1 AND tenant_id = $2;
 
+-- ===========================================================================
+-- SIP password encryption at rest (internal/secretbox, api startup)
+-- Sealed values carry the 'enc:v1:' prefix; anything else non-empty is
+-- legacy plaintext.
+-- ===========================================================================
+
+-- name: count-stored-secrets
+-- (sealed, plaintext) SIP password counts across trunks + agents.
+SELECT count(*) FILTER (WHERE sip_password LIKE 'enc:v1:%'),
+       count(*) FILTER (WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%')
+FROM (SELECT sip_password FROM trunks UNION ALL SELECT sip_password FROM agents) s;
+
+-- name: list-plaintext-trunk-secrets
+-- Locked so concurrent api replicas starting together seal each row once.
+SELECT id, sip_password FROM trunks
+WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%'
+FOR UPDATE;
+
+-- name: set-trunk-secret
+UPDATE trunks SET sip_password = $2 WHERE id = $1;
+
+-- name: list-plaintext-agent-secrets
+SELECT id, sip_password FROM agents
+WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%'
+FOR UPDATE;
+
+-- name: set-agent-secret
+UPDATE agents SET sip_password = $2 WHERE id = $1;
+
 -- name: select-outbound-trunks
 -- Active outbound DIDs joined to their active trunk, priority order.
 SELECT n.e164, tk.id, tk.provider_type
