@@ -111,9 +111,10 @@ func TestParseKey(t *testing.T) {
 	for _, s := range []string{
 		"",
 		"tring_dev_change_me",
-		hex.EncodeToString(key)[:62],                // 31 bytes of hex
-		base64.StdEncoding.EncodeToString(key[:16]), // 16 bytes
-		strings.Repeat("z", 64),                     // 64 chars, not hex
+		// 31 bytes of hex; 16 bytes of base64; 64 chars that aren't hex.
+		hex.EncodeToString(key)[:62],
+		base64.StdEncoding.EncodeToString(key[:16]),
+		strings.Repeat("z", 64),
 	} {
 		if _, err := ParseKey(s); err == nil {
 			t.Errorf("ParseKey(%q) succeeded", s)
