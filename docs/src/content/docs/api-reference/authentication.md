@@ -15,14 +15,14 @@ There are four kinds of credential. Your backend holds the first two. Browsers o
 
 | Credential | Looks like | Lifetime | Who holds it | Used for |
 |---|---|---|---|---|
-| **Tenant API key** | `tk_live_…` | Until revoked | Your backend | The whole tenant-scoped API |
+| **Tenant API key** | `tk_live_…` | Until revoked | Your backend | The tenant-scoped API, limited by the key's [scope](/tring/api-reference/api-keys/#scopes) |
 | **Console session** | JWT | 12 hours | An admin console user | The whole tenant-scoped API, plus console-only routes |
 | **Agent token** | JWT | 5 minutes | The agent's browser (agent widget) | Connecting to the media gateway, and the agent's own call control |
 | **Visitor call token** | JWT | 2 minutes, single use | The visitor's browser (visitor widget) | Placing one web call at the media gateway |
 
 ## Tenant API keys
 
-API keys are how your backend (CRM, support portal, scripts) talks to Tring. A key belongs to one tenant and has full access to that tenant's data through the API.
+API keys are how your backend (CRM, support portal, scripts) talks to Tring. A key belongs to one tenant. Its [scope](/tring/api-reference/api-keys/#scopes) decides how much of the API it reaches: `calls` covers placing and handling calls, `full` adds tenant administration (keys, trunks, webhooks, settings).
 
 ```bash
 curl -sS "$TRING_URL/v1/agents" \
