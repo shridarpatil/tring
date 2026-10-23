@@ -196,3 +196,53 @@ func TestTransferDetailNumber(t *testing.T) {
 		t.Fatalf("detail = %q, want the number (it takes precedence over team)", got)
 	}
 }
+
+const pinGatherFlow = `{
+  "version": 2,
+  "entry_node": "start",
+  "nodes": [
+    {"id":"start","type":"start","config":{}},
+    {"id":"pin","type":"gather","config":{"min_digits":4,"max_digits":4,"store_as":"pin"}},
+    {"id":"ok","type":"hangup","config":{}},
+    {"id":"retry","type":"hangup","config":{}}
+  ],
+  "edges": [
+    {"from":"start","to":"pin","condition":"default"},
+    {"from":"pin","to":"ok","condition":"default"},
+    {"from":"pin","to":"retry","condition":"timeout"}
+  ]
+}`
+
+func TestSimulateGatherBelowMinDigitsTimesOut(t *testing.T) {
+	res, err := SimulateFlow([]byte(pinGatherFlow), SimInput{DTMF: []string{"1", "2"}})
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	if res.EndedAt != "retry" {
+		t.Errorf("ended_at = %s, want 'retry' (2 digits < min 4)", res.EndedAt)
+	}
+	if _, ok := res.Vars["pin"]; ok {
+		t.Errorf("pin stored as %q, want unset", res.Vars["pin"])
+	}
+
+	res, err = SimulateFlow([]byte(pinGatherFlow), SimInput{DTMF: []string{"1", "2", "3", "4"}})
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	if res.EndedAt != "ok" || res.Vars["pin"] != "1234" {
+		t.Errorf("ended_at = %s pin = %q, want ok / 1234", res.EndedAt, res.Vars["pin"])
+	}
+}
+
+func TestInteractiveGatherBelowMinDigitsTimesOut(t *testing.T) {
+	node := &ivrNode{ID: "pin", Type: nodeGather, Config: map[string]interface{}{
+		"min_digits": float64(4), "store_as": "pin",
+	}}
+	vars := map[string]string{}
+	if _, oc := stepForInteractive(node, "12", vars, time.Now()); oc != "timeout" {
+		t.Errorf("outcome = %s, want timeout (2 digits < min 4)", oc)
+	}
+	if _, ok := vars["pin"]; ok {
+		t.Errorf("pin stored as %q, want unset", vars["pin"])
+	}
+}

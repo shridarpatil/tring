@@ -284,10 +284,18 @@ func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) 
 	return ivr.NodeResult{Outcome: "max_retries", Action: "prompt_dtmf", Detail: file}, nil
 }
 
-// Gather plays the prompt and collects up to num_digits digits, ending early on
-// a terminator ('#') or timeout. Stores the collected digits in vars[store_as].
+// Gather plays the prompt and collects up to max_digits digits (what the
+// editor writes; num_digits is the older API name, default 10 as in the
+// simulator), ending early on the terminator (default '#') or timeout. Fewer
+// than min_digits (default 1) takes the timeout branch; otherwise the
+// collected digits are stored in vars[store_as].
 func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
-	ndigits := ivr.IntFromConfig(n.Config, "num_digits", 1)
+	ndigits := ivr.IntFromConfig(n.Config, "max_digits", ivr.IntFromConfig(n.Config, "num_digits", 10))
+	minDigits := ivr.IntFromConfig(n.Config, "min_digits", 1)
+	terminator := ivr.StringFromConfig(n.Config, "terminator")
+	if terminator == "" {
+		terminator = "#"
+	}
 	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
 	store := ivr.StringFromConfig(n.Config, "store_as")
 
@@ -300,12 +308,9 @@ func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error
 	var collected strings.Builder
 	for {
 		if !ok {
-			if collected.Len() == 0 {
-				return ivr.NodeResult{Outcome: "timeout", Action: "gather", Detail: file}, nil
-			}
-			break // partial input, ended by timeout
+			break // input ended by timeout
 		}
-		if digit == "#" {
+		if digit == terminator {
 			break
 		}
 		collected.WriteString(digit)
@@ -313,6 +318,9 @@ func (d *Driver) Gather(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error
 			break
 		}
 		digit, ok = d.awaitDigit(ctx, timeout)
+	}
+	if collected.Len() == 0 || collected.Len() < minDigits {
+		return ivr.NodeResult{Outcome: "timeout", Action: "gather", Detail: file, DTMF: collected.String()}, nil
 	}
 	if store != "" {
 		d.vars[store] = collected.String()

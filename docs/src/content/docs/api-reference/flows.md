@@ -123,20 +123,22 @@ Outcomes: `digit:<d>` for a valid option (for example `digit:1`), `timeout` when
 
 #### `gather`
 
-Plays a prompt and collects several digits, for example an account number. Any key interrupts the prompt. `#` ends input early.
+Plays a prompt and collects several digits, for example an account number. Any key interrupts the prompt. The terminator key (`#` by default) ends input early.
 
 | Config | Type | Default | Description |
 |---|---|---|---|
 | `audio_file` / `greeting_text` | string | | The prompt. |
-| `num_digits` | integer | `1` | Live calls: stop after this many digits. |
-| `max_digits` | integer | `10` | Simulator only: stop after this many digits. |
+| `min_digits` | integer | `1` | Fewer digits than this takes the `timeout` branch and stores nothing. Set it equal to `max_digits` to require an exact length. |
+| `max_digits` | integer | `10` | Stop after this many digits. |
+| `num_digits` | integer | | Older name for `max_digits`, used on live calls only when `max_digits` is not set. |
+| `terminator` | string | `#` | Key that ends input early. It isn't stored. |
 | `timeout_seconds` | integer | `10` | Wait per digit. A timeout after some digits ends input with what was collected. |
 | `store_as` | string | | Variable to save the digits in. |
 
-Outcomes: `default` once at least one digit is collected, `timeout` if none are.
+Outcomes: `default` once at least `min_digits` digits are collected, `timeout` if fewer are.
 
-:::caution
-Live calls read `num_digits` (default `1`) and the simulator reads `max_digits` (default `10`). The console editor writes `max_digits`, so a gather built there collects only one digit on a live call unless `num_digits` is also set. Set both to the same value. The editor's `terminator` and `max_retries` fields on gather are not used at call time: `#` is always the terminator.
+:::note
+The editor's `max_retries` field on gather is not used at call time.
 :::
 
 #### `http_callback`
@@ -477,7 +479,7 @@ Run a batch simulation.
 Differences from a live call:
 
 - A menu digit that isn't an option goes straight to `max_retries`. There's no retry loop.
-- A `gather` reads `max_digits`, not `num_digits`.
+- A `gather` reads `max_digits` only (not `num_digits`) and ignores `terminator`.
 - An outcome with no matching edge falls back to the node's `default` edge.
 - `queue_timeout` is a simulator-only outcome. On a live call an unanswered transfer is `no_answer`.
 

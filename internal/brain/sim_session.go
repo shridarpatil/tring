@@ -237,6 +237,11 @@ func stepForInteractive(node *ivrNode, input string, vars map[string]string, now
 		step.Action = "prompt_dtmf"
 		step.Detail = promptFor(node)
 		step.DTMFInput = input
+		// Too-short entry is treated like no input, as on a live call.
+		if input == "" || len(input) < intFromConfig(node.Config, "min_digits", 1) {
+			step.Outcome = "timeout"
+			return step, "timeout"
+		}
 		if storeAs, ok := node.Config["store_as"].(string); ok && storeAs != "" {
 			vars[storeAs] = input
 		}
