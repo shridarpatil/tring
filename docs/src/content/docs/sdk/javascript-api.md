@@ -395,8 +395,8 @@ new RtcCall(opts: RtcCallOpts)
 | `hangup(): void` | Ends the call and emits `ended`. It doesn't reconnect. |
 | `sendDtmf(digit: string): void` | Sends a keypress to the room's IVR |
 | `setMuted(muted: boolean): void` | Mutes or unmutes the outgoing microphone |
-| `hold(): void` / `resume(): void` | Hold music on or off for the other party. These also mute or unmute you. |
-| `transfer({ toSip?, toTeam? }): void` | Blind transfer |
+| `hold(): void` / `resume(): void` | Hold music on or off for the other party. These also mute or unmute you. Agent tokens only. |
+| `transfer({ toSip?, toTeam? }): void` | Blind transfer. Agent tokens only. |
 | `shareScreen(constraints?): Promise<void>` | Starts sharing your screen. It throws `"not connected"` before the call has connected. |
 | `stopScreen(): void` | Stops sharing your screen |
 | `sharingScreen: boolean` | Read-only |
@@ -492,6 +492,7 @@ Both clients use one WebSocket to `{gatewayUrl}/rtc?token=<jwt>` (`ws://` or `ws
 - **The first message sets the connection's role.** `register` makes it an agent's presence connection: the gateway replies `ready` and later sends `incoming` / `incoming-cancel`. `join` (with a `room`) makes it a call connection.
 - **The gateway makes the WebRTC offer.** The client answers with `answer` and exchanges `ice` candidates as they're found, in both directions.
 - **In-call messages** from the client: `dtmf`, `hold`, `resume`, `transfer`, `publish` / `unpublish` (screen sharing), and `bye`. From the server: `peer-joined`, `peer-left`, `peer-state`, `ended`, `supervisor`, `transfer-failed` and `error`.
+- **Agent-only messages.** `hold`, `resume`, `transfer` and `dial` are accepted only on an agent's call connection. Sent with a visitor token they're ignored and the gateway replies `error` ("only an agent can hold" / "only an agent can resume"), `transfer-failed` for `transfer`, or `error` for `dial`. A visitor may send `dtmf`, `publish` / `unpublish` (screen sharing its own screen) and `bye`.
 - **Who can join a call.** A `join` to a room that already has a call in it is only accepted from an agent that was rung for it (`incoming`), and only the first of them to answer; anyone else gets `error` "not invited to this call". Joining a new, empty room is always allowed. A `session_token` rejoin is unaffected.
 - **Limits.** The first message must arrive within 10 seconds of connecting. A single message over 64 KB closes the socket.
 - **Keepalive.** The gateway drops a socket that has been silent for about 90 seconds, so the SDK sends a `ping` (calls) or a repeated `register` (presence) every 25 seconds.
