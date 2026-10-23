@@ -38,6 +38,16 @@ COPY conf/sip_profiles/whatsapp/profile.xml      /usr/share/freeswitch/conf/vani
 # IPv6 hosts with none of Tring's settings (ACLs, bindings).
 RUN rm -f /usr/share/freeswitch/conf/vanilla/sip_profiles/*-ipv6.xml
 
+# Drop the stock demo dialplans (pizza demo, talking clock, example.com
+# gateway bridges) that default.xml's `include default/*.xml` would load, the
+# unused public/ samples, and the stock features / skinny-patterns contexts.
+# Tring routes only through its own extensions.
+RUN rm -rf /usr/share/freeswitch/conf/vanilla/dialplan/default/* \
+           /usr/share/freeswitch/conf/vanilla/dialplan/public/* \
+           /usr/share/freeswitch/conf/vanilla/dialplan/features.xml \
+           /usr/share/freeswitch/conf/vanilla/dialplan/skinny-patterns.xml \
+           /usr/share/freeswitch/conf/vanilla/dialplan/skinny-patterns
+
 # Dynamic trunk dir stays a runtime volume — just ensure the (empty) path exists.
 RUN mkdir -p /usr/share/freeswitch/conf/vanilla/sip_profiles/external/dynamic \
  && mkdir -p /etc/freeswitch/sip_profiles/external/dynamic

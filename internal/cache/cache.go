@@ -31,15 +31,24 @@ type Cache struct {
 	rdb *redis.Client
 }
 
-// New dials Redis at addr (host:port) and verifies the connection with a
-// short ping. An empty addr returns (nil, nil) — caching disabled. A
-// non-empty addr that can't be reached returns an error so the caller can
+// Options builds the go-redis client options for addr (host:port) and an
+// optional password (Redis AUTH / requirepass; empty = no auth). Every Redis
+// client in the app is built from this so connection settings can't drift
+// between call sites.
+func Options(addr, password string) *redis.Options {
+	return &redis.Options{Addr: addr, Password: password}
+}
+
+// New dials Redis at addr (host:port), authenticating with password when
+// non-empty, and verifies the connection with a short ping. An empty addr
+// returns (nil, nil) — caching disabled. A non-empty addr that can't be
+// reached (or rejects the password) returns an error so the caller can
 // decide whether to fail hard or log-and-disable.
-func New(addr string) (*Cache, error) {
+func New(addr, password string) (*Cache, error) {
 	if addr == "" {
 		return nil, nil
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(Options(addr, password))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {

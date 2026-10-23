@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/shridarpatil/tring/internal/cache"
 )
 
 const subBuffer = 16
@@ -49,11 +51,11 @@ type Hub struct {
 
 // NewHub dials Redis at addr. Empty addr → (nil, nil): live streaming disabled
 // (the SSE handler still serves the connect-time snapshot).
-func NewHub(addr string, logger *slog.Logger) (*Hub, error) {
+func NewHub(addr, password string, logger *slog.Logger) (*Hub, error) {
 	if addr == "" {
 		return nil, nil
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(cache.Options(addr, password))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
