@@ -61,7 +61,7 @@ func ParseKey(s string) ([]byte, error) {
 	if k, err := base64.StdEncoding.DecodeString(s); err == nil && len(k) == KeySize {
 		return k, nil
 	}
-	return nil, errors.New("secrets key must be 64 hex characters or base64 of 32 bytes")
+	return nil, fmt.Errorf("secrets key must be 32 bytes: 64 hex characters (generate with: openssl rand -hex 32) or base64 of 32 bytes; got %d characters", len(s))
 }
 
 // IsSealed reports whether v is a sealed value (vs legacy plaintext).
