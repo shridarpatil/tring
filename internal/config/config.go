@@ -163,6 +163,35 @@ var defaults = map[string]any{
 	"fsplug_rtp_min":       12000,
 	"fsplug_rtp_max":       12100,
 	"fsplug_fs_sip":        "127.0.0.1:5060",
+
+	// fs_addr is the loopback-only listener for the FreeSWITCH-facing /fs/*
+	// endpoints (mod_xml_curl). Kept off api_addr so a reverse proxy or an
+	// open :8085 never exposes the agent SIP directory.
+	"fs_addr": "127.0.0.1:8088",
+	// allow_insecure_secrets lets the binaries boot with the built-in dev
+	// secrets above. Local dev only — see WeakSecrets.
+	"allow_insecure_secrets": false,
+}
+
+// secretMinLen is the shortest value WeakSecrets accepts per secret key.
+var secretMinLen = map[string]int{
+	"jwt_secret":    32,
+	"fs_basic_auth": 16,
+	"esl_password":  16,
+}
+
+// WeakSecrets returns the given secret keys whose value is still the
+// built-in dev default or shorter than its minimum length. Binaries refuse
+// to start when this is non-empty unless allow_insecure_secrets is set.
+func WeakSecrets(k *koanf.Koanf, keys ...string) []string {
+	var weak []string
+	for _, key := range keys {
+		v := k.String(key)
+		if v == defaults[key] || len(v) < secretMinLen[key] {
+			weak = append(weak, key)
+		}
+	}
+	return weak
 }
 
 // Load returns a koanf instance populated with defaults, then overlaid

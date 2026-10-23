@@ -65,8 +65,11 @@ services:
       POSTGRES_PASSWORD: tring_dev
       POSTGRES_DB: tring
       TZ: ${TZ:-Asia/Kolkata}
+    # Loopback only: api/gateway use host networking and reach it on
+    # 127.0.0.1. A bare "5434:5432" publishes on 0.0.0.0 and Docker's iptables
+    # rules bypass ufw/firewalld, exposing the DB to the network.
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - tring-db-data:/var/lib/postgresql/data
       # Schema is owned by the embedded golang-migrate (see
@@ -93,8 +96,9 @@ services:
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     environment:
       TZ: ${TZ:-Asia/Kolkata}
+    # Loopback only (no auth configured) — see the postgres ports note.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

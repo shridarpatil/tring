@@ -18,7 +18,7 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/shridarpatil/tring/main/install.sh | sh
 #   cd tring
-#   cp .env.example .env     # edit network IPs, TZ, admin password, TRING_TAG
+#   $EDITOR .env             # generated with random secrets; set network IPs, TZ, TRING_TAG
 #   docker compose pull && docker compose up -d
 #
 # Override the target dir:
@@ -70,23 +70,34 @@ for d in $DIRS; do
     mkdir -p "$d"
 done
 
+# First run only: create .env with fresh random secrets. The api and gateway
+# refuse to start while the .env.example placeholders are still in place.
+rand() { od -An -tx1 -N24 /dev/urandom | tr -d ' \n'; }
+if [ ! -f .env ]; then
+    sed -e "s|^TRING_JWT_SECRET=.*|TRING_JWT_SECRET=$(rand)$(rand)|" \
+        -e "s|^TRING_FS_BASIC_AUTH=.*|TRING_FS_BASIC_AUTH=fs:$(rand)|" \
+        -e "s|^TRING_ESL_PASSWORD=.*|TRING_ESL_PASSWORD=$(rand)|" \
+        -e "s|^TRING_ADMIN_PASSWORD=.*|TRING_ADMIN_PASSWORD=$(rand)|" \
+        .env.example > .env
+    chmod 600 .env
+    echo "  .env (random secrets generated)"
+fi
+
 cat <<EOF
 
 tring: ready in $(pwd)
 
 Next steps:
   cd $TARGET
-  cp .env.example .env
 
-  # Edit .env — for a SERVER (not localhost) the network IPs are what people
+  # .env was generated with random secrets (admin password included).
+  # Edit it — for a SERVER (not localhost) the network IPs are what people
   # get wrong (see section 5 of .env.example and docs/src/content/docs/architecture/state-and-ha.md):
   #   TRING_GATEWAY_PUBLIC_URL=https://gw.your-domain  # browser-reachable, must hit /rtc
   #   TRING_PUBLIC_IP=<public/elastic ip>   # rewrites the gateway's WebRTC ICE candidate
   #   TRING_REDIS_ADDR=127.0.0.1:6379       # gateway HARD-dep when REQUIRE_AUTH=true (default)
   #   TZ=Asia/Kolkata                       # applies to every container
-  #   TRING_ADMIN_PASSWORD=...               # and the JWT/FS secrets
   #   TRING_TAG=develop                      # pin a release (e.g. v0.1.0) for production
-
   docker compose pull        # pull the shridh0r/tring-* images + Postgres/Redis
   docker compose up -d
 

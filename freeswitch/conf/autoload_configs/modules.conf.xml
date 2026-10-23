@@ -47,7 +47,8 @@
     <!-- <load module="mod_khomp"/>   -->
     <load module="mod_rtc"/>
     <!-- <load module="mod_rtmp"/>   -->
-    <load module="mod_verto"/>
+    <!-- mod_verto off: unused by Tring, and its stock config listens on 8081/8082. -->
+    <!-- <load module="mod_verto"/> -->
 
     <!-- Applications -->
     <!-- mod_signalwire disabled: Tring doesn't use SignalWire's cloud, and it
@@ -127,7 +128,8 @@
     <!-- <load module="mod_python"/> -->
     <!-- <load module="mod_python3"/> -->
     <!-- <load module="mod_java"/> -->
-    <load module="mod_lua"/>
+    <!-- mod_lua off: unused by Tring; one less scripting surface over ESL. -->
+    <!-- <load module="mod_lua"/> -->
 
     <!-- ASR /TTS -->
     <!-- <load module="mod_flite"/> -->
