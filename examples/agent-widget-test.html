@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent widget test</title>
+<!--
+  Test page for the agent widget (agent.js) with a token you mint by hand —
+  no backend needed. Use it to take an end-to-end call: phone → IVR →
+  Transfer node → this browser.
+
+  1. Mint a token with your tenant API key (valid 5 minutes):
+       curl -s -H "Authorization: Bearer $TRING_API_KEY" \
+         https://tring.example.com/v1/agents/<sip_username>/token
+  2. Serve this file over https, or from localhost (browsers only allow the
+     microphone in a secure context):
+       python3 -m http.server 8000 --bind 127.0.0.1 --directory examples
+     then open http://localhost:8000/agent-widget-test.html
+  3. Paste the API URL and the token response, click Start, and call your
+     number within the 5 minutes.
+
+  The pasted JSON is handed to agent.js through an in-memory blob: URL used as
+  its data-token-url, so the widget also gets gateway_url and ice_servers
+  (TURN). Nothing is stored or sent anywhere except to your own Tring.
+-->
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1a1d21; --muted: #5a636e;
+    --border: #e4e7eb; --accent: #0d9488; --danger: #dc2626; --input: #f1f3f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --card: #161b22; --ink: #e6edf3; --muted: #9ba8b7;
+      --border: #2a323d; --accent: #2dd4bf; --danger: #f85149; --input: #1c232d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 40rem; margin: 2rem auto; padding: 0 1rem 6rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+  p { margin: 0 0 1rem; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem; }
+  label { display: block; font-weight: 600; margin: 1rem 0 .25rem; }
+  label:first-child { margin-top: 0; }
+  small { display: block; color: var(--muted); margin-top: .25rem; }
+  input, textarea { width: 100%; padding: .5rem .625rem; border: 1px solid var(--border);
+                    border-radius: 6px; background: var(--input); color: var(--ink); font: inherit; }
+  textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; min-height: 9rem; }
+  button { margin-top: 1rem; padding: .55rem 1.1rem; border: 0; border-radius: 6px;
+           background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { margin-top: 1rem; min-height: 1.5em; }
+  #msg.error { color: var(--danger); }
+  ol { padding-left: 1.25rem; color: var(--muted); }
+  code { font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent widget test</h1>
+  <p>Take a real call in this browser with a token you minted by hand.</p>
+
+  <div class="card">
+    <label for="api">Tring API URL</label>
+    <input id="api" placeholder="https://tring.example.com" autocomplete="off" />
+    <small>agent.js is loaded from <code>&lt;API URL&gt;/sdk/agent.js</code>.</small>
+
+    <label for="creds">Token response</label>
+    <textarea id="creds" spellcheck="false" placeholder='Paste the whole JSON from GET /v1/agents/&lt;id&gt;/token:
+{ "token": "eyJ…", "expires_at": "…", "gateway_url": "https://…", "ice_servers": [ … ] }
+
+or just the token on its own.'></textarea>
+
+    <label for="gw">Gateway URL</label>
+    <input id="gw" placeholder="Only needed if you pasted a bare token" autocomplete="off" />
+
+    <button id="start">Start widget</button>
+    <div id="msg" role="status"></div>
+  </div>
+
+  <ol>
+    <li>After Start, the badge at the bottom left should say <b>Online</b>.</li>
+    <li>Call your number and choose the IVR option whose Transfer node targets this agent (or a team they're in).</li>
+    <li>The panel at the bottom right rings: <b>Accept</b>, talk, try Hold, then hang up.</li>
+    <li>The token lasts 5 minutes and isn't refreshed here: if you take longer, mint a new one and reload.</li>
+  </ol>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const say = (text, error) => { $("msg").textContent = text; $("msg").className = error ? "error" : ""; };
+
+function parseCreds(raw) {
+  raw = raw.trim();
+  if (!raw) throw new Error("Paste the token response first.");
+  if (raw.startsWith("{")) {
+    const c = JSON.parse(raw);
+    if (!c.token) throw new Error("The JSON has no \"token\" field.");
+    return c;
+  }
+  return { token: raw };
+}
+
+$("start").addEventListener("click", () => {
+  let api, creds;
+  try {
+    api = new URL($("api").value.trim()).origin;
+    creds = parseCreds($("creds").value);
+  } catch (e) {
+    return say(e instanceof SyntaxError ? "That isn't valid JSON." : e.message || "Enter a valid API URL.", true);
+  }
+  const gw = $("gw").value.trim();
+  if (gw) creds.gateway_url = gw;
+  if (!creds.gateway_url) return say("No gateway URL: paste the full JSON, or fill in Gateway URL.", true);
+
+  if (!window.isSecureContext) {
+    say("Not a secure context: the microphone will be blocked. Open this page over https or from localhost.", true);
+  }
+  try {
+    const parts = creds.token.split(".");
+    const exp = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"))).exp;
+    if (exp && exp * 1000 < Date.now()) return say("This token has expired. Mint a new one.", true);
+  } catch { /* not a decodable JWT; let the gateway decide */ }
+
+  // agent.js reads data-token-url and fetches it; a blob: URL serves the pasted
+  // JSON (token + gateway_url + ice_servers) without a backend.
+  const tokenUrl = URL.createObjectURL(new Blob([JSON.stringify(creds)], { type: "application/json" }));
+  const s = document.createElement("script");
+  s.src = api + "/sdk/agent.js";
+  s.dataset.tokenUrl = tokenUrl;
+  s.dataset.apiBase = api;
+  s.onload = () => say("Widget loaded. Check the badge at the bottom left.");
+  s.onerror = () => say(`Couldn't load ${s.src}. Check the API URL.`, true);
+  document.body.appendChild(s);
+
+  $("start").disabled = true;
+  for (const id of ["api", "creds", "gw"]) $(id).disabled = true;
+  say("Loading widget…");
+});
+</script>
+</body>
+</html>

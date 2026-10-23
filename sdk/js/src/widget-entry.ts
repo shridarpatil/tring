@@ -1,32 +1,24 @@
 // Auto-init entry for the drop-in <script> bundle (agent.iife.js).
 //
-// Reads config from its own <script> tag's data-* attributes:
+// Reads config from its own <script> tag's data-* attributes. Recommended:
+//
+//   <script src=".../sdk/agent.js" data-token-url="/tring/agent-token"></script>
+//
+// data-token-url is a same-origin endpoint on YOUR backend that checks the
+// agent's session and returns Tring's GET /v1/agents/{id}/token response
+// ({ token, gateway_url, ice_servers }) unchanged. The widget fetches it at
+// start-up, on every reconnect and before each transfer-list request, so the
+// 5-minute token never needs refreshing by hand. The browser never sees the
+// API key. For a quick test, a static token works instead (no refresh):
 //
 //   <script src=".../sdk/agent.js"
-//           data-gateway-url="https://gw.tring.io"
-//           data-token="<jwt>" />
+//           data-token="<jwt>" data-gateway-url="https://gw.example.com"></script>
 //
-// or with a refresh endpoint:
-//
-//   <script src=".../sdk/agent.js"
-//           data-gateway-url="https://gw.tring.io"
-//           data-token-url="/tring/token" />
-//
-// The token endpoint should return `{ "token": "<jwt>" }` after the
-// integrating server mints a fresh JWT for the current agent (using its
-// tenant API key). The browser never sees the API key. The widget only
-// connects the gateway WebSocket and renders the in-call panel — it does NOT
-// place calls (origination is backend-only; see widget.ts).
-//
-// Optional call control (Hold):
-//
-//   <script src=".../sdk/agent.js" data-token-url="/tring/token"
-//           data-control-url="/tring/call-control" />
-//
-// The Hold button POSTs `{ call_id, action: "hold"|"resume" }` (with
-// credentials) to data-control-url — a same-origin endpoint on YOUR backend
-// that proxies to Tring's POST /v1/calls/{id}/hold with the tenant API key.
-// Omit data-control-url and the Hold button is hidden.
+// Call control needs no backend: Hold/Resume, Transfer, Mute, DTMF and Hang up
+// go over the call socket to the gateway; the transfer list comes from
+// {apiBase}/v1/sdk/transfer-targets with the agent token (apiBase is derived
+// from this script's src, or data-api-base). The widget does NOT place calls
+// (origination is backend-only; see widget.ts).
 
 import { bootstrap } from "./widget";
 import { Tring } from "./tring";
