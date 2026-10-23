@@ -117,11 +117,46 @@ func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to, callerI
 	return leg, callerID, to, err
 }
 
+// maxAgentOutbound caps one agent's concurrent outbound calls (across rooms).
+// An agent talks on one call at a time; the second slot covers a just-ended
+// call that is still tearing down.
+const maxAgentOutbound = 2
+
+// beginDial reserves the room's single outbound slot and one of the agent's
+// slots. false → a call is already being placed/up in this room, or the agent
+// is at its cap. The returned func releases both.
+func (s *Server) beginDial(roomID room.RoomID, agentKey string) (func(), bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dialing[roomID] || s.agentDials[agentKey] >= maxAgentOutbound {
+		return nil, false
+	}
+	s.dialing[roomID] = true
+	s.agentDials[agentKey]++
+	return func() {
+		s.mu.Lock()
+		delete(s.dialing, roomID)
+		if s.agentDials[agentKey]--; s.agentDials[agentKey] <= 0 {
+			delete(s.agentDials, agentKey)
+		}
+		s.mu.Unlock()
+	}, true
+}
+
 // handleAgentDial places an outbound call on behalf of an agent already in
 // roomID and plugs the resulting leg into that SAME room. Run in its own
 // goroutine by the read loop (msgDial) since Originate blocks until answered,
-// failed, or the call ends.
-func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID room.ParticipantID, to string) {
+// failed, or the call ends. One outbound call per room at a time, and at most
+// maxAgentOutbound per agent — repeated dials would otherwise each bill a
+// carrier leg, with only the last one tracked for hangup.
+func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, sip string, agentPID room.ParticipantID, to string) {
+	release, ok := s.beginDial(roomID, tenant.String()+"|"+sip)
+	if !ok {
+		s.sendError(agentPID, "a call is already in progress")
+		return
+	}
+	defer release()
+
 	leg, callerID, to, err := s.originateOut(context.Background(), tenant, to, "", func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})

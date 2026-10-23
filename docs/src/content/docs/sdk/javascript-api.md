@@ -492,6 +492,7 @@ Both clients use one WebSocket to `{gatewayUrl}/rtc?token=<jwt>` (`ws://` or `ws
 - **The first message sets the connection's role.** `register` makes it an agent's presence connection: the gateway replies `ready` and later sends `incoming` / `incoming-cancel`. `join` (with a `room`) makes it a call connection.
 - **The gateway makes the WebRTC offer.** The client answers with `answer` and exchanges `ice` candidates as they're found, in both directions.
 - **In-call messages** from the client: `dtmf`, `hold`, `resume`, `transfer`, `publish` / `unpublish` (screen sharing), and `bye`. From the server: `peer-joined`, `peer-left`, `peer-state`, `ended`, `supervisor`, `transfer-failed` and `error`.
+- **Who can join a call.** A `join` to a room that already has a call in it is only accepted from an agent that was rung for it (`incoming`), and only the first of them to answer; anyone else gets `error` "not invited to this call". Joining a new, empty room is always allowed. A `session_token` rejoin is unaffected.
 - **Limits.** The first message must arrive within 10 seconds of connecting. A single message over 64 KB closes the socket.
 - **Keepalive.** The gateway drops a socket that has been silent for about 90 seconds, so the SDK sends a `ping` (calls) or a repeated `register` (presence) every 25 seconds.
 - **Rejoining.** `joined` returns a `session_token`. After a drop, the client sends it in its next `join` to get its place in the call back within the gateway's grace period.

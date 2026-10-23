@@ -188,6 +188,9 @@ type Server struct {
 	roles        map[room.ParticipantID]partRole                      // signaling-only participant roles (supervisor.go)
 	supers       map[room.RoomID]map[room.ParticipantID]*superSession // supervisor sessions per room (supervisor.go)
 	hangupBy     map[room.RoomID]string                               // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
+	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
+	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
+	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
 
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
@@ -224,6 +227,9 @@ func New(cfg Config) *Server {
 		handoffs:     make(map[room.RoomID]*handoff),
 		holds:        make(map[room.RoomID]func()),
 		transfers:    make(map[room.RoomID]context.CancelFunc),
+		invites:      make(map[room.RoomID]map[string]bool),
+		dialing:      make(map[room.RoomID]bool),
+		agentDials:   make(map[string]int),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -329,6 +335,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if p == nil { // fresh join, or reattach failed (expired) → new slot
+		// A fresh join may only start a new room, or — for an agent — answer a
+		// call it was rung for. Otherwise any agent who learned a room name (every
+		// ring_all agent is told it) could join a live call: listen in, transfer it
+		// away or dial into it, bypassing supervision. Dev tokens are exempt so the
+		// two-tab local test client still works.
+		if !s.cfg.DevTokens && s.roomOccupied(roomID) && (princ.isVisitor || !s.takeInvite(roomID, princ.sip)) {
+			s.log.Warn("join refused: call already in progress", "room", roomID, "visitor", princ.isVisitor, "sip", princ.sip)
+			_ = c.send(msg{Type: msgError, Reason: "not invited to this call"})
+			_ = netConn.Close()
+			return
+		}
 		// Burn a visitor token's jti once, on the FIRST (non-reattach) join, so a
 		// captured token can't be amplified into many calls. Fails closed.
 		if princ.isVisitor {
@@ -532,7 +549,7 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 				_ = c.send(msg{Type: msgError, Reason: "outbound calling is agent-only"})
 				continue
 			}
-			go s.handleAgentDial(p.Room().ID(), tenant, p.ID(), m.To)
+			go s.handleAgentDial(p.Room().ID(), tenant, sip, p.ID(), m.To)
 		case msgBye:
 			// An explicit hangup — attribute the call's end to this party (first Bye wins).
 			s.markHangupInitiator(p.Room().ID(), p.ID())
