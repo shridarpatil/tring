@@ -25,13 +25,7 @@ Tring runs as a set of Docker containers. You need **Docker** with the **Compose
 
    Set `TRING_DIR=/srv/tring` before `sh install.sh` to install somewhere else.
 
-2. Create your config:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   For a first local run the defaults work. Change the admin password (`TRING_ADMIN_PASSWORD`) before anyone else can reach the machine.
+2. Review your config. `install.sh` created `.env` with random secrets, including the admin password (`TRING_ADMIN_PASSWORD`). For a first local run the other defaults work.
 
 3. Start everything:
 
@@ -50,7 +44,7 @@ Tring runs as a set of Docker containers. You need **Docker** with the **Compose
 
    ```bash
    git clone https://github.com/shridarpatil/tring && cd tring
-   cp .env.example .env
+   make .env   # copies .env.example with random secrets
    ```
 
 2. Build and start:
