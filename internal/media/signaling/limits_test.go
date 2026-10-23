@@ -72,14 +72,18 @@ func TestReadClientTextCapsSize(t *testing.T) {
 	}
 }
 
-func limitsServer(t *testing.T) (*httptest.Server, string) {
+func limitsServer(t *testing.T, joinTimeout time.Duration) (*httptest.Server, string) {
 	t.Helper()
 	sf, err := sfu.New(sfu.Config{})
 	if err != nil {
 		t.Fatalf("new sfu: %v", err)
 	}
 	secret := []byte("limits-secret")
-	ts := httptest.NewServer(New(Config{SFU: sf, JWTSecret: secret}).Handler())
+	srv := New(Config{SFU: sf, JWTSecret: secret})
+	if joinTimeout > 0 {
+		srv.joinTimeout = joinTimeout // set before serving: no race with handlers
+	}
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"tenant": uuid.New().String(), "sip_user": "a",
@@ -105,11 +109,7 @@ func waitClosed(c net.Conn, d time.Duration) bool {
 
 // An authenticated socket that never sends its join/register is dropped.
 func TestIdleBeforeJoinTimesOut(t *testing.T) {
-	old := joinTimeout
-	joinTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { joinTimeout = old })
-
-	_, u := limitsServer(t)
+	_, u := limitsServer(t, 200*time.Millisecond)
 	c, _, _, err := ws.Dial(context.Background(), u)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -122,7 +122,7 @@ func TestIdleBeforeJoinTimesOut(t *testing.T) {
 
 // One oversized message gets the connection closed, not buffered.
 func TestOversizeMessageClosesConn(t *testing.T) {
-	_, u := limitsServer(t)
+	_, u := limitsServer(t, 0)
 	c, _, _, err := ws.Dial(context.Background(), u)
 	if err != nil {
 		t.Fatalf("dial: %v", err)

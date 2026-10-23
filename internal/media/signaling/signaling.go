@@ -153,6 +153,10 @@ type Server struct {
 	rooms *room.Manager
 	log   *slog.Logger
 
+	// joinTimeout bounds the wait for a socket's first message (defaultJoinTimeout;
+	// a field so tests can shorten it without racing live handlers).
+	joinTimeout time.Duration
+
 	// brain drives IVR sessions in-process — the brain is embedded in this server.
 	// One Runner shared across all rooms; state per-room inside the Runner.
 	brain *brain.Runner
@@ -201,6 +205,7 @@ func New(cfg Config) *Server {
 		cfg:          cfg,
 		sfu:          cfg.SFU,
 		log:          cfg.Logger.With("component", "signaling"),
+		joinTimeout:  defaultJoinTimeout,
 		brain:        brain.NewRunner(cfg.Logger),
 		conns:        make(map[room.ParticipantID]*conn),
 		agents:       make(map[string]map[string]*conn),
@@ -271,7 +276,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// (presence, can be rung into a call); `join` = a call participant. Bound
 	// the wait so an authenticated-but-silent socket can't pin this goroutine;
 	// each role's read loop sets its own deadline from here on.
-	_ = netConn.SetReadDeadline(time.Now().Add(joinTimeout))
+	_ = netConn.SetReadDeadline(time.Now().Add(s.joinTimeout))
 	first, err := c.read()
 	if err != nil {
 		_ = netConn.Close()
@@ -731,9 +736,8 @@ type conn struct {
 	writeMu sync.Mutex
 }
 
-// joinTimeout bounds the wait for a socket's first (join/register) message.
-// A var so tests can shorten it.
-var joinTimeout = 10 * time.Second
+// defaultJoinTimeout bounds the wait for a socket's first (join/register) message.
+const defaultJoinTimeout = 10 * time.Second
 
 // maxWSMessageBytes caps one client message. The largest legitimate one is an
 // SDP answer (a few KiB, more with screen share); 64 KiB leaves ample room.
