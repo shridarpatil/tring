@@ -469,7 +469,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls/transfer", s.handleSdkTransfer)
 		})
 		// Outbound origination is backend-only (POST /v1/calls, API key); the
-		// agent JWT authenticates the gateway WebSocket and nothing else.
+		// agent JWT authenticates the gateway WebSocket and the routes above only.
 	})
 
 	// Browser widget bundles (embedded). Served at /sdk/voice.js,
