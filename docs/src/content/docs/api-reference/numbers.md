@@ -27,7 +27,7 @@ All routes on this page take a tenant API key or a console session. See [Authent
 | `flow_id` | UUID or `null` | The IVR flow inbound calls to this number run. |
 | `provider_did_id` | string | Your carrier's identifier for this DID, if you set one. Omitted when empty. |
 | `priority` | integer | Lower is preferred. Orders outbound trunk selection. Default `100`. |
-| `active` | boolean | Inactive outbound numbers are skipped when picking a trunk and can't be used as an explicit `caller_id`. |
+| `active` | boolean | Inactive outbound numbers are skipped when picking a trunk and can't be used as an explicit `caller_id`. Inactive inbound numbers stop receiving calls. |
 | `created_at` | timestamp | When the number was registered. |
 
 ```json
@@ -52,7 +52,7 @@ All routes on this page take a tenant API key or a console session. See [Authent
 - If no `inbound` number matches, or the match has no `flow_id`, the gateway rejects the call.
 
 :::caution
-The inbound lookup doesn't check `active`. Deactivating an inbound number does not stop it receiving calls; clear its flow (`clear_flow`) instead.
+Deactivating an inbound number (`active: false`) stops it receiving calls.
 :::
 
 If duplicate inbound numbers exist from before the cross-tenant check, the number registered first gets the call. A number only ever runs a flow of its own tenant.

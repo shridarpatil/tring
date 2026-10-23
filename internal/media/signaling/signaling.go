@@ -98,13 +98,15 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// FlowLoader loads a parsed IVR flow by id (internal/flowstore implements it).
+// FlowLoader loads a tenant's parsed IVR flow by id (internal/flowstore
+// implements it). Both calls are tenant-scoped: a flow id from another tenant
+// must not resolve.
 // FlowName resolves just the flow's display name (cheap, reuses the same row) so
 // the web CDR can log the dialed flow as the call's to_number — it works whether
 // or not the flow graph itself is loaded in this process (brain-up vs fallback).
 type FlowLoader interface {
-	Load(ctx context.Context, flowID string) (*ivr.Flow, error)
-	FlowName(ctx context.Context, flowID string) (string, error)
+	Load(ctx context.Context, tenant, flowID string) (*ivr.Flow, error)
+	FlowName(ctx context.Context, tenant, flowID string) (string, error)
 }
 
 // TeamResolver returns a team's member SIP usernames and its queue config
@@ -405,7 +407,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// distinguishes the channel without overloading to_number.
 		flowName := "Web call"
 		if s.cfg.Flows != nil {
-			if n, err := s.cfg.Flows.FlowName(r.Context(), flowID); err == nil && n != "" {
+			if n, err := s.cfg.Flows.FlowName(r.Context(), princ.tenant.String(), flowID); err == nil && n != "" {
 				flowName = n
 			}
 		}
