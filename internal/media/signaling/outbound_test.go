@@ -634,6 +634,7 @@ type fakeOutboundCallLog struct {
 	mu              sync.Mutex
 	startedCalls    int
 	startedOutbound []outboundCallRecord
+	ended           []string
 }
 
 func (f *fakeOutboundCallLog) Started(_ context.Context, _ uuid.UUID, _, _, _, _, _ string, _ room.ParticipantID) room.TrackSink {
@@ -656,7 +657,19 @@ func (f *fakeOutboundCallLog) RingAgent(string, string)                         
 func (f *fakeOutboundCallLog) RingStop(string)                                            {}
 func (f *fakeOutboundCallLog) Transferred(string, string, string)                         {}
 func (f *fakeOutboundCallLog) Journey(string, []ivr.Step)                                 {}
-func (f *fakeOutboundCallLog) Ended(string, string)                                       {}
+func (f *fakeOutboundCallLog) Ended(_, cause string) {
+	f.mu.Lock()
+	f.ended = append(f.ended, cause)
+	f.mu.Unlock()
+}
+
+// endedCauses returns every cause Ended was called with, in order — the real
+// call log keeps only the first.
+func (f *fakeOutboundCallLog) endedCauses() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ended...)
+}
 
 func (f *fakeOutboundCallLog) snapshot() (startedCalls int, outbound []outboundCallRecord) {
 	f.mu.Lock()

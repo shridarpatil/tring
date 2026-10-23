@@ -61,7 +61,7 @@ Recordings contain personal data. Tell callers they are recorded where the law r
 | `client_ref` | Your verified caller identity from `POST /v1/guest-credentials`. |
 | `leg_id` | Opaque per-call leg id; also the recording file name. |
 | `started_at`, `answered_at`, `ended_at`, `duration_seconds` | Timing. |
-| `hangup_cause` | For gateway calls: `client` (caller hung up), `agent`, or `system` (IVR hangup, no answer, flow end, connection lost); `caller_hangup` when a phone caller hung up. |
+| `hangup_cause` | Who ended the call: `client` (web caller hung up or lost connection), `agent` (hung up or lost connection), `caller_hangup` (phone caller), `callee_hangup` (the dialed party on an outbound or IVR-dialed call), or `system` (IVR hangup node, no answer, flow end). |
 | `recording_url` | Set when a recording exists. |
 | `ivr_path` | The IVR journey: an ordered list of steps with `node_id`, `node_type`, `action`, `detail`, `dtmf_input`, `outcome` and `at` (when the step ran). |
 | `room_id` | The gateway room, for live calls that can be supervised. |

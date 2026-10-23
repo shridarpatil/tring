@@ -26,7 +26,7 @@ Unless a section says otherwise, routes take a tenant API key or a console sessi
 | `answered_at` | timestamp | Omitted until answered. |
 | `ended_at` | timestamp | Omitted until ended. |
 | `duration_seconds` | integer | Omitted until ended. |
-| `hangup_cause` | string | Why it ended. On media-gateway calls: `client`, `agent` or `system` (who hung up), or `caller_hangup` / `callee_hangup` on phone legs. Omitted until ended. |
+| `hangup_cause` | string | Who ended the call. `client` (web caller), `agent`, `caller_hangup` (phone caller), `callee_hangup` (the dialed party on an outbound or IVR-dialed call) or `system` (flow end, `hangup` node, no answer). Omitted until ended. |
 | `recording_url` | string | API path of the recording, `/v1/calls/{id}/recording`. Omitted when the call wasn't recorded. Fetch it with your credential; it isn't a public link. |
 | `ivr_path` | array | The IVR steps the call took, same shape as the [simulator's trace steps](/tring/api-reference/flows/#trace-steps), plus an `at` timestamp per step on live calls. `[]` for calls that didn't run a flow. |
 | `room_id` | string | Media-gateway room, used to match live dashboard events. Omitted for calls that don't have one. |

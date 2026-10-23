@@ -184,7 +184,9 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, agentPID 
 	s.log.Info("outbound: call attached", "room", roomID, "to", to, "caller_id", callerID)
 
 	<-leg.Done
-	s.endOutboundRoom(roomID, "call ended")
+	// If the agent hung up, their leave already settled the call as "agent";
+	// otherwise the far end did.
+	s.endOutboundRoom(roomID, "callee_hangup")
 }
 
 // endOutboundRoom tears down everything room-side after the outbound leg
@@ -210,7 +212,7 @@ func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
 	if r, ok := s.rooms.Get(roomID); ok {
 		for _, p := range r.Participants() {
 			if c := s.connFor(p.ID()); c != nil {
-				_ = c.send(msg{Type: msgEnded, Reason: cause})
+				_ = c.send(msg{Type: msgEnded, Reason: "call ended"}) // wire reason stays stable; cause goes to the CDR
 			}
 			s.removeParticipant(roomID, p.ID())
 		}
