@@ -126,6 +126,10 @@ html[data-theme="dark"] {
  * Minimal layout helpers — Oat ships flex utils (hstack/vstack) but no grid.
  * These follow Oat's utility style so views need no per-view grid CSS.
  */
+/* Oat's .hstack wraps with align-content:flex-start, which pins the row to the
+   top of any fixed/min-height box (panel, modal and card headers). Centre it;
+   no effect on auto-height stacks. */
+.hstack { align-content: center; }
 .view { display: flex; flex-direction: column; gap: 1.25rem; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .page-title { font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em; }
