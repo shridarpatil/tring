@@ -105,5 +105,6 @@ func (s *Server) endIfAlone(roomID room.RoomID) {
 	if c != nil {
 		_ = c.send(msg{Type: msgEnded, Reason: "flow ended"})
 	}
+	s.setHangupBy(roomID, "system") // no-op if the other party's leave was recorded first
 	s.removeParticipant(roomID, pid)
 }

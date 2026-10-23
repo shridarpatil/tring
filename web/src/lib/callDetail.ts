@@ -80,7 +80,21 @@ function ivrNav(steps: IvrStep[]): string {
   return parts.join(" → ");
 }
 
-const ENDED_BY: Record<string, string> = { client: "caller", agent: "agent", system: "system" };
+// endedBy names who hung up from the CDR cause. Web calls record client/agent/
+// system; phone legs record caller_hangup / callee_hangup.
+function endedBy(cause: string, call: Call): string {
+  switch (cause) {
+    case "client":
+    case "caller_hangup":
+      return call.from_number ? `caller (${call.from_number})` : "caller";
+    case "agent":
+      return call.agent_name ? `agent (${call.agent_name})` : "agent";
+    case "callee_hangup":
+      return call.direction === "outbound" && call.to_number ? `callee (${call.to_number})` : "callee";
+    default:
+      return "system";
+  }
+}
 
 // failedIvrTransfers are IVR transfer nodes whose target never answered.
 function failedIvrTransfers(steps: IvrStep[]): IvrStep[] {
@@ -193,7 +207,7 @@ export function toCallDetail(call: Call, events: CallEvent[]): CallDetail {
         break;
       }
       case "ended":
-        out.push({ time: hms(e.at), icon: "phone-off", kind: "muted", label: `Call ended by ${ENDED_BY[str(d, "cause")] || "system"}`, sub: "", failed: false });
+        out.push({ time: hms(e.at), icon: "phone-off", kind: "muted", label: `Call ended by ${endedBy(str(d, "cause"), call)}`, sub: "", failed: false });
         break;
     }
   }
@@ -349,8 +363,8 @@ export function toFullLog(call: Call, events: CallEvent[]): FullLogRow[] {
       }
       case "ended":
         event = "call.ended";
-        actor = ENDED_BY[str(d, "cause")] || "system";
-        detail = `Call ended by ${ENDED_BY[str(d, "cause")] || "system"}`;
+        actor = endedBy(str(d, "cause"), call);
+        detail = `Call ended by ${actor}`;
         break;
     }
     rows.push({ timestamp: hms(e.at), offset: `+${secsBetween(startAt, e.at)}s`, source: "timeline", event, actor, detail });
