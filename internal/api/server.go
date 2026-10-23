@@ -303,6 +303,20 @@ func (s *Server) turnTTLFor(ctx context.Context, tenantID uuid.UUID) time.Durati
 	return time.Duration(secs)*time.Second + turnSetupBuffer
 }
 
+// FSRouter serves the FreeSWITCH-facing /fs/* endpoints. Basic Auth shared
+// with mod_xml_curl; not behind the tenant API-key wall. Mounted on its own
+// loopback listener (fs_addr), never on the public Router.
+func (s *Server) FSRouter() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
+	r.Route("/fs", func(r chi.Router) {
+		r.Use(middleware.Timeout(30 * time.Second))
+		r.Use(s.FSBasicAuth)
+		r.Post("/directory", s.handleFSDirectory)
+	})
+	return r
+}
+
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -314,14 +328,6 @@ func (s *Server) Router() http.Handler {
 	r.Use(corsMiddleware)
 
 	r.Get("/healthz", s.handleHealthz)
-
-	// FreeSWITCH-facing endpoints. Basic Auth shared with mod_xml_curl;
-	// not behind the tenant API-key wall.
-	r.Route("/fs", func(r chi.Router) {
-		r.Use(middleware.Timeout(30 * time.Second))
-		r.Use(s.FSBasicAuth)
-		r.Post("/directory", s.handleFSDirectory)
-	})
 
 	r.Route("/v1", func(r chi.Router) {
 		// Tenant-scoped routes: API key auth, full access within the tenant.

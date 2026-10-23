@@ -29,3 +29,19 @@ func TestLoadEnvOverridesDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestWeakSecretsFlagsDefaultsAndShortValues(t *testing.T) {
+	k := Load()
+	got := WeakSecrets(k, "jwt_secret", "fs_basic_auth", "esl_password")
+	if len(got) != 3 {
+		t.Fatalf("built-in defaults: WeakSecrets = %v, want all three", got)
+	}
+
+	t.Setenv("TRING_JWT_SECRET", "short")
+	t.Setenv("TRING_FS_BASIC_AUTH", "fs:0123456789abcdef0123456789abcdef")
+	t.Setenv("TRING_ESL_PASSWORD", "0123456789abcdef0123456789abcdef")
+	got = WeakSecrets(Load(), "jwt_secret", "fs_basic_auth", "esl_password")
+	if len(got) != 1 || got[0] != "jwt_secret" {
+		t.Fatalf("WeakSecrets = %v, want [jwt_secret]", got)
+	}
+}

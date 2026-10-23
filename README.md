@@ -47,12 +47,12 @@ curl -fsSLO https://raw.githubusercontent.com/shridarpatil/tring/main/install.sh
 less install.sh
 sh install.sh && cd tring
 
-# Configure, then start
-cp .env.example .env    # set secrets, admin password, network IPs
+# Configure, then start (install.sh generated .env with random secrets)
+$EDITOR .env            # network IPs, TZ
 docker compose pull && docker compose up -d
 ```
 
-Go to `http://localhost:8085/admin/` and log in with `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` from `.env`. Change the default password straight away.
+Go to `http://localhost:8085/admin/` and log in with `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` from `.env`.
 
 __________________
 
@@ -61,7 +61,7 @@ __________________
 ```bash
 git clone https://github.com/shridarpatil/tring.git
 cd tring
-cp .env.example .env
+make .env               # copies .env.example with random secrets
 docker compose up -d --build
 ```
 

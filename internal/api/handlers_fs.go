@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/xml"
 	"errors"
 	"net/http"
@@ -26,7 +27,9 @@ const fsDialString = "{^^:sip_invite_domain=${dialed_domain}:presence_id=${diale
 func (s *Server) FSBasicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
-		if !ok || u != s.fsBasicUser || p != s.fsBasicPass {
+		userOK := subtle.ConstantTimeCompare([]byte(u), []byte(s.fsBasicUser)) == 1
+		passOK := subtle.ConstantTimeCompare([]byte(p), []byte(s.fsBasicPass)) == 1
+		if !ok || !userOK || !passOK {
 			w.Header().Set("WWW-Authenticate", `Basic realm="tring-fs"`)
 			writeError(w, http.StatusUnauthorized, "bad fs credentials")
 			return

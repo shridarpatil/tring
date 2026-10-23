@@ -49,6 +49,10 @@ func main() {
 	k := config.Load()
 	logger := logging.New(k.String("log_format"), k.String("log_level"))
 	slog.SetDefault(logger) // so startup helpers (bootstrap) log through it too
+	if weak := config.WeakSecrets(k, "jwt_secret", "fs_basic_auth", "esl_password"); len(weak) > 0 && !k.Bool("allow_insecure_secrets") {
+		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
+		os.Exit(1)
+	}
 	addr := flag.String("addr", k.String("api_addr"), "HTTP listen address")
 	dsn := flag.String("dsn", k.String("dsn"), "Postgres connection string")
 	seed := flag.String("seed-tenant", "", "If set, creates a tenant with the given name, prints the API key, then exits")
@@ -194,10 +198,25 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	// FreeSWITCH mod_xml_curl endpoints on their own loopback listener, so the
+	// public api_addr (and any reverse proxy in front of it) never serves them.
+	fsSrv := &http.Server{
+		Addr:              k.String("fs_addr"),
+		Handler:           apiSrv.FSRouter(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
 	go func() {
 		logger.Info("api listening", "addr", *addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("api listen failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+	go func() {
+		logger.Info("fs endpoints listening", "addr", fsSrv.Addr)
+		if err := fsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("fs listen failed", "err", err)
 			os.Exit(1)
 		}
 	}()
@@ -207,6 +226,7 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+	_ = fsSrv.Shutdown(shutdownCtx)
 }
 
 func seedTenant(ctx context.Context, database *db.DB, name string) error {

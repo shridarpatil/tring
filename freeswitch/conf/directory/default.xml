@@ -21,10 +21,7 @@
   <!--the domain or ip (the right hand side of the @ in the addr-->
   <domain name="$${domain}">
     <params>
-      <param name="dial-string" value="{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})},${verto_contact(${dialed_user}@${dialed_domain})}"/>
-      <!-- These are required for Verto to function properly -->
-      <param name="jsonrpc-allowed-methods" value="verto"/>
-      <!-- <param name="jsonrpc-allowed-event-channels" value="demo,conference,presence"/> -->
+      <param name="dial-string" value="{^^:sip_invite_domain=${dialed_domain}:presence_id=${dialed_user}@${dialed_domain}}${sofia_contact(*/${dialed_user}@${dialed_domain})}"/>
     </params>
 
     <variables>
@@ -34,48 +31,9 @@
       <variable name="transfer_fallback_extension" value="operator"/>
     </variables>
 
-    <groups>
-      <group name="default">
-	<users>
-	  <X-PRE-PROCESS cmd="include" data="default/*.xml"/>
-	</users>
-      </group>
-
-      <group name="sales">
-	<users>
-	  <!--
-	      type="pointer" is a pointer so you can have the
-	      same user in multiple groups.  It basically means
-	      to keep searching for the user in the directory.
-	  -->
-	  <user id="1000" type="pointer"/>
-	  <user id="1001" type="pointer"/>
-	  <user id="1002" type="pointer"/>
-	  <user id="1003" type="pointer"/>
-	  <user id="1004" type="pointer"/>
-	</users>
-      </group>
-
-      <group name="billing">
-	<users>
-	  <user id="1005" type="pointer"/>
-	  <user id="1006" type="pointer"/>
-	  <user id="1007" type="pointer"/>
-	  <user id="1008" type="pointer"/>
-	  <user id="1009" type="pointer"/>
-	</users>
-      </group>
-
-      <group name="support">
-	<users>
-	  <user id="1010" type="pointer"/>
-	  <user id="1011" type="pointer"/>
-	  <user id="1012" type="pointer"/>
-	  <user id="1013" type="pointer"/>
-	  <user id="1014" type="pointer"/>
-	</users>
-      </group>
-    </groups>
+    <!-- No static users: the stock 1000-1019 demo users (password
+         $${default_password}) were removed. Agents are served per tenant by
+         mod_xml_curl (/fs/directory). -->
 
   </domain>
 </include>

@@ -46,7 +46,10 @@
          config is ready the day the pipe-join lands, not because it does
          anything today. -->
     <extension name="tring_outbound_trunk">
-      <condition field="${sip_h_X-Tring-Trunk}" expression="^(.+)$"/>
+      <!-- Only a dynamic trunk gateway name (freeswitch.GatewayName:
+           t_ + 12 hex). Anything else — including `|` or `,` that would
+           smuggle extra dial strings into the bridge — falls through. -->
+      <condition field="${sip_h_X-Tring-Trunk}" expression="^t_[0-9a-f]{12}$"/>
       <condition field="destination_number" expression="^(\+?\d+)$">
         <action application="set" data="effective_caller_id_number=${sip_from_user}"/>
         <action application="set" data="continue_on_fail=NORMAL_TEMPORARY_FAILURE,NO_ROUTE_DESTINATION,RECOVERY_ON_TIMER_EXPIRE"/>
