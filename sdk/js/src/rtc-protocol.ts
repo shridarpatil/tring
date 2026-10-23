@@ -8,6 +8,9 @@
 //
 // The SFU is the sole offerer, so the directions are:
 //   client → server:  join | register | answer | ice | publish | unpublish | dtmf | bye
+//                     | hold | resume | transfer | decline | ping
+//                     (hold/resume/transfer are agent-only: a visitor token gets
+//                     `error` / `transfer-failed` and the message is ignored)
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
 //                     | incoming | incoming-cancel | ready | error | supervisor
 //                     | transfer-failed

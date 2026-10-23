@@ -111,6 +111,7 @@ type Queries struct {
 
 	// ---- api: console auth ----
 	GetUserByEmail string `query:"get-user-by-email"`
+	UserExists     string `query:"user-exists"`
 	GetTenant      string `query:"get-tenant"`
 
 	// ---- api: guest web-calling ----
@@ -143,6 +144,13 @@ type Queries struct {
 	UpdateTrunk          string `query:"update-trunk"`
 	DeleteTrunk          string `query:"delete-trunk"`
 	SelectOutboundTrunks string `query:"select-outbound-trunks"`
+
+	// ---- api startup: SIP password encryption at rest (api/secrets.go) ----
+	CountStoredSecrets        string `query:"count-stored-secrets"`
+	ListPlaintextTrunkSecrets string `query:"list-plaintext-trunk-secrets"`
+	SetTrunkSecret            string `query:"set-trunk-secret"`
+	ListPlaintextAgentSecrets string `query:"list-plaintext-agent-secrets"`
+	SetAgentSecret            string `query:"set-agent-secret"`
 
 	// ---- orchestrator: CDR settlement (runner.go) ----
 	FailCallByJob     string `query:"fail-call-by-job"`

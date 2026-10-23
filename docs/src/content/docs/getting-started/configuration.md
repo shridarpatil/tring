@@ -23,11 +23,12 @@ The values in `.env.example` are tuned for **local development on one machine**.
 
 ## 1. Secrets
 
-`make .env` and `install.sh` generate random values for `TRING_JWT_SECRET`, `TRING_FS_BASIC_AUTH`, `TRING_ESL_PASSWORD` and `TRING_ADMIN_PASSWORD`. The api and gateway **refuse to start** while any of their secrets is still the built-in placeholder or too short (`TRING_JWT_SECRET` at least 32 characters, the others at least 16).
+`make .env` and `install.sh` generate random values for `TRING_JWT_SECRET`, `TRING_SECRETS_KEY`, `TRING_FS_BASIC_AUTH`, `TRING_ESL_PASSWORD` and `TRING_ADMIN_PASSWORD`. The api and gateway **refuse to start** while any of their secrets is still the built-in placeholder or too short (`TRING_JWT_SECRET` at least 32 characters, the others at least 16).
 
 | Variable | Default | What it does |
 |---|---|---|
 | `TRING_JWT_SECRET` | dev placeholder | HMAC-SHA256 key that signs **every** token Tring issues: console sessions, agent tokens, visitor call tokens and supervisor tokens. The api and the gateway must share the same value. |
+| `TRING_SECRETS_KEY` | empty | api only. AES-256-GCM key that encrypts the SIP trunk and agent passwords stored in Postgres. Exactly 32 bytes, written as 64 hex characters (`od -An -tx1 -N32 /dev/urandom \| tr -d ' \n'`) or base64. See [Encryption at rest](#encryption-at-rest) below. |
 | `TRING_FS_BASIC_AUTH` | dev placeholder (`fs:…`) | `user:password` that FreeSWITCH presents to the api's `/fs/directory` endpoint (`mod_xml_curl`). FreeSWITCH reads the same variable from `.env`. |
 | `TRING_FS_ADDR` | `127.0.0.1:8088` | Loopback-only listener for the api's `/fs/*` endpoints. They are not served on `TRING_API_ADDR`. Must match the URL in `xml_curl.conf.xml`. |
 | `TRING_ALLOW_INSECURE_SECRETS` | `false` | Skip the startup secret check. Local development only. |
@@ -35,6 +36,19 @@ The values in `.env.example` are tuned for **local development on one machine**.
 :::danger[Production]
 - Anyone who knows `TRING_JWT_SECRET` can mint valid tokens for any tenant. Rotating it signs everyone out and invalidates every agent and visitor token in flight.
 - FreeSWITCH reads `TRING_FS_BASIC_AUTH` and `TRING_ESL_PASSWORD` from the same `.env`, so changing them only needs a restart of the `freeswitch` and `api` containers.
+:::
+
+### Encryption at rest
+
+FreeSWITCH needs the plaintext SIP passwords to register with carriers, so Tring can't hash them. Instead the api encrypts `trunks.sip_password` and `agents.sip_password` with `TRING_SECRETS_KEY` (AES-256-GCM, stored as `enc:v1:…`). It decrypts them only to write the FreeSWITCH gateway XML and to answer the agent directory lookup.
+
+- **Key set:** on every start the api encrypts any plaintext passwords left in the database (one transaction; it logs how many, never the values). Setting the key on an existing install is how you migrate.
+- **Key empty:** the api starts with a warning and keeps storing passwords in plaintext, so existing deployments keep working after an upgrade until you add the key. If the database already holds encrypted passwords, the api **refuses to start** without the key.
+- **Malformed key** (not 32 bytes of hex or base64): the api refuses to start.
+- **Wrong key:** the api starts, but each trunk whose password it can't decrypt is left out of the FreeSWITCH config with an error in the log (`trunk not rendered: cannot decrypt its sip_password`). Agent directory lookups for those agents fail the same way.
+
+:::danger[Back up TRING_SECRETS_KEY]
+Store the key in a password manager or secret store, **separately from your database backups** (a stolen DB dump alone doesn't reveal the passwords). If you lose it, the stored passwords can't be recovered: you must re-enter every trunk password in the console. Rotating the key is **not supported yet**, so don't change it once set.
 :::
 
 ## 2. Database and cache
@@ -202,6 +216,7 @@ These are not in `.env.example` but are read by the binaries, Compose or FreeSWI
 ## Production checklist
 
 - Replace every secret: `TRING_JWT_SECRET`, `TRING_FS_BASIC_AUTH`, `TRING_ESL_PASSWORD`, `TRING_ADMIN_PASSWORD` (before first boot). `make .env` / `install.sh` generate these. The Postgres password in `TRING_DSN` is not generated; the compose file publishes Postgres on `127.0.0.1` only.
+- Set `TRING_SECRETS_KEY` so SIP passwords are encrypted at rest, and back it up outside the database backups. The api logs a warning on every start while it is empty.
 - Serve the api and gateway over HTTPS behind a TLS proxy; set `TRING_GATEWAY_PUBLIC_URL=https://…` and `TRING_TRUSTED_PROXIES` to the proxy's address.
 - Set `TRING_PUBLIC_IP`, widen `TRING_GATEWAY_UDP_*` for your load, and open only the media ranges you use.
 - Keep `TRING_GATEWAY_REQUIRE_AUTH=true` and `TRING_RTC_DEV_TOKENS=false`.
@@ -211,4 +226,4 @@ These are not in `.env.example` but are read by the binaries, Compose or FreeSWI
 - Use ephemeral TURN (`TRING_TURN_SECRET`) and TURNS on 443.
 - Store recordings in a private, encrypted bucket with an IAM role.
 - Pin `TRING_TAG` to a release.
-- Turn on MFA for your cloud and registry accounts, keep audit logging on, and rotate secrets on a schedule.
+- Turn on MFA for your cloud and registry accounts, keep audit logging on, and rotate secrets on a schedule (except `TRING_SECRETS_KEY`, which can't be rotated yet).

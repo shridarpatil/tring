@@ -82,7 +82,7 @@ Error messages are short, readable strings meant for logs and for showing to ope
 | `409 Conflict` | A uniqueness rule or a state check failed (for example, a duplicate name). |
 | `413 Content Too Large` | The request body is over the 1 MB limit (see below). |
 | `429 Too Many Requests` | Too many console login attempts. Wait for the number of seconds in `Retry-After`. |
-| `500 Internal Server Error` | A server-side failure. Some messages include the underlying database error. |
+| `500 Internal Server Error` | A server-side failure. The message is generic (for example `update failed`); the underlying error is written to the API server log, never to the response. |
 | `503 Service Unavailable` | A dependency or feature isn't available (for example, audio uploads with no audio directory configured). |
 | `504 Gateway Timeout` | The request took longer than the 30-second limit (see below). |
 

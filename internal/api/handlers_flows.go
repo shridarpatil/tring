@@ -188,7 +188,7 @@ func (s *Server) handleCreateFlow(w http.ResponseWriter, r *http.Request) {
 	)
 	f, err := scanFlow(row)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "insert failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "insert failed", err)
 		return
 	}
 	s.invalidateFlowList(r.Context(), t.ID)
@@ -218,7 +218,7 @@ func (s *Server) handleListFlows(w http.ResponseWriter, r *http.Request) {
 
 	out, err := s.scanFlows(r, s.q.ListFlows, t.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "query failed", err)
 		return
 	}
 
@@ -243,7 +243,7 @@ func (s *Server) listFlowsPage(w http.ResponseWriter, r *http.Request, tenantID 
 	}
 	out, err := s.scanFlows(r, s.q.ListFlowsPage, tenantID, limit, offset)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "query failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
@@ -313,7 +313,7 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	// Invalidate the brain's cached definition (read on the call
