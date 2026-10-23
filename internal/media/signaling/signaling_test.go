@@ -940,7 +940,8 @@ func TestInboundPhoneCallMasksCallerForAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sfu: %v", err)
 	}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: maskFlows{url: backend.URL}})
+	// backend is on 127.0.0.1 (refused by the default SSRF guard) — use its client.
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: maskFlows{url: backend.URL}, HTTP: backend.Client()})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 	fp := newFakePstn()

@@ -68,6 +68,15 @@ var defaults = map[string]any{
 	// log. Empty (the default) = no proxy: XFF is ignored entirely so a
 	// direct caller can't forge its own address. See internal/api realIP.
 	"trusted_proxies": "",
+	// Comma-separated CIDRs that tenant-supplied URLs (webhooks, IVR
+	// http_callback nodes) may reach even though they're non-public. By
+	// default those requests are SSRF-guarded: loopback, private (RFC 1918,
+	// fc00::/7), link-local (incl. cloud metadata 169.254.169.254), CGNAT,
+	// multicast etc. are refused at connect time. Self-hosters whose CRM is on
+	// a private network list just that range (e.g. "10.20.0.0/16"). An entry
+	// overrides EVERY block — listing 127.0.0.0/8 or 169.254.0.0/16 re-opens
+	// local services / cloud credentials to every tenant, so don't.
+	"outbound_allow_cidrs": "",
 	// WebRTC media gateway (ADR-001): browser-facing HTTP signaling + media.
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).

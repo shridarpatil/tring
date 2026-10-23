@@ -193,6 +193,7 @@ If you use a framework, make sure the route gets the raw body (for example `expr
 ## Delivery and retries
 
 - Tring records each delivery as `pending`, then sends it in the background, so your endpoint's speed never slows a call.
+- The URL must be `http://` or `https://` and resolve to a public address. Loopback, private, link-local (including cloud metadata) and other internal addresses are refused when the webhook is created (for literal IPs and `localhost`) and again on every delivery attempt, after DNS resolution and on redirects (at most 3 are followed). A refused attempt fails like a connection error. An on-premises receiver needs its range in [`TRING_OUTBOUND_ALLOW_CIDRS`](/tring/getting-started/configuration/).
 - Each attempt has a 10-second timeout. Any `2xx` response is success; anything else (including a timeout or connection error) is a failure.
 - A failed delivery is retried up to **5 more times**, waiting 1, 2, 4, 8 and 16 seconds between attempts (6 attempts, about 30 seconds in total).
 - After the last failure the delivery is marked `exhausted`. There is no automatic redelivery later and no replay endpoint yet.
