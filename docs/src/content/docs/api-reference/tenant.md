@@ -109,7 +109,7 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 | `400` | `outbound_strategy must be failover\|round_robin\|manual\|load_based` |
 | `400` | `failover_causes must be FreeSWITCH cause names (e.g. NORMAL_TEMPORARY_FAILURE) or Q.850 codes` / `too many failover_causes` |
 | `400` | `hold_music must be one of this tenant's uploaded sounds` |
-| `500` | `update failed: …` |
+| `500` | `update failed` |
 
 :::note
 `transfer_failed_message` is converted to audio with the server's text-to-speech engine when you save it. If text-to-speech isn't set up, or the conversion fails, the update still succeeds, but the caller hears silence and then the call ends. Check the API logs for a `tts:` warning if the message doesn't play.

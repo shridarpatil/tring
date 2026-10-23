@@ -59,7 +59,7 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 		t.ID, req.URL, req.Secret, req.Events).
 		Scan(&h.ID, &h.TenantID, &h.URL, &h.Secret, &h.Events, &h.CreatedAt)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "insert webhook: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "insert webhook failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, h)

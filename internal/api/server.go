@@ -469,7 +469,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls/transfer", s.handleSdkTransfer)
 		})
 		// Outbound origination is backend-only (POST /v1/calls, API key); the
-		// agent JWT authenticates the gateway WebSocket and nothing else.
+		// agent JWT authenticates the gateway WebSocket and the routes above only.
 	})
 
 	// Browser widget bundles (embedded). Served at /sdk/voice.js,
@@ -585,6 +585,17 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeServerError answers a server-side failure (5xx) with a generic msg and
+// logs the underlying err with the request id. Internal detail — Postgres
+// errors, FreeSWITCH replies, file paths — must never reach the client: it
+// leaks schema/infra and is useless to an integrator anyway.
+func (s *Server) writeServerError(w http.ResponseWriter, r *http.Request, status int, msg string, err error) {
+	s.log.Error(msg, "err", err, "status", status,
+		"method", r.Method, "path", r.URL.Path,
+		"req_id", middleware.GetReqID(r.Context()))
+	writeError(w, status, msg)
 }
 
 // corsMiddleware reflects the request's Origin so browsers from any CRM
