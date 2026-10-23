@@ -11,6 +11,8 @@ package signaling
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -266,7 +268,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	c := &conn{Conn: netConn}
 
 	// First message decides the socket's role: `register` = an available agent
-	// (presence, can be rung into a call); `join` = a call participant.
+	// (presence, can be rung into a call); `join` = a call participant. Bound
+	// the wait so an authenticated-but-silent socket can't pin this goroutine;
+	// each role's read loop sets its own deadline from here on.
+	_ = netConn.SetReadDeadline(time.Now().Add(joinTimeout))
 	first, err := c.read()
 	if err != nil {
 		_ = netConn.Close()
@@ -726,8 +731,18 @@ type conn struct {
 	writeMu sync.Mutex
 }
 
+// joinTimeout bounds the wait for a socket's first (join/register) message.
+// A var so tests can shorten it.
+var joinTimeout = 10 * time.Second
+
+// maxWSMessageBytes caps one client message. The largest legitimate one is an
+// SDP answer (a few KiB, more with screen share); 64 KiB leaves ample room.
+const maxWSMessageBytes = 64 << 10
+
+var errMessageTooLarge = errors.New("ws message too large")
+
 func (c *conn) read() (msg, error) {
-	data, err := wsutil.ReadClientText(c.Conn)
+	data, err := readClientText(c.Conn, maxWSMessageBytes)
 	if err != nil {
 		return msg{}, err
 	}
@@ -736,6 +751,47 @@ func (c *conn) read() (msg, error) {
 		return msg{}, err
 	}
 	return m, nil
+}
+
+// readClientText is wsutil.ReadClientText with a size cap: a frame whose header
+// declares more than max bytes is refused before reading it, and fragments
+// can't add up past max either. Binary messages are discarded; control frames
+// (ping/close) are answered as before.
+func readClientText(rw io.ReadWriter, max int64) ([]byte, error) {
+	ctl := wsutil.ControlFrameHandler(rw, ws.StateServerSide)
+	rd := wsutil.Reader{
+		Source:         rw,
+		State:          ws.StateServerSide,
+		CheckUTF8:      true,
+		MaxFrameSize:   max,
+		OnIntermediate: ctl,
+	}
+	for {
+		hdr, err := rd.NextFrame()
+		if err != nil {
+			return nil, err
+		}
+		if hdr.OpCode.IsControl() {
+			if err := ctl(hdr, &rd); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if hdr.OpCode&ws.OpText == 0 {
+			if err := rd.Discard(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(&rd, max+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(data)) > max {
+			return nil, errMessageTooLarge
+		}
+		return data, nil
+	}
 }
 
 func (c *conn) send(m msg) error {
