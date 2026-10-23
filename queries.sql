@@ -729,18 +729,21 @@ SELECT EXISTS (
 -- foreign flow_id resolves to NULL → call rejected), and if two tenants ever
 -- hold the same inbound DID the first registrant wins (create-number refuses
 -- new duplicates; this keeps routing deterministic for any that predate it).
+-- A deactivated number (active = false) no longer routes.
 SELECT n.tenant_id, f.id
 FROM numbers n
 LEFT JOIN flows f ON f.id = n.flow_id AND f.tenant_id = n.tenant_id
-WHERE n.e164 = $1 AND n.type = 'inbound'
+WHERE n.e164 = $1 AND n.type = 'inbound' AND n.active
 ORDER BY n.created_at ASC, n.id ASC
 LIMIT 1;
 
 -- name: get-active-flow-by-id
 -- Guest web-call path: flow pinned by UUID via tring_flow_id channel var.
 -- name is used as the call log's "To" for web calls (no dialed number).
+-- Scoped to the caller's tenant ($2): a flow id from another tenant (an agent
+-- can put any flow_id in a join) must not resolve.
 SELECT tenant_id, name, COALESCE(definition::text, '')
-FROM flows WHERE id = $1 AND is_active;
+FROM flows WHERE id = $1 AND tenant_id = $2 AND is_active;
 
 -- name: list-agent-sip-usernames
 -- Ring targets only: skip agents the backend marked unavailable (Away/Break).
