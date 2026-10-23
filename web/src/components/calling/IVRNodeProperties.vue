@@ -257,6 +257,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
         </div>
         <div class="grid grid-2">
           <label class="fld">
+            <span class="fl">Min digits</span>
+            <input v-model.number="config.min_digits" type="number" min="1" max="50" placeholder="1" />
+          </label>
+          <label class="fld">
             <span class="fl">Max digits</span>
             <input v-model.number="config.max_digits" type="number" min="1" max="50" />
           </label>
@@ -273,6 +277,10 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             <input v-model.number="config.max_retries" type="number" min="0" />
           </label>
         </div>
+        <p class="sub-note">
+          Fewer digits than the minimum takes the <strong>T/O</strong> branch. Set min and max
+          to the same number to require an exact length, e.g. a 4-digit PIN.
+        </p>
         <label class="fld">
           <span class="fl">Store as (variable name)</span>
           <input v-model="config.store_as" class="mono" placeholder="account_number" />

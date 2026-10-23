@@ -230,6 +230,7 @@ const defaultConfigs: Record<IVRNodeType, Record<string, any>> = {
   gather: {
     audio_file: "",
     greeting_text: "",
+    min_digits: 1,
     max_digits: 10,
     terminator: "#",
     timeout_seconds: 10,

@@ -309,6 +309,76 @@ func TestGatherCollectsAndStores(t *testing.T) {
 	}
 }
 
+// The console editor writes max_digits (not num_digits) and a terminator; a
+// live gather must honor both instead of stopping after one digit.
+func TestGatherHonorsEditorMaxDigitsAndTerminator(t *testing.T) {
+	gatherFlow := func(cfg map[string]interface{}) *ivr.Flow {
+		return &ivr.Flow{
+			EntryNode: "s",
+			Nodes: []ivr.Node{
+				{ID: "s", Type: ivr.NodeStart},
+				{ID: "ga", Type: ivr.NodeGather, Config: cfg},
+				{ID: "h", Type: ivr.NodeHangup},
+			},
+			Edges: []ivr.Edge{
+				{From: "s", To: "ga", Condition: "default"},
+				{From: "ga", To: "h", Condition: "default"},
+			},
+		}
+	}
+
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	runFlow(t, d, fake, gatherFlow(map[string]interface{}{
+		"audio_file": "acct.ogg", "max_digits": float64(4),
+		"timeout_seconds": float64(1), "store_as": "acct",
+	}), map[string][]string{"acct.ogg": {"1", "2", "3", "4", "5"}})
+	if got := d.Vars()["acct"]; got != "1234" {
+		t.Fatalf("max_digits gather = %q, want 1234", got)
+	}
+
+	fake = &fakePrompts{played: make(chan string, 16)}
+	d = newDriver(fake, nil)
+	runFlow(t, d, fake, gatherFlow(map[string]interface{}{
+		"audio_file": "acct.ogg", "max_digits": float64(10), "terminator": "*",
+		"timeout_seconds": float64(1), "store_as": "acct",
+	}), map[string][]string{"acct.ogg": {"4", "2", "*", "9"}})
+	if got := d.Vars()["acct"]; got != "42" {
+		t.Fatalf("terminator gather = %q, want 42", got)
+	}
+}
+
+// Fewer digits than min_digits (here 2 then '#') is treated as no valid input:
+// the gather takes its timeout branch and stores nothing.
+func TestGatherBelowMinDigitsTimesOut(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	flow := &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "ga", Type: ivr.NodeGather, Config: map[string]interface{}{
+				"audio_file": "pin.ogg", "min_digits": float64(4), "max_digits": float64(4),
+				"timeout_seconds": float64(1), "store_as": "pin",
+			}},
+			{ID: "ok", Type: ivr.NodeHangup},
+			{ID: "retry", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "ga", Condition: "default"},
+			{From: "ga", To: "ok", Condition: "default"},
+			{From: "ga", To: "retry", Condition: "timeout"},
+		},
+	}
+	path := runFlow(t, d, fake, flow, map[string][]string{"pin.ogg": {"1", "2", "#"}})
+	if want := []string{"s", "ga", "retry"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v", ids(path), want)
+	}
+	if got, ok := d.Vars()["pin"]; ok {
+		t.Fatalf("pin stored as %q, want unset", got)
+	}
+}
+
 func TestTransferRoutesToAgent(t *testing.T) {
 	fake := &fakePrompts{played: make(chan string, 16)}
 	agents := &fakeAgents{outcome: "completed"}
