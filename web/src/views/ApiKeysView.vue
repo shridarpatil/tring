@@ -15,6 +15,7 @@ import {
   TextField,
   CopyButton,
 } from "../components/ui";
+import { confirmDialog } from "../lib/confirm";
 
 const { items: keys, loading, load } = useList<ApiKey>("/v1/api-keys");
 
@@ -49,7 +50,7 @@ async function create() {
 }
 
 async function revoke(k: ApiKey) {
-  if (!confirm(`Revoke "${k.name}" (${k.key_prefix}…)? Anything using it will stop working.`)) return;
+  if (!(await confirmDialog(`Revoke "${k.name}" (${k.key_prefix}…)? Anything using it will stop working.`, { confirmLabel: "Revoke" }))) return;
   try {
     await api.del(`/v1/api-keys/${k.id}`);
     await load();

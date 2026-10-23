@@ -16,6 +16,7 @@ import {
   Toggle,
   CopyButton,
 } from "../components/ui";
+import { confirmDialog } from "../lib/confirm";
 
 const { items: webhooks, loading, load } = useList<Webhook>("/v1/webhooks");
 
@@ -58,7 +59,7 @@ async function create() {
 }
 
 async function remove(w: Webhook) {
-  if (!confirm(`Delete webhook ${w.url}?`)) return;
+  if (!(await confirmDialog(`Delete webhook ${w.url}?`))) return;
   try {
     await api.del(`/v1/webhooks/${w.id}`);
     await load();

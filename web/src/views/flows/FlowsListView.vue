@@ -19,6 +19,7 @@ import {
   type Column,
   TextField,
 } from "../../components/ui";
+import { confirmDialog } from "../../lib/confirm";
 
 const router = useRouter();
 
@@ -89,7 +90,7 @@ async function duplicateFlow() {
 }
 
 async function deleteFlow(id: string) {
-  if (!confirm("Delete this flow?")) return;
+  if (!(await confirmDialog("Delete this flow?"))) return;
   try {
     await api.del(`/v1/flows/${id}`);
     await refresh();
