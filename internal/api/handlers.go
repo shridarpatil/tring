@@ -40,8 +40,11 @@ type Agent struct {
 	ID          uuid.UUID `json:"id"`
 	TenantID    uuid.UUID `json:"tenant_id"`
 	SipUsername string    `json:"sip_username"`
-	SipPassword string    `json:"sip_password,omitempty"`
-	DisplayName string    `json:"display_name,omitempty"`
+	// SipPassword is generated and stored for the FreeSWITCH directory
+	// (legacy SIP transport) but never returned: gateway-transport agents
+	// authenticate with the agent JWT and never SIP-register.
+	SipPassword string `json:"-"`
+	DisplayName string `json:"display_name,omitempty"`
 	// AvailableForCalls is the backend-managed availability (the integrator's
 	// Away/Break button). Separate from connection presence: the orchestrator
 	// rings an agent only when they're BOTH connected AND available_for_calls.

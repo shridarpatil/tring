@@ -20,20 +20,23 @@ import (
 // FreeSWITCH gateway XML by internal/freeswitch.WriteGateway and picked
 // up via a sofia profile rescan on save.
 type Trunk struct {
-	ID           uuid.UUID       `json:"id"`
-	TenantID     uuid.UUID       `json:"tenant_id"`
-	Name         string          `json:"name"`
-	ProviderType string          `json:"provider_type"`
-	SIPUsername  string          `json:"sip_username"`
-	SIPPassword  string          `json:"sip_password,omitempty"` // omitted on list responses
-	SIPRealm     string          `json:"sip_realm"`
-	Register     bool            `json:"register"`
-	ProxyIP      string          `json:"proxy_ip"`
-	AuthACLCIDR  string          `json:"auth_acl_cidr"`
-	Active       bool            `json:"active"`
-	ExtraParams  json.RawMessage `json:"extra_params"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID           uuid.UUID `json:"id"`
+	TenantID     uuid.UUID `json:"tenant_id"`
+	Name         string    `json:"name"`
+	ProviderType string    `json:"provider_type"`
+	SIPUsername  string    `json:"sip_username"`
+	// SIPPassword is write-only: accepted on create/update, never returned
+	// (it is the carrier credential). HasPassword tells the console one is set.
+	SIPPassword string          `json:"-"`
+	HasPassword bool            `json:"has_password"`
+	SIPRealm    string          `json:"sip_realm"`
+	Register    bool            `json:"register"`
+	ProxyIP     string          `json:"proxy_ip"`
+	AuthACLCIDR string          `json:"auth_acl_cidr"`
+	Active      bool            `json:"active"`
+	ExtraParams json.RawMessage `json:"extra_params"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 	// Live state from sofia status — populated on responses, not in DB.
 	// Values: online | offline | connecting | not_loaded | unknown.
 	Status   string   `json:"status,omitempty"`
@@ -109,6 +112,7 @@ func scanTrunk(scanner interface{ Scan(...interface{}) error }) (Trunk, error) {
 		&t.Register, &t.ProxyIP, &t.AuthACLCIDR,
 		&t.Active, &t.ExtraParams, &t.CreatedAt, &t.UpdatedAt,
 	)
+	t.HasPassword = t.SIPPassword != ""
 	return t, err
 }
 
@@ -238,8 +242,6 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		// Don't leak password in list responses.
-		tr.SIPPassword = ""
 		out = append(out, tr)
 	}
 	// Best-effort: enrich with live FS gateway health. If ESL is down
