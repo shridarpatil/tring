@@ -34,6 +34,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/safehttp"
 )
 
 // Event names accepted by webhook subscribers. Kept as constants so handler
@@ -52,11 +53,17 @@ type Notifier struct {
 	log  *slog.Logger
 }
 
+// DeliveryTimeout bounds one webhook delivery attempt.
+const DeliveryTimeout = 10 * time.Second
+
+// New builds a Notifier. Webhook URLs are tenant-controlled, so deliveries go
+// through an SSRF-guarded client (internal/safehttp) with no private-range
+// allowlist; WithHTTPClient swaps in one built with the operator's allowlist.
 func New(d *db.DB) *Notifier {
 	return &Notifier{
 		db:   d,
 		q:    queries.MustLoad(),
-		http: &http.Client{Timeout: 10 * time.Second},
+		http: safehttp.NewClient(nil, DeliveryTimeout),
 		log:  slog.Default().With("component", "webhook"),
 	}
 }
@@ -67,6 +74,16 @@ func New(d *db.DB) *Notifier {
 func (n *Notifier) WithLogger(l *slog.Logger) *Notifier {
 	if l != nil {
 		n.log = l.With("component", "webhook")
+	}
+	return n
+}
+
+// WithHTTPClient sets the client deliveries are POSTed with and returns the
+// notifier for chaining. It must be a safehttp client (or a test client);
+// nil keeps the default.
+func (n *Notifier) WithHTTPClient(c *http.Client) *Notifier {
+	if c != nil {
+		n.http = c
 	}
 	return n
 }
