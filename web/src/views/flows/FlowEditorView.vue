@@ -55,6 +55,7 @@ import HangupNode from "../../components/calling/nodes/HangupNode.vue";
 import IVRNodeProperties from "../../components/calling/IVRNodeProperties.vue";
 
 import type { Flow, IVRFlowData, IVRNodeType, Agent, Team, Paginated } from "../../api/types";
+import { confirmDialog } from "../../lib/confirm";
 
 const route = useRoute();
 const router = useRouter();
@@ -315,18 +316,18 @@ function onUpdateNode(updated: any) {
   }
 }
 
-function requestDeleteSelectedNode() {
-  if (!selectedNode.value) return;
+async function requestDeleteSelectedNode() {
+  const node = selectedNode.value;
+  if (!node) return;
   // Start is the implicit entry point — every flow has exactly one.
   // Hard-block its deletion rather than silently breaking the flow.
-  if (selectedNode.value.id === START_NODE_ID) {
+  if (node.id === START_NODE_ID) {
     alert("The Start node is the flow's entry point and can't be removed.");
     return;
   }
-  if (!confirm(`Delete node "${selectedNode.value.data?.label || selectedNode.value.type}"?`))
-    return;
-  const id = selectedNode.value.id;
-  removeNodes([selectedNode.value]);
+  if (!(await confirmDialog(`Delete node "${node.data?.label || node.type}"?`))) return;
+  const id = node.id;
+  removeNodes([node]);
   removeEdges(edges.value.filter((e) => e.source === id || e.target === id));
   selectedNodeId.value = null;
 }

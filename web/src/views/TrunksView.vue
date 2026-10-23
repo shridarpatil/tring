@@ -27,6 +27,7 @@ import {
   Toggle,
 } from "../components/ui";
 import { Pencil, Trash2 } from "lucide-vue-next";
+import { confirmDialog } from "../lib/confirm";
 
 // status string → human label for the status badge.
 const statusLabels: Record<string, string> = {
@@ -192,7 +193,7 @@ async function save() {
 }
 
 async function removeTrunk(t: Trunk) {
-  if (!confirm(`Delete trunk "${t.name}"?`)) return;
+  if (!(await confirmDialog(`Delete trunk "${t.name}"?`))) return;
   try {
     await api.del(`/v1/trunks/${t.id}`);
     await load();

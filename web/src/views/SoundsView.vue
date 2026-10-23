@@ -6,11 +6,13 @@ import { api } from "../api/client";
 import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import type { Audio } from "../api/types";
-import { Button, IconButton, Panel, DataTable, type Column } from "../components/ui";
+import { Button, IconButton, Panel, DataTable, Modal, TextField, type Column } from "../components/ui";
 import { Trash2 } from "lucide-vue-next";
+import { confirmDialog } from "../lib/confirm";
 
 const { items: sounds, loading, load } = useList<Audio>("/v1/audio");
 const uploading = ref(false);
+const showUpload = ref(false);
 const name = ref("");
 const fileInput = ref<HTMLInputElement | null>(null);
 const previewUrl = ref<Record<string, string>>({});
@@ -22,6 +24,11 @@ const cols: Column[] = [
   { key: "preview", label: "Preview" },
 ];
 
+function newSound() {
+  name.value = "";
+  showUpload.value = true;
+}
+
 async function upload() {
   const f = fileInput.value?.files?.[0];
   if (!f) {
@@ -31,8 +38,7 @@ async function upload() {
   uploading.value = true;
   try {
     await api.upload<Audio>("/v1/audio", f, name.value ? { name: name.value } : undefined);
-    name.value = "";
-    if (fileInput.value) fileInput.value.value = "";
+    showUpload.value = false;
     await load();
     toast.success("Sound uploaded");
   } catch (e) {
@@ -43,7 +49,7 @@ async function upload() {
 }
 
 async function destroy(s: Audio) {
-  if (!confirm(`Delete "${s.name}"? Flows or hold music using it will fall back to the default.`)) return;
+  if (!(await confirmDialog(`Delete "${s.name}"? Flows or hold music using it will fall back to the default.`))) return;
   try {
     await api.del<void>(`/v1/audio/${s.id}`);
     await load();
@@ -75,24 +81,15 @@ function fmtSize(n: number) {
 
 <template>
   <div class="view">
-    <h1 class="page-title">Sounds</h1>
+    <div class="row-between">
+      <h1 class="page-title">Sounds</h1>
+      <Button @click="newSound">Upload sound</Button>
+    </div>
     <p class="text-light">
       Upload audio (.wav or .mp3) once, then reuse it for IVR greetings and menu prompts, or as your
       queue hold music. Pick an uploaded sound on the <strong>Flows</strong> editor and in
       <strong>Settings</strong>.
     </p>
-
-    <form class="card grid grid-3" style="align-items: end" @submit.prevent="upload">
-      <div data-field>
-        <label for="snd-name">Name (optional)</label>
-        <input id="snd-name" v-model="name" placeholder="Welcome greeting" />
-      </div>
-      <div data-field>
-        <label for="snd-file">File (.wav / .mp3)</label>
-        <input id="snd-file" ref="fileInput" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" />
-      </div>
-      <Button type="submit" :loading="uploading">Upload</Button>
-    </form>
 
     <Panel>
       <DataTable :columns="cols" :rows="sounds" :loading="loading" empty-text="No sounds yet">
@@ -113,5 +110,19 @@ function fmtSize(n: number) {
         </template>
       </DataTable>
     </Panel>
+
+    <Modal v-model:open="showUpload" title="Upload sound">
+      <form id="sound-form" class="vstack" @submit.prevent="upload">
+        <TextField v-model="name" label="Name (optional)" placeholder="Welcome greeting" />
+        <div data-field>
+          <label for="snd-file">File (.wav / .mp3)</label>
+          <input id="snd-file" ref="fileInput" type="file" accept=".wav,.mp3,audio/wav,audio/mpeg" />
+        </div>
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="showUpload = false">Cancel</Button>
+        <Button type="submit" form="sound-form" :loading="uploading">Upload</Button>
+      </template>
+    </Modal>
   </div>
 </template>
