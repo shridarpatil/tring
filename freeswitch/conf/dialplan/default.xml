@@ -46,6 +46,13 @@
          config is ready the day the pipe-join lands, not because it does
          anything today. -->
     <extension name="tring_outbound_trunk">
+      <!-- Only the media gateway may use this: the trunk name and caller ID
+           come straight from SIP headers, so any other internal-profile caller
+           (e.g. a digest-authenticated agent SIP user) could otherwise bridge
+           out over ANY tenant's trunk with a spoofed caller ID. tring_gateway
+           (acl.conf.xml) = loopback + $${tring_internal_ip}, the addresses
+           fsplug INVITEs from. -->
+      <condition field="${acl(${network_addr} tring_gateway)}" expression="^true$"/>
       <!-- Only a dynamic trunk gateway name (freeswitch.GatewayName:
            t_ + 12 hex). Anything else — including `|` or `,` that would
            smuggle extra dial strings into the bridge — falls through. -->
@@ -63,6 +70,10 @@
          resolveFlowByID — exactly like a guest web call, just sourced from the
          gateway instead of a guest_* registration. -->
     <extension name="tring_gateway_flow">
+      <!-- Gateway-only, like tring_outbound_trunk: the flow id and client ref
+           are caller-supplied headers, so without this any internal-profile
+           caller could run any tenant's flow (and write that tenant's CDRs). -->
+      <condition field="${acl(${network_addr} tring_gateway)}" expression="^true$"/>
       <condition field="destination_number" expression="^gwflow$">
         <action application="set" data="tring_flow_id=${sip_h_X-Tring-Flow-Id}"/>
         <!-- Trusted caller id from the gateway call token (when present) — the
