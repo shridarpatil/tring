@@ -213,6 +213,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 			delete(s.rings, rid)
 		}
 		delete(s.declines, rid)
+		delete(s.invites, rid) // ring over: a late answer can no longer join
 		s.mu.Unlock()
 	}
 	return candidates, eff, cleanup
@@ -307,6 +308,10 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	pop := func(sip string) {
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
+			if p.s.invites[p.roomID] == nil {
+				p.s.invites[p.roomID] = map[string]bool{}
+			}
+			p.s.invites[p.roomID][sip] = true
 			p.rung[sip] = true
 			p.active[sip] = true
 			poppedNow = append(poppedNow, sip)
@@ -461,6 +466,28 @@ func (s *Server) signalRing(roomID room.RoomID) {
 	if ring != nil {
 		close(ring)
 	}
+}
+
+// roomOccupied reports whether roomID is a live call: it has participants or a
+// phone/outbound leg attached.
+func (s *Server) roomOccupied(roomID room.RoomID) bool {
+	if r, ok := s.rooms.Get(roomID); ok && len(r.Participants()) > 0 {
+		return true
+	}
+	return s.sfu.HasPort(roomID)
+}
+
+// takeInvite consumes the room's ring invitations if sip is one of the agents
+// rung for it. The first answer takes them all, so with ring_all only one agent
+// gets in.
+func (s *Server) takeInvite(roomID room.RoomID, sip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.invites[roomID][sip] {
+		return false
+	}
+	delete(s.invites, roomID)
+	return true
 }
 
 // ensure the server satisfies the brain's ring-transport + handoff-wait seams.

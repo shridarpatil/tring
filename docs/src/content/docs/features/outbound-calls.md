@@ -87,4 +87,4 @@ Present only numbers you hold, and follow your carrier's and regulator's caller-
 
 ## Agent-dialed calls
 
-The gateway's `/rtc` protocol has an agent-only `dial` message that dials a number into the agent's current call through the SIP plug, using the same trunk selection and caller-ID rule. Visitor connections can never use it. The published SDK does not expose it; for click-to-call, use `POST /v1/calls`.
+The gateway's `/rtc` protocol has an agent-only `dial` message that dials a number into the agent's current call through the SIP plug, using the same trunk selection and caller-ID rule. Visitor connections can never use it. A room carries one outbound call at a time, and an agent can have at most two in progress; further `dial`s get `error` "a call is already in progress". The published SDK does not expose it; for click-to-call, use `POST /v1/calls`.
