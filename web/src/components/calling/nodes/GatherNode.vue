@@ -10,7 +10,8 @@ const props = defineProps<{ data: Record<string, any> }>();
 const summary = computed(() => {
   const c = props.data?.config || {};
   const parts: string[] = [];
-  if (c.max_digits) parts.push(`${c.max_digits} digits`);
+  const min = c.min_digits || 1;
+  if (c.max_digits) parts.push(min >= c.max_digits ? `${c.max_digits} digits` : `${min}–${c.max_digits} digits`);
   if (c.store_as) parts.push(`→ ${c.store_as}`);
   return parts.join(", ") || "Gather input";
 });
