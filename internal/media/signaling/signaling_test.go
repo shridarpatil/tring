@@ -98,6 +98,13 @@ func newServer(t *testing.T) *httptest.Server {
 	return newServerCfg(t, signaling.Config{})
 }
 
+// newOpenRoomServer lets any agent join any room (the dev-token exemption from
+// the ring-invite rule), for tests of room mechanics rather than join auth.
+func newOpenRoomServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return newServerCfg(t, signaling.Config{DevTokens: true})
+}
+
 // newServerCfg builds a signaling server with the given extra config (SFU +
 // secret are filled in).
 func newServerCfg(t *testing.T, cfg signaling.Config) *httptest.Server {
@@ -143,7 +150,7 @@ func TestJoinReturnsJoinedAndOffer(t *testing.T) {
 }
 
 func TestSecondJoinFansOutPeerJoined(t *testing.T) {
-	ts := newServer(t)
+	ts := newOpenRoomServer(t)
 	tenant := uuid.New()
 
 	a := dial(t, ts.URL, mintToken(t, tenant, "a"))
@@ -221,7 +228,7 @@ func TestReattachKeepsSameParticipant(t *testing.T) {
 }
 
 func TestPeerSeesReconnectingOnDrop(t *testing.T) {
-	ts := newServer(t)
+	ts := newOpenRoomServer(t)
 	tenant := uuid.New()
 
 	a := dial(t, ts.URL, mintToken(t, tenant, "a"))
@@ -670,7 +677,7 @@ func TestPeerLeaveEndsLoneRemaining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sfu: %v", err)
 	}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret})
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, DevTokens: true}) // open rooms: tests teardown, not join auth
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 
@@ -966,4 +973,50 @@ func TestInboundPhoneCallMasksCallerForAgent(t *testing.T) {
 	}
 	fp.src.Close()
 	close(fp.done)
+}
+
+// An agent that wasn't rung for a live call can't join it; the agent that was
+// rung can, and once it has answered the other rung agents are locked out.
+func TestOnlyRungAgentCanJoinLiveCall(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{Flows: transferFlows{}})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+	bob := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	bob.send(map[string]any{"type": "register"})
+	bob.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+	alice.readUntil("incoming") // ring_all: both are rung
+	bob.readUntil("incoming")
+
+	// Mallory (same tenant, never rung) guesses the room name.
+	mallory := dial(t, ts.URL, mintToken(t, tenant, "mallory"))
+	mallory.send(map[string]any{"type": "join", "room": "call", "name": "Mallory"})
+	if e := mallory.readUntil("error"); e["reason"] != "not invited to this call" {
+		t.Fatalf("uninvited join error = %v", e)
+	}
+
+	answer := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	answer.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
+	answer.readUntil("joined")
+
+	// Bob was rung too, but Alice answered first.
+	late := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	late.send(map[string]any{"type": "join", "room": "call", "name": "Bob"})
+	if e := late.readUntil("error"); e["reason"] != "not invited to this call" {
+		t.Fatalf("second rung agent join error = %v", e)
+	}
+}
+
+// Agents can still start their own (empty) room, e.g. for an outbound call.
+func TestAgentCanStartNewRoom(t *testing.T) {
+	ts := newServer(t)
+	a := dial(t, ts.URL, mintToken(t, uuid.New(), "alice"))
+	a.send(map[string]any{"type": "join", "room": "out-1", "name": "Alice"})
+	a.readUntil("joined")
 }

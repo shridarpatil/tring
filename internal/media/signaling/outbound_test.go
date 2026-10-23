@@ -158,7 +158,7 @@ func TestHandleAgentDialOriginatesWithSelectedTrunkAndAttachesPort(t *testing.T)
 
 	finished := make(chan struct{})
 	go func() {
-		s.handleAgentDial(rid, tenant, agent.ID(), "+919900001111")
+		s.handleAgentDial(rid, tenant, "alice", agent.ID(), "+919900001111")
 		close(finished)
 	}()
 
@@ -224,7 +224,7 @@ func TestHandleAgentDialSendsErrorWhenNoTrunkAvailable(t *testing.T) {
 	s.conns[agent.ID()] = &conn{Conn: serverConn, pid: agent.ID()}
 	s.mu.Unlock()
 
-	go s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+	go s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "+919900001111")
 
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	data, err := wsutil.ReadServerText(clientConn)
@@ -268,7 +268,7 @@ func TestHandleAgentDialDisabledWithoutWiringSendsError(t *testing.T) {
 	// call directly rather than in a goroutine — but the read below still
 	// needs to happen concurrently since conn.send blocks on net.Pipe until
 	// the peer reads.
-	go s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+	go s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "+919900001111")
 
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	data, err := wsutil.ReadServerText(clientConn)
@@ -307,7 +307,7 @@ func TestHangupOutboundIfAbandonedHangsUpWhenAgentLeaves(t *testing.T) {
 		t.Fatalf("join agent: %v", err)
 	}
 
-	go s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+	go s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "+919900001111")
 
 	select {
 	case <-orig.calls:
@@ -424,7 +424,7 @@ func TestDialAgentLeavesDuringRing(t *testing.T) {
 
 	finished := make(chan struct{})
 	go func() {
-		s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+		s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "+919900001111")
 		close(finished)
 	}()
 
@@ -490,7 +490,7 @@ func TestDialOriginateError(t *testing.T) {
 	s.conns[agent.ID()] = &conn{Conn: serverConn, pid: agent.ID()}
 	s.mu.Unlock()
 
-	go s.handleAgentDial(rid, uuid.New(), agent.ID(), "+919900001111")
+	go s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "+919900001111")
 
 	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	data, err := wsutil.ReadServerText(clientConn)
@@ -544,7 +544,7 @@ func TestDialNormalizesDestination(t *testing.T) {
 
 		finished := make(chan struct{})
 		go func() {
-			s.handleAgentDial(rid, uuid.New(), agent.ID(), "9900001111")
+			s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "9900001111")
 			close(finished)
 		}()
 
@@ -584,7 +584,7 @@ func TestDialNormalizesDestination(t *testing.T) {
 		s.conns[agent.ID()] = &conn{Conn: serverConn, pid: agent.ID()}
 		s.mu.Unlock()
 
-		go s.handleAgentDial(rid, uuid.New(), agent.ID(), "12345")
+		go s.handleAgentDial(rid, uuid.New(), "alice", agent.ID(), "12345")
 
 		_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		data, err := wsutil.ReadServerText(clientConn)
@@ -712,7 +712,7 @@ func TestHandleAgentDialOpensOutboundCDRViaStartedOutbound(t *testing.T) {
 
 	finished := make(chan struct{})
 	go func() {
-		srv.handleAgentDial(rid, tenant, agent.ID(), "+919900001111")
+		srv.handleAgentDial(rid, tenant, "alice", agent.ID(), "+919900001111")
 		close(finished)
 	}()
 
@@ -762,5 +762,82 @@ func TestHandleAgentDialOpensOutboundCDRViaStartedOutbound(t *testing.T) {
 	case <-finished:
 	case <-time.After(2 * time.Second):
 		t.Fatal("handleAgentDial did not return after leg.Done closed")
+	}
+}
+
+// Repeated dials can't stack carrier legs: one outbound call per room, and at
+// most maxAgentOutbound in progress per agent across rooms.
+func TestDialConcurrencyCaps(t *testing.T) {
+	orig := newFakeOriginator(nil)
+	orig.release = make(chan struct{}) // every originate rings until released
+	orig.err = errors.New("released")
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{Name: "t_000000000001", E164: "+911600000000"}}}
+	s := newOutboundServer(t, orig, trunks)
+	tenant := uuid.New()
+
+	agentIn := func(rid room.RoomID) (room.ParticipantID, net.Conn) {
+		p, err := s.rooms.Join(rid, "agent")
+		if err != nil {
+			t.Fatalf("join: %v", err)
+		}
+		serverConn, clientConn := net.Pipe()
+		t.Cleanup(func() { _ = clientConn.Close() })
+		s.mu.Lock()
+		s.conns[p.ID()] = &conn{Conn: serverConn, pid: p.ID()}
+		s.mu.Unlock()
+		return p.ID(), clientConn
+	}
+
+	r1, r2, r3 := room.RoomID("t/cap-1"), room.RoomID("t/cap-2"), room.RoomID("t/cap-3")
+	p1, c1 := agentIn(r1)
+	go s.handleAgentDial(r1, tenant, "alice", p1, "+919900001111")
+	<-orig.calls // first call is ringing
+
+	// Same room again → refused, no second carrier leg.
+	go s.handleAgentDial(r1, tenant, "alice", p1, "+919900002222")
+	if m := readMsg(t, c1); m.Type != msgError || m.Reason != "a call is already in progress" {
+		t.Fatalf("second dial in room = %+v", m)
+	}
+	_ = c1.SetReadDeadline(time.Time{})
+
+	// A second room is within the agent's cap; a third is not.
+	p2, c2 := agentIn(r2)
+	go s.handleAgentDial(r2, tenant, "alice", p2, "+919900003333")
+	<-orig.calls
+	p3, c3 := agentIn(r3)
+	go s.handleAgentDial(r3, tenant, "alice", p3, "+919900004444")
+	if m := readMsg(t, c3); m.Type != msgError || m.Reason != "a call is already in progress" {
+		t.Fatalf("dial over agent cap = %+v", m)
+	}
+	select {
+	case req := <-orig.calls:
+		t.Fatalf("unexpected extra originate: %+v", req)
+	default:
+	}
+
+	// Once the calls end, the slots are free again. (Drain the pipes: each failed
+	// dial sends the agent "call failed", and net.Pipe writes block until read.)
+	for _, c := range []net.Conn{c1, c2} {
+		go func(c net.Conn) {
+			for {
+				if _, err := wsutil.ReadServerText(c); err != nil {
+					return
+				}
+			}
+		}(c)
+	}
+	close(orig.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		n := len(s.dialing) + len(s.agentDials)
+		s.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dial slots never released")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
