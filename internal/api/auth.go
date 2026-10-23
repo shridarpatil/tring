@@ -66,7 +66,7 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 			tenantID = id
 		} else {
 			claims, err := s.parseConsoleToken(token)
-			if err != nil {
+			if err != nil || !s.consoleUserExists(r.Context(), claims) {
 				writeError(w, http.StatusUnauthorized, "invalid credentials")
 				return
 			}
@@ -83,6 +83,21 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), tenantCtxKey, &t)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// consoleUserExists reports whether a console token's user still exists in
+// its tenant. Console JWTs are stateless, so without this a deleted user's
+// session would stay valid until expiry. Fails closed on a DB error.
+func (s *Server) consoleUserExists(ctx context.Context, c *ConsoleClaims) bool {
+	userID, err := uuid.Parse(c.Subject)
+	if err != nil {
+		return false
+	}
+	var ok bool
+	if err := s.db.Pool.QueryRow(ctx, s.q.UserExists, userID, c.TenantID).Scan(&ok); err != nil {
+		return false
+	}
+	return ok
 }
 
 // tenantForAPIKey resolves a presented API key to its tenant by hash,

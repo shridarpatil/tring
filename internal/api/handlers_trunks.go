@@ -20,20 +20,23 @@ import (
 // FreeSWITCH gateway XML by internal/freeswitch.WriteGateway and picked
 // up via a sofia profile rescan on save.
 type Trunk struct {
-	ID           uuid.UUID       `json:"id"`
-	TenantID     uuid.UUID       `json:"tenant_id"`
-	Name         string          `json:"name"`
-	ProviderType string          `json:"provider_type"`
-	SIPUsername  string          `json:"sip_username"`
-	SIPPassword  string          `json:"sip_password,omitempty"` // omitted on list responses
-	SIPRealm     string          `json:"sip_realm"`
-	Register     bool            `json:"register"`
-	ProxyIP      string          `json:"proxy_ip"`
-	AuthACLCIDR  string          `json:"auth_acl_cidr"`
-	Active       bool            `json:"active"`
-	ExtraParams  json.RawMessage `json:"extra_params"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID           uuid.UUID `json:"id"`
+	TenantID     uuid.UUID `json:"tenant_id"`
+	Name         string    `json:"name"`
+	ProviderType string    `json:"provider_type"`
+	SIPUsername  string    `json:"sip_username"`
+	// SIPPassword is write-only: accepted on create/update, never returned
+	// (it is the carrier credential). HasPassword tells the console one is set.
+	SIPPassword string          `json:"-"`
+	HasPassword bool            `json:"has_password"`
+	SIPRealm    string          `json:"sip_realm"`
+	Register    bool            `json:"register"`
+	ProxyIP     string          `json:"proxy_ip"`
+	AuthACLCIDR string          `json:"auth_acl_cidr"`
+	Active      bool            `json:"active"`
+	ExtraParams json.RawMessage `json:"extra_params"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 	// Live state from sofia status — populated on responses, not in DB.
 	// Values: online | offline | connecting | not_loaded | unknown.
 	Status   string   `json:"status,omitempty"`
@@ -109,6 +112,7 @@ func scanTrunk(scanner interface{ Scan(...interface{}) error }) (Trunk, error) {
 		&t.Register, &t.ProxyIP, &t.AuthACLCIDR,
 		&t.Active, &t.ExtraParams, &t.CreatedAt, &t.UpdatedAt,
 	)
+	t.HasPassword = t.SIPPassword != ""
 	return t, err
 }
 
@@ -179,10 +183,10 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 // FreeSWITCH didn't pick it up — so they don't read a 2xx as "live" and they
 // know POST /v1/trunks/reload is the retry. `did` is the past-tense verb, e.g.
 // "saved" / "updated" / "deleted".
-func syncTrunkError(w http.ResponseWriter, did string, err error) {
-	writeError(w, http.StatusBadGateway,
-		"trunk "+did+" but FreeSWITCH did not reload: "+err.Error()+
-			" — retry with POST /v1/trunks/reload")
+// The underlying error (file paths, ESL replies) is logged, not returned.
+func (s *Server) syncTrunkError(w http.ResponseWriter, r *http.Request, did string, err error) {
+	s.writeServerError(w, r, http.StatusBadGateway,
+		"trunk "+did+" but FreeSWITCH did not reload — retry with POST /v1/trunks/reload", err)
 }
 
 func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
@@ -208,12 +212,16 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 		req.Register, req.ProxyIP, req.AuthACLCIDR, req.Active, extra,
 	)
 	tr, err := scanTrunk(row)
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "a trunk with this name already exists")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusConflict, "trunk insert failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "trunk insert failed", err)
 		return
 	}
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		syncTrunkError(w, "saved", err)
+		s.syncTrunkError(w, r, "saved", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, tr)
@@ -234,8 +242,6 @@ func (s *Server) handleListTrunks(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		// Don't leak password in list responses.
-		tr.SIPPassword = ""
 		out = append(out, tr)
 	}
 	// Best-effort: enrich with live FS gateway health. If ESL is down
@@ -304,12 +310,16 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "trunk not found")
 		return
 	}
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "a trunk with this name already exists")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		syncTrunkError(w, "updated", err)
+		s.syncTrunkError(w, r, "updated", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tr)
@@ -332,7 +342,7 @@ func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		syncTrunkError(w, "deleted", err)
+		s.syncTrunkError(w, r, "deleted", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -343,7 +353,7 @@ func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
 // from the DB (e.g. after a crash before a write completed).
 func (s *Server) handleReloadTrunks(w http.ResponseWriter, r *http.Request) {
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "reload failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "reload failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})

@@ -18,7 +18,6 @@ Wherever a path has `{id}` on this page, you can pass either the agent's UUID **
 | `id` | UUID | Agent ID. |
 | `tenant_id` | UUID | Owning tenant. |
 | `sip_username` | string | The agent's username, unique in the tenant. Typically your CRM user ID. |
-| `sip_password` | string | Generated SIP password. **Only in the create response.** |
 | `display_name` | string | Name shown to supervisors and in the console. Left out when empty. |
 | `available_for_calls` | boolean | Your backend's availability flag (your "Away" / "Break" button). Tring rings an agent only when they're connected **and** available. |
 | `created_at` | timestamp | When the agent was created. |
@@ -61,14 +60,13 @@ curl -sS -X POST "$TRING_URL/v1/agents" \
   "id": "9a3e5d10-0000-4000-8000-00000000c001",
   "tenant_id": "00000000-0000-4000-8000-000000000001",
   "sip_username": "agent-1042",
-  "sip_password": "examplepasswordexample23",
   "display_name": "Asha Example",
   "available_for_calls": true,
   "created_at": "2026-10-16T09:41:07.512843+05:30"
 }
 ```
 
-The SIP password is generated for you. You don't need it with the agent widget, which authenticates with an [agent token](#get-v1agentsidtoken). It's shown only in this response.
+Agents authenticate with an [agent token](#get-v1agentsidtoken), not SIP credentials. Tring still generates and stores a SIP password for the legacy `sip` agent transport, but never returns it.
 
 A new agent isn't in any team yet. Add it with [`POST /v1/teams/{name}/agents`](/tring/api-reference/teams/#post-v1teamsnameagents).
 

@@ -113,8 +113,8 @@ curl -sS -X POST "$TRING_URL/v1/calls" \
 | `400` | `invalid destination "…": …`, for example `not a valid Indian mobile number` |
 | `400` | `load_based strategy is reserved and not yet implemented` |
 | `404` | `agent not found` |
-| `500` | `agent lookup failed` / `insert call: …` |
-| `502` | `originate failed: …` (FreeSWITCH rejected or couldn't be reached) |
+| `500` | `agent lookup failed` / `internal error` |
+| `502` | `originate failed` (FreeSWITCH rejected the call or couldn't be reached) |
 
 :::caution
 Calls placed with `POST /v1/calls` and `POST /v1/calls/connect` go out through FreeSWITCH directly. In the current code, nothing moves these rows past `ringing` when the call is answered or ends. Don't rely on their `status`, `answered_at` or `duration_seconds`. Calls that go through the media gateway (inbound phone, web, and agent-dialed calls from the widget) are updated normally.
@@ -166,8 +166,8 @@ curl -sS -X POST "$TRING_URL/v1/calls/connect" \
 | `400` | `agent_number and client_number are required` |
 | `400` | `invalid agent_number "…": …` / `invalid client_number "…": …` |
 | `400` | `load_based strategy is reserved and not yet implemented` |
-| `500` | `insert call: …` |
-| `502` | `originate failed: …` |
+| `500` | `internal error` |
+| `502` | `originate failed` |
 
 ## Reading the call log
 
@@ -238,7 +238,6 @@ curl -sS "$TRING_URL/v1/calls?status=ended&page=1&limit=25" \
 | `500` | `count failed` / `query failed` |
 
 An unknown `status` value returns an empty list, not an error.
-| `500` | `query failed` / `query failed: …` / `scan failed` |
 
 ### GET /v1/calls/{id}
 

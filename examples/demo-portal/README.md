@@ -8,11 +8,13 @@ that links to each:
 |---|---|---|---|
 | `/support` | **Anonymous "call us"** — visitor with no account lands in your IVR | `voice.js` (`data-credentials-url` → `/support-credentials`), **inline button** (`data-render-button="false"` + your own `<button data-tring-call>`) | guest token minted server-side, no `client_ref` (gate with CAPTCHA in prod); flow-pinned, can't reach a trunk |
 | `/portal` | **Logged-in support** — call attributed to the verified client | `voice.js` (`data-credentials-url`), **floating launcher** | backend mints a trusted call token (`client_ref`) |
-| `/crm` | **Agent** — receives/handles calls; the *backend* places outbound (agent never sees the number) | `agent.js` (`data-token-url`) — WS-only, no API access | backend mints a short-lived agent JWT |
+| `/crm` | **Agent** — receives/handles calls; the *backend* places outbound (agent never sees the number) | `agent.js` (`data-token-url`) — can't originate; its agent JWT only reaches the gateway WS and the self call-control routes (`/v1/sdk/*`) | backend mints a short-lived agent JWT; requires the demo login |
 
 The browser never holds the tenant API key, and the **agent's browser never sees
-the dialed number**. The SDK has no Tring API access; this backend mints tokens
-and places calls server-side:
+the dialed number**. The SDK can't place calls: its agent JWT is accepted only by
+the gateway WebSocket and the agent's own call-control routes (`POST
+/v1/sdk/calls/hold|resume|transfer`, `GET /v1/sdk/transfer-targets`). This
+backend mints tokens and places calls server-side:
 
 ```
 browser ──/guest-credentials──► this app ──► Tring POST /v1/guest-credentials  (call token + client_ref)
@@ -58,12 +60,26 @@ export TRING_AGENT_ID=<agent-uuid>                # optional; else the first age
 python app.py
 ```
 
+The app listens on `127.0.0.1:5000` with the Flask debugger off. To reach it
+from another machine or turn the debugger on, opt in explicitly — and only on a
+trusted network (the debugger runs arbitrary code, and these routes spend your
+tenant API key):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DEMO_HOST` | `127.0.0.1` | Bind address, e.g. `0.0.0.0` |
+| `DEMO_PORT` | `5000` | Port |
+| `FLASK_DEBUG` | off | `1` enables the Werkzeug debugger and reloader |
+| `FLASK_SECRET` | random per start | Session-signing key |
+
 Open <http://localhost:5000> and pick a demo:
 - **/support** — click **Call support** (no login).
 - **/portal** — log in as **`alice` / `demo`** (or `bob` / `demo`), click **Call
   support**. In the console → **Calls**, the row's **From** shows `cust_ACME_42`
   (alice's `client_ref`), not `guest_…`.
-- **/crm** — click a customer's **Call**, or keep it open to catch an IVR transfer.
+- **/crm** — sign in (any demo user), then click a customer's **Call**, or keep
+  it open to catch an IVR transfer. `/crm` and its `/agent/*` endpoints mint
+  agent tokens and place calls with your API key, so they require the login.
 
 End-to-end test: open `/crm` in one tab (agent online) and `/support` in another
 (visitor), call support, and have the IVR transfer to the agent.
@@ -77,4 +93,5 @@ End-to-end test: open `/crm` in one tab (agent online) and `/support` in another
   check the session, call Tring's authenticated mint with the verified
   `client_ref`, return the JSON. `voice.js` calls it via `data-credentials-url`.
 - `/agent/token` → mint a fresh agent JWT for the logged-in agent. `agent.js`
-  calls it via `data-token-url`.
+  calls it via `data-token-url`. Gate it (and `/agent/originate`,
+  `/agent/availability`) on your agent auth — the demo just requires a session.

@@ -283,7 +283,7 @@ export interface Trunk {
   name: string;
   provider_type: string;
   sip_username: string;
-  sip_password?: string; // only returned on create / get
+  has_password: boolean; // sip_password is write-only: never returned
   sip_realm: string;
   register: boolean;
   proxy_ip: string;
