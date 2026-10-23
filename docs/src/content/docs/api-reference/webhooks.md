@@ -252,7 +252,7 @@ Register a webhook endpoint.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `url` | string | yes | Where to POST events. Not validated, so check it yourself; use `https://`. |
+| `url` | string | yes | Where to POST events. Must be `http://` or `https://` with a public host; use `https://`. Literal private, loopback or link-local IPs and `localhost` are rejected, and every delivery re-checks the resolved address (see the caution below). |
 | `events` | array of strings | no | Event types to receive. Empty or omitted means **all** events. Values aren't validated, so a typo silently receives nothing. |
 | `secret` | string | no | Signing secret. When omitted, Tring generates one (`whsec_` followed by 48 hex characters). |
 
@@ -282,10 +282,11 @@ curl -sS -X POST "$TRING_URL/v1/webhooks" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `url is required` |
+| `400` | `url must be a public http or https URL` |
 | `500` | `insert webhook: …` |
 
 :::caution
-Only register HTTPS endpoints you control. Tring sends to whatever URL is registered, including private and internal addresses reachable from the API and gateway servers (both send webhooks), so operators should restrict who can hold API keys and consider egress filtering. Treat the secret like a password: if it leaks, delete the webhook and create a new one. There's no way to rotate a secret in place.
+Only register HTTPS endpoints you control. The API and gateway (both send webhooks) refuse to connect to loopback, private, link-local (including cloud metadata), CGNAT and other internal addresses, checked on the resolved IP of every attempt and redirect. Operators with an on-premises receiver can allow its range with `TRING_OUTBOUND_ALLOW_CIDRS`; egress filtering is still a good second layer. Treat the secret like a password: if it leaks, delete the webhook and create a new one. There's no way to rotate a secret in place.
 :::
 
 ### GET /v1/webhooks

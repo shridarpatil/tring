@@ -95,6 +95,10 @@ type Config struct {
 	// same selection internal/api uses for FreeSWITCH-path calls). nil →
 	// outbound dialing is disabled.
 	Trunks TrunkResolver
+	// HTTP is the client IVR http_callback nodes call tenant URLs with. Must be
+	// SSRF-guarded (internal/safehttp); nil → the guarded default with no
+	// private-range allowlist.
+	HTTP   *http.Client
 	Logger *slog.Logger
 }
 

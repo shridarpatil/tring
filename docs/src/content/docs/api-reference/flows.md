@@ -155,6 +155,8 @@ Calls your backend so the flow can branch on data only you have. The request run
 
 Outcomes: `http:2xx` on a 2xx response, `http:non2xx` on anything else, including a bad URL, a timeout or a network error. The call never fails because of the callback.
 
+The URL must resolve to a public address: loopback, private, link-local (including cloud metadata) and other internal addresses are refused at connect time, on redirects too, and take `http:non2xx`. Operators can allow a private range with `TRING_OUTBOUND_ALLOW_CIDRS`.
+
 On a 2xx with a JSON object body (up to 1 MiB is read), each top-level field becomes a variable: strings as is, booleans as `true`/`false`, numbers in plain form, `null` as an empty string, objects and arrays as JSON text. A response `{"team": "priority", "vip": true}` sets `{{team}}` and `{{vip}}`.
 
 :::caution

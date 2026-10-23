@@ -98,7 +98,7 @@ type Config struct {
 	Room      string           // the call's room id (transfer admits the agent here)
 	ClientRef string           // caller label shown to the agent (empty → "Web Caller")
 	Now       func() time.Time // nil → time.Now
-	HTTP      *http.Client     // nil → http.DefaultClient
+	HTTP      *http.Client     // http_callback client; nil → SSRF-guarded default (safehttp)
 	Logger    *slog.Logger
 	// Vars seeds the flow vars before the walk — {{caller}} (the caller's
 	// number / client ref) and {{did}} (the number they dialed) — so an
@@ -111,9 +111,6 @@ type Config struct {
 func New(cfg Config) *Driver {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
-	}
-	if cfg.HTTP == nil {
-		cfg.HTTP = http.DefaultClient
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
