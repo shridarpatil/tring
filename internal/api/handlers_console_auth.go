@@ -46,8 +46,14 @@ type consoleLoginResponse struct {
 
 // handleConsoleLogin authenticates an email+password against the users
 // table and returns a JWT the Vue console uses for all subsequent calls.
-// Public endpoint (no auth wall).
+// Public endpoint (no auth wall), so it's throttled per client IP and per
+// email (loginAttemptLimit per loginAttemptWindow each) → 429 + Retry-After.
 func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if retry, ok := s.loginByIP.take(ip); !ok {
+		writeTooManyRequests(w, retry)
+		return
+	}
 	var req consoleLoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
@@ -56,6 +62,10 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "email and password required")
+		return
+	}
+	if retry, ok := s.loginByEmail.take(email); !ok {
+		writeTooManyRequests(w, retry)
 		return
 	}
 
@@ -84,6 +94,10 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	// Correct password: refund the attempt so legitimate logins (many users
+	// behind one office NAT) don't eat into the guessing budget.
+	s.loginByIP.release(ip)
+	s.loginByEmail.release(email)
 
 	// Pull the tenant in the same shape AuthRequired loads it so the
 	// console gets a consistent /v1/tenants/me-equivalent payload back
