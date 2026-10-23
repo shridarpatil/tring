@@ -373,16 +373,9 @@ func (s *Server) Router() http.Handler {
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Timeout(30 * time.Second))
-				r.Get("/tenants/me", s.handleGetMyTenant)
-				r.Patch("/tenants/me", s.handlePatchMyTenant)
-				r.Get("/guest-config", s.handleGetGuestConfig)
-				r.Patch("/guest-config", s.handlePatchGuestConfig)
-				// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
-				// manages these with the console JWT; the issued keys then auth
-				// server-to-server callers via AuthRequired.
-				r.Post("/api-keys", s.handleCreateAPIKey)
-				r.Get("/api-keys", s.handleListAPIKeys)
-				r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+
+				// ── Any caller, including a 'calls'-scoped API key: what a CRM
+				// backend needs to place and handle calls, plus read-only lookups.
 				// API-key mint: integrator backend mints guest creds with a
 				// trusted client_ref (the verified logged-in caller). The public
 				// /sdk/guest-credentials never accepts client_ref.
@@ -394,26 +387,15 @@ func (s *Server) Router() http.Handler {
 				r.Get("/agents/{id}/token", s.handleAgentToken)
 				// Teams — agent groups the IVR transfer node rings as a unit.
 				// Identified by name, so the path param is the team name.
-				r.Post("/teams", s.handleCreateTeam)
 				r.Get("/teams", s.handleListTeams)
 				r.Get("/teams/{name}", s.handleGetTeam)
-				r.Patch("/teams/{name}", s.handlePatchTeam)
-				r.Delete("/teams/{name}", s.handleDeleteTeam)
-				r.Post("/teams/{name}/agents", s.handleAddTeamAgent)
-				r.Delete("/teams/{name}/agents/{agentID}", s.handleRemoveTeamAgent)
 				// Live queue depth per team (orchestrator publishes → Redis → here).
 				r.Get("/queues", s.handleListQueues)
 				// "Today so far" aggregates for the dashboard trend strip.
 				r.Get("/stats/overview", s.handleStatsOverview)
-				// Sound library — uploaded audio reused for IVR prompts + hold music.
-				r.Get("/audio", s.handleListAudio)
-				r.Post("/audio", s.handleUploadAudio)
-				r.Get("/audio/{id}/file", s.handleGetAudioFile)
-				r.Get("/audio/preview", s.handlePreviewAudio) // play by file_path (assets + TTS prompts)
-				r.Delete("/audio/{id}", s.handleDeleteAudio)
-				r.Post("/numbers", s.handleCreateNumber)
 				r.Get("/numbers", s.handleListNumbers)
-				r.Patch("/numbers/{id}", s.handlePatchNumber)
+				r.Get("/flows", s.handleListFlows)
+				r.Get("/flows/{id}", s.handleGetFlow)
 
 				r.Post("/calls", s.handleCreateCall)
 				r.Post("/calls/connect", s.handleConnectCall)
@@ -425,26 +407,54 @@ func (s *Server) Router() http.Handler {
 				r.Post("/calls/{id}/hold", s.handleHoldCall)
 				r.Post("/calls/{id}/resume", s.handleResumeCall)
 
-				r.Post("/webhooks", s.handleCreateWebhook)
-				r.Get("/webhooks", s.handleListWebhooks)
-				r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
-				r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
+				// ── Full access only (console sessions, 'full' API keys): tenant
+				// administration. A 'calls' key gets 403, so a leaked CRM key can't
+				// mint more keys, read trunk config or repoint webhooks.
+				r.Group(func(r chi.Router) {
+					r.Use(s.RequireFullScope)
+					r.Get("/tenants/me", s.handleGetMyTenant)
+					r.Patch("/tenants/me", s.handlePatchMyTenant)
+					r.Get("/guest-config", s.handleGetGuestConfig)
+					r.Patch("/guest-config", s.handlePatchGuestConfig)
+					// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
+					// manages these with the console JWT; the issued keys then auth
+					// server-to-server callers via AuthRequired.
+					r.Post("/api-keys", s.handleCreateAPIKey)
+					r.Get("/api-keys", s.handleListAPIKeys)
+					r.Delete("/api-keys/{id}", s.handleRevokeAPIKey)
+					r.Post("/teams", s.handleCreateTeam)
+					r.Patch("/teams/{name}", s.handlePatchTeam)
+					r.Delete("/teams/{name}", s.handleDeleteTeam)
+					r.Post("/teams/{name}/agents", s.handleAddTeamAgent)
+					r.Delete("/teams/{name}/agents/{agentID}", s.handleRemoveTeamAgent)
+					// Sound library — uploaded audio reused for IVR prompts + hold music.
+					r.Get("/audio", s.handleListAudio)
+					r.Post("/audio", s.handleUploadAudio)
+					r.Get("/audio/{id}/file", s.handleGetAudioFile)
+					r.Get("/audio/preview", s.handlePreviewAudio) // play by file_path (assets + TTS prompts)
+					r.Delete("/audio/{id}", s.handleDeleteAudio)
+					r.Post("/numbers", s.handleCreateNumber)
+					r.Patch("/numbers/{id}", s.handlePatchNumber)
 
-				r.Post("/flows", s.handleCreateFlow)
-				r.Get("/flows", s.handleListFlows)
-				r.Get("/flows/{id}", s.handleGetFlow)
-				r.Patch("/flows/{id}", s.handlePatchFlow)
-				r.Delete("/flows/{id}", s.handleDeleteFlow)
-				r.Post("/flows/{id}/simulate", s.handleSimulateFlow)
-				r.Post("/flows/{id}/simulate/start", s.handleSimulateStart)
-				r.Post("/flows/simulate/sessions/{sid}/input", s.handleSimulateInput)
+					r.Post("/webhooks", s.handleCreateWebhook)
+					r.Get("/webhooks", s.handleListWebhooks)
+					r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
+					r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
 
-				r.Post("/trunks", s.handleCreateTrunk)
-				r.Get("/trunks", s.handleListTrunks)
-				r.Get("/trunks/{id}", s.handleGetTrunk)
-				r.Patch("/trunks/{id}", s.handlePatchTrunk)
-				r.Delete("/trunks/{id}", s.handleDeleteTrunk)
-				r.Post("/trunks/reload", s.handleReloadTrunks)
+					r.Post("/flows", s.handleCreateFlow)
+					r.Patch("/flows/{id}", s.handlePatchFlow)
+					r.Delete("/flows/{id}", s.handleDeleteFlow)
+					r.Post("/flows/{id}/simulate", s.handleSimulateFlow)
+					r.Post("/flows/{id}/simulate/start", s.handleSimulateStart)
+					r.Post("/flows/simulate/sessions/{sid}/input", s.handleSimulateInput)
+
+					r.Post("/trunks", s.handleCreateTrunk)
+					r.Get("/trunks", s.handleListTrunks)
+					r.Get("/trunks/{id}", s.handleGetTrunk)
+					r.Patch("/trunks/{id}", s.handlePatchTrunk)
+					r.Delete("/trunks/{id}", s.handleDeleteTrunk)
+					r.Post("/trunks/reload", s.handleReloadTrunks)
+				})
 			})
 		})
 

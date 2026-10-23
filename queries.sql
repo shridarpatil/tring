@@ -492,13 +492,13 @@ UPDATE tenants SET default_flow_id = $1 WHERE id = $2;
 -- ===========================================================================
 
 -- name: create-api-key
-INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix)
-VALUES ($1, $2, $3, $4)
+INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix, scope)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, created_at;
 
 -- name: list-api-keys
 -- Never returns the hash/plaintext — only the display prefix + status.
-SELECT id, name, key_prefix, created_at, last_used_at, revoked_at
+SELECT id, name, key_prefix, scope, created_at, last_used_at, revoked_at
 FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC;
 
 -- name: revoke-api-key
@@ -507,8 +507,8 @@ UPDATE api_keys SET revoked_at = now()
 WHERE id = $1 AND tenant_id = $2 AND revoked_at IS NULL;
 
 -- name: resolve-api-key-tenant
--- Auth path: map a presented key's hash to its tenant, unless revoked.
-SELECT tenant_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL;
+-- Auth path: map a presented key's hash to its tenant + scope, unless revoked.
+SELECT tenant_id, scope FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL;
 
 -- name: touch-api-key
 -- Best-effort last-used stamp on a successful auth.
