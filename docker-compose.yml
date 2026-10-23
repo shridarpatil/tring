@@ -93,14 +93,35 @@ services:
     container_name: tring-redis
     # Pure cache — no persistence. The IVR flow cache is repopulated from
     # Postgres on a miss, so losing it on restart only costs a few DB reads.
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    #
+    # Auth: when TRING_REDIS_PASSWORD is set (in .env — `make up`/install.sh
+    # generate one), Redis requires it (requirepass) and the api + gateway send
+    # it. Empty = no auth (pre-existing deployments keep working). The password
+    # is fed to redis-server as a config file on stdin rather than as an argv
+    # flag so it doesn't show up in `ps` on the host. `$$` defers expansion to
+    # the container shell; docker-entrypoint.sh still drops to the redis user.
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$TRING_REDIS_PASSWORD" ]; then
+        exec docker-entrypoint.sh redis-server - --save '' --appendonly no <<EOF
+        requirepass "$$TRING_REDIS_PASSWORD"
+        EOF
+        fi
+        exec docker-entrypoint.sh redis-server --save '' --appendonly no
     environment:
       TZ: ${TZ:-Asia/Kolkata}
-    # Loopback only (no auth configured) — see the postgres ports note.
+      TRING_REDIS_PASSWORD: ${TRING_REDIS_PASSWORD:-}
+    # Loopback only — see the postgres ports note. Set TRING_REDIS_PASSWORD too
+    # (defence in depth: any local process can otherwise reach 127.0.0.1:6379).
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # REDISCLI_AUTH can't be used: an empty value makes redis-cli send a
+      # bare AUTH, which fails on a password-less server. Grep for PONG since
+      # redis-cli exits 0 even on a NOAUTH error reply.
+      test: ["CMD-SHELL", "if [ -n \"$$TRING_REDIS_PASSWORD\" ]; then export REDISCLI_AUTH=\"$$TRING_REDIS_PASSWORD\"; fi; redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10

@@ -41,5 +41,18 @@
       <node type="allow" cidr="$${tring_internal_ip}/32"/>
     </list>
 
+    <!-- Tring: ONLY the media gateway's own SIP source addresses (the same
+         static nodes as 'domains' above). The dialplan checks this before
+         honouring gateway-only extensions (tring_outbound_trunk, gwflow), so a
+         SIP user that merely digest-authenticated on the internal profile
+         can't pick another tenant's trunk or flow. Deliberately separate from
+         'domains': that list also auto-includes any directory user carrying a
+         cidr= param, which would silently widen this trust. -->
+    <list name="tring_gateway" default="deny">
+      <node type="allow" cidr="127.0.0.0/8"/>
+      <node type="allow" cidr="::1/128"/>
+      <node type="allow" cidr="$${tring_internal_ip}/32"/>
+    </list>
+
   </network-lists>
 </configuration>

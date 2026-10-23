@@ -62,7 +62,7 @@ func main() {
 
 	// Redis (shared with api/orchestrator) backs agent presence. Optional:
 	// log-and-disable if unreachable — presence just goes dark, calls still work.
-	redisCache, err := cache.New(k.String("redis_addr"))
+	redisCache, err := cache.New(k.String("redis_addr"), k.String("redis_password"))
 	if err != nil {
 		logger.Warn("redis unavailable, agent presence disabled", "err", err)
 	}
@@ -82,7 +82,7 @@ func main() {
 
 	// Dashboard live-update publisher (shares the Redis the api Hub subscribes
 	// to). Best-effort: nil when Redis is off → events simply don't fire.
-	eventsPub, err := events.NewPublisher(k.String("redis_addr"), logger)
+	eventsPub, err := events.NewPublisher(k.String("redis_addr"), k.String("redis_password"), logger)
 	if err != nil {
 		logger.Warn("redis unavailable, dashboard events disabled", "err", err)
 	}
