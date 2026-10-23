@@ -229,10 +229,16 @@ func main() {
 	root.Handle("/rtc", sigHandler)
 	root.Handle("/rtc/", sigHandler)
 
+	// ReadTimeout/IdleTimeout only govern the HTTP upgrade request: Hijack
+	// (inside ws.UpgradeHTTP) clears the conn deadlines, and the signaling
+	// layer sets its own per-read deadlines on the socket. No WriteTimeout —
+	// it would be meaningless for (and is likewise cleared on) hijacked conns.
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	logger.Info("gateway listening", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil {

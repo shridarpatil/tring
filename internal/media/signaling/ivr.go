@@ -119,8 +119,19 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 }
 
 // routeDTMF delivers a caller keypress to the room's IVR, if one is running.
+// Anything but a single DTMF key is dropped: collected digits are substituted
+// into tenant callback URLs/bodies, so a browser must not smuggle arbitrary
+// text in through a "digit".
 func (s *Server) routeDTMF(roomID room.RoomID, digit string) {
+	if !validDTMF(digit) {
+		return
+	}
 	s.brain.DTMF(roomID, digit)
+}
+
+// validDTMF reports whether d is exactly one DTMF key: 0-9, *, # or A-D.
+func validDTMF(d string) bool {
+	return len(d) == 1 && strings.IndexByte("0123456789*#ABCD", d[0]) >= 0
 }
 
 // stopIVR tears down a room's IVR. Delegates to brain.Runner which cancels the

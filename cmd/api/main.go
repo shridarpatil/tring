@@ -199,10 +199,16 @@ func main() {
 	)
 	go hub.Run(ctx)
 
+	// ReadTimeout bounds a slow-trickled request body (slowloris); IdleTimeout
+	// reaps idle keep-alives. No WriteTimeout: /v1/stream/dashboard is a
+	// long-lived SSE response. The 10 MiB audio upload already runs under a 30s
+	// middleware.Timeout, so ReadTimeout doesn't tighten it further.
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           apiSrv.Router(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// FreeSWITCH mod_xml_curl endpoints on their own loopback listener, so the
@@ -211,6 +217,8 @@ func main() {
 		Addr:              k.String("fs_addr"),
 		Handler:           apiSrv.FSRouter(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	go func() {
