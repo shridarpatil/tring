@@ -463,6 +463,11 @@ SELECT id, sip_password FROM agents WHERE tenant_id = $1 AND sip_username = $2;
 -- name: get-user-by-email
 SELECT id, tenant_id, password_hash FROM users WHERE email = $1;
 
+-- name: user-exists
+-- Console-session revocation check: a JWT for a deleted user (or one moved
+-- out of the tenant) must stop working. Primary-key point read.
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2);
+
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
 SELECT id, name, sip_domain, outbound_strategy, failover_causes

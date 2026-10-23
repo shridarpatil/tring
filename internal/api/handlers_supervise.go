@@ -31,7 +31,7 @@ func (s *Server) ConsoleAuthRequired(next http.Handler) http.Handler {
 			return
 		}
 		claims, err := s.parseConsoleToken(token)
-		if err != nil {
+		if err != nil || !s.consoleUserExists(r.Context(), claims) {
 			writeError(w, http.StatusUnauthorized, "invalid console session")
 			return
 		}

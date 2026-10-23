@@ -111,6 +111,7 @@ type Queries struct {
 
 	// ---- api: console auth ----
 	GetUserByEmail string `query:"get-user-by-email"`
+	UserExists     string `query:"user-exists"`
 	GetTenant      string `query:"get-tenant"`
 
 	// ---- api: guest web-calling ----
