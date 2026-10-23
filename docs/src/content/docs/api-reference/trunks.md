@@ -58,6 +58,7 @@ An IP-authenticated trunk with `from_domain` set:
 </include>
 ```
 
+- Every value is written into FreeSWITCH config, where `${…}` is expanded, so no field may contain `${`. Hosts (`sip_realm`, `proxy_ip`, `from_domain`) may only use host/IP characters (plus `:port` and `;transport=…`), and usernames only `A-Z a-z 0-9 . _ @ + -`. A trunk stored before these checks that breaks them is left out of FreeSWITCH (logged) until it's fixed.
 - In IP mode, `realm` is `sip_realm`, or `proxy_ip` when `sip_realm` is empty.
 - In REGISTER mode, `realm` is `sip_realm`, or `proxy_ip` when `sip_realm` is empty. `proxy_ip` (when set) adds `<param name="proxy">`: REGISTER and calls go to that address while `realm` stays the SIP domain. Use it when the realm isn't resolvable from your network, as with a carrier's IMS domain. `extra_params.auth_username` adds `<param name="auth-username">`.
 - `ping` makes FreeSWITCH send SIP OPTIONS every 25 seconds. That's how an IP-auth trunk's `status` is known (see below).
@@ -200,6 +201,10 @@ curl -sS -X POST "$TRING_URL/v1/trunks" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `name is required` |
+| `400` | `sip_username may only contain letters, digits and . _ @ + -` |
+| `400` | `sip_password may not contain ${ or control characters` |
+| `400` | `sip_realm and proxy_ip must be a host or IP, optionally with :port` |
+| `400` | `extra_params.from_domain must be a host or IP` / `extra_params.auth_username may only contain …` |
 | `409` | `trunk insert failed: …` with the database error. A duplicate `name` in your tenant lands here. |
 | `502` | `trunk saved but FreeSWITCH did not reload: … — retry with POST /v1/trunks/reload`. The trunk **is** saved; FreeSWITCH just hasn't picked it up. |
 
@@ -314,6 +319,10 @@ curl -sS -X PATCH "$TRING_URL/v1/trunks/4e1f0a2b-4444-4a00-8d00-000000000001" \
 |---|---|
 | `400` | `invalid id` |
 | `400` | `invalid JSON body` |
+| `400` | `sip_username may only contain letters, digits and . _ @ + -` |
+| `400` | `sip_password may not contain ${ or control characters` |
+| `400` | `sip_realm and proxy_ip must be a host or IP, optionally with :port` |
+| `400` | `extra_params.from_domain must be a host or IP` / `extra_params.auth_username may only contain …` |
 | `404` | `trunk not found` |
 | `500` | `update failed: …` (including a duplicate `name`) |
 | `502` | `trunk updated but FreeSWITCH did not reload: … — retry with POST /v1/trunks/reload` |
@@ -368,5 +377,5 @@ curl -sS -X POST "$TRING_URL/v1/trunks/reload" \
 | `500` | `reload failed: …` with the file-write or FreeSWITCH error. |
 
 :::danger
-Only open your SIP port (`5060`) to your carriers' published IP ranges, never `0.0.0.0/0`, and keep FreeSWITCH's ESL port (`8021`) private. An IP-authenticated trunk trusts the network path, so a wide-open SIP port invites toll fraud.
+Only open your SIP port (`5060`) to your carriers' published IP ranges, never `0.0.0.0/0`, and set `TRING_CARRIER_CIDRS` to the same ranges so FreeSWITCH itself refuses inbound calls from anywhere else. FreeSWITCH's ESL port (`8021`) listens on loopback only. An IP-authenticated trunk trusts the network path, so a wide-open SIP port invites toll fraud.
 :::

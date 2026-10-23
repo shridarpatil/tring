@@ -1,6 +1,7 @@
 package freeswitch
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,68 @@ func TestWriteGatewaysReportsChangedAndRemoved(t *testing.T) {
 	}
 	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
 		t.Error("removed gateway's file still present")
+	}
+}
+
+// FreeSWITCH expands $${global} (and ${var}) inside gateway XML, so a trunk
+// field like from-domain=$${tring_fs_basic_auth} would put a secret into the
+// SIP headers sent to the tenant's proxy. Such gateways are never rendered;
+// the others still are.
+func TestWriteGatewaysSkipsVariableExpansion(t *testing.T) {
+	old := GatewayDir
+	GatewayDir = t.TempDir()
+	defer func() { GatewayDir = old }()
+
+	idGood, idBad := uuid.New(), uuid.New()
+	good := Gateway{ID: idGood.String(), Name: GatewayName(idGood), ProxyIP: "198.51.100.20"}
+	for _, bad := range []Gateway{
+		{FromDomain: "$${tring_fs_basic_auth}"},
+		{Register: true, Username: "u", Password: "x${tring_esl_password}"},
+		{Realm: "${sip_from_host}"},
+		{AuthUsername: "a\nb"},
+	} {
+		bad.ID, bad.Name = idBad.String(), GatewayName(idBad)
+		if bad.ProxyIP == "" {
+			bad.ProxyIP = "198.51.100.30"
+		}
+		if _, err := renderGateway(bad); !errors.Is(err, ErrUnsafeValue) {
+			t.Errorf("renderGateway(%+v) err = %v, want ErrUnsafeValue", bad, err)
+		}
+		if _, err := WriteGateways([]Gateway{good, bad}); err != nil {
+			t.Fatalf("WriteGateways: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(GatewayDir, "t_"+bad.ID+".xml")); !os.IsNotExist(err) {
+			t.Errorf("unsafe gateway %+v was written", bad)
+		}
+		if _, err := os.Stat(filepath.Join(GatewayDir, "t_"+good.ID+".xml")); err != nil {
+			t.Errorf("safe gateway not written: %v", err)
+		}
+	}
+	// A literal $ without a brace (e.g. in a password) is fine.
+	ok := Gateway{ID: idBad.String(), Name: GatewayName(idBad), Register: true, Username: "u", Password: "pa$$word", ProxyIP: "198.51.100.30"}
+	if _, err := renderGateway(ok); err != nil {
+		t.Errorf("password with plain $: %v", err)
+	}
+}
+
+// A trunk that turns unsafe after it was rendered is unloaded, not left
+// running on its old config.
+func TestWriteGatewaysUnloadsTrunkThatTurnsUnsafe(t *testing.T) {
+	old := GatewayDir
+	GatewayDir = t.TempDir()
+	defer func() { GatewayDir = old }()
+
+	id := uuid.New()
+	g := Gateway{ID: id.String(), Name: GatewayName(id), ProxyIP: "198.51.100.20"}
+	if _, err := WriteGateways([]Gateway{g}); err != nil {
+		t.Fatal(err)
+	}
+	g.FromDomain = "$${tring_esl_password}"
+	stale, err := WriteGateways([]Gateway{g})
+	if err != nil || len(stale) != 1 || stale[0] != g.Name {
+		t.Fatalf("stale=%v err=%v, want [%s]", stale, err, g.Name)
+	}
+	if _, err := os.Stat(filepath.Join(GatewayDir, "t_"+g.ID+".xml")); !os.IsNotExist(err) {
+		t.Error("unsafe trunk's old file still present")
 	}
 }
