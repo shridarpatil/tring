@@ -75,8 +75,8 @@ Update one or more tenant settings. Fields you leave out keep their current valu
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `outbound_strategy` | string | no | One of `failover`, `round_robin`, `manual`, `load_based`. |
-| `failover_causes` | string[] | no | Replaces the whole list of hangup causes that trigger failover to the next trunk. |
-| `hold_music` | string | no | A sound's `file_path` (from [`GET /v1/audio`](/tring/api-reference/audio/#get-v1audio)) to use as hold music, or `""` to go back to the built-in default. The path isn't checked against your sound library, so copy it exactly. |
+| `failover_causes` | string[] | no | Replaces the whole list of hangup causes that trigger failover to the next trunk. Each entry is a FreeSWITCH cause name (`NORMAL_TEMPORARY_FAILURE`) or a Q.850 code; at most 32. |
+| `hold_music` | string | no | A sound's `file_path` (from [`GET /v1/audio`](/tring/api-reference/audio/#get-v1audio)) to use as hold music, or `""` to go back to the built-in default. It must be one of your tenant's sounds (or `local_stream://moh`); anything else is rejected. |
 | `record_calls` | boolean | no | Turn call recording on or off. |
 | `max_call_seconds` | integer | no | Maximum call duration in seconds, from `60` to `86400` (1 minute to 24 hours). |
 | `transfer_failed_message` | string | no | Text played when a transfer finds no one available. It's turned into speech when you save it. Sending `""` makes that moment silent. |
@@ -107,6 +107,8 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 | `400` | `recording_format must be one of ogg, mp3, wav` |
 | `400` | `max_call_seconds must be between 60 and 86400 (1 min–24 h)` |
 | `400` | `outbound_strategy must be failover\|round_robin\|manual\|load_based` |
+| `400` | `failover_causes must be FreeSWITCH cause names (e.g. NORMAL_TEMPORARY_FAILURE) or Q.850 codes` / `too many failover_causes` |
+| `400` | `hold_music must be one of this tenant's uploaded sounds` |
 | `500` | `update failed: …` |
 
 :::note

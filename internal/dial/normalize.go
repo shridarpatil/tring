@@ -55,13 +55,25 @@ func India(raw string) (string, error) {
 	return "+91" + cleaned, nil
 }
 
+// plainNumber is a bare number: an optional leading + and 3-15 digits (the
+// E.164 maximum). Nothing else may reach a FreeSWITCH dial string — `|`, `,`,
+// `[`, spaces or newlines would add legs, variables or whole ESL commands.
+var plainNumber = regexp.MustCompile(`^\+?\d{3,15}$`)
+
+// IsNumber reports whether s is a bare number (see plainNumber). Use it to
+// gate stored numbers (DIDs, caller IDs) that end up in dial strings.
+func IsNumber(s string) bool { return plainNumber.MatchString(s) }
+
 // Passthrough does no E.164 normalization. Used by the Loopback provider
-// in dev so internal extensions like 9196 (echo) still route. Only checks
-// that the input isn't empty/whitespace.
+// (dev, and tenants with no or "generic" trunks) so internal extensions like
+// 9196 (echo) still route. Only trims, and requires a bare number.
 func Passthrough(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", ErrEmpty
+	}
+	if !IsNumber(raw) {
+		return "", ErrBadFormat
 	}
 	return raw, nil
 }

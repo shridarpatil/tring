@@ -5,6 +5,7 @@ package freeswitch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,6 +13,22 @@ import (
 	"github.com/percipia/eslgo"
 	"github.com/percipia/eslgo/command"
 )
+
+// ErrUnsafeArg is returned, before anything is sent, when a command argument
+// contains a control character. ESL is line-framed: a newline would end the
+// command and start a second one with full ESL privileges. Callers validate
+// their inputs; this is the backstop.
+var ErrUnsafeArg = errors.New("freeswitch: control character in command argument")
+
+// checkArgs returns ErrUnsafeArg if any argument has a control character.
+func checkArgs(args ...string) error {
+	for _, a := range args {
+		if strings.IndexFunc(a, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+			return ErrUnsafeArg
+		}
+	}
+	return nil
+}
 
 type Client struct {
 	addr     string
@@ -82,12 +99,6 @@ type OriginateResult struct {
 // per call — fine at low concurrency; Phase 2's orchestrator will hold a
 // persistent connection.
 func (c *Client) Originate(ctx context.Context, req OriginateRequest) (OriginateResult, error) {
-	conn, err := eslgo.Dial(c.addr, c.password, func() {})
-	if err != nil {
-		return OriginateResult{}, fmt.Errorf("esl dial: %w", err)
-	}
-	defer conn.Close()
-
 	vars := map[string]string{}
 	for k, v := range req.Vars {
 		vars[k] = v
@@ -110,6 +121,15 @@ func (c *Client) Originate(ctx context.Context, req OriginateRequest) (Originate
 	// which causes trigger the rollover.
 	bridgeArgs := strings.Join(req.BLegs, "|")
 	args := fmt.Sprintf("%s%s &bridge(%s)", buildVarBlock(vars), req.ALeg, bridgeArgs)
+	if err := checkArgs(args); err != nil {
+		return OriginateResult{}, err
+	}
+
+	conn, err := eslgo.Dial(c.addr, c.password, func() {})
+	if err != nil {
+		return OriginateResult{}, fmt.Errorf("esl dial: %w", err)
+	}
+	defer conn.Close()
 
 	resp, err := conn.SendCommand(ctx, command.API{
 		Command:    "originate",
@@ -139,6 +159,9 @@ func (c *Client) Originate(ctx context.Context, req OriginateRequest) (Originate
 // resume, "uuid_transfer", "<uuid> <dest>" to transfer. Returns an error if FS
 // replies -ERR (e.g. the channel no longer exists).
 func (c *Client) Command(ctx context.Context, cmd, args string) (string, error) {
+	if err := checkArgs(cmd, args); err != nil {
+		return "", err
+	}
 	conn, err := eslgo.Dial(c.addr, c.password, func() {})
 	if err != nil {
 		return "", fmt.Errorf("esl dial: %w", err)

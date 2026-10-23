@@ -115,10 +115,10 @@ How `status` is worked out:
 | Value | Normalisation |
 |---|---|
 | `airtel`, `jio`, `tata` | Indian mobile numbers only. Accepts `+91…`, `91…`, `0…` and bare 10-digit forms, with spaces or dashes. Normalises to `+91XXXXXXXXXX`. Anything else is rejected with `400`. |
-| `generic` (default), `loopback`, or any other value | None. The trimmed input is dialed as is. |
+| `generic` (default), `loopback`, or any other value | No normalisation. The trimmed input must be a bare number (optional leading `+`, 3 to 15 digits) and is dialed as is. |
 
 :::danger
-With `generic` there is no destination validation at all. Whatever reaches `POST /v1/calls` gets dialed on your trunk and billed to you. Never pass a number an end user typed straight through: validate it and check it against an allow-list in your backend first. This is how toll fraud happens.
+With `generic` the only check is that the destination is a bare number; any number in any country is accepted. Whatever reaches `POST /v1/calls` gets dialed on your trunk and billed to you. Never pass a number an end user typed straight through: validate it and check it against an allow-list in your backend first. This is how toll fraud happens.
 :::
 
 ### POST /v1/trunks

@@ -156,6 +156,7 @@ type Queries struct {
 	TenantOwnsNumber      string `query:"tenant-owns-number"`
 	TenantOwnsTrunk       string `query:"tenant-owns-trunk"`
 	TenantOwnsFlow        string `query:"tenant-owns-flow"`
+	TenantOwnsAudioPath   string `query:"tenant-owns-audio-path"`
 	InboundHeldElsewhere  string `query:"inbound-number-held-elsewhere"`
 	GetActiveFlowByID     string `query:"get-active-flow-by-id"`
 	ListAgentSipUsernames string `query:"list-agent-sip-usernames"`
