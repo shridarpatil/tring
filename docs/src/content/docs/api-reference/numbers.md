@@ -67,7 +67,7 @@ Register a number with your tenant.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `e164` | string | yes | The number. Stored as sent, not validated or normalised. Use E.164 (`+919800000001`) unless your carrier sends inbound calls in another format (see above). |
+| `e164` | string | yes | The number: digits with an optional leading `+`, 3 to 15 digits. Stored as sent, not normalised. Use E.164 (`+919800000001`) unless your carrier sends inbound calls in another format (see above). |
 | `type` | string | yes | `inbound`, `outbound` or `masking`. |
 | `trunk_id` | UUID | for `outbound` | The trunk this number dials out through. Must be one of your tenant's trunks. Required when `type` is `outbound`. Optional for the other types. |
 | `flow_id` | UUID | no | IVR flow to run for inbound calls. Must be one of your tenant's flows. |
@@ -110,6 +110,7 @@ curl -sS -X POST "$TRING_URL/v1/numbers" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `e164 and type are required` |
+| `400` | `e164 must be digits with an optional leading + (3-15 digits)` |
 | `400` | `type must be inbound\|outbound\|masking` |
 | `400` | `trunk_id is required for outbound numbers` |
 | `400` | `trunk not found in this tenant` / `flow not found in this tenant`: the ID doesn't exist or belongs to another tenant |
