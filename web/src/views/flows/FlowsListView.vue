@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// FlowsListView — list/create/delete IVR flows via the Tring API.
+// FlowsListView — list/create/duplicate/delete IVR flows via the Tring API.
 import { ref } from "vue";
 import { errMessage } from "../../lib/errors";
 import { usePagedList } from "../../composables/usePagedList";
 import { useRouter } from "vue-router";
-import { Trash2, ArrowRight } from "lucide-vue-next";
+import { Trash2, ArrowRight, Copy } from "lucide-vue-next";
 import { api } from "../../api/client";
 import { toast } from "../../lib/toast";
 import type { Flow } from "../../api/types";
@@ -34,6 +34,9 @@ const {
 const showCreate = ref(false);
 const newName = ref("");
 const creating = ref(false);
+const dupSource = ref<Flow | null>(null);
+const dupName = ref("");
+const duplicating = ref(false);
 
 const cols: Column[] = [
   { key: "name", label: "Name" },
@@ -52,6 +55,36 @@ async function createFlow() {
     toast.error(errMessage(e, "create failed"));
   } finally {
     creating.value = false;
+  }
+}
+
+function openDuplicate(f: Flow) {
+  dupSource.value = f;
+  dupName.value = `${f.name} (copy)`;
+}
+
+// duplicateFlow copies a flow's graph into a new flow (e.g. to translate an
+// IVR into another language). The copy starts as a draft so it can't take
+// calls until it's been edited and activated.
+async function duplicateFlow() {
+  const src = dupSource.value;
+  if (!src || !dupName.value.trim()) return;
+  duplicating.value = true;
+  try {
+    const f = await api.post<Flow>("/v1/flows", {
+      name: dupName.value.trim(),
+      description: src.description,
+      is_active: false,
+      is_outgoing_end: src.is_outgoing_end,
+      definition: src.definition,
+      welcome_audio_url: src.welcome_audio_url,
+    });
+    dupSource.value = null;
+    router.push({ name: "flow-editor", params: { id: f.id } });
+  } catch (e) {
+    toast.error(errMessage(e, "duplicate failed"));
+  } finally {
+    duplicating.value = false;
   }
 }
 
@@ -97,6 +130,9 @@ async function deleteFlow(id: string) {
           >
             Edit <ArrowRight :size="12" />
           </Button>
+          <IconButton title="Duplicate flow" size="sm" @click="openDuplicate(row as Flow)">
+            <Copy :size="16" />
+          </IconButton>
           <IconButton title="Delete flow" size="sm" variant="danger" @click="deleteFlow(row.id)">
             <Trash2 :size="16" />
           </IconButton>
@@ -124,6 +160,20 @@ async function deleteFlow(id: string) {
       <template #footer>
         <Button variant="ghost" @click="showCreate = false">Cancel</Button>
         <Button type="submit" form="flow-form" :loading="creating">Create &amp; edit</Button>
+      </template>
+    </Modal>
+
+    <Modal
+      :open="dupSource !== null"
+      title="Duplicate flow"
+      @update:open="(v: boolean) => { if (!v) dupSource = null; }"
+    >
+      <form id="dup-flow-form" class="vstack" @submit.prevent="duplicateFlow">
+        <TextField v-model="dupName" label="New flow name" required />
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="dupSource = null">Cancel</Button>
+        <Button type="submit" form="dup-flow-form" :loading="duplicating">Duplicate &amp; edit</Button>
       </template>
     </Modal>
   </div>
