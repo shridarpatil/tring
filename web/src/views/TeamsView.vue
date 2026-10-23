@@ -12,6 +12,7 @@ import {
   TextField,
   Modal,
 } from "../components/ui";
+import { confirmDialog } from "../lib/confirm";
 
 const teams = ref<Team[]>([]);
 const agents = ref<Agent[]>([]);
@@ -138,7 +139,7 @@ async function removeMember(agentId: string) {
 }
 
 async function destroy(t: Team) {
-  if (!confirm(`Delete team "${t.name}"? Flows referencing it will fall back to no-answer.`)) return;
+  if (!(await confirmDialog(`Delete team "${t.name}"? Flows referencing it will fall back to no-answer.`))) return;
   try {
     await api.del<void>(`/v1/teams/${encodeURIComponent(t.name)}`);
     if (selected.value?.name === t.name) selected.value = null;
