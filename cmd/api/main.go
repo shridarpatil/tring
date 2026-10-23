@@ -23,6 +23,7 @@ import (
 	"github.com/shridarpatil/tring/internal/logging"
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
 	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/tts"
 )
 
@@ -51,6 +52,11 @@ func main() {
 	slog.SetDefault(logger) // so startup helpers (bootstrap) log through it too
 	if weak := config.WeakSecrets(k, "jwt_secret", "fs_basic_auth", "esl_password"); len(weak) > 0 && !k.Bool("allow_insecure_secrets") {
 		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
+		os.Exit(1)
+	}
+	outboundAllow, err := safehttp.ParseCIDRs(csv(k.String("outbound_allow_cidrs")))
+	if err != nil {
+		logger.Error("invalid outbound_allow_cidrs", "err", err)
 		os.Exit(1)
 	}
 	addr := flag.String("addr", k.String("api_addr"), "HTTP listen address")
@@ -168,6 +174,7 @@ func main() {
 		Hub:              hub,
 		Events:           eventsPub,
 		TrustedProxies:   csv(k.String("trusted_proxies")),
+		OutboundAllow:    outboundAllow,
 		Logger:           logger,
 	})
 

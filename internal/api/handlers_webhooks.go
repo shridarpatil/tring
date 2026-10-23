@@ -11,6 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/shridarpatil/tring/internal/safehttp"
 )
 
 type Webhook struct {
@@ -37,6 +39,12 @@ func (s *Server) handleCreateWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.URL == "" {
 		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+	// Up-front SSRF check (literal private IPs, localhost, non-http schemes);
+	// the delivery client re-checks the resolved address on every attempt.
+	if err := safehttp.ValidateURL(req.URL, s.outboundAllow); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if req.Events == nil {

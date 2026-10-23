@@ -132,6 +132,8 @@ If the response is `2xx` with a JSON **object** body, each top-level field becom
 
 :::caution[Security]
 Use an `https://` URL. Authenticate the request with a header (for example `Authorization: Bearer <secret>`) and check it on your side, because anyone who learns the URL can call it. Header values are stored in the flow definition in plain text, so use a dedicated, low-privilege secret, never a Tring API key.
+
+The URL must resolve to a public address. Requests to loopback, private, link-local (including cloud metadata) and other internal ranges are refused, on redirects too (at most 3 are followed), and take `http:non2xx`. A backend on a private network needs its range in [`TRING_OUTBOUND_ALLOW_CIDRS`](/tring/getting-started/configuration/).
 :::
 
 ### Transfer

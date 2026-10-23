@@ -6,20 +6,28 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/shridarpatil/tring/internal/safehttp"
 )
 
 // httpRespBodyCap bounds how much of a callback response we read.
 const httpRespBodyCap = 1 << 20 // 1 MiB
+
+// defaultHTTPClient is used when a caller passes no client: SSRF-guarded with
+// no allowlist (the per-node timeout comes from the caller's ctx).
+var defaultHTTPClient = safehttp.NewClient(nil, 0)
 
 // RunHTTPCallback performs an http_callback node's request — templating {{vars}}
 // into the URL + body — and returns the branch outcome plus, on a 2xx with a
 // JSON object body, the top-level fields stringified (for the caller to stash
 // into flow vars / CDR channel vars). It never errors the call: a bad URL or a
 // failed/non-2xx request returns "http:non2xx". This is the transport-agnostic
-// core shared by the FreeSWITCH executor and the pion IVR driver.
+// core shared by the FreeSWITCH executor and the pion IVR driver. The URL is
+// tenant-controlled, so client must be a safehttp client (nil → one with no
+// private-range allowlist).
 func RunHTTPCallback(ctx context.Context, n *Node, vars map[string]string, client *http.Client) (outcome string, stash map[string]string, err error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = defaultHTTPClient
 	}
 	url := SubstituteVars(StringFromConfig(n.Config, "url"), vars)
 	if url == "" {

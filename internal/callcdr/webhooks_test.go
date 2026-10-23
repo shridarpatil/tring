@@ -124,7 +124,7 @@ func TestCallWebhooksDeliveredAndSigned(t *testing.T) {
 		t.Fatalf("register webhook: %v", err)
 	}
 
-	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil).WithWebhooks(webhook.New(fx.DB))
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil).WithWebhooks(webhook.New(fx.DB).WithHTTPClient(srv.Client())) // srv is loopback: bypass the SSRF guard
 	roomID := fx.TenantID.String() + "/pstn-e2e"
 	l.Started(ctx, fx.TenantID, roomID, "+919800000003", "+919800000004", "phone", "", "caller-pid")
 	l.Answered(roomID, "agent-pid", "bob")
