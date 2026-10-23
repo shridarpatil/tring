@@ -26,6 +26,7 @@ import (
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/queries"
 	"github.com/shridarpatil/tring/internal/safehttp"
+	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/tts"
 	"github.com/shridarpatil/tring/internal/webhook"
 	"github.com/shridarpatil/tring/internal/webui"
@@ -111,6 +112,11 @@ type Config struct {
 	// still reach — the operator's escape hatch for an on-prem CRM. Empty (the
 	// default) = public internet only. See internal/safehttp.
 	OutboundAllow []netip.Prefix
+
+	// Secrets seals trunk and agent SIP passwords at rest (TRING_SECRETS_KEY).
+	// nil = no key configured: new passwords are stored as plaintext and only
+	// legacy plaintext can be read. See secrets.go.
+	Secrets *secretbox.Box
 }
 
 type Server struct {
@@ -181,6 +187,8 @@ type Server struct {
 	// enforced again at delivery by the notifier's safehttp client).
 	outboundAllow []netip.Prefix
 
+	secrets *secretbox.Box // nil = plaintext mode (no TRING_SECRETS_KEY)
+
 	log *slog.Logger
 }
 
@@ -231,6 +239,7 @@ func NewServer(cfg Config) *Server {
 		loginByIP:        newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		loginByEmail:     newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		outboundAllow:    cfg.OutboundAllow,
+		secrets:          cfg.Secrets,
 		log:              logger,
 	}
 }

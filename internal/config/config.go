@@ -182,6 +182,13 @@ var defaults = map[string]any{
 	// endpoints (mod_xml_curl). Kept off api_addr so a reverse proxy or an
 	// open :8085 never exposes the agent SIP directory.
 	"fs_addr": "127.0.0.1:8088",
+	// secrets_key (api only) encrypts trunk and agent SIP passwords at rest
+	// with AES-256-GCM: 64 hex chars or base64 of 32 bytes. Empty = stored in
+	// plaintext (the api warns; it refuses to start keyless once any value is
+	// encrypted). Not in WeakSecrets so existing deployments upgrade before
+	// adding it. Losing it means re-entering every trunk password; rotation
+	// is not supported yet. See internal/secretbox.
+	"secrets_key": "",
 	// allow_insecure_secrets lets the binaries boot with the built-in dev
 	// secrets above. Local dev only — see WeakSecrets.
 	"allow_insecure_secrets": false,

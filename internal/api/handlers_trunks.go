@@ -156,18 +156,9 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 // sync with the DB until POST /v1/trunks/reload (or the next successful trunk
 // op) re-renders and rescans.
 func (s *Server) rerenderAllGateways(ctx context.Context) error {
-	rows, err := s.db.Pool.Query(ctx, s.q.ListActiveTrunks)
+	gws, err := s.activeGateways(ctx)
 	if err != nil {
 		return err
-	}
-	defer rows.Close()
-	var gws []freeswitch.Gateway
-	for rows.Next() {
-		t, err := scanTrunk(rows)
-		if err != nil {
-			return err
-		}
-		gws = append(gws, trunkToGateway(t))
 	}
 	stale, err := freeswitch.WriteGateways(gws)
 	if err != nil {
@@ -177,6 +168,32 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 		return fmt.Errorf("freeswitch rescan: %w", err)
 	}
 	return nil
+}
+
+// activeGateways loads every active trunk with its SIP password decrypted,
+// ready to render. A trunk whose password can't be opened (wrong or missing
+// TRING_SECRETS_KEY) is logged and left out — FreeSWITCH drops that one
+// gateway; the rest still render.
+func (s *Server) activeGateways(ctx context.Context) ([]freeswitch.Gateway, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListActiveTrunks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var gws []freeswitch.Gateway
+	for rows.Next() {
+		t, err := scanTrunk(rows)
+		if err != nil {
+			return nil, err
+		}
+		if t.SIPPassword, err = s.openSecret(t.SIPPassword); err != nil {
+			s.log.Error("trunk not rendered: cannot decrypt its sip_password — re-enter it or fix TRING_SECRETS_KEY",
+				"trunk_id", t.ID, "tenant_id", t.TenantID, "err", err)
+			continue
+		}
+		gws = append(gws, trunkToGateway(t))
+	}
+	return gws, rows.Err()
 }
 
 // syncTrunkError writes a 502 telling the caller their DB change committed but
@@ -208,7 +225,7 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 		extra = req.ExtraParams
 	}
 	row := s.db.Pool.QueryRow(r.Context(), s.q.CreateTrunk,
-		t.ID, req.Name, req.ProviderType, req.SIPUsername, req.SIPPassword, req.SIPRealm,
+		t.ID, req.Name, req.ProviderType, req.SIPUsername, s.sealSecret(req.SIPPassword), req.SIPRealm,
 		req.Register, req.ProxyIP, req.AuthACLCIDR, req.Active, extra,
 	)
 	tr, err := scanTrunk(row)
@@ -301,7 +318,7 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 		extra = req.ExtraParams
 	}
 	row := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTrunk,
-		req.Name, req.ProviderType, req.SIPUsername, req.SIPPassword, req.SIPRealm,
+		req.Name, req.ProviderType, req.SIPUsername, s.sealSecretPtr(req.SIPPassword), req.SIPRealm,
 		req.Register, req.ProxyIP, req.AuthACLCIDR, req.Active, extra,
 		id, t.ID,
 	)

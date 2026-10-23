@@ -24,6 +24,7 @@ import (
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
 	"github.com/shridarpatil/tring/internal/queries"
 	"github.com/shridarpatil/tring/internal/safehttp"
+	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/tts"
 )
 
@@ -53,6 +54,20 @@ func main() {
 	if weak := config.WeakSecrets(k, "jwt_secret", "fs_basic_auth", "esl_password"); len(weak) > 0 && !k.Bool("allow_insecure_secrets") {
 		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
 		os.Exit(1)
+	}
+	// TRING_SECRETS_KEY seals trunk/agent SIP passwords at rest. Optional for
+	// now (see api.PrepareStoredSecrets for the keyless upgrade path), but a
+	// set-and-malformed key is always fatal.
+	var secrets *secretbox.Box
+	if v := k.String("secrets_key"); v != "" {
+		key, err := secretbox.ParseKey(v)
+		if err == nil {
+			secrets, err = secretbox.New(key)
+		}
+		if err != nil {
+			logger.Error("invalid TRING_SECRETS_KEY", "err", err)
+			os.Exit(1)
+		}
 	}
 	outboundAllow, err := safehttp.ParseCIDRs(csv(k.String("outbound_allow_cidrs")))
 	if err != nil {
@@ -100,6 +115,13 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+
+	// Seal legacy plaintext SIP passwords (key set), or refuse to run keyless
+	// against sealed ones. Before serving: the gateway XML render needs it.
+	if err := api.PrepareStoredSecrets(ctx, database, secrets, logger); err != nil {
+		logger.Error("stored SIP passwords", "err", err)
+		os.Exit(1)
 	}
 
 	// Shared Redis cache. The API only uses it to invalidate IVR flow
@@ -175,6 +197,7 @@ func main() {
 		Events:           eventsPub,
 		TrustedProxies:   csv(k.String("trusted_proxies")),
 		OutboundAllow:    outboundAllow,
+		Secrets:          secrets,
 		Logger:           logger,
 	})
 

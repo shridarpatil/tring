@@ -87,7 +87,7 @@ Other keys are stored and returned but ignored. A missing or malformed value is 
 | `name` | string | Your label. Unique within the tenant. |
 | `provider_type` | string | Drives destination-number normalisation (see below). Default `generic`. |
 | `sip_username` | string | REGISTER mode username. |
-| `has_password` | boolean | `true` when a `sip_password` is stored. The password itself is write-only: no response ever includes it. |
+| `has_password` | boolean | `true` when a `sip_password` is stored. The password itself is write-only: no response ever includes it. With `TRING_SECRETS_KEY` set it is stored encrypted (AES-256-GCM) and decrypted only to write the FreeSWITCH gateway config; see [Encryption at rest](/tring/getting-started/configuration/#encryption-at-rest). |
 | `sip_realm` | string | REGISTER realm, or the IP-mode realm override. |
 | `register` | boolean | `true` = REGISTER auth, `false` = IP auth. |
 | `proxy_ip` | string | IP mode: the carrier SBC to send calls to. REGISTER mode (optional): the registrar/SBC to send REGISTER and calls to. |
