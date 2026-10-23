@@ -42,7 +42,8 @@ type Agent struct {
 	SipUsername string    `json:"sip_username"`
 	// SipPassword is generated and stored for the FreeSWITCH directory
 	// (legacy SIP transport) but never returned: gateway-transport agents
-	// authenticate with the agent JWT and never SIP-register.
+	// authenticate with the agent JWT and never SIP-register. Holds the
+	// stored form (sealed when TRING_SECRETS_KEY is set; see secrets.go).
 	SipPassword string `json:"-"`
 	DisplayName string `json:"display_name,omitempty"`
 	// AvailableForCalls is the backend-managed availability (the integrator's
@@ -87,7 +88,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
-		t.ID, req.SipUsername, sipPassword, req.DisplayName).Scan(
+		t.ID, req.SipUsername, s.sealSecret(sipPassword), req.DisplayName).Scan(
 		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
 	)
 	if err != nil {

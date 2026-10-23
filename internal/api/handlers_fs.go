@@ -119,6 +119,12 @@ func (s *Server) handleFSDirectory(w http.ResponseWriter, r *http.Request) {
 		writeFSNotFound(w)
 		return
 	}
+	if sipPassword, err = s.openSecret(sipPassword); err != nil {
+		s.log.Error("agent directory: cannot decrypt sip_password — check TRING_SECRETS_KEY",
+			"agent_id", agentID, "tenant_id", tenantID, "err", err)
+		writeFSNotFound(w)
+		return
+	}
 
 	doc := fsDocument{
 		Type: "freeswitch/xml",
