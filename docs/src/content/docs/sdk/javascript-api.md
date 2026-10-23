@@ -164,7 +164,7 @@ endBtn.onclick = () => call.hangup();
 sendDTMF(digit: string): Promise<void>
 ```
 
-Sends a keypress (`0`–`9`, `*`, `#`) to the call's IVR. The digit goes over the signaling socket, not as an audio tone. It does nothing before the call is accepted.
+Sends a keypress (`0`–`9`, `*`, `#`, `A`–`D`) to the call's IVR. Send one key per call: the gateway ignores anything else. The digit goes over the signaling socket, not as an audio tone. It does nothing before the call is accepted.
 
 ```js
 await call.sendDTMF("1");
@@ -293,7 +293,7 @@ Ends the call, or cancels it before it connects. It's safe to call at any time.
 sendDTMF(digit: string): Promise<void>
 ```
 
-Sends a keypress (`0`–`9`, `*`, `#`) to the IVR.
+Sends a keypress (`0`–`9`, `*`, `#`, `A`–`D`) to the IVR. Send one key per call: the gateway ignores anything else.
 
 ```js
 keypad.onclick = (e) => guest.sendDTMF(e.target.dataset.digit);
@@ -492,6 +492,7 @@ Both clients use one WebSocket to `{gatewayUrl}/rtc?token=<jwt>` (`ws://` or `ws
 - **The first message sets the connection's role.** `register` makes it an agent's presence connection: the gateway replies `ready` and later sends `incoming` / `incoming-cancel`. `join` (with a `room`) makes it a call connection.
 - **The gateway makes the WebRTC offer.** The client answers with `answer` and exchanges `ice` candidates as they're found, in both directions.
 - **In-call messages** from the client: `dtmf`, `hold`, `resume`, `transfer`, `publish` / `unpublish` (screen sharing), and `bye`. From the server: `peer-joined`, `peer-left`, `peer-state`, `ended`, `supervisor`, `transfer-failed` and `error`.
+- **Limits.** The first message must arrive within 10 seconds of connecting. A single message over 64 KB closes the socket.
 - **Keepalive.** The gateway drops a socket that has been silent for about 90 seconds, so the SDK sends a `ping` (calls) or a repeated `register` (presence) every 25 seconds.
 - **Rejoining.** `joined` returns a `session_token`. After a drop, the client sends it in its next `join` to get its place in the call back within the gateway's grace period.
 

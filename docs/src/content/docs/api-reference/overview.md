@@ -32,7 +32,7 @@ Put TLS in front of the API before it leaves localhost. API keys and console tok
 | `GET /healthz` | none | Returns `{"status":"ok"}`, or `503` with `{"error":"db unreachable"}` when Postgres is down. Use it for load balancer health checks. |
 | `/fs/*` | HTTP Basic (`TRING_FS_BASIC_AUTH`) | Used by FreeSWITCH only, on the loopback listener `TRING_FS_ADDR` (not the public api port). Not for integrators. |
 | `/sdk/*` | none | Browser widget bundles (`voice.js`, `agent.js`, `tring.js`). |
-| `/admin/*` | none (the console signs in through the API) | The admin console. |
+| `/admin/*` | none (the console signs in through the API) | The admin console. Served with a strict `Content-Security-Policy` that forbids framing; its `connect-src` allows the WebSocket origin of `TRING_GATEWAY_PUBLIC_URL` so supervisors can monitor calls. |
 
 ## Authentication
 
@@ -80,6 +80,8 @@ Error messages are short, readable strings meant for logs and for showing to ope
 | `403 Forbidden` | Authenticated, but this user isn't allowed to do this (for example, supervising without the permission). |
 | `404 Not Found` | The resource doesn't exist in your tenant. |
 | `409 Conflict` | A uniqueness rule or a state check failed (for example, a duplicate name). |
+| `413 Content Too Large` | The request body is over the 1 MB limit (see below). |
+| `429 Too Many Requests` | Too many console login attempts. Wait for the number of seconds in `Retry-After`. |
 | `500 Internal Server Error` | A server-side failure. Some messages include the underlying database error. |
 | `503 Service Unavailable` | A dependency or feature isn't available (for example, audio uploads with no audio directory configured). |
 | `504 Gateway Timeout` | The request took longer than the 30-second limit (see below). |
@@ -127,9 +129,9 @@ Without `page`, each endpoint has its own default. See the [calls](/tring/api-re
 ## Timeouts and limits
 
 - **Request timeout:** 30 seconds for every `/v1` route except `GET /v1/stream/dashboard`, which is a long-lived stream.
-- **Header read timeout:** the server allows 5 seconds to receive request headers.
-- **Upload size:** audio uploads are capped at 10 MB. Other endpoints have no special size limit.
-- **Rate limits:** the API has no built-in rate limiting. If you expose an endpoint of your own that calls Tring for anonymous visitors (for example, minting [guest credentials](/tring/api-reference/tenant/#post-v1guest-credentials)), add your own rate limit or CAPTCHA in front of it.
+- **Header read timeout:** the server allows 5 seconds to receive request headers, and 30 seconds to receive the whole request including its body. Idle keep-alive connections are closed after 120 seconds.
+- **Body size:** request bodies are capped at 1 MB. A larger body with a `Content-Length` gets `413`; a larger chunked body fails to parse and gets `400`. Audio uploads have their own 10 MB cap instead.
+- **Rate limits:** only [`POST /v1/console/login`](/tring/api-reference/authentication/#post-v1consolelogin) is rate limited. If you expose an endpoint of your own that calls Tring for anonymous visitors (for example, minting [guest credentials](/tring/api-reference/tenant/#post-v1guest-credentials)), add your own rate limit or CAPTCHA in front of it.
 
 ## CORS
 
