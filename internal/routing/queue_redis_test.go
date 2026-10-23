@@ -20,7 +20,7 @@ func testRedis(t *testing.T) *cache.Cache {
 	if addr == "" {
 		addr = "127.0.0.1:6379"
 	}
-	c, err := cache.New(addr)
+	c, err := cache.New(addr, os.Getenv("TRING_TEST_REDIS_PASSWORD"))
 	if err != nil || c == nil {
 		t.Skipf("redis not reachable at %s: %v", addr, err)
 	}

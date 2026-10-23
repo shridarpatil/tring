@@ -105,7 +105,7 @@ func main() {
 	// Shared Redis cache. The API only uses it to invalidate IVR flow
 	// definitions the orchestrator caches — must point at the SAME Redis as
 	// the orchestrator. Optional: log-and-disable if unreachable.
-	flowCache, err := cache.New(k.String("redis_addr"))
+	flowCache, err := cache.New(k.String("redis_addr"), k.String("redis_password"))
 	if err != nil {
 		logger.Warn("redis unavailable, flow-cache invalidation disabled", "err", err)
 	}
@@ -140,12 +140,12 @@ func main() {
 	// Dashboard live-update bus (shares the same Redis as the gateway). Both
 	// best-effort: if Redis is down, the dashboard still serves the connect-time
 	// snapshot, just no live deltas.
-	hub, err := events.NewHub(k.String("redis_addr"), logger)
+	hub, err := events.NewHub(k.String("redis_addr"), k.String("redis_password"), logger)
 	if err != nil {
 		logger.Warn("redis unavailable, dashboard live stream disabled", "err", err)
 	}
 	defer hub.Close()
-	eventsPub, err := events.NewPublisher(k.String("redis_addr"), logger)
+	eventsPub, err := events.NewPublisher(k.String("redis_addr"), k.String("redis_password"), logger)
 	if err != nil {
 		logger.Warn("redis unavailable, event publishing disabled", "err", err)
 	}
