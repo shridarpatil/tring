@@ -64,6 +64,9 @@ func (s *Server) playHold(roomID room.RoomID, moh string) func() {
 		_ = player.Close()
 		return func() {}
 	}
+	// A phone leg forwards ONE feed; the held party's agent keeps sending (muted)
+	// packets, so pin the music as the leg's feed until it's removed below.
+	s.sfu.PinPortFeed(roomID, pid)
 	s.log.Info("hold music started", "room", roomID, "file", file)
 
 	stopCh := make(chan struct{})
