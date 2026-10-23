@@ -254,7 +254,7 @@ func TestPeerSeesReconnectingOnDrop(t *testing.T) {
 // transferFlows is a fake FlowLoader returning start → transfer(team=sales).
 type transferFlows struct{}
 
-func (transferFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
+func (transferFlows) Load(_ context.Context, _, _ string) (*ivr.Flow, error) {
 	return &ivr.Flow{
 		EntryNode: "s",
 		Nodes: []ivr.Node{
@@ -265,7 +265,7 @@ func (transferFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
 	}, nil
 }
 
-func (transferFlows) FlowName(_ context.Context, _ string) (string, error) { return "Sales", nil }
+func (transferFlows) FlowName(_ context.Context, _, _ string) (string, error) { return "Sales", nil }
 
 // TestTransferRingsAgentIntoRoom is the M9 membership-change end-to-end (minus
 // real media): a visitor enters a flow-pinned room whose IVR immediately
@@ -908,7 +908,7 @@ var _ http.Handler = signaling.New(signaling.Config{}).Handler()
 // then the transfer rings agents labelled with it instead of the caller's number.
 type maskFlows struct{ url string }
 
-func (m maskFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
+func (m maskFlows) Load(_ context.Context, _, _ string) (*ivr.Flow, error) {
 	return &ivr.Flow{
 		EntryNode: "h",
 		Nodes: []ivr.Node{
@@ -921,7 +921,7 @@ func (m maskFlows) Load(_ context.Context, _ string) (*ivr.Flow, error) {
 	}, nil
 }
 
-func (maskFlows) FlowName(_ context.Context, _ string) (string, error) { return "Masked", nil }
+func (maskFlows) FlowName(_ context.Context, _, _ string) (string, error) { return "Masked", nil }
 
 // TestInboundPhoneCallMasksCallerForAgent: the flow learns who called which
 // number ({{caller}}, {{did}}), and the agent's ring shows the masked label —
@@ -940,7 +940,8 @@ func TestInboundPhoneCallMasksCallerForAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sfu: %v", err)
 	}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: maskFlows{url: backend.URL}})
+	// backend is on 127.0.0.1 (refused by the default SSRF guard) — use its client.
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: maskFlows{url: backend.URL}, HTTP: backend.Client()})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 	fp := newFakePstn()

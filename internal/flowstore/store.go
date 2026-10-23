@@ -27,43 +27,42 @@ func New(d *db.DB) *Store {
 	return &Store{db: d, q: queries.MustLoad()}
 }
 
-// Load fetches the active flow with the given id and parses its definition.
-// Returns an error for a bad id, an unknown/inactive flow, or a malformed
-// definition; (nil, nil) if the flow row exists but has an empty definition.
-func (s *Store) Load(ctx context.Context, flowID string) (*ivr.Flow, error) {
-	fid, err := uuid.Parse(flowID)
+// Load fetches the tenant's active flow with the given id and parses its
+// definition. Returns an error for a bad id, an unknown/inactive flow, a flow
+// owned by another tenant, or a malformed definition; (nil, nil) if the flow
+// row exists but has an empty definition.
+func (s *Store) Load(ctx context.Context, tenant, flowID string) (*ivr.Flow, error) {
+	_, def, err := s.activeFlow(ctx, tenant, flowID)
 	if err != nil {
-		return nil, fmt.Errorf("bad flow id %q: %w", flowID, err)
-	}
-	var (
-		tenantID uuid.UUID
-		name     string
-		def      string
-	)
-	row := s.db.Pool.QueryRow(ctx, s.q.GetActiveFlowByID, fid)
-	if err := row.Scan(&tenantID, &name, &def); err != nil {
 		return nil, fmt.Errorf("load flow %s: %w", flowID, err)
 	}
 	return ivr.Parse([]byte(def))
 }
 
-// FlowName resolves just the active flow's display name, reusing the same row
-// Load reads. Used by the media plane to log the dialed flow as a web call's
-// to_number without loading/parsing the whole graph.
-func (s *Store) FlowName(ctx context.Context, flowID string) (string, error) {
-	fid, err := uuid.Parse(flowID)
+// FlowName resolves just the tenant's active flow display name, reusing the
+// same row Load reads. Used by the media plane to log the dialed flow as a web
+// call's to_number without loading/parsing the whole graph.
+func (s *Store) FlowName(ctx context.Context, tenant, flowID string) (string, error) {
+	name, _, err := s.activeFlow(ctx, tenant, flowID)
 	if err != nil {
-		return "", fmt.Errorf("bad flow id %q: %w", flowID, err)
-	}
-	var (
-		tenantID uuid.UUID
-		name     string
-		def      string
-	)
-	if err := s.db.Pool.QueryRow(ctx, s.q.GetActiveFlowByID, fid).Scan(&tenantID, &name, &def); err != nil {
 		return "", fmt.Errorf("flow name %s: %w", flowID, err)
 	}
 	return name, nil
+}
+
+// activeFlow reads the name + definition of a tenant's active flow.
+func (s *Store) activeFlow(ctx context.Context, tenant, flowID string) (name, def string, err error) {
+	tid, err := uuid.Parse(tenant)
+	if err != nil {
+		return "", "", fmt.Errorf("bad tenant id %q: %w", tenant, err)
+	}
+	fid, err := uuid.Parse(flowID)
+	if err != nil {
+		return "", "", fmt.Errorf("bad flow id %q: %w", flowID, err)
+	}
+	var owner uuid.UUID
+	err = s.db.Pool.QueryRow(ctx, s.q.GetActiveFlowByID, fid, tid).Scan(&owner, &name, &def)
+	return name, def, err
 }
 
 // ResolveDID returns the owning tenant + attached flow id for an inbound DID

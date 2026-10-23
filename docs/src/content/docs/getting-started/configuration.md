@@ -93,10 +93,12 @@ The gateway (`cmd/gateway`) runs browser WebRTC on `/rtc`, the IVR, agent routin
 | `TRING_MEDIA_GRACE_SECONDS` | `30` | How long a dropped participant's slot is held so a page refresh can rejoin the same call. See [page-refresh grace](/tring/features/web-calling/#page-refresh-grace). |
 | `TRING_RTC_DEV_TOKENS` | `false` | Mounts an **unauthenticated** token mint at `/rtc/dev-token` for the local test client. |
 | `TRING_TRUSTED_PROXIES` | empty | Comma-separated CIDRs of the reverse proxies in front of the **api**. Only `X-Forwarded-For` hops inside these ranges are trusted when logging the client IP and rate limiting console login. Empty ignores `X-Forwarded-For` entirely. |
+| `TRING_OUTBOUND_ALLOW_CIDRS` | empty | Comma-separated CIDRs that tenant-supplied URLs (webhooks, IVR `http_callback` nodes) may reach even though they aren't public. By default the **api** and **gateway** refuse to connect to loopback, private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local (including cloud metadata `169.254.169.254`), CGNAT (`100.64/10`), multicast and reserved addresses, on every redirect too. List only your CRM's range, for example `10.20.0.0/16`. |
 
 :::danger
 - Never set `TRING_RTC_DEV_TOKENS=true` in production. Anyone could mint agent tokens.
 - Set `TRING_TRUSTED_PROXIES` only to ranges you control (for example `127.0.0.1/32` for a proxy on the same host). A range that is too wide lets anyone in it forge client IPs in your logs.
+- An entry in `TRING_OUTBOUND_ALLOW_CIDRS` overrides every block, loopback and metadata included. Listing `127.0.0.0/8` or `169.254.0.0/16` lets any tenant reach ESL, Redis, Postgres or your cloud credentials from a webhook or IVR flow.
 :::
 
 ### Trunk and WhatsApp interfaces (FreeSWITCH)
