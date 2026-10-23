@@ -28,7 +28,7 @@ The values in `.env.example` are tuned for **local development on one machine**.
 | Variable | Default | What it does |
 |---|---|---|
 | `TRING_JWT_SECRET` | dev placeholder | HMAC-SHA256 key that signs **every** token Tring issues: console sessions, agent tokens, visitor call tokens and supervisor tokens. The api and the gateway must share the same value. |
-| `TRING_SECRETS_KEY` | empty | api only. AES-256-GCM key that encrypts the SIP trunk and agent passwords stored in Postgres. Exactly 32 bytes, written as 64 hex characters (`od -An -tx1 -N32 /dev/urandom \| tr -d ' \n'`) or base64. See [Encryption at rest](#encryption-at-rest) below. |
+| `TRING_SECRETS_KEY` | empty | api only. AES-256-GCM key that encrypts the SIP trunk and agent passwords stored in Postgres. Exactly 32 bytes, written as **64 hex characters** (`openssl rand -hex 32`; note `-hex 16` gives only 32 characters and is rejected) or base64. See [Encryption at rest](#encryption-at-rest) below. |
 | `TRING_FS_BASIC_AUTH` | dev placeholder (`fs:…`) | `user:password` that FreeSWITCH presents to the api's `/fs/directory` endpoint (`mod_xml_curl`). FreeSWITCH reads the same variable from `.env`. |
 | `TRING_FS_ADDR` | `127.0.0.1:8088` | Loopback-only listener for the api's `/fs/*` endpoints. They are not served on `TRING_API_ADDR`. Must match the URL in `xml_curl.conf.xml`. |
 | `TRING_ALLOW_INSECURE_SECRETS` | `false` | Skip the startup secret check. Local development only. |
