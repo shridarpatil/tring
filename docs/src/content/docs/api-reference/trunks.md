@@ -87,7 +87,7 @@ Other keys are stored and returned but ignored. A missing or malformed value is 
 | `name` | string | Your label. Unique within the tenant. |
 | `provider_type` | string | Drives destination-number normalisation (see below). Default `generic`. |
 | `sip_username` | string | REGISTER mode username. |
-| `sip_password` | string | REGISTER mode password. Returned by create, get and update; left out of list responses. |
+| `has_password` | boolean | `true` when a `sip_password` is stored. The password itself is write-only: no response ever includes it. |
 | `sip_realm` | string | REGISTER realm, or the IP-mode realm override. |
 | `register` | boolean | `true` = REGISTER auth, `false` = IP auth. |
 | `proxy_ip` | string | IP mode: the carrier SBC to send calls to. REGISTER mode (optional): the registrar/SBC to send REGISTER and calls to. |
@@ -174,7 +174,7 @@ curl -sS -X POST "$TRING_URL/v1/trunks" \
   }')"
 ```
 
-**Response:** `201 Created` with the trunk object (including `sip_password`, without `status`).
+**Response:** `201 Created` with the trunk object (without `status`). `sip_password` is never returned; `has_password` shows whether one is set.
 
 ```json
 {
@@ -183,6 +183,7 @@ curl -sS -X POST "$TRING_URL/v1/trunks" \
   "name": "carrier-a-primary",
   "provider_type": "tata",
   "sip_username": "",
+  "has_password": false,
   "sip_realm": "",
   "register": false,
   "proxy_ip": "198.51.100.10",
@@ -212,7 +213,7 @@ List your tenant's trunks, sorted by name, with live health. Not paginated.
 
 **Query parameters:** none.
 
-`sip_password` is left out of every item. Health comes from FreeSWITCH on each request. If FreeSWITCH can't be reached, trunks show `not_loaded` rather than the request failing.
+Health comes from FreeSWITCH on each request. If FreeSWITCH can't be reached, trunks show `not_loaded` rather than the request failing.
 
 ```bash
 curl -sS "$TRING_URL/v1/trunks" \
@@ -229,6 +230,7 @@ curl -sS "$TRING_URL/v1/trunks" \
     "name": "carrier-a-primary",
     "provider_type": "tata",
     "sip_username": "",
+    "has_password": false,
     "sip_realm": "",
     "register": false,
     "proxy_ip": "198.51.100.10",
@@ -258,7 +260,7 @@ Fetch one trunk.
 
 **Auth:** tenant API key or console session.
 
-Unlike the list, this response **includes `sip_password`** and has no `status`/`state_raw`.
+Unlike the list, this response has no `status`/`state_raw`. Like every trunk response, it carries `has_password` but never `sip_password`.
 
 ```bash
 curl -sS "$TRING_URL/v1/trunks/4e1f0a2b-4444-4a00-8d00-000000000001" \
@@ -292,7 +294,7 @@ Update any trunk fields, then re-render and rescan.
 | `name` | string | |
 | `provider_type` | string | |
 | `sip_username` | string | |
-| `sip_password` | string | |
+| `sip_password` | string | New password. Left out **or empty** keeps the stored one, so you can update other fields without resending it. |
 | `sip_realm` | string | |
 | `register` | boolean | Switch auth mode. |
 | `proxy_ip` | string | |

@@ -627,7 +627,9 @@ UPDATE trunks SET
     name          = COALESCE($1, name),
     provider_type = COALESCE($2, provider_type),
     sip_username  = COALESCE($3, sip_username),
-    sip_password  = COALESCE($4, sip_password),
+    -- write-only secret: omitted OR empty keeps the stored password, so the
+    -- console can save other fields without re-entering it.
+    sip_password  = COALESCE(NULLIF($4, ''), sip_password),
     sip_realm     = COALESCE($5, sip_realm),
     register      = COALESCE($6, register),
     proxy_ip      = COALESCE($7, proxy_ip),
