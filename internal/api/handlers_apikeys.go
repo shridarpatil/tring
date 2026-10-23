@@ -51,7 +51,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.Pool.QueryRow(r.Context(), s.q.CreateAPIKey,
 		t.ID, name, hash, prefix,
 	).Scan(&id, &createdAt); err != nil {
-		writeError(w, http.StatusInternalServerError, "create failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "create failed", err)
 		return
 	}
 

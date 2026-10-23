@@ -179,10 +179,10 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 // FreeSWITCH didn't pick it up — so they don't read a 2xx as "live" and they
 // know POST /v1/trunks/reload is the retry. `did` is the past-tense verb, e.g.
 // "saved" / "updated" / "deleted".
-func syncTrunkError(w http.ResponseWriter, did string, err error) {
-	writeError(w, http.StatusBadGateway,
-		"trunk "+did+" but FreeSWITCH did not reload: "+err.Error()+
-			" — retry with POST /v1/trunks/reload")
+// The underlying error (file paths, ESL replies) is logged, not returned.
+func (s *Server) syncTrunkError(w http.ResponseWriter, r *http.Request, did string, err error) {
+	s.writeServerError(w, r, http.StatusBadGateway,
+		"trunk "+did+" but FreeSWITCH did not reload — retry with POST /v1/trunks/reload", err)
 }
 
 func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
@@ -208,12 +208,16 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 		req.Register, req.ProxyIP, req.AuthACLCIDR, req.Active, extra,
 	)
 	tr, err := scanTrunk(row)
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "a trunk with this name already exists")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusConflict, "trunk insert failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "trunk insert failed", err)
 		return
 	}
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		syncTrunkError(w, "saved", err)
+		s.syncTrunkError(w, r, "saved", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, tr)
@@ -304,12 +308,16 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "trunk not found")
 		return
 	}
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "a trunk with this name already exists")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		syncTrunkError(w, "updated", err)
+		s.syncTrunkError(w, r, "updated", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tr)
@@ -332,7 +340,7 @@ func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		syncTrunkError(w, "deleted", err)
+		s.syncTrunkError(w, r, "deleted", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -343,7 +351,7 @@ func (s *Server) handleDeleteTrunk(w http.ResponseWriter, r *http.Request) {
 // from the DB (e.g. after a crash before a write completed).
 func (s *Server) handleReloadTrunks(w http.ResponseWriter, r *http.Request) {
 	if err := s.rerenderAllGateways(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "reload failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "reload failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reloaded"})

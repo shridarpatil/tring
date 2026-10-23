@@ -200,8 +200,9 @@ curl -sS -X POST "$TRING_URL/v1/trunks" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `name is required` |
-| `409` | `trunk insert failed: …` with the database error. A duplicate `name` in your tenant lands here. |
-| `502` | `trunk saved but FreeSWITCH did not reload: … — retry with POST /v1/trunks/reload`. The trunk **is** saved; FreeSWITCH just hasn't picked it up. |
+| `409` | `a trunk with this name already exists` |
+| `500` | `trunk insert failed` |
+| `502` | `trunk saved but FreeSWITCH did not reload — retry with POST /v1/trunks/reload`. The trunk **is** saved; FreeSWITCH just hasn't picked it up. |
 
 ### GET /v1/trunks
 
@@ -315,8 +316,9 @@ curl -sS -X PATCH "$TRING_URL/v1/trunks/4e1f0a2b-4444-4a00-8d00-000000000001" \
 | `400` | `invalid id` |
 | `400` | `invalid JSON body` |
 | `404` | `trunk not found` |
-| `500` | `update failed: …` (including a duplicate `name`) |
-| `502` | `trunk updated but FreeSWITCH did not reload: … — retry with POST /v1/trunks/reload` |
+| `409` | `a trunk with this name already exists` |
+| `500` | `update failed` |
+| `502` | `trunk updated but FreeSWITCH did not reload — retry with POST /v1/trunks/reload` |
 
 ### DELETE /v1/trunks/{id}
 
@@ -338,7 +340,7 @@ curl -sS -X DELETE "$TRING_URL/v1/trunks/4e1f0a2b-4444-4a00-8d00-000000000001" \
 | `400` | `invalid id` |
 | `404` | `trunk not found` |
 | `500` | `delete failed` |
-| `502` | `trunk deleted but FreeSWITCH did not reload: … — retry with POST /v1/trunks/reload` |
+| `502` | `trunk deleted but FreeSWITCH did not reload — retry with POST /v1/trunks/reload` |
 
 ### POST /v1/trunks/reload
 
@@ -365,7 +367,7 @@ curl -sS -X POST "$TRING_URL/v1/trunks/reload" \
 
 | Status | Message |
 |---|---|
-| `500` | `reload failed: …` with the file-write or FreeSWITCH error. |
+| `500` | `reload failed`. The file-write or FreeSWITCH error is in the API server log. |
 
 :::danger
 Only open your SIP port (`5060`) to your carriers' published IP ranges, never `0.0.0.0/0`, and keep FreeSWITCH's ESL port (`8021`) private. An IP-authenticated trunk trusts the network path, so a wide-open SIP port invites toll fraud.

@@ -59,7 +59,7 @@ func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 	}
 	c, code, err := s.originateForAgent(r.Context(), t, req.AgentID, req.To, req.AgentLabel, req.CallerID)
 	if err != nil {
-		writeError(w, code, err.Error())
+		s.writeCallError(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)
@@ -84,6 +84,34 @@ func (s *Server) agentALeg(sipUsername, sipDomain, tenantID, label string) strin
 	})
 }
 
+// errInternal marks an error from the originate path that is a server-side
+// failure (DB, I/O) rather than a problem with the caller's input. statusFor
+// maps it to 500; writeCallError then keeps its detail out of the response.
+var errInternal = errors.New("internal error")
+
+// statusFor is 500 for an errInternal-wrapped error, else 400.
+func statusFor(err error) int {
+	if errors.Is(err, errInternal) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
+}
+
+// writeCallError answers a failed originate. 4xx errors describe the caller's
+// input (bad destination, unowned caller_id, unknown agent) and are returned
+// as-is; 5xx/502 carry pgx errors or FreeSWITCH replies, so the client gets a
+// generic message and the detail is logged.
+func (s *Server) writeCallError(w http.ResponseWriter, r *http.Request, code int, err error) {
+	switch {
+	case code == http.StatusBadGateway:
+		s.writeServerError(w, r, code, "originate failed", err)
+	case code >= 500:
+		s.writeServerError(w, r, code, "internal error", err)
+	default:
+		writeError(w, code, err.Error())
+	}
+}
+
 // originateForAgent is the shared originate path used by both the tenant-
 // scoped and JWT-scoped handlers. Returns (call, http_status_on_error, err).
 func (s *Server) originateForAgent(
@@ -95,7 +123,7 @@ func (s *Server) originateForAgent(
 	callerID string,
 ) (Call, int, error) {
 	if err := s.checkCallerID(ctx, t.ID, callerID); err != nil {
-		return Call{}, http.StatusBadRequest, err
+		return Call{}, statusFor(err), err
 	}
 
 	var sipUsername string
@@ -114,7 +142,7 @@ func (s *Server) originateForAgent(
 	// (failover: pipe-join in priority order).
 	trunks, err := s.selectTrunks(ctx, t)
 	if err != nil {
-		return Call{}, http.StatusBadRequest, err
+		return Call{}, statusFor(err), err
 	}
 
 	// Normalize using the primary trunk's provider_type. All trunks for
@@ -231,7 +259,7 @@ func (s *Server) handleConnectCall(w http.ResponseWriter, r *http.Request) {
 	}
 	c, code, err := s.originateBridge(r.Context(), t, req.AgentNumber, req.ClientNumber)
 	if err != nil {
-		writeError(w, code, err.Error())
+		s.writeCallError(w, r, code, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)
@@ -246,7 +274,7 @@ func (s *Server) originateBridge(
 ) (Call, int, error) {
 	trunks, err := s.selectTrunks(ctx, t)
 	if err != nil {
-		return Call{}, http.StatusBadRequest, err
+		return Call{}, statusFor(err), err
 	}
 
 	// Normalize both numbers with the primary trunk's provider_type rules
@@ -599,7 +627,7 @@ func (s *Server) checkCallerID(ctx context.Context, tenant uuid.UUID, callerID s
 	}
 	var owned bool
 	if err := s.db.Pool.QueryRow(ctx, s.q.TenantOwnsNumber, tenant, callerID).Scan(&owned); err != nil {
-		return fmt.Errorf("check caller_id: %w", err)
+		return fmt.Errorf("check caller_id: %w: %w", errInternal, err)
 	}
 	if !owned {
 		return fmt.Errorf("caller_id %q is not one of this tenant's numbers", callerID)

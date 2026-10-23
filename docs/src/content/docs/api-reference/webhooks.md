@@ -283,7 +283,7 @@ curl -sS -X POST "$TRING_URL/v1/webhooks" \
 | `400` | `invalid JSON body` |
 | `400` | `url is required` |
 | `400` | `url must be a public http or https URL` |
-| `500` | `insert webhook: …` |
+| `500` | `insert webhook failed` |
 
 :::caution
 Only register HTTPS endpoints you control. The API and gateway (both send webhooks) refuse to connect to loopback, private, link-local (including cloud metadata), CGNAT and other internal addresses, checked on the resolved IP of every attempt and redirect. Operators with an on-premises receiver can allow its range with `TRING_OUTBOUND_ALLOW_CIDRS`; egress filtering is still a good second layer. Treat the secret like a password: if it leaks, delete the webhook and create a new one. There's no way to rotate a secret in place.
