@@ -113,12 +113,18 @@ func (p *Peer) HandleAnswer(sdp string) error {
 	return nil
 }
 
+// maxPendingCandidates bounds the pre-answer candidate queue. A real client
+// gathers a handful (host/srflx/relay per interface); extras are dropped.
+const maxPendingCandidates = 64
+
 // HandleCandidate adds a trickled ICE candidate, queueing it until the first
 // answer is applied (AddICECandidate errors before a remote description exists).
 func (p *Peer) HandleCandidate(c webrtc.ICECandidateInit) error {
 	p.mu.Lock()
 	if !p.haveRemote {
-		p.pending = append(p.pending, c)
+		if len(p.pending) < maxPendingCandidates {
+			p.pending = append(p.pending, c)
+		}
 		p.mu.Unlock()
 		return nil
 	}
