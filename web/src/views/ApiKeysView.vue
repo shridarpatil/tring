@@ -13,6 +13,7 @@ import {
   Badge,
   Modal,
   TextField,
+  Select,
   CopyButton,
 } from "../components/ui";
 import { confirmDialog } from "../lib/confirm";
@@ -22,11 +23,17 @@ const { items: keys, loading, load } = useList<ApiKey>("/v1/api-keys");
 const showForm = ref(false);
 const creating = ref(false);
 const newName = ref("");
+const newScope = ref<ApiKey["scope"]>("calls"); // least privilege by default
+const scopeOptions = [
+  { value: "calls", label: "Calls — place calls, mint call tokens, manage agents" },
+  { value: "full", label: "Full access — also keys, trunks, webhooks, settings" },
+];
 const newKey = ref(""); // plaintext, shown once after create
 
 const cols: Column[] = [
   { key: "name", label: "Name" },
   { key: "key_prefix", label: "Key", mono: true },
+  { key: "scope", label: "Scope" },
   { key: "created_at", label: "Created" },
   { key: "last_used_at", label: "Last used" },
   { key: "status", label: "Status" },
@@ -36,9 +43,10 @@ async function create() {
   creating.value = true;
   newKey.value = "";
   try {
-    const k = await api.post<ApiKey>("/v1/api-keys", { name: newName.value });
+    const k = await api.post<ApiKey>("/v1/api-keys", { name: newName.value, scope: newScope.value });
     if (k.key) newKey.value = k.key;
     newName.value = "";
+    newScope.value = "calls";
     showForm.value = false;
     await load();
     toast.success("API key generated");
@@ -96,6 +104,9 @@ function fmt(d?: string) {
         <template #cell-key_prefix="{ value }">
           <span class="text-light">{{ value }}…</span>
         </template>
+        <template #cell-scope="{ value }">
+          <Badge :tone="value === 'full' ? 'warning' : 'neutral'">{{ value }}</Badge>
+        </template>
         <template #cell-created_at="{ value }">
           <span class="text-light">{{ fmt(value as string | undefined) }}</span>
         </template>
@@ -120,6 +131,13 @@ function fmt(d?: string) {
           label="Name"
           placeholder="e.g. support-portal backend"
           hint="A label to recognise where this key is used."
+        />
+        <Select
+          :model-value="newScope"
+          label="Scope"
+          :options="scopeOptions"
+          hint="Most backends only need Calls. A leaked Full key can mint more keys and change trunks."
+          @update:model-value="(v) => (newScope = v as ApiKey['scope'])"
         />
       </form>
       <template #footer>

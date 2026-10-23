@@ -124,6 +124,9 @@ const providerTypes = ["generic", "airtel", "jio", "tata"];
 const providerOptions = providerTypes.map((p) => ({ value: p, label: p }));
 
 const formTitle = computed(() => (editing.value ? "Edit trunk" : "New trunk"));
+// Editing a trunk that already has a password: the field may stay blank
+// (the API keeps the stored password on an empty value).
+const keepsPassword = computed(() => !!editing.value?.has_password);
 
 
 function newTrunk() {
@@ -147,14 +150,14 @@ function newTrunk() {
 
 async function startEdit(t: Trunk) {
   editing.value = t;
-  // Fetch the full trunk (list response omits sip_password).
   const full = await api.get<Trunk>(`/v1/trunks/${t.id}`);
   form.value = {
     name: full.name,
     provider_type: full.provider_type,
     register: full.register,
     sip_username: full.sip_username,
-    sip_password: full.sip_password || "",
+    // Write-only: never returned. Left blank, a save keeps the stored one.
+    sip_password: "",
     sip_realm: full.sip_realm,
     proxy_ip: full.proxy_ip,
     auth_acl_cidr: full.auth_acl_cidr,
@@ -175,7 +178,9 @@ async function save() {
       if (v.trim()) extra_params[k] = v.trim();
       else delete extra_params[k];
     }
-    const body = { ...fields, extra_params };
+    const { sip_password, ...rest } = fields;
+    // Only send a password the user typed; blank means "unchanged".
+    const body = sip_password ? { ...rest, sip_password, extra_params } : { ...rest, extra_params };
     if (editing.value) {
       await api.patch<Trunk>(`/v1/trunks/${editing.value.id}`, body);
     } else {
@@ -304,7 +309,16 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
         <template v-if="form.register">
           <div class="grid grid-2">
             <TextField v-model="form.sip_username" label="SIP username" mono required />
-            <TextField v-model="form.sip_password" label="SIP password" type="password" mono required />
+            <TextField
+              v-model="form.sip_password"
+              label="SIP password"
+              type="password"
+              mono
+              autocomplete="new-password"
+              :required="!keepsPassword"
+              :placeholder="keepsPassword ? '••• set (unchanged)' : ''"
+              :hint="keepsPassword ? 'Leave blank to keep the current password.' : undefined"
+            />
           </div>
           <TextField
             v-model="form.sip_realm"

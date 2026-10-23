@@ -15,14 +15,14 @@ There are four kinds of credential. Your backend holds the first two. Browsers o
 
 | Credential | Looks like | Lifetime | Who holds it | Used for |
 |---|---|---|---|---|
-| **Tenant API key** | `tk_live_…` | Until revoked | Your backend | The whole tenant-scoped API |
+| **Tenant API key** | `tk_live_…` | Until revoked | Your backend | The tenant-scoped API, limited by the key's [scope](/tring/api-reference/api-keys/#scopes) |
 | **Console session** | JWT | 12 hours | An admin console user | The whole tenant-scoped API, plus console-only routes |
 | **Agent token** | JWT | 5 minutes | The agent's browser (agent widget) | Connecting to the media gateway, and the agent's own call control |
 | **Visitor call token** | JWT | 2 minutes, single use | The visitor's browser (visitor widget) | Placing one web call at the media gateway |
 
 ## Tenant API keys
 
-API keys are how your backend (CRM, support portal, scripts) talks to Tring. A key belongs to one tenant and has full access to that tenant's data through the API.
+API keys are how your backend (CRM, support portal, scripts) talks to Tring. A key belongs to one tenant. Its [scope](/tring/api-reference/api-keys/#scopes) decides how much of the API it reaches: `calls` covers placing and handling calls, `full` adds tenant administration (keys, trunks, webhooks, settings).
 
 ```bash
 curl -sS "$TRING_URL/v1/agents" \
@@ -95,7 +95,7 @@ The `tenant` object in the login response only fills in `id`, `name`, `sip_domai
 
 Login is throttled to 10 attempts per 5 minutes per client IP, and separately per email address. A successful sign-in doesn't count against either limit. Over the limit, the API answers `429` with a `Retry-After` header giving the seconds until the window resets. The client IP is the connection address, or the `X-Forwarded-For` entry from a [trusted proxy](/tring/getting-started/configuration/). The counters live in each API process, so with several replicas the effective limit is per replica.
 
-The token is valid for 12 hours. There are no refresh tokens: sign in again when it expires. Signing out of the console just discards the token on the client. The token stays valid until it expires.
+The token is valid for 12 hours. There are no refresh tokens: sign in again when it expires. Signing out of the console just discards the token on the client. The token stays valid until it expires, unless the user is deleted: every request checks that the token's user still exists, so deleting a user ends their sessions immediately.
 
 The first tenant and console user are created on first start from `TRING_BOOTSTRAP_TENANT`, `TRING_ADMIN_EMAIL` and `TRING_ADMIN_PASSWORD` (see the [Quickstart](/tring/getting-started/quickstart/)).
 
@@ -107,7 +107,7 @@ A few routes act on behalf of a specific console **user**, so they reject API ke
 |---|---|
 | `POST /v1/calls/{id}/supervise` | Join a live call as a supervisor. The user also needs the supervise permission, or gets `403 not permitted to supervise`. See [Calls](/tring/api-reference/calls/). |
 
-Sending an API key to one of these returns `401 console session required`. An invalid or expired token returns `401 invalid console session`.
+Sending an API key to one of these returns `401 console session required`. An invalid or expired token, or one whose user has been deleted, returns `401 invalid console session`.
 
 ## Agent tokens
 
@@ -161,7 +161,7 @@ On the tenant-scoped routes, failures look like this:
 | Status | `error` | When |
 |---|---|---|
 | `401` | `missing credentials` | No `Authorization: Bearer` and no `X-API-Key` header |
-| `401` | `invalid credentials` | Unknown or revoked API key, or an invalid or expired console token |
+| `401` | `invalid credentials` | Unknown or revoked API key, or an invalid or expired console token, or a console token whose user was deleted |
 
 ## Security guidance
 

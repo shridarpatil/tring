@@ -26,7 +26,9 @@ up: .env
 .env:
 	@test -f .env || { \
 		rand() { od -An -tx1 -N24 /dev/urandom | tr -d ' \n'; }; \
+		key32() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }; \
 		sed -e "s|^TRING_JWT_SECRET=.*|TRING_JWT_SECRET=$$(rand)$$(rand)|" \
+		    -e "s|^TRING_SECRETS_KEY=.*|TRING_SECRETS_KEY=$$(key32)|" \
 		    -e "s|^TRING_FS_BASIC_AUTH=.*|TRING_FS_BASIC_AUTH=fs:$$(rand)|" \
 		    -e "s|^TRING_ESL_PASSWORD=.*|TRING_ESL_PASSWORD=$$(rand)|" \
 		    -e "s|^TRING_REDIS_PASSWORD=.*|TRING_REDIS_PASSWORD=$$(rand)|" \

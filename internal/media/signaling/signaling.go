@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -163,6 +165,10 @@ type Server struct {
 	// a field so tests can shorten it without racing live handlers).
 	joinTimeout time.Duration
 
+	// setDeaf deafens/undeafens a subscriber for the agent hold (sfu.SetDeaf; a
+	// field so tests can observe it without live media).
+	setDeaf func(room.RoomID, room.ParticipantID, bool)
+
 	// brain drives IVR sessions in-process — the brain is embedded in this server.
 	// One Runner shared across all rooms; state per-room inside the Runner.
 	brain *brain.Runner
@@ -215,6 +221,7 @@ func New(cfg Config) *Server {
 		sfu:          cfg.SFU,
 		log:          cfg.Logger.With("component", "signaling"),
 		joinTimeout:  defaultJoinTimeout,
+		setDeaf:      cfg.SFU.SetDeaf,
 		brain:        brain.NewRunner(cfg.Logger),
 		conns:        make(map[room.ParticipantID]*conn),
 		agents:       make(map[string]map[string]*conn),
@@ -426,13 +433,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// caller's recording leg when the tenant records). Reattaches (page refresh)
 	// keep the original CDR; plain rooms (no flow) get none.
 	if flowID != "" && freshJoin && s.cfg.Calls != nil {
-		from := princ.clientRef
-		if from == "" {
-			from = first.Name
-		}
-		if from == "" {
-			from = "Web visitor" // anonymous caller has no identity — don't log blank
-		}
+		// Only the token's client_ref identifies the caller; the visitor-typed join
+		// name is kept as a labelled hint, never as the identity (webCallerFrom).
+		from := webCallerFrom(princ.clientRef, first.Name)
 		// to_number is the dialed destination: the IVR flow's name (best-effort —
 		// falls back to a literal if the flow can't be resolved). source='web'
 		// distinguishes the channel without overloading to_number.
@@ -475,9 +478,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 // readLoop dispatches client messages until the socket closes, then drops the
 // participant into the grace window. tenant is the joiner's principal tenant
 // (needed for agent-initiated actions like msgDial that must resolve
-// tenant-scoped config, e.g. outbound trunks). isAgent gates agent-only
-// actions (msgDial) — a visitor socket also carries a tenant, but must never
-// be able to originate a billable PSTN call on it (toll fraud).
+// tenant-scoped config, e.g. outbound trunks). isAgent gates the agent-only
+// call controls (msgHold, msgResume, msgTransfer, msgDial): the visitor SDK
+// never sends them, and a visitor socket must never steer the agent's call —
+// nor originate a billable PSTN call on its tenant (toll fraud).
 func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgent bool, sip string) {
 	defer func() {
 		// Only act if THIS socket is still the participant's current one. A reattach
@@ -517,6 +521,8 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 				}
 			}
 		case msgPublish:
+			// Open to visitors: the guest SDK screen-shares (TringGuest.shareScreen).
+			// It only adds a receive slot on the sender's OWN peer.
 			if c.peer != nil {
 				c.peer.Publish(codecKind(m.Kind))
 			}
@@ -529,11 +535,23 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 			// A quiet call (media rides RTP, not this socket) would otherwise hit the
 			// 90s read deadline and get dropped mid-call.
 		case msgHold:
+			// Agent-only: the visitor SDK never sends hold. A caller sending it
+			// would play hold music at the agent whenever it liked.
+			if !isAgent {
+				_ = c.send(msg{Type: msgError, Reason: "only an agent can hold"})
+				continue
+			}
 			// The agent muted its own mic client-side; play the tenant's hold music
 			// into the room so the held party hears music, not dead air — and deafen
 			// the agent, which must hear neither that music nor the held party.
 			s.holdParty(p.Room().ID(), p.ID())
 		case msgResume:
+			// Agent-only: a caller must not be able to cancel the agent's hold
+			// (which also un-deafens the agent).
+			if !isAgent {
+				_ = c.send(msg{Type: msgError, Reason: "only an agent can resume"})
+				continue
+			}
 			s.resumeParty(p.Room().ID())
 		case msgTransfer:
 			if !isAgent {
@@ -866,6 +884,38 @@ func webrtcICE(raw json.RawMessage) *webrtc.ICECandidateInit {
 		return nil
 	}
 	return &init
+}
+
+// maxVisitorNameRunes bounds the visitor-typed name kept in a web call's CDR.
+const maxVisitorNameRunes = 64
+
+// webCallerFrom is the CDR "from" for a web call. The token's client_ref is the
+// only trusted caller identity; without it the caller is anonymous. The join
+// name is free text the VISITOR typed, so it is kept only as a clearly-labelled
+// hint ("Web visitor (name: …)") — never on its own, where it could pass for a
+// verified number/identity in CDRs and webhooks. Control and format (e.g. bidi
+// override) characters are stripped and the name is capped.
+func webCallerFrom(clientRef, name string) string {
+	if clientRef != "" {
+		return clientRef
+	}
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if n == maxVisitorNameRunes {
+			break
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError {
+			continue
+		}
+		b.WriteRune(r)
+		n++
+	}
+	clean := strings.TrimSpace(b.String())
+	if clean == "" {
+		return "Web visitor" // anonymous caller has no identity — don't log blank
+	}
+	return "Web visitor (name: " + clean + ")"
 }
 
 // codecKind maps a publish/unpublish kind string to a pion codec type

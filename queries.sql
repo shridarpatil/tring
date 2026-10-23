@@ -463,6 +463,11 @@ SELECT id, sip_password FROM agents WHERE tenant_id = $1 AND sip_username = $2;
 -- name: get-user-by-email
 SELECT id, tenant_id, password_hash FROM users WHERE email = $1;
 
+-- name: user-exists
+-- Console-session revocation check: a JWT for a deleted user (or one moved
+-- out of the tenant) must stop working. Primary-key point read.
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2);
+
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
 SELECT id, name, sip_domain, outbound_strategy, failover_causes
@@ -487,13 +492,13 @@ UPDATE tenants SET default_flow_id = $1 WHERE id = $2;
 -- ===========================================================================
 
 -- name: create-api-key
-INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix)
-VALUES ($1, $2, $3, $4)
+INSERT INTO api_keys (tenant_id, name, key_hash, key_prefix, scope)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, created_at;
 
 -- name: list-api-keys
 -- Never returns the hash/plaintext — only the display prefix + status.
-SELECT id, name, key_prefix, created_at, last_used_at, revoked_at
+SELECT id, name, key_prefix, scope, created_at, last_used_at, revoked_at
 FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC;
 
 -- name: revoke-api-key
@@ -502,8 +507,8 @@ UPDATE api_keys SET revoked_at = now()
 WHERE id = $1 AND tenant_id = $2 AND revoked_at IS NULL;
 
 -- name: resolve-api-key-tenant
--- Auth path: map a presented key's hash to its tenant, unless revoked.
-SELECT tenant_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL;
+-- Auth path: map a presented key's hash to its tenant + scope, unless revoked.
+SELECT tenant_id, scope FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL;
 
 -- name: touch-api-key
 -- Best-effort last-used stamp on a successful auth.
@@ -627,7 +632,9 @@ UPDATE trunks SET
     name          = COALESCE($1, name),
     provider_type = COALESCE($2, provider_type),
     sip_username  = COALESCE($3, sip_username),
-    sip_password  = COALESCE($4, sip_password),
+    -- write-only secret: omitted OR empty keeps the stored password, so the
+    -- console can save other fields without re-entering it.
+    sip_password  = COALESCE(NULLIF($4, ''), sip_password),
     sip_realm     = COALESCE($5, sip_realm),
     register      = COALESCE($6, register),
     proxy_ip      = COALESCE($7, proxy_ip),
@@ -641,6 +648,35 @@ RETURNING id, tenant_id, name, provider_type, sip_username, sip_password, sip_re
 
 -- name: delete-trunk
 DELETE FROM trunks WHERE id = $1 AND tenant_id = $2;
+
+-- ===========================================================================
+-- SIP password encryption at rest (internal/secretbox, api startup)
+-- Sealed values carry the 'enc:v1:' prefix; anything else non-empty is
+-- legacy plaintext.
+-- ===========================================================================
+
+-- name: count-stored-secrets
+-- (sealed, plaintext) SIP password counts across trunks + agents.
+SELECT count(*) FILTER (WHERE sip_password LIKE 'enc:v1:%'),
+       count(*) FILTER (WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%')
+FROM (SELECT sip_password FROM trunks UNION ALL SELECT sip_password FROM agents) s;
+
+-- name: list-plaintext-trunk-secrets
+-- Locked so concurrent api replicas starting together seal each row once.
+SELECT id, sip_password FROM trunks
+WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%'
+FOR UPDATE;
+
+-- name: set-trunk-secret
+UPDATE trunks SET sip_password = $2 WHERE id = $1;
+
+-- name: list-plaintext-agent-secrets
+SELECT id, sip_password FROM agents
+WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%'
+FOR UPDATE;
+
+-- name: set-agent-secret
+UPDATE agents SET sip_password = $2 WHERE id = $1;
 
 -- name: select-outbound-trunks
 -- Active outbound DIDs joined to their active trunk, priority order.

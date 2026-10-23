@@ -49,7 +49,7 @@ Inbound phone calls need the SIP plug enabled (`TRING_FSPLUG_ENABLED=true`); see
 | `name` | Your label. |
 | `provider_type` | `generic` (default), `airtel`, `jio` or `tata`. |
 | `register` | `true` for REGISTER (username/password) authentication, `false` for IP authentication. |
-| `sip_username`, `sip_password`, `sip_realm` | REGISTER credentials and the registrar realm. |
+| `sip_username`, `sip_password`, `sip_realm` | REGISTER credentials and the registrar realm. The password is write-only: the API and console show only whether one is set. |
 | `proxy_ip` | IP authentication: the carrier's SBC address calls are sent to. REGISTER (optional): the registrar to send REGISTER and calls to, when the realm isn't resolvable. |
 | `auth_acl_cidr` | IP authentication: the carrier's address range, stored for reference. |
 | `extra_params` | JSON for extra settings: `from_domain` (host in `From`) and `auth_username` (REGISTER digest user, when different). |

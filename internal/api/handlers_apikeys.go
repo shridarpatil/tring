@@ -18,13 +18,15 @@ type apiKeyResponse struct {
 	Name       string     `json:"name"`
 	Key        string     `json:"key,omitempty"` // plaintext — create response only
 	KeyPrefix  string     `json:"key_prefix"`
+	Scope      string     `json:"scope"`
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	Revoked    bool       `json:"revoked"`
 }
 
 type createAPIKeyRequest struct {
-	Name string `json:"name"`
+	Name  string `json:"name"`
+	Scope string `json:"scope"` // "full" (default) | "calls"
 }
 
 // handleCreateAPIKey issues a new tenant API key. The plaintext is returned
@@ -36,6 +38,14 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		name = "API key"
+	}
+	scope := req.Scope
+	if scope == "" {
+		scope = scopeFull
+	}
+	if scope != scopeFull && scope != scopeCalls {
+		writeError(w, http.StatusBadRequest, "scope must be full or calls")
+		return
 	}
 
 	plaintext, hash, prefix, err := GenerateKey("live")
@@ -49,9 +59,9 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		createdAt time.Time
 	)
 	if err := s.db.Pool.QueryRow(r.Context(), s.q.CreateAPIKey,
-		t.ID, name, hash, prefix,
+		t.ID, name, hash, prefix, scope,
 	).Scan(&id, &createdAt); err != nil {
-		writeError(w, http.StatusInternalServerError, "create failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "create failed", err)
 		return
 	}
 
@@ -60,6 +70,7 @@ func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		Name:      name,
 		Key:       plaintext, // shown once
 		KeyPrefix: prefix,
+		Scope:     scope,
 		CreatedAt: createdAt,
 	})
 }
@@ -81,7 +92,7 @@ func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 			k         apiKeyResponse
 			revokedAt *time.Time
 		)
-		if err := rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.CreatedAt, &k.LastUsedAt, &revokedAt); err != nil {
+		if err := rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.Scope, &k.CreatedAt, &k.LastUsedAt, &revokedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}

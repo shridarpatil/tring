@@ -40,8 +40,12 @@ type Agent struct {
 	ID          uuid.UUID `json:"id"`
 	TenantID    uuid.UUID `json:"tenant_id"`
 	SipUsername string    `json:"sip_username"`
-	SipPassword string    `json:"sip_password,omitempty"`
-	DisplayName string    `json:"display_name,omitempty"`
+	// SipPassword is generated and stored for the FreeSWITCH directory
+	// (legacy SIP transport) but never returned: gateway-transport agents
+	// authenticate with the agent JWT and never SIP-register. Holds the
+	// stored form (sealed when TRING_SECRETS_KEY is set; see secrets.go).
+	SipPassword string `json:"-"`
+	DisplayName string `json:"display_name,omitempty"`
 	// AvailableForCalls is the backend-managed availability (the integrator's
 	// Away/Break button). Separate from connection presence: the orchestrator
 	// rings an agent only when they're BOTH connected AND available_for_calls.
@@ -84,7 +88,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
-		t.ID, req.SipUsername, sipPassword, req.DisplayName).Scan(
+		t.ID, req.SipUsername, s.sealSecret(sipPassword), req.DisplayName).Scan(
 		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
 	)
 	if err != nil {
@@ -330,8 +334,12 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		t.ID, req.E164, req.Type, req.TrunkID, req.FlowID, req.ProviderDIDID, priority).Scan(
 		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "number already registered for this tenant")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusConflict, "number already registered for this tenant: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "create number failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, n)
@@ -423,7 +431,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
+			s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
 			return
 		}
 		if rowType == "outbound" && rowActive {
@@ -431,7 +439,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 			err = s.db.Pool.QueryRow(r.Context(), s.q.CountOtherActiveOutbound,
 				t.ID, id).Scan(&otherActive)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
+				s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
 				return
 			}
 			if otherActive == 0 {
@@ -457,7 +465,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
@@ -581,7 +589,7 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat).
 		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

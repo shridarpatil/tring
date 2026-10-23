@@ -38,7 +38,7 @@ type trunk struct {
 func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
 	rows, err := s.db.Pool.Query(ctx, s.q.SelectOutboundTrunks, t.ID)
 	if err != nil {
-		return nil, fmt.Errorf("list outbound trunks: %w", err)
+		return nil, fmt.Errorf("list outbound trunks: %w: %w", errInternal, err)
 	}
 	defer rows.Close()
 
@@ -50,13 +50,16 @@ func (s *Server) selectTrunks(ctx context.Context, t *Tenant) ([]trunk, error) {
 			provType string
 		)
 		if err := rows.Scan(&e164, &trunkID, &provType); err != nil {
-			return nil, fmt.Errorf("scan trunk: %w", err)
+			return nil, fmt.Errorf("scan trunk: %w: %w", errInternal, err)
 		}
 		all = append(all, trunk{
 			E164:         e164,
 			Gateway:      freeswitch.GatewayName(trunkID),
 			ProviderType: provType,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list outbound trunks: %w: %w", errInternal, err)
 	}
 	if len(all) == 0 {
 		return nil, nil
