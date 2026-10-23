@@ -163,6 +163,10 @@ type Server struct {
 	// a field so tests can shorten it without racing live handlers).
 	joinTimeout time.Duration
 
+	// setDeaf deafens/undeafens a subscriber for the agent hold (sfu.SetDeaf; a
+	// field so tests can observe it without live media).
+	setDeaf func(room.RoomID, room.ParticipantID, bool)
+
 	// brain drives IVR sessions in-process — the brain is embedded in this server.
 	// One Runner shared across all rooms; state per-room inside the Runner.
 	brain *brain.Runner
@@ -215,6 +219,7 @@ func New(cfg Config) *Server {
 		sfu:          cfg.SFU,
 		log:          cfg.Logger.With("component", "signaling"),
 		joinTimeout:  defaultJoinTimeout,
+		setDeaf:      cfg.SFU.SetDeaf,
 		brain:        brain.NewRunner(cfg.Logger),
 		conns:        make(map[room.ParticipantID]*conn),
 		agents:       make(map[string]map[string]*conn),
@@ -475,9 +480,10 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 // readLoop dispatches client messages until the socket closes, then drops the
 // participant into the grace window. tenant is the joiner's principal tenant
 // (needed for agent-initiated actions like msgDial that must resolve
-// tenant-scoped config, e.g. outbound trunks). isAgent gates agent-only
-// actions (msgDial) — a visitor socket also carries a tenant, but must never
-// be able to originate a billable PSTN call on it (toll fraud).
+// tenant-scoped config, e.g. outbound trunks). isAgent gates the agent-only
+// call controls (msgHold, msgResume, msgTransfer, msgDial): the visitor SDK
+// never sends them, and a visitor socket must never steer the agent's call —
+// nor originate a billable PSTN call on its tenant (toll fraud).
 func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgent bool, sip string) {
 	defer func() {
 		// Only act if THIS socket is still the participant's current one. A reattach
@@ -517,6 +523,8 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 				}
 			}
 		case msgPublish:
+			// Open to visitors: the guest SDK screen-shares (TringGuest.shareScreen).
+			// It only adds a receive slot on the sender's OWN peer.
 			if c.peer != nil {
 				c.peer.Publish(codecKind(m.Kind))
 			}
@@ -529,11 +537,23 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 			// A quiet call (media rides RTP, not this socket) would otherwise hit the
 			// 90s read deadline and get dropped mid-call.
 		case msgHold:
+			// Agent-only: the visitor SDK never sends hold. A caller sending it
+			// would play hold music at the agent whenever it liked.
+			if !isAgent {
+				_ = c.send(msg{Type: msgError, Reason: "only an agent can hold"})
+				continue
+			}
 			// The agent muted its own mic client-side; play the tenant's hold music
 			// into the room so the held party hears music, not dead air — and deafen
 			// the agent, which must hear neither that music nor the held party.
 			s.holdParty(p.Room().ID(), p.ID())
 		case msgResume:
+			// Agent-only: a caller must not be able to cancel the agent's hold
+			// (which also un-deafens the agent).
+			if !isAgent {
+				_ = c.send(msg{Type: msgError, Reason: "only an agent can resume"})
+				continue
+			}
 			s.resumeParty(p.Room().ID())
 		case msgTransfer:
 			if !isAgent {
