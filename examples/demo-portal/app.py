@@ -33,6 +33,7 @@ Run:
     # open http://localhost:5000  (log in as alice / demo for the portal)
 """
 
+import functools
 import json
 import os
 import secrets
@@ -111,6 +112,24 @@ def resolve_agent_id():
     return payload[0]["id"], None
 
 
+# Pages /login may send the user back to (an allow-list, so `next` can't be
+# turned into an open redirect).
+SAFE_NEXT = ("/portal", "/crm")
+
+
+def login_required(view):
+    """Gate a route on the demo session (your real app: its own auth). JSON
+    endpoints answer 401; pages show the sign-in form, returning here after."""
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("user"):
+            if request.method == "GET" and request.path in SAFE_NEXT:
+                return render_template_string(LOGIN_HTML, next=request.path)
+            abort(401)
+        return view(*args, **kwargs)
+    return wrapped
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -149,11 +168,14 @@ def support_credentials():
 def login():
     username = request.form.get("username", "")
     password = request.form.get("password", "")
+    nxt = request.form.get("next", "")
+    if nxt not in SAFE_NEXT:
+        nxt = "/portal"
     u = DEMO_USERS.get(username)
     if not u or u["password"] != password:
-        return render_template_string(LOGIN_HTML, error="Invalid login (try alice / demo)."), 401
+        return render_template_string(LOGIN_HTML, error="Invalid login (try alice / demo).", next=nxt), 401
     session["user"] = username
-    return redirect("/portal")
+    return redirect(nxt)
 
 
 @app.post("/logout")
@@ -163,31 +185,31 @@ def logout():
 
 
 @app.get("/portal")
+@login_required
 def portal():
-    user = session.get("user")
-    if not user:
-        return render_template_string(LOGIN_HTML)
-    u = DEMO_USERS[user]
+    u = DEMO_USERS[session["user"]]
     return render_template_string(
         PORTAL_HTML, name=u["name"], client_ref=u["client_ref"], api_base=API_BASE
     )
 
 
 @app.get("/guest-credentials")
+@login_required
 def guest_credentials():
     """voice.js data-credentials-url target. Same-origin + cookie-authed, so only
     a logged-in visitor can mint — and only ever as THEIR client_ref."""
-    user = session.get("user")
-    if not user:
-        abort(401)
     if not API_KEY:
         return jsonify({"error": "server misconfigured: TRING_API_KEY not set"}), 500
-    status, payload = mint_credentials(DEMO_USERS[user]["client_ref"])
+    status, payload = mint_credentials(DEMO_USERS[session["user"]]["client_ref"])
     return jsonify(payload), status
 
 
 # --- 3. Agent CRM (agent.js + a short-lived agent JWT) --------------------------
+# Every agent route needs a signed-in session: they mint agent tokens and place
+# calls with the tenant API key. (Any demo login works here; your real app
+# would check the user is an agent.)
 @app.get("/crm")
+@login_required
 def crm():
     aid, err = resolve_agent_id() if API_KEY else (None, "TRING_API_KEY not set")
     # Only id + name reach the page — never the number.
@@ -199,6 +221,7 @@ def crm():
 
 
 @app.get("/agent/token")
+@login_required
 def agent_token():
     """agent.js data-token-url target: mint a fresh 5-min agent JWT server-side."""
     if not API_KEY:
@@ -216,6 +239,7 @@ def agent_token():
 
 
 @app.post("/agent/originate")
+@login_required
 def agent_originate():
     """The CRM's own 'Call' button hits THIS endpoint with a customer id (never a
     number). We resolve the number server-side and ask Tring to originate via
@@ -239,6 +263,7 @@ def agent_originate():
 
 
 @app.post("/agent/availability")
+@login_required
 def agent_availability():
     """The CRM's own Away/Break toggle hits THIS endpoint; the backend (which
     holds the API key) sets the agent available/unavailable via the Tring API.
@@ -359,6 +384,7 @@ LOGIN_HTML = (
   <div class="card">
     {% if error %}<p style="color:#c00">{{ error }}</p>{% endif %}
     <form method="post" action="/login">
+      <input type="hidden" name="next" value="{{ next or '/portal' }}">
       <input name="username" type="text" placeholder="username — alice or bob" autocomplete="username">
       <input name="password" type="password" placeholder="password — demo" autocomplete="current-password">
       <button>Sign in</button>
@@ -407,7 +433,8 @@ CRM_HTML = (
   <h1>📇 Acme Sales — CRM</h1>
   <p class="hint">Agent view. <code>agent.js</code> only opens a WebSocket to the
   gateway with a short-lived JWT (minted at <code>/agent/token</code>) and renders
-  the in-call panel — it has <strong>no Tring API access and cannot place calls</strong>.
+  the in-call panel — it <strong>cannot place calls</strong>; its token only reaches the
+  gateway and the agent's own hold/resume/transfer routes (<code>/v1/sdk/*</code>).
   The <em>Call</em> buttons below are the CRM's own; they POST a customer <em>id</em>
   (never a number) to this backend's <code>/agent/originate</code>, which resolves
   the number and calls Tring <code>POST /v1/calls</code>. So the agent's browser
@@ -499,4 +526,11 @@ CRM_HTML = (
 if __name__ == "__main__":
     if not API_KEY:
         print("WARNING: TRING_API_KEY is not set — the trusted-support and agent demos will 500.")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    # Loopback and no debugger by default: Werkzeug's debugger runs arbitrary
+    # code, and these routes spend the tenant API key. Opt in with DEMO_HOST /
+    # FLASK_DEBUG=1 only on a trusted network.
+    app.run(
+        host=os.environ.get("DEMO_HOST", "127.0.0.1"),
+        port=int(os.environ.get("DEMO_PORT", "5000")),
+        debug=os.environ.get("FLASK_DEBUG", "") in ("1", "true"),
+    )

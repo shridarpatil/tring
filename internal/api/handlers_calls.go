@@ -44,7 +44,7 @@ type createCallRequest struct {
 
 // handleCreateCall is the originate surface. The CRM's backend calls this with
 // its tenant API key, choosing the agent + destination — the agent's browser
-// never sees the dialed number (the SDK has no API access; see ADR-001). The
+// never sees the dialed number (the SDK cannot originate; see ADR-001). The
 // agent leg auto-answers (the agent already clicked to call).
 func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
