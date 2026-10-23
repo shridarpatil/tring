@@ -43,7 +43,7 @@ Unless a section says otherwise, routes take a tenant API key or a console sessi
 ## Placing calls
 
 :::danger
-Every outbound call is dialed on your trunk and billed to you. Never dial a number an end user supplied (a form field, a CRM note, an IVR `gather`) without validating it and checking it against an allow-list in your backend. With a trunk whose `provider_type` is `generic`, Tring does no destination validation at all. See [Trunks](/tring/api-reference/trunks/#provider_type).
+Every outbound call is dialed on your trunk and billed to you. Never dial a number an end user supplied (a form field, a CRM note, an IVR `gather`) without validating it and checking it against an allow-list in your backend. With a trunk whose `provider_type` is `generic`, Tring only checks that the destination is a bare number; it accepts any country and any premium-rate number. See [Trunks](/tring/api-reference/trunks/#provider_type).
 :::
 
 ### POST /v1/calls
@@ -71,7 +71,7 @@ What happens:
 4. The call is created with `status: "ringing"` and a [`call.ringing` webhook](/tring/api-reference/webhooks/#callringing) is sent.
 
 :::caution
-With no active outbound number on an active trunk, Tring falls back to a FreeSWITCH loopback dial meant for local development, with no normalisation. Make sure production tenants have at least one outbound number with a trunk.
+With no active outbound number on an active trunk, Tring falls back to a FreeSWITCH loopback dial meant for local development, with no normalisation (the destination must still be a bare number). Make sure production tenants have at least one outbound number with a trunk.
 :::
 
 ```bash

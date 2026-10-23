@@ -19,6 +19,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/agentleg"
 	"github.com/shridarpatil/tring/internal/callrow"
+	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/provider"
 	"github.com/shridarpatil/tring/internal/webhook"
@@ -592,6 +593,9 @@ func callSearch(q string) (idPrefix, digits string) {
 func (s *Server) checkCallerID(ctx context.Context, tenant uuid.UUID, callerID string) error {
 	if callerID == "" {
 		return nil
+	}
+	if !dial.IsNumber(callerID) {
+		return fmt.Errorf("caller_id %q is not a valid number", callerID)
 	}
 	var owned bool
 	if err := s.db.Pool.QueryRow(ctx, s.q.TenantOwnsNumber, tenant, callerID).Scan(&owned); err != nil {

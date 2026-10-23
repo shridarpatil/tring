@@ -706,6 +706,11 @@ SELECT EXISTS (SELECT 1 FROM trunks WHERE id = $1 AND tenant_id = $2);
 -- name: tenant-owns-flow
 SELECT EXISTS (SELECT 1 FROM flows WHERE id = $1 AND tenant_id = $2);
 
+-- name: tenant-owns-audio-path
+-- Is file_path one of the tenant's uploaded sounds? Gates hold_music, which is
+-- handed to FreeSWITCH (uuid_displace / transfer_ringback) as-is.
+SELECT EXISTS (SELECT 1 FROM audio_assets WHERE tenant_id = $1 AND file_path = $2);
+
 -- name: inbound-number-held-elsewhere
 -- Is e164 already an inbound number of ANOTHER tenant? Inbound routing is by
 -- DID alone, so a second tenant registering it could take the first's calls.
