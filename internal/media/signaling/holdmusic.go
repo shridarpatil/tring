@@ -119,24 +119,62 @@ func (s *Server) tenantHoldMusic(roomID room.RoomID) string {
 // without this the agent would hear both the music and the held party. Deafness
 // is server-side, so it survives the agent refreshing the page mid-hold. A
 // second hold while already held is a no-op.
+//
+// The room's hold slot is claimed BEFORE any side effect, so a second (or
+// concurrent) hold returns without touching deafness or music — previously the
+// losing hold tore down its own setup with SetDeaf(holder,false), un-deafening
+// the agent while the winning hold's music kept playing.
 func (s *Server) holdParty(roomID room.RoomID, holder room.ParticipantID) {
-	// Deafen BEFORE the music starts, so not one frame of it reaches the agent.
-	s.sfu.SetDeaf(roomID, holder, true)
-	moh := s.tenantHoldMusic(roomID)
-	stopMusic := s.playHold(roomID, moh)
-	stop := func() {
-		stopMusic()
-		s.sfu.SetDeaf(roomID, holder, false)
-	}
-
+	h := &agentHold{}
 	s.mu.Lock()
 	if _, held := s.holds[roomID]; held {
 		s.mu.Unlock()
-		stop() // lost the race — tear down the one we just started
 		return
 	}
-	s.holds[roomID] = stop
+	s.holds[roomID] = h.stop
 	s.mu.Unlock()
+
+	// Deafen BEFORE the music starts, so not one frame of it reaches the agent.
+	s.setDeaf(roomID, holder, true)
+	stopMusic := s.playHold(roomID, s.tenantHoldMusic(roomID))
+	h.started(func() {
+		stopMusic()
+		s.setDeaf(roomID, holder, false)
+	})
+}
+
+// agentHold is one room's hold. Its slot is claimed before the hold is set up,
+// so a resume/teardown can arrive mid-setup: stop then just marks it, and
+// started releases immediately.
+type agentHold struct {
+	mu      sync.Mutex
+	stopped bool
+	release func()
+}
+
+// started installs the hold's release func, running it at once if the hold was
+// already stopped during setup.
+func (h *agentHold) started(release func()) {
+	h.mu.Lock()
+	if h.stopped {
+		h.mu.Unlock()
+		release()
+		return
+	}
+	h.release = release
+	h.mu.Unlock()
+}
+
+// stop releases the hold (idempotent).
+func (h *agentHold) stop() {
+	h.mu.Lock()
+	h.stopped = true
+	release := h.release
+	h.release = nil
+	h.mu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 // resumeParty stops a room's hold music and restores the holder's hearing on
