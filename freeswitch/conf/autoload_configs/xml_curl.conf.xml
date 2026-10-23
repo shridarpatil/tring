@@ -4,12 +4,13 @@
       Tring backend handles directory lookups (per-tenant agent registration
       + SIP password). FreeSWITCH POSTs the lookup params; the backend
       returns XML with the agent's stored password and tenant_id/agent_id
-      variables. Credentials here must match TRING_FS_BASIC_AUTH on the API
-      side.
+      variables. The api serves /fs on its loopback-only listener
+      (TRING_FS_ADDR, default 127.0.0.1:8088); credentials come from
+      TRING_FS_BASIC_AUTH via vars.xml, shared with the api.
     -->
     <binding name="tring-directory">
-      <param name="gateway-url" value="http://127.0.0.1:8085/fs/directory" bindings="directory"/>
-      <param name="gateway-credentials" value="fs:fs_dev_secret_change_me_in_prod"/>
+      <param name="gateway-url" value="http://127.0.0.1:8088/fs/directory" bindings="directory"/>
+      <param name="gateway-credentials" value="$${tring_fs_basic_auth}"/>
       <param name="disable-100-continue" value="true"/>
     </binding>
   </bindings>

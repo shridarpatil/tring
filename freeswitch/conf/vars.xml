@@ -13,7 +13,7 @@
        WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
   -->
   <X-PRE-PROCESS cmd="set" data="default_password=1234"/>
-  <X-PRE-PROCESS cmd="set" data="disable_system_api_commands=false"/>
+  <X-PRE-PROCESS cmd="set" data="disable_system_api_commands=true"/>
   <!-- Did you change it yet? -->
   <!--
       The following variables are set dynamically - calculated if possible by freeswitch - and
@@ -83,6 +83,14 @@
        to loopback because the orchestrator is co-located with FreeSWITCH (one per
        FS instance). Override TRING_IVR_SOCKET if you run it on another host/port. -->
   <X-PRE-PROCESS cmd="exec-set" data="tring_ivr_socket=sh -c 'echo ${TRING_IVR_SOCKET:-127.0.0.1:8086}'"/>
+  <!-- Shared secrets, read from the same .env the api uses (docker-compose
+       env_file), so FreeSWITCH and the api always agree:
+         tring_esl_password  -> event_socket.conf.xml (api -> FS ESL)
+         tring_fs_basic_auth -> xml_curl.conf.xml (FS -> api /fs, user:pass)
+       The fallbacks are the dev defaults; the api refuses to start with them
+       unless TRING_ALLOW_INSECURE_SECRETS=true. -->
+  <X-PRE-PROCESS cmd="exec-set" data="tring_esl_password=sh -c 'echo ${TRING_ESL_PASSWORD:-ClueCon}'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="tring_fs_basic_auth=sh -c 'echo ${TRING_FS_BASIC_AUTH:-fs:fs_dev_secret_change_me_in_prod}'"/>
   <!-- Trunk credentials are now managed via the admin console at /trunks.
        Each trunk row in the `trunks` table renders to
        external/dynamic/t_<uuid>.xml on save; `sofia profile external

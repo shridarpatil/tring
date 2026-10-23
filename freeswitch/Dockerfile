@@ -24,6 +24,7 @@ COPY conf/dialplan/whatsapp.xml                  /usr/share/freeswitch/conf/vani
 COPY conf/directory/default.xml                  /usr/share/freeswitch/conf/vanilla/directory/default.xml
 COPY conf/autoload_configs/modules.conf.xml      /usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml
 COPY conf/autoload_configs/acl.conf.xml          /usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml
+COPY conf/autoload_configs/event_socket.conf.xml /usr/share/freeswitch/conf/vanilla/autoload_configs/event_socket.conf.xml
 COPY conf/autoload_configs/xml_curl.conf.xml     /usr/share/freeswitch/conf/vanilla/autoload_configs/xml_curl.conf.xml
 COPY conf/autoload_configs/local_stream.conf.xml /usr/share/freeswitch/conf/vanilla/autoload_configs/local_stream.conf.xml
 COPY conf/autoload_configs/switch.conf.xml       /usr/share/freeswitch/conf/vanilla/autoload_configs/switch.conf.xml
@@ -32,6 +33,10 @@ COPY conf/sip_profiles/internal.xml              /usr/share/freeswitch/conf/vani
 COPY conf/sip_profiles/external/tring-gw.xml     /usr/share/freeswitch/conf/vanilla/sip_profiles/external/tring-gw.xml
 COPY conf/sip_profiles/whatsapp.xml              /usr/share/freeswitch/conf/vanilla/sip_profiles/whatsapp.xml
 COPY conf/sip_profiles/whatsapp/profile.xml      /usr/share/freeswitch/conf/vanilla/sip_profiles/whatsapp/profile.xml
+
+# Drop the stock IPv6 profiles: they would otherwise load next to ours on
+# IPv6 hosts with none of Tring's settings (ACLs, bindings).
+RUN rm -f /usr/share/freeswitch/conf/vanilla/sip_profiles/*-ipv6.xml
 
 # Dynamic trunk dir stays a runtime volume — just ensure the (empty) path exists.
 RUN mkdir -p /usr/share/freeswitch/conf/vanilla/sip_profiles/external/dynamic \

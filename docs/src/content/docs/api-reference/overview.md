@@ -30,7 +30,7 @@ Put TLS in front of the API before it leaves localhost. API keys and console tok
 | Path | Auth | What it is |
 |---|---|---|
 | `GET /healthz` | none | Returns `{"status":"ok"}`, or `503` with `{"error":"db unreachable"}` when Postgres is down. Use it for load balancer health checks. |
-| `/fs/*` | HTTP Basic (`TRING_FS_BASIC_AUTH`) | Used by FreeSWITCH only. Not for integrators. |
+| `/fs/*` | HTTP Basic (`TRING_FS_BASIC_AUTH`) | Used by FreeSWITCH only, on the loopback listener `TRING_FS_ADDR` (not the public api port). Not for integrators. |
 | `/sdk/*` | none | Browser widget bundles (`voice.js`, `agent.js`, `tring.js`). |
 | `/admin/*` | none (the console signs in through the API) | The admin console. |
 

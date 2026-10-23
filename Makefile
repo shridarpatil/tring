@@ -21,9 +21,17 @@ help:
 up: .env
 	docker compose up -d
 
-# Seed .env from the template on first run so `make up` works out of the box.
+# Seed .env from the template on first run so `make up` works out of the box,
+# with fresh random secrets (the binaries refuse to boot on the placeholders).
 .env:
-	@test -f .env || (cp .env.example .env && echo "created .env from .env.example — review it")
+	@test -f .env || { \
+		rand() { od -An -tx1 -N24 /dev/urandom | tr -d ' \n'; }; \
+		sed -e "s|^TRING_JWT_SECRET=.*|TRING_JWT_SECRET=$$(rand)$$(rand)|" \
+		    -e "s|^TRING_FS_BASIC_AUTH=.*|TRING_FS_BASIC_AUTH=fs:$$(rand)|" \
+		    -e "s|^TRING_ESL_PASSWORD=.*|TRING_ESL_PASSWORD=$$(rand)|" \
+		    -e "s|^TRING_ADMIN_PASSWORD=.*|TRING_ADMIN_PASSWORD=$$(rand)|" \
+		    .env.example > .env && \
+		echo "created .env from .env.example with random secrets — review it"; }
 
 down:
 	docker compose down
@@ -34,11 +42,12 @@ logs:
 images:
 	docker compose build api gateway freeswitch
 
-api:
-	go run ./cmd/api
+# Host-run binaries load .env so they share the containers' secrets.
+api: .env
+	set -a; . ./.env; set +a; go run ./cmd/api
 
-gateway:
-	go run ./cmd/gateway
+gateway: .env
+	set -a; . ./.env; set +a; go run ./cmd/gateway
 
 build:
 	go build ./...

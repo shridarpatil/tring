@@ -40,6 +40,10 @@ func main() {
 
 	logger := logging.New(k.String("log_format"), k.String("log_level"))
 	slog.SetDefault(logger)
+	if weak := config.WeakSecrets(k, "jwt_secret"); len(weak) > 0 && !k.Bool("allow_insecure_secrets") {
+		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
+		os.Exit(1)
+	}
 
 	turnURL := k.String("turn_url")
 	turnSecret := k.String("turn_secret")
