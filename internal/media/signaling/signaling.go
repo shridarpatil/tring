@@ -531,21 +531,34 @@ func (s *Server) readLoop(c *conn, p *room.Participant, tenant uuid.UUID, isAgen
 // markHangupInitiator records WHO ended a call, from the explicit `bye` a party's
 // SDK sends on hangup (and on the peer-left cascade). First writer wins, so the
 // party who actually hung up is captured — not the other side that auto-leaves
-// after. Supervisors and unknown roles never count. A room with no recorded
-// initiator ended without a human hangup (IVR hangup node, no-answer, flow end,
-// or a socket drop) → "system", resolved by endCause.
+// after. Supervisors and unknown roles never count.
 func (s *Server) markHangupInitiator(rid room.RoomID, pid room.ParticipantID) {
+	s.setHangupBy(rid, s.hangupRole(pid))
+}
+
+// hangupRole maps a participant to the cause it is attributed as when it ends a
+// call: "client" (visitor) or "agent"; "" for supervisors / unknown roles.
+func (s *Server) hangupRole(pid room.ParticipantID) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var by string
 	switch s.roles[pid] {
 	case roleVisitor:
-		by = "client"
+		return "client"
 	case roleAgent:
-		by = "agent"
-	default:
-		return // supervisor / unknown — not a call-ending hangup
+		return "agent"
 	}
+	return ""
+}
+
+// setHangupBy records a room's hangup cause if none is recorded yet (first
+// writer wins). "" is a no-op. Server-initiated ends (flow end, IVR hangup node,
+// no-answer) record "system" just before they tear the call down.
+func (s *Server) setHangupBy(rid room.RoomID, by string) {
+	if by == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.hangupBy == nil {
 		s.hangupBy = map[room.RoomID]string{}
 	}
@@ -554,15 +567,29 @@ func (s *Server) markHangupInitiator(rid room.RoomID, pid room.ParticipantID) {
 	}
 }
 
+// clearHangupBy forgets a recorded cause when the call carries on after that
+// party left (an agent leaving into a post-call flow or a blind transfer).
+func (s *Server) clearHangupBy(rid room.RoomID) {
+	s.mu.Lock()
+	delete(s.hangupBy, rid)
+	s.mu.Unlock()
+}
+
 // endCause resolves and consumes a room's hangup cause: the recorded initiator
-// ("client"/"agent"), or "system" when no party hung up. Clears the entry.
+// ("client"/"agent"/"system"), or "system" when nothing was recorded.
 func (s *Server) endCause(rid room.RoomID) string {
+	return s.endCauseOr(rid, "system")
+}
+
+// endCauseOr is endCause with the fallback for an unrecorded room — e.g. a
+// phone leg that ended on its own is the caller hanging up. Clears the entry.
+func (s *Server) endCauseOr(rid room.RoomID, def string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	by, ok := s.hangupBy[rid]
 	delete(s.hangupBy, rid)
 	if !ok {
-		return "system"
+		return def
 	}
 	return by
 }
@@ -577,6 +604,9 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
+		// Resolve the leaver's role before clearing it: a party that left WITHOUT a
+		// bye (closed tab, network drop past the grace window) still ended the call.
+		leaverBy := s.hangupRole(e.Participant)
 		s.clearRole(e.Participant)
 		// A held call is a 1:1 state between the two live parties: if either leaves,
 		// stop any agent-initiated hold music so its source never outlives the call.
@@ -584,6 +614,7 @@ func (s *Server) routeEvent(e room.Event) {
 		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
 		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
+			s.setHangupBy(e.Room, leaverBy) // no-op if a bye / system end was recorded first
 			s.endTransfer(e.Room) // caller gone → stop any in-flight blind-transfer ring
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
@@ -599,13 +630,16 @@ func (s *Server) routeEvent(e room.Event) {
 			// fan out peer-left to the caller: the visitor SDK treats "the only peer
 			// left" as call-over (sends Bye), which would tear the caller down before
 			// the post-call flow can play. The SFU already removed the agent's track
-			// (renegotiation), so the caller simply hears the IVR again.
+			// (renegotiation), so the caller simply hears the IVR again. The call goes
+			// on, so the agent's bye no longer decides who ends it.
+			s.clearHangupBy(e.Room)
 			return
 		} else if s.transferActive(e.Room) {
 			// A blind transfer is ringing: the initiating agent just left and the
 			// caller is briefly alone. Keep the room (the target will join, or the
 			// no-answer message plays) and suppress peer-left to the caller — the
 			// visitor SDK treats "the last peer left" as call-over and would Bye.
+			s.clearHangupBy(e.Room)
 			return
 		} else {
 			// A 1:1 call whose OTHER party just left: end the lone remaining leg now
@@ -615,6 +649,10 @@ func (s *Server) routeEvent(e room.Event) {
 			// endIfAlone no-ops on a phone room (the remaining leg is the agent
 			// serving the port caller) or when ≥2 participants remain. It removes the
 			// leg via Leave(), which re-enters here with the room now empty → Ended.
+			// When it does end the call, the party who just left is who hung up.
+			if r, ok := s.rooms.Get(e.Room); ok && len(r.Participants()) == 1 && !s.sfu.HasPort(e.Room) {
+				s.setHangupBy(e.Room, leaverBy)
+			}
 			s.endIfAlone(e.Room)
 		}
 	}
