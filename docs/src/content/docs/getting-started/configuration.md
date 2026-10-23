@@ -92,7 +92,7 @@ The gateway (`cmd/gateway`) runs browser WebRTC on `/rtc`, the IVR, agent routin
 | `TRING_GATEWAY_REQUIRE_AUTH` | `true` | When `true`, the gateway will not start without Redis (see the note above). `/rtc` always requires a signed token regardless of this setting. Keep it `true`. |
 | `TRING_MEDIA_GRACE_SECONDS` | `30` | How long a dropped participant's slot is held so a page refresh can rejoin the same call. See [page-refresh grace](/tring/features/web-calling/#page-refresh-grace). |
 | `TRING_RTC_DEV_TOKENS` | `false` | Mounts an **unauthenticated** token mint at `/rtc/dev-token` for the local test client. |
-| `TRING_TRUSTED_PROXIES` | empty | Comma-separated CIDRs of the reverse proxies in front of the **api**. Only `X-Forwarded-For` hops inside these ranges are trusted when logging the client IP. Empty ignores `X-Forwarded-For` entirely. |
+| `TRING_TRUSTED_PROXIES` | empty | Comma-separated CIDRs of the reverse proxies in front of the **api**. Only `X-Forwarded-For` hops inside these ranges are trusted when logging the client IP and rate limiting console login. Empty ignores `X-Forwarded-For` entirely. |
 
 :::danger
 - Never set `TRING_RTC_DEV_TOKENS=true` in production. Anyone could mint agent tokens.
