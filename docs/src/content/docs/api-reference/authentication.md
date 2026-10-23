@@ -89,7 +89,11 @@ The `tenant` object in the login response only fills in `id`, `name`, `sip_domai
 | `400` | `invalid json` |
 | `400` | `email and password required` |
 | `401` | `invalid credentials` (wrong email or wrong password; the API doesn't say which) |
+| `413` | `request body too large` (over 1 MB) |
+| `429` | `too many login attempts, try again later` |
 | `500` | `query failed`, `load tenant`, `issue token` |
+
+Login is throttled to 10 attempts per 5 minutes per client IP, and separately per email address. A successful sign-in doesn't count against either limit. Over the limit, the API answers `429` with a `Retry-After` header giving the seconds until the window resets. The client IP is the connection address, or the `X-Forwarded-For` entry from a [trusted proxy](/tring/getting-started/configuration/). The counters live in each API process, so with several replicas the effective limit is per replica.
 
 The token is valid for 12 hours. There are no refresh tokens: sign in again when it expires. Signing out of the console just discards the token on the client. The token stays valid until it expires.
 

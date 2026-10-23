@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -171,6 +172,11 @@ type Server struct {
 	// Empty = trust none. See realIP.
 	trustedProxies []string
 
+	// loginByIP / loginByEmail throttle POST /v1/console/login (see
+	// attemptLimiter). In-process: per replica.
+	loginByIP    *attemptLimiter
+	loginByEmail *attemptLimiter
+
 	// outboundAllow: private CIDRs webhook URLs may target (validated on create;
 	// enforced again at delivery by the notifier's safehttp client).
 	outboundAllow []netip.Prefix
@@ -222,6 +228,8 @@ func NewServer(cfg Config) *Server {
 		hub:              cfg.Hub,
 		events:           cfg.Events,
 		trustedProxies:   cfg.TrustedProxies,
+		loginByIP:        newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		loginByEmail:     newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		outboundAllow:    cfg.OutboundAllow,
 		log:              logger,
 	}
@@ -338,9 +346,12 @@ func (s *Server) Router() http.Handler {
 	r.Use(realIP(s.trustedProxies))
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(securityHeaders)
 	// CORS must come BEFORE the auth wall — preflight OPTIONS requests
 	// from browsers don't carry `Authorization`, so they'd otherwise 401.
 	r.Use(corsMiddleware)
+	// After CORS so a browser can read the 413.
+	r.Use(limitBody)
 
 	r.Get("/healthz", s.handleHealthz)
 
@@ -472,7 +483,7 @@ func (s *Server) Router() http.Handler {
 	// to revalidate every time — it still gets a cheap 304 when unchanged,
 	// but picks up a new bundle the instant we ship one.
 	if wFS, ok := widget.FS(); ok {
-		sdk := http.StripPrefix("/sdk/", http.FileServer(http.FS(wFS)))
+		sdk := http.StripPrefix("/sdk/", sdkHandler(wFS))
 		r.Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache")
 			sdk.ServeHTTP(w, req)
@@ -483,6 +494,7 @@ func (s *Server) Router() http.Handler {
 	// actually built — backend-only deployments get a UI-less binary
 	// automatically (no flag needed, just don't run `npm run build`).
 	if uiFS, ok := webui.FS(); ok {
+		admin := r.With(adminHeaders(adminCSP(s.gatewayPublicURL)))
 		fileServer := http.FileServer(http.FS(uiFS))
 		// Strip "/admin" prefix so requests for /admin/assets/foo.js
 		// resolve to "assets/foo.js" within the embedded FS.
@@ -490,15 +502,16 @@ func (s *Server) Router() http.Handler {
 		// Catch-all: any /admin/* path that doesn't match a static file
 		// falls back to index.html so the Vue router (history mode) can
 		// own the URL space client-side.
-		r.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
+		admin.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
 			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
 		})
-		r.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+		admin.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
 			// If it's a known asset (has a file extension), serve it
 			// directly; otherwise serve index.html for SPA routing.
 			path := strings.TrimPrefix(req.URL.Path, "/admin/")
 			if path != "" {
-				if _, err := uiFS.Open(path); err == nil {
+				// Directories fall through to index.html — never a listing.
+				if st, err := fs.Stat(uiFS, path); err == nil && !st.IsDir() {
 					stripped.ServeHTTP(w, req)
 					return
 				}
