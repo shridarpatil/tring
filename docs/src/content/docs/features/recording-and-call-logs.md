@@ -56,7 +56,7 @@ Recordings contain personal data. Tell callers they are recorded where the law r
 | `direction` | `inbound` or `outbound`. |
 | `status` | `ringing`, `answered`, `ended` (`failed` exists in the schema). |
 | `source` | `web`, `phone` or `whatsapp`. Calls arriving through the SIP plug are recorded as `phone`. |
-| `from_number`, `to_number` | Caller and destination. For a web call, `from_number` is the `client_ref` (or the visitor's display name, or `Web visitor`) and `to_number` is the flow's name. |
+| `from_number`, `to_number` | Caller and destination. For a web call, `from_number` is the `client_ref` from the call token. Without one the caller is anonymous: it's `Web visitor`, or `Web visitor (name: …)` when the visitor typed a name (unverified, control characters removed, at most 64 characters). In both cases `source` is `web`, and `to_number` is the flow's name. |
 | `agent_id`, `agent_name` | The agent who answered. |
 | `client_ref` | Your verified caller identity from `POST /v1/guest-credentials`. |
 | `leg_id` | Opaque per-call leg id; also the recording file name. |
