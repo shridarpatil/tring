@@ -58,7 +58,7 @@ Copy `key` now and put it in your secret manager. Tring stores only its hash and
 | Status | `error` |
 |---|---|
 | `500` | `key generation failed` |
-| `500` | `create failed: …` |
+| `500` | `create failed` |
 
 ### GET /v1/api-keys
 

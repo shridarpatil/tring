@@ -587,6 +587,17 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// writeServerError answers a server-side failure (5xx) with a generic msg and
+// logs the underlying err with the request id. Internal detail — Postgres
+// errors, FreeSWITCH replies, file paths — must never reach the client: it
+// leaks schema/infra and is useless to an integrator anyway.
+func (s *Server) writeServerError(w http.ResponseWriter, r *http.Request, status int, msg string, err error) {
+	s.log.Error(msg, "err", err, "status", status,
+		"method", r.Method, "path", r.URL.Path,
+		"req_id", middleware.GetReqID(r.Context()))
+	writeError(w, status, msg)
+}
+
 // corsMiddleware reflects the request's Origin so browsers from any CRM
 // (dev: localhost:9999, prod: customer's CRM domain) can hit the API. The
 // browser SDK is the primary cross-origin caller; tenant backends speak

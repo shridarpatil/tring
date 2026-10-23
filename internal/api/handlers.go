@@ -330,8 +330,12 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		t.ID, req.E164, req.Type, req.TrunkID, req.FlowID, req.ProviderDIDID, priority).Scan(
 		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "number already registered for this tenant")
+		return
+	}
 	if err != nil {
-		writeError(w, http.StatusConflict, "number already registered for this tenant: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "create number failed", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, n)
@@ -423,7 +427,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
+			s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
 			return
 		}
 		if rowType == "outbound" && rowActive {
@@ -431,7 +435,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 			err = s.db.Pool.QueryRow(r.Context(), s.q.CountOtherActiveOutbound,
 				t.ID, id).Scan(&otherActive)
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "lookup failed: "+err.Error())
+				s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
 				return
 			}
 			if otherActive == 0 {
@@ -457,7 +461,7 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
@@ -581,7 +585,7 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat).
 		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update failed: "+err.Error())
+		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

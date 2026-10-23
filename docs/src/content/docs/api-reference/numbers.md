@@ -115,7 +115,8 @@ curl -sS -X POST "$TRING_URL/v1/numbers" \
 | `400` | `trunk_id is required for outbound numbers` |
 | `400` | `trunk not found in this tenant` / `flow not found in this tenant`: the ID doesn't exist or belongs to another tenant |
 | `409` | `number is already in use`: another tenant already has this inbound number |
-| `409` | `number already registered for this tenant: …` followed by the database error. Returned when the insert fails, usually because you already have this number. |
+| `409` | `number already registered for this tenant` |
+| `500` | `create number failed` |
 | `500` | `lookup failed` |
 
 ### GET /v1/numbers
@@ -226,6 +227,6 @@ curl -sS -X PATCH "$TRING_URL/v1/numbers/0b6f2a4e-1111-4c1d-9a00-000000000001" \
 | `400` | `flow not found in this tenant` |
 | `404` | `number not found` |
 | `409` | `cannot deactivate the last active outbound trunk for this tenant; register another outbound number first`. Returned when you set `active: false` on the only active outbound number. Without it, every outbound call would fail. |
-| `500` | `lookup failed: …` / `update failed: …` |
+| `500` | `lookup failed` / `update failed` |
 
 There is no `DELETE` endpoint for numbers.

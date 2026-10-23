@@ -310,7 +310,7 @@ EOF
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `name is required` |
-| `500` | `insert failed: …` |
+| `500` | `insert failed` |
 
 ### GET /v1/flows
 
@@ -414,7 +414,7 @@ curl -sS -X PATCH "$TRING_URL/v1/flows/5c1a7b22-2222-4e3f-8b00-000000000001" \
 | `400` | `invalid id` |
 | `400` | `invalid JSON body` |
 | `404` | `flow not found` |
-| `500` | `update failed: …` |
+| `500` | `update failed` |
 
 ### DELETE /v1/flows/{id}
 
