@@ -209,7 +209,8 @@ func stepFor(node *ivrNode, in *SimInput, dtmfIdx *int, vars map[string]string) 
 			gathered += in.DTMF[*dtmfIdx]
 			*dtmfIdx++
 		}
-		if gathered == "" {
+		if gathered == "" || len(gathered) < intFromConfig(node.Config, "min_digits", 1) {
+			step.DTMFInput = gathered
 			step.Outcome = "timeout"
 			return step, "timeout"
 		}
