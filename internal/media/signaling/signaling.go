@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -431,13 +433,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// caller's recording leg when the tenant records). Reattaches (page refresh)
 	// keep the original CDR; plain rooms (no flow) get none.
 	if flowID != "" && freshJoin && s.cfg.Calls != nil {
-		from := princ.clientRef
-		if from == "" {
-			from = first.Name
-		}
-		if from == "" {
-			from = "Web visitor" // anonymous caller has no identity — don't log blank
-		}
+		// Only the token's client_ref identifies the caller; the visitor-typed join
+		// name is kept as a labelled hint, never as the identity (webCallerFrom).
+		from := webCallerFrom(princ.clientRef, first.Name)
 		// to_number is the dialed destination: the IVR flow's name (best-effort —
 		// falls back to a literal if the flow can't be resolved). source='web'
 		// distinguishes the channel without overloading to_number.
@@ -886,6 +884,38 @@ func webrtcICE(raw json.RawMessage) *webrtc.ICECandidateInit {
 		return nil
 	}
 	return &init
+}
+
+// maxVisitorNameRunes bounds the visitor-typed name kept in a web call's CDR.
+const maxVisitorNameRunes = 64
+
+// webCallerFrom is the CDR "from" for a web call. The token's client_ref is the
+// only trusted caller identity; without it the caller is anonymous. The join
+// name is free text the VISITOR typed, so it is kept only as a clearly-labelled
+// hint ("Web visitor (name: …)") — never on its own, where it could pass for a
+// verified number/identity in CDRs and webhooks. Control and format (e.g. bidi
+// override) characters are stripped and the name is capped.
+func webCallerFrom(clientRef, name string) string {
+	if clientRef != "" {
+		return clientRef
+	}
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if n == maxVisitorNameRunes {
+			break
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError {
+			continue
+		}
+		b.WriteRune(r)
+		n++
+	}
+	clean := strings.TrimSpace(b.String())
+	if clean == "" {
+		return "Web visitor" // anonymous caller has no identity — don't log blank
+	}
+	return "Web visitor (name: " + clean + ")"
 }
 
 // codecKind maps a publish/unpublish kind string to a pion codec type

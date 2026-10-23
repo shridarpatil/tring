@@ -1020,3 +1020,40 @@ func TestAgentCanStartNewRoom(t *testing.T) {
 	a.send(map[string]any{"type": "join", "room": "out-1", "name": "Alice"})
 	a.readUntil("joined")
 }
+
+// TestWebCallCDRFromIsNotTheVisitorName: a web call without a client_ref must
+// not record the visitor-typed join name as if it were the caller's identity —
+// the CDR "from" is labelled "Web visitor (name: …)", control chars stripped.
+func TestWebCallCDRFromIsNotTheVisitorName(t *testing.T) {
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	cl := &fakeCallLog{}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, Calls: cl})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+
+	caller := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	caller.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "+919876543210\n"})
+	caller.readUntil("joined")
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		cl.mu.Lock()
+		got := append([]string(nil), cl.started...)
+		cl.mu.Unlock()
+		if len(got) == 1 {
+			want := tenant.String() + "/call|Web visitor (name: +919876543210)|Sales|web"
+			if got[0] != want {
+				t.Fatalf("started = %q, want %q", got[0], want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("started hooks = %v, want 1", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
