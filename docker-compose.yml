@@ -48,7 +48,9 @@ services:
       # Dynamic trunk gateways — RUNTIME only (NOT baked into the image): Tring
       # writes t_<uuid>.xml here and rescans the external profile; the api shares
       # the same host path. Static config is baked into the image above.
-      - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
+      # Read-only here: only the api writes trunk gateways. FreeSWITCH loads
+      # (and preprocesses) every file in it, so FS must never be the writer.
+      - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:ro
       # WhatsApp SIP TLS certs (agent.pem, cafile.pem) — host-managed so they
       # can be renewed without a rebuild. Unused unless TRING_WHATSAPP_ENABLED.
       - ./freeswitch/tls/whatsapp:/etc/freeswitch/tls/whatsapp:ro

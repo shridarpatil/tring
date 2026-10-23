@@ -482,7 +482,7 @@
 
      default: tlsv1,tlsv1.1,tlsv1.2
   -->
-  <X-PRE-PROCESS cmd="set" data="sip_tls_version=tlsv1,tlsv1.1,tlsv1.2"/>
+  <X-PRE-PROCESS cmd="set" data="sip_tls_version=tlsv1.2"/>
 
   <!--
      TLS cipher suite: default ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH
@@ -493,7 +493,7 @@
 
      Will show you what is available in your verion of openssl.
   -->
-  <X-PRE-PROCESS cmd="set" data="sip_tls_ciphers=ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH"/>
+  <X-PRE-PROCESS cmd="set" data="sip_tls_ciphers=ECDHE+AESGCM:ECDHE+CHACHA20:!aNULL"/>
 
   <!-- Internal SIP Profile -->
   <X-PRE-PROCESS cmd="set" data="internal_auth_calls=true"/>

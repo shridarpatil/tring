@@ -220,6 +220,10 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 	if req.ProviderType == "" {
 		req.ProviderType = "generic"
 	}
+	if err := validateTrunkFields(req.SIPUsername, req.SIPPassword, req.SIPRealm, req.ProxyIP, req.ExtraParams); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var extra interface{}
 	if len(req.ExtraParams) > 0 {
 		extra = req.ExtraParams
@@ -311,6 +315,10 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 	var req patchTrunkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := validateTrunkFields(derefStr(req.SIPUsername), derefStr(req.SIPPassword), derefStr(req.SIPRealm), derefStr(req.ProxyIP), req.ExtraParams); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var extra interface{}

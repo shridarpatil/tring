@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -100,9 +101,25 @@ type xmlInclude struct {
 	Gateway xmlGateway `xml:"gateway"`
 }
 
+// ErrUnsafeValue rejects a gateway field FreeSWITCH would expand: it
+// substitutes $${global} and ${var} inside gateway XML, so a tenant-set
+// from-domain of $${tring_fs_basic_auth} would send that secret to the
+// tenant's proxy in every SIP request. Control characters are refused too.
+var ErrUnsafeValue = errors.New("gateway field contains FreeSWITCH variable syntax or control characters")
+
+// unsafeValue reports whether v would be expanded or misparsed by FreeSWITCH.
+func unsafeValue(v string) bool {
+	return strings.Contains(v, "${") || strings.IndexFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+}
+
 // renderGateway turns a Gateway into a complete <include><gateway/></include>
 // XML document suitable for sofia's per-profile gateway dir.
 func renderGateway(g Gateway) ([]byte, error) {
+	for _, v := range []string{g.Username, g.AuthUsername, g.Password, g.Realm, g.ProxyIP, g.FromDomain} {
+		if unsafeValue(v) {
+			return nil, ErrUnsafeValue
+		}
+	}
 	params := []xmlGatewayParam{}
 	if g.Register {
 		// No realm = register to the proxy as the domain too, as IP mode does
@@ -187,11 +204,18 @@ func WriteGateways(gws []Gateway) (stale []string, err error) {
 	want := make(map[string]bool, len(gws))
 	for _, g := range gws {
 		path := filepath.Join(GatewayDir, "t_"+g.ID+".xml")
-		want[filepath.Base(path)] = true
 		body, err := renderGateway(g)
+		if errors.Is(err, ErrUnsafeValue) {
+			// Skip just this trunk (the API rejects such values; this catches
+			// rows stored before it did). Not in `want`, so an older file for it
+			// is swept and the gateway unloaded below.
+			slog.Error("trunk not rendered: unsafe gateway field", "component", "freeswitch", "gateway", g.Name)
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("render gateway %s: %w", g.Name, err)
 		}
+		want[filepath.Base(path)] = true
 		if old, err := os.ReadFile(path); err == nil {
 			if bytes.Equal(old, body) {
 				continue // unchanged: leave the loaded gateway alone
