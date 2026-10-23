@@ -267,6 +267,9 @@ export interface ApiKey {
   name: string;
   key?: string;
   key_prefix: string;
+  // "calls": calls, guest/agent tokens, agents and read-only lookups only.
+  // "full": everything the console can do (key, trunk, webhook, settings admin).
+  scope: "full" | "calls";
   created_at: string;
   last_used_at?: string;
   revoked: boolean;

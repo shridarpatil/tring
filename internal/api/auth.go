@@ -14,6 +14,13 @@ type ctxKey int
 const (
 	tenantCtxKey ctxKey = iota
 	agentCtxKey
+	scopeCtxKey
+)
+
+// API key scopes (api_keys.scope). Console sessions always act as scopeFull.
+const (
+	scopeFull  = "full"
+	scopeCalls = "calls"
 )
 
 type Tenant struct {
@@ -56,14 +63,15 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		}
 
 		var tenantID uuid.UUID
+		scope := scopeFull
 		if strings.HasPrefix(token, "tk_") {
 			// Tenant API key: look up its hash; reject if unknown/revoked.
-			id, ok := s.tenantForAPIKey(r.Context(), token)
+			id, keyScope, ok := s.tenantForAPIKey(r.Context(), token)
 			if !ok {
 				writeError(w, http.StatusUnauthorized, "invalid credentials")
 				return
 			}
-			tenantID = id
+			tenantID, scope = id, keyScope
 		} else {
 			claims, err := s.parseConsoleToken(token)
 			if err != nil || !s.consoleUserExists(r.Context(), claims) {
@@ -81,7 +89,21 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), tenantCtxKey, &t)
+		ctx = context.WithValue(ctx, scopeCtxKey, scope)
 		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// RequireFullScope admits only full-access callers (console sessions and
+// 'full' API keys) to the admin routes it wraps; a 'calls' key gets 403.
+// Mount it inside the AuthRequired group.
+func (s *Server) RequireFullScope(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if scope, _ := r.Context().Value(scopeCtxKey).(string); scope != scopeFull {
+			writeError(w, http.StatusForbidden, "this API key's scope does not allow this endpoint")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -100,22 +122,25 @@ func (s *Server) consoleUserExists(ctx context.Context, c *ConsoleClaims) bool {
 	return ok
 }
 
-// tenantForAPIKey resolves a presented API key to its tenant by hash,
-// rejecting unknown or revoked keys. On success it best-effort stamps
+// tenantForAPIKey resolves a presented API key to its tenant and scope by
+// hash, rejecting unknown or revoked keys. On success it best-effort stamps
 // last_used_at (fire-and-forget, own context) so a slow write never delays
 // the request.
-func (s *Server) tenantForAPIKey(ctx context.Context, plaintext string) (uuid.UUID, bool) {
+func (s *Server) tenantForAPIKey(ctx context.Context, plaintext string) (uuid.UUID, string, bool) {
 	hash := HashKey(plaintext)
-	var tenantID uuid.UUID
-	if err := s.db.Pool.QueryRow(ctx, s.q.ResolveAPIKeyTenant, hash).Scan(&tenantID); err != nil {
-		return uuid.Nil, false
+	var (
+		tenantID uuid.UUID
+		scope    string
+	)
+	if err := s.db.Pool.QueryRow(ctx, s.q.ResolveAPIKeyTenant, hash).Scan(&tenantID, &scope); err != nil {
+		return uuid.Nil, "", false
 	}
 	go func() {
 		bg, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, _ = s.db.Pool.Exec(bg, s.q.TouchAPIKey, hash)
 	}()
-	return tenantID, true
+	return tenantID, scope, true
 }
 
 func tenantFromCtx(ctx context.Context) *Tenant {
