@@ -73,8 +73,10 @@ done
 # First run only: create .env with fresh random secrets. The api and gateway
 # refuse to start while the .env.example placeholders are still in place.
 rand() { od -An -tx1 -N24 /dev/urandom | tr -d ' \n'; }
+key32() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
 if [ ! -f .env ]; then
     sed -e "s|^TRING_JWT_SECRET=.*|TRING_JWT_SECRET=$(rand)$(rand)|" \
+        -e "s|^TRING_SECRETS_KEY=.*|TRING_SECRETS_KEY=$(key32)|" \
         -e "s|^TRING_FS_BASIC_AUTH=.*|TRING_FS_BASIC_AUTH=fs:$(rand)|" \
         -e "s|^TRING_ESL_PASSWORD=.*|TRING_ESL_PASSWORD=$(rand)|" \
         -e "s|^TRING_ADMIN_PASSWORD=.*|TRING_ADMIN_PASSWORD=$(rand)|" \
@@ -91,6 +93,8 @@ Next steps:
   cd $TARGET
 
   # .env was generated with random secrets (admin password included).
+  # BACK UP .env: TRING_SECRETS_KEY encrypts the stored SIP trunk passwords;
+  # without it they can't be recovered and must be re-entered.
   # Edit it — for a SERVER (not localhost) the network IPs are what people
   # get wrong (see section 5 of .env.example and docs/src/content/docs/architecture/state-and-ha.md):
   #   TRING_GATEWAY_PUBLIC_URL=https://gw.your-domain  # browser-reachable, must hit /rtc
