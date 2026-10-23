@@ -121,6 +121,11 @@ var defaults = map[string]any{
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
 	"redis_addr": "",
+	// redis_password is sent as Redis AUTH (requirepass) by every Redis client
+	// (api + gateway). Empty = no auth, so existing password-less deployments
+	// keep working. Deliberately NOT enforced by WeakSecrets: an operator may
+	// run Redis elsewhere behind network isolation instead.
+	"redis_password": "",
 	// audio_dir is the tenant audio library (IVR prompt uploads + synthesized
 	// TTS + hold music). The API writes bytes here; the gateway reads + plays
 	// them on the pion media plane. A shared mount in the standard docker deploy

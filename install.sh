@@ -77,6 +77,7 @@ if [ ! -f .env ]; then
     sed -e "s|^TRING_JWT_SECRET=.*|TRING_JWT_SECRET=$(rand)$(rand)|" \
         -e "s|^TRING_FS_BASIC_AUTH=.*|TRING_FS_BASIC_AUTH=fs:$(rand)|" \
         -e "s|^TRING_ESL_PASSWORD=.*|TRING_ESL_PASSWORD=$(rand)|" \
+        -e "s|^TRING_REDIS_PASSWORD=.*|TRING_REDIS_PASSWORD=$(rand)|" \
         -e "s|^TRING_ADMIN_PASSWORD=.*|TRING_ADMIN_PASSWORD=$(rand)|" \
         .env.example > .env
     chmod 600 .env

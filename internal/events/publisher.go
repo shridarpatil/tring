@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/shridarpatil/tring/internal/cache"
 )
 
 // Publisher fan-outs events on per-tenant Redis channels. Best-effort: a nil
@@ -19,11 +21,11 @@ type Publisher struct {
 // NewPublisher dials Redis at addr. An empty addr returns (nil, nil) — events
 // disabled (no-op). A non-empty addr that can't be reached returns an error so
 // the caller can log-and-disable.
-func NewPublisher(addr string, logger *slog.Logger) (*Publisher, error) {
+func NewPublisher(addr, password string, logger *slog.Logger) (*Publisher, error) {
 	if addr == "" {
 		return nil, nil
 	}
-	rdb := redis.NewClient(&redis.Options{Addr: addr})
+	rdb := redis.NewClient(cache.Options(addr, password))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := rdb.Ping(ctx).Err(); err != nil {
