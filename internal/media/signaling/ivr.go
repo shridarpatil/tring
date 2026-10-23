@@ -62,6 +62,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 		Room:      string(roomID),
 		ClientRef: callerRef,
 		Vars:      vars,
+		HTTP:      s.cfg.HTTP,
 		Logger:    s.log,
 	})
 
@@ -73,7 +74,8 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 	case flowID == devFlowID && s.cfg.DevTokens:
 		flow = devTransferFlow() // built-in: ring an agent, no DB needed
 	case s.cfg.Flows != nil:
-		flow, err = s.cfg.Flows.Load(context.Background(), flowID)
+		tenant, _, _ := strings.Cut(string(roomID), "/") // rooms are tenant-namespaced
+		flow, err = s.cfg.Flows.Load(context.Background(), tenant, flowID)
 	default:
 		err = errNoFlowLoader
 	}

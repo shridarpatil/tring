@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/shridarpatil/tring/internal/blobstore"
@@ -32,6 +33,7 @@ import (
 	"github.com/shridarpatil/tring/internal/media/signaling"
 	"github.com/shridarpatil/tring/internal/outboundtrunks"
 	"github.com/shridarpatil/tring/internal/presence"
+	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/webhook"
 )
 
@@ -44,6 +46,16 @@ func main() {
 		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
 		os.Exit(1)
 	}
+
+	// SSRF guard for tenant-supplied URLs (IVR http_callback, webhooks): one
+	// client, public internet + the operator's outbound_allow_cidrs only.
+	outboundAllow, err := safehttp.ParseCIDRs(strings.Split(k.String("outbound_allow_cidrs"), ","))
+	if err != nil {
+		logger.Error("invalid outbound_allow_cidrs", "err", err)
+		os.Exit(1)
+	}
+	ivrHTTP := safehttp.NewClient(outboundAllow, 0) // per-node timeout via ctx (ivrdrive)
+	webhookHTTP := safehttp.NewClient(outboundAllow, webhook.DeliveryTimeout)
 
 	turnURL := k.String("turn_url")
 	turnSecret := k.String("turn_secret")
@@ -145,7 +157,7 @@ func main() {
 		// the one process that sees each media-plane call answer and end, so
 		// each fires exactly once however many api replicas run.
 		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub).
-			WithWebhooks(webhook.New(database).WithLogger(logger))
+			WithWebhooks(webhook.New(database).WithLogger(logger).WithHTTPClient(webhookHTTP))
 		calls = cdrLog
 		supervisors = cdrLog
 	}
@@ -170,6 +182,7 @@ func main() {
 		Cache:           redisCache,               // publish web team-queue depth for the dashboard
 		Events:          eventsPub,
 		Supervisors:     supervisors, // supervisor session audit (nil DB → nil, no audit)
+		HTTP:            ivrHTTP,     // SSRF-guarded client for IVR http_callback nodes
 		Logger:          logger,
 	})
 

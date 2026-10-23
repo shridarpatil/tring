@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -517,7 +518,9 @@ func TestTransferDialsNumberFromHTTPVar(t *testing.T) {
 	fake := &fakePrompts{played: make(chan string, 16)}
 	agents := &fakeAgents{outcome: "completed"}
 	dialer := &fakeDialer{outcome: "completed"}
-	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Dialer: dialer, Room: "tenant/call"})
+	// srv is on 127.0.0.1, which the default SSRF-guarded client refuses —
+	// use the test server's own client.
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Dialer: dialer, Room: "tenant/call", HTTP: srv.Client()})
 	flow := &ivr.Flow{
 		EntryNode: "h",
 		Nodes: []ivr.Node{
@@ -721,5 +724,39 @@ func TestSeededVarsAreAvailableToTheFlow(t *testing.T) {
 	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "{{caller}}", "caller_id": "{{did}}"}), nil)
 	if dialer.gotNum != "+919812345678" || dialer.gotCID != "02265915000" {
 		t.Fatalf("dial = %+v, want caller/did vars substituted", dialer)
+	}
+}
+
+// With no client injected, http_callback goes through the SSRF guard: a
+// loopback URL (stand-in for 169.254.169.254 / ESL / Redis) is never fetched
+// and the node takes the http:non2xx branch.
+func TestHTTPCallbackRefusesLoopbackByDefault(t *testing.T) {
+	var hit atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit.Store(true)
+		_, _ = w.Write([]byte(`{"secret":"x"}`))
+	}))
+	defer srv.Close()
+
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake})
+	flow := &ivr.Flow{
+		EntryNode: "h",
+		Nodes: []ivr.Node{
+			{ID: "h", Type: ivr.NodeHTTPCallback, Config: map[string]interface{}{"url": srv.URL}},
+			{ID: "ok", Type: ivr.NodeHangup},
+			{ID: "blocked", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "h", To: "ok", Condition: "http:2xx"},
+			{From: "h", To: "blocked", Condition: "http:non2xx"},
+		},
+	}
+	path := runFlow(t, d, fake, flow, nil)
+	if want := []string{"h", "blocked"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v", ids(path), want)
+	}
+	if hit.Load() {
+		t.Fatal("default client reached a loopback server")
 	}
 }

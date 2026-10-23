@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/tts"
 	"github.com/shridarpatil/tring/internal/webhook"
 	"github.com/shridarpatil/tring/internal/webui"
@@ -104,6 +106,11 @@ type Config struct {
 	// (the default) means "no proxy" — the transport address is the client
 	// and XFF is ignored entirely.
 	TrustedProxies []string
+
+	// OutboundAllow are private CIDRs tenant-supplied URLs (webhooks) may
+	// still reach — the operator's escape hatch for an on-prem CRM. Empty (the
+	// default) = public internet only. See internal/safehttp.
+	OutboundAllow []netip.Prefix
 }
 
 type Server struct {
@@ -170,6 +177,10 @@ type Server struct {
 	loginByIP    *attemptLimiter
 	loginByEmail *attemptLimiter
 
+	// outboundAllow: private CIDRs webhook URLs may target (validated on create;
+	// enforced again at delivery by the notifier's safehttp client).
+	outboundAllow []netip.Prefix
+
 	log *slog.Logger
 }
 
@@ -189,6 +200,9 @@ func NewServer(cfg Config) *Server {
 		logger = slog.Default()
 	}
 	logger = logger.With("component", "api")
+	// Webhook URLs are tenant-supplied: deliver through the SSRF guard.
+	notifier := webhook.New(cfg.DB).WithLogger(cfg.Logger).
+		WithHTTPClient(safehttp.NewClient(cfg.OutboundAllow, webhook.DeliveryTimeout))
 	return &Server{
 		db:               cfg.DB,
 		q:                queries.MustLoad(),
@@ -196,7 +210,7 @@ func NewServer(cfg Config) *Server {
 		fsBasicUser:      user,
 		fsBasicPass:      pass,
 		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		notifier:         webhook.New(cfg.DB).WithLogger(cfg.Logger),
+		notifier:         notifier,
 		cache:            cfg.Cache,
 		presence:         presence.New(cfg.Cache),
 		agentTransport:   cfg.AgentTransport,
@@ -216,6 +230,7 @@ func NewServer(cfg Config) *Server {
 		trustedProxies:   cfg.TrustedProxies,
 		loginByIP:        newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		loginByEmail:     newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		outboundAllow:    cfg.OutboundAllow,
 		log:              logger,
 	}
 }
