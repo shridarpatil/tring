@@ -32,6 +32,7 @@ type roomPort struct {
 
 	mu     sync.Mutex
 	active room.ParticipantID
+	pinned room.ParticipantID // when set, the only feed forwarded (hold music) until it leaves
 	gone   map[room.ParticipantID]struct{} // removed publishers; their copy-loop tail packets must not re-claim the feed
 	seq    uint16
 	ts     uint32
@@ -61,6 +62,9 @@ func (p *roomPort) WriteRTP(from room.ParticipantID, pkt *rtp.Packet) error {
 		p.mixer.push(from, pkt.Payload)
 		p.mu.Unlock()
 		return nil // mixLoop sends the mix
+	}
+	if p.pinned != "" {
+		p.active = p.pinned // a pinned feed (hold music) preempts whoever was talking
 	}
 	if p.active == "" {
 		p.active = from
@@ -176,6 +180,9 @@ func (p *roomPort) clearActive(gone room.ParticipantID) {
 		p.gone = make(map[room.ParticipantID]struct{})
 	}
 	p.gone[gone] = struct{}{}
+	if p.pinned == gone {
+		p.pinned = ""
+	}
 	if p.active == gone {
 		p.active = ""
 	}
@@ -276,20 +283,37 @@ func (s *SFU) HasPort(roomID room.RoomID) bool {
 	return r != nil && len(r.ports) > 0
 }
 
+// PinPortFeed makes pid the only feed every port in the room forwards, until
+// pid leaves (RemoveSource/Leave). Used for agent hold music on a phone call:
+// the agent's muted track keeps sending (silent) packets, so without the pin it
+// stays the leg's feed and the caller hears silence instead of the music.
+func (s *SFU) PinPortFeed(roomID room.RoomID, pid room.ParticipantID) {
+	for _, p := range s.roomPorts(roomID) {
+		p.mu.Lock()
+		p.pinned = pid
+		p.mu.Unlock()
+	}
+}
+
+// roomPorts snapshots a room's ports.
+func (s *SFU) roomPorts(roomID room.RoomID) []*roomPort {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil || r.ports == nil {
+		return nil
+	}
+	ports := make([]*roomPort, 0, len(r.ports))
+	for _, p := range r.ports {
+		ports = append(ports, p)
+	}
+	return ports
+}
+
 // portsClearActive releases `gone` as the active feed on every port in the room
 // (called on unpublish/leave so the next publisher takes over).
 func (s *SFU) portsClearActive(roomID room.RoomID, gone room.ParticipantID) {
-	s.mu.Lock()
-	r := s.rooms[roomID]
-	var ports []*roomPort
-	if r != nil && r.ports != nil {
-		ports = make([]*roomPort, 0, len(r.ports))
-		for _, p := range r.ports {
-			ports = append(ports, p)
-		}
-	}
-	s.mu.Unlock()
-	for _, p := range ports {
+	for _, p := range s.roomPorts(roomID) {
 		p.clearActive(gone)
 	}
 }

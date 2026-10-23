@@ -158,3 +158,57 @@ func waitCount(t *testing.T, c *pktCollector, n int, msg string) {
 	}
 	t.Fatalf("timeout: %s (got %d packets)", msg, c.count())
 }
+
+// marksSince returns which source marks arrived after the first n packets.
+func (c *pktCollector) marksSince(n int) map[byte]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	seen := map[byte]int{}
+	for _, p := range c.pkts[n:] {
+		if len(p.Payload) > 0 {
+			seen[p.Payload[0]]++
+		}
+	}
+	return seen
+}
+
+// Agent hold on a phone call: the agent's (muted) track keeps sending packets,
+// so without pinning it stays the port's only feed and the caller hears
+// silence instead of the hold music. A pinned feed (the hold source) wins
+// until it's removed; then the agent's feed takes over again.
+func TestPortPinnedFeedWinsUntilRemoved(t *testing.T) {
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	caller := &slowSource{id: "phone-leg", mark: 0xCC, total: 1000}
+	out := &pktCollector{}
+	if err := s.AttachPort("call", caller, out.write); err != nil {
+		t.Fatalf("attach port: %v", err)
+	}
+	agent := &slowSource{id: "agent", mark: 0xBB, total: 1000}
+	if err := s.InjectSource("call", agent, opusCap()); err != nil {
+		t.Fatalf("inject agent: %v", err)
+	}
+	waitCount(t, out, 10, "port hears the agent")
+
+	hold := &slowSource{id: "hold-1", mark: 0xDD, total: 1000}
+	if err := s.InjectSource("call", hold, opusCap()); err != nil {
+		t.Fatalf("inject hold: %v", err)
+	}
+	s.PinPortFeed("call", "hold-1")
+	time.Sleep(50 * time.Millisecond) // let in-flight agent packets drain
+	mark := out.count()
+	waitCount(t, out, mark+20, "port hears the hold music")
+	if got := out.marksSince(mark); got[0xBB] > 0 || got[0xDD] == 0 {
+		t.Fatalf("while pinned the port forwarded %v, want only hold (0xDD)", got)
+	}
+
+	s.RemoveSource("call", "hold-1")
+	time.Sleep(50 * time.Millisecond)
+	mark = out.count()
+	waitCount(t, out, mark+20, "port hears the agent after hold")
+	if got := out.marksSince(mark); got[0xBB] == 0 || got[0xDD] > 0 {
+		t.Fatalf("after hold the port forwarded %v, want only agent (0xBB)", got)
+	}
+}
