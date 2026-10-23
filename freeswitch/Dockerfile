@@ -14,9 +14,13 @@
 # Build (context = the freeswitch/ dir):
 #   docker build -t ghcr.io/shridarpatil/tring-freeswitch:develop \
 #     -f freeswitch/Dockerfile freeswitch
-FROM safarov/freeswitch:latest
+# Pinned by digest (was :latest) so a rebuild can't silently pull a different
+# FreeSWITCH. Bump deliberately: docker pull safarov/freeswitch:latest, then
+# docker inspect --format '{{index .RepoDigests 0}}' safarov/freeswitch:latest
+FROM safarov/freeswitch@sha256:f156e01a96d48944078ed7f0e24304be63ea15f6466cf607a0aeb6cb47761da7
 
 # Static config → vanilla templates (mirrors the docker-compose :ro mounts).
+COPY --chmod=755 tring-carrier-acl.sh             /usr/local/bin/tring-carrier-acl
 COPY conf/vars.xml                               /usr/share/freeswitch/conf/vanilla/vars.xml
 COPY conf/dialplan/default.xml                   /usr/share/freeswitch/conf/vanilla/dialplan/default.xml
 COPY conf/dialplan/public.xml                     /usr/share/freeswitch/conf/vanilla/dialplan/public.xml
