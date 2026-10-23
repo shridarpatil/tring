@@ -121,3 +121,17 @@ func TestParseKey(t *testing.T) {
 		}
 	}
 }
+
+// The common mistake (openssl rand -hex 16 → 32 hex chars) gets an error that
+// says what was received and how to generate a correct key.
+func TestParseKeyErrorExplains(t *testing.T) {
+	_, err := ParseKey(hex.EncodeToString(testKey(7)[:16]))
+	if err == nil {
+		t.Fatal("16-byte hex key accepted")
+	}
+	for _, want := range []string{"got 32 characters", "openssl rand -hex 32"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}
