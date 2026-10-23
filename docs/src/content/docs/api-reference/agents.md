@@ -44,7 +44,7 @@ Create an agent.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `sip_username` | string | yes | Unique within the tenant. Use your own user ID so you can address the agent by it. |
+| `sip_username` | string | yes | Unique within the tenant. Letters, digits and `.` `_` `@` `+` `-`, up to 64 characters. Use your own user ID so you can address the agent by it. |
 | `display_name` | string | no | Human-readable name. |
 
 ```bash
@@ -78,6 +78,7 @@ A new agent isn't in any team yet. Add it with [`POST /v1/teams/{name}/agents`](
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `sip_username required` |
+| `400` | `sip_username may only contain letters, digits and . _ @ + - (max 64)` |
 | `409` | `sip_username already exists for this tenant` |
 | `500` | `generate password`, `create agent failed` |
 

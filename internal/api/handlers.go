@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
@@ -68,6 +69,10 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SipUsername == "" {
 		writeError(w, http.StatusBadRequest, "sip_username required")
+		return
+	}
+	if !validSipUsername(req.SipUsername) {
+		writeError(w, http.StatusBadRequest, "sip_username may only contain letters, digits and . _ @ + - (max 64)")
 		return
 	}
 
@@ -278,6 +283,10 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.E164 == "" || req.Type == "" {
 		writeError(w, http.StatusBadRequest, "e164 and type are required")
+		return
+	}
+	if !dial.IsNumber(req.E164) {
+		writeError(w, http.StatusBadRequest, "e164 must be digits with an optional leading + (3-15 digits)")
 		return
 	}
 	switch req.Type {
@@ -517,9 +526,26 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := validFailoverCauses(req.FailoverCauses); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	var causes interface{}
 	if req.FailoverCauses != nil {
 		causes = req.FailoverCauses
+	}
+	// hold_music goes to FreeSWITCH verbatim, so it must be the built-in
+	// default or one of this tenant's own uploaded sounds.
+	if req.HoldMusic != nil && *req.HoldMusic != "" && *req.HoldMusic != defaultMOH {
+		var owned bool
+		if err := s.db.Pool.QueryRow(r.Context(), s.q.TenantOwnsAudioPath, t.ID, *req.HoldMusic).Scan(&owned); err != nil {
+			writeError(w, http.StatusInternalServerError, "hold_music lookup failed")
+			return
+		}
+		if !owned {
+			writeError(w, http.StatusBadRequest, "hold_music must be one of this tenant's uploaded sounds")
+			return
+		}
 	}
 
 	// Pre-render the no-answer message to Opus so the gateway plays it as a file

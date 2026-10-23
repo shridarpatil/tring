@@ -60,3 +60,38 @@ func TestPassthrough(t *testing.T) {
 		t.Errorf("Passthrough(blank) should be ErrEmpty, got %v", err)
 	}
 }
+
+// Passthrough output goes straight into a FreeSWITCH dial string, so anything
+// beyond digits and a leading + must be rejected, not passed through.
+func TestPassthroughRejectsDialStringSyntax(t *testing.T) {
+	ok := map[string]string{"9196": "9196", " +14155551234 ": "+14155551234", "5000": "5000"}
+	for in, want := range ok {
+		if got, err := Passthrough(in); err != nil || got != want {
+			t.Errorf("Passthrough(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	bad := []string{
+		"1|sofia/gateway/t_000000000000/19005550100",
+		"1\n\napi status\n\n",
+		"1,origination_caller_id_number=1",
+		"[x=y]1", "1 2", "12", "+1234567890123456", "abc", "1}",
+	}
+	for _, in := range bad {
+		if _, err := Passthrough(in); !errors.Is(err, ErrBadFormat) {
+			t.Errorf("Passthrough(%q) err = %v, want ErrBadFormat", in, err)
+		}
+	}
+}
+
+func TestIsNumber(t *testing.T) {
+	for _, s := range []string{"+912265915000", "02265915000", "9196"} {
+		if !IsNumber(s) {
+			t.Errorf("IsNumber(%q) = false", s)
+		}
+	}
+	for _, s := range []string{"", "+91 22", "91|x", "1\n", "+", "12"} {
+		if IsNumber(s) {
+			t.Errorf("IsNumber(%q) = true", s)
+		}
+	}
+}
