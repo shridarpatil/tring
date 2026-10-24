@@ -172,7 +172,7 @@ func (s *Server) sendAvailability(c *conn, tenant, sip string) {
 }
 
 // lookupAvailability reads an agent's available_for_calls through the Redis
-// cache (the API invalidates it on update), so reconnects don't hit the DB.
+// cache (the API rewrites it on update), so reconnects don't hit the DB.
 // ok=false when it can't be known.
 func (s *Server) lookupAvailability(tenant, sip string) (available, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -192,7 +192,7 @@ func (s *Server) lookupAvailability(tenant, sip string) (available, ok bool) {
 		s.log.Warn("agent availability lookup failed", "tenant", tenant, "sip", sip, "err", err)
 		return false, false
 	}
-	s.cfg.Presence.CacheAvailability(ctx, tenant, sip, available)
+	s.cfg.Presence.FillAvailability(ctx, tenant, sip, available)
 	return available, true
 }
 
