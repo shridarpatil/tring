@@ -109,8 +109,9 @@ INSERT INTO numbers (tenant_id, e164, type, trunk_id, flow_id, provider_did_id, 
 VALUES ($1, $2, $3::number_type, $4, $5, NULLIF($6, ''), $7)
 RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at;
 
--- name: get-number-type-active
-SELECT type::text, active FROM numbers WHERE id = $1 AND tenant_id = $2;
+-- name: get-number-for-update
+-- Current state handlePatchNumber validates an edit against.
+SELECT e164, type::text, active, trunk_id FROM numbers WHERE id = $1 AND tenant_id = $2;
 
 -- name: count-other-active-outbound
 -- Guardrail for handlePatchNumber: are there other active outbound trunks
@@ -120,10 +121,13 @@ WHERE tenant_id = $1 AND type = 'outbound' AND active AND id != $2;
 
 -- name: update-number
 -- flow_id is tri-state: clear_flow ($3) wins, else set when $4 is non-null,
--- else keep existing.
+-- else keep existing. A NULL e164/type/trunk_id ($7-$9) keeps the existing.
 UPDATE numbers
 SET priority = COALESCE($1, priority),
     active   = COALESCE($2, active),
+    e164     = COALESCE($7, e164),
+    type     = COALESCE($8::number_type, type),
+    trunk_id = COALESCE($9, trunk_id),
     flow_id  = CASE
                   WHEN $3::boolean THEN NULL
                   WHEN $4::uuid IS NOT NULL THEN $4::uuid
@@ -131,6 +135,9 @@ SET priority = COALESCE($1, priority),
                END
 WHERE id = $5 AND tenant_id = $6
 RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at;
+
+-- name: delete-number
+DELETE FROM numbers WHERE id = $1 AND tenant_id = $2;
 
 -- name: list-numbers
 SELECT id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at

@@ -437,6 +437,7 @@ func (s *Server) Router() http.Handler {
 					r.Delete("/audio/{id}", s.handleDeleteAudio)
 					r.Post("/numbers", s.handleCreateNumber)
 					r.Patch("/numbers/{id}", s.handlePatchNumber)
+					r.Delete("/numbers/{id}", s.handleDeleteNumber)
 
 					r.Post("/webhooks", s.handleCreateWebhook)
 					r.Get("/webhooks", s.handleListWebhooks)
