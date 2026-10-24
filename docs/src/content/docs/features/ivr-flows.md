@@ -160,11 +160,11 @@ Other fields:
 | `audio_file` | all | | An announcement from your sound library instead of text. If it can't be played, the transfer goes ahead without it. |
 | `priority` | team | `false` | Saved by the editor ("let them skip the line"). The live routing engine does not apply it yet; callers queue in arrival order. |
 
-While a number rings, the caller hears the tenant's hold music. A number transfer needs the SIP plug (`TRING_FSPLUG_ENABLED=true`) and an outbound trunk. The live call normalizes the number as an Indian number (`+91XXXXXXXXXX`). A blank number, or one that still contains an unresolved variable, is not dialed.
+While a number rings, the caller hears the tenant's hold music, which stops when it answers. A number transfer needs the SIP plug (`TRING_FSPLUG_ENABLED=true`) and an outbound trunk. The live call normalizes the number as an Indian number (`+91XXXXXXXXXX`). A blank number, or one that still contains an unresolved variable, is not dialed.
 
 | Outcome | When |
 |---|---|
-| `completed` | Someone answered. For an agent transfer, the edge runs **after the agent hangs up** while the caller (web or phone) is still on the line, so you can play a survey or goodbye. If the caller hangs up first, the flow stops. With no `completed` edge, the call ends when the agent hangs up. |
+| `completed` | Someone answered. The edge runs **after the agent (or the dialed number) hangs up** while the caller, web or phone, is still on the line, so you can play a survey or goodbye. If the caller hangs up first, the flow stops. With no `completed` edge, the call ends when the agent or dialed number hangs up. |
 | `no_answer` | Nobody answered in time, no one was available, the team wait ran out, the number was busy or invalid, there was no trunk, or the caller ID was refused. |
 
 The editor also shows a `queue_timeout` handle and the Test panel can force it, but live calls report a queue wait that runs out as `no_answer`. Wire `no_answer` for your fallback.
