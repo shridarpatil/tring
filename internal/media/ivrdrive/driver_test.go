@@ -129,6 +129,8 @@ func newDriver(fake *fakePrompts, now func() time.Time) *ivrdrive.Driver {
 // fakeAgents records the ring target and returns a scripted outcome.
 type fakeAgents struct {
 	outcome string
+	err     error
+	onRing  func() // runs as the ring starts (ordering checks)
 	gotRoom string
 	gotTgt  ivrdrive.Target
 }
@@ -136,7 +138,10 @@ type fakeAgents struct {
 func (a *fakeAgents) Ring(_ context.Context, room string, t ivrdrive.Target) (string, error) {
 	a.gotRoom = room
 	a.gotTgt = t
-	return a.outcome, nil
+	if a.onRing != nil {
+		a.onRing()
+	}
+	return a.outcome, a.err
 }
 
 // menuFlow: start → greeting(greeting.ogg) → menu(menu.ogg) --digit:1--> hangup(bye.ogg)
@@ -429,6 +434,49 @@ func TestTransferNoAnswerBranches(t *testing.T) {
 	path := runFlow(t, d, fake, flow, nil)
 	if want := []string{"x", "vm"}; !eq(ids(path), want) {
 		t.Fatalf("path = %v, want %v (no_answer → voicemail)", ids(path), want)
+	}
+}
+
+// A transfer's optional announcement ("this call may be recorded") plays to the
+// caller before anyone rings.
+func TestTransferPlaysAnnouncementBeforeRinging(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	var playedAtRing []string
+	agents := &fakeAgents{outcome: "completed"}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r"})
+	agents.onRing = func() { playedAtRing = d.Played() }
+	flow := &ivr.Flow{
+		EntryNode: "x",
+		Nodes: []ivr.Node{
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"team": "sales", "audio_file": "recorded.ogg"}},
+		},
+	}
+	runFlow(t, d, fake, flow, nil)
+	if want := []string{"recorded.ogg"}; !eq(playedAtRing, want) {
+		t.Fatalf("played when the ring started = %v, want %v (announcement first)", playedAtRing, want)
+	}
+}
+
+// An answered transfer whose caller then hung up records "completed" (the agent
+// did answer) but stops the flow: nothing after it plays to an empty line.
+func TestTransferCallEndedRecordsCompletedAndStops(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	agents := &fakeAgents{outcome: "completed", err: ivrdrive.ErrCallEnded}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r"})
+	flow := &ivr.Flow{
+		EntryNode: "x",
+		Nodes: []ivr.Node{
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"team": "sales"}},
+			{ID: "survey", Type: ivr.NodeHangup, Config: map[string]interface{}{"audio_file": "survey.ogg"}},
+		},
+		Edges: []ivr.Edge{{From: "x", To: "survey", Condition: "completed"}},
+	}
+	path := runFlow(t, d, fake, flow, nil)
+	if want := []string{"x"}; !eq(ids(path), want) {
+		t.Fatalf("path = %v, want %v (flow stops once the call ended)", ids(path), want)
+	}
+	if path[0].Outcome != "completed" {
+		t.Fatalf("transfer outcome = %q, want completed", path[0].Outcome)
 	}
 }
 
@@ -758,5 +806,56 @@ func TestHTTPCallbackRefusesLoopbackByDefault(t *testing.T) {
 	}
 	if hit.Load() {
 		t.Fatal("default client reached a loopback server")
+	}
+}
+
+// An interruptible greeting stops at the caller's first keypress and moves on.
+func TestGreetingInterruptibleStopsOnKeypress(t *testing.T) {
+	prompts := newBlockingPrompts()
+	d := ivrdrive.New(ivrdrive.Config{Prompts: prompts})
+	n := &ivr.Node{ID: "g", Type: ivr.NodeGreeting, Config: map[string]interface{}{"audio_file": "welcome.ogg", "interruptible": true}}
+
+	got := make(chan ivr.NodeResult, 1)
+	go func() {
+		res, err := d.Greeting(context.Background(), n)
+		if err != nil {
+			t.Errorf("Greeting: %v", err)
+		}
+		got <- res
+	}()
+	<-prompts.started
+	d.DTMF("1")
+
+	select {
+	case res := <-got:
+		if res.Outcome != "default" || res.DTMF != "1" {
+			t.Fatalf("result = %+v, want default with DTMF 1", res)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a keypress did not interrupt the greeting")
+	}
+}
+
+// A greeting that isn't interruptible plays to the end despite a keypress.
+func TestGreetingNotInterruptibleIgnoresKeypress(t *testing.T) {
+	prompts := newBlockingPrompts()
+	d := ivrdrive.New(ivrdrive.Config{Prompts: prompts})
+	n := &ivr.Node{ID: "g", Type: ivr.NodeGreeting, Config: map[string]interface{}{"audio_file": "welcome.ogg"}}
+
+	got := make(chan ivr.NodeResult, 1)
+	go func() {
+		res, _ := d.Greeting(context.Background(), n)
+		got <- res
+	}()
+	<-prompts.started
+	d.DTMF("1")
+	select {
+	case res := <-got:
+		t.Fatalf("greeting ended early on a keypress: %+v", res)
+	case <-time.After(100 * time.Millisecond):
+	}
+	prompts.Stop() // the prompt finishes on its own
+	if res := <-got; res.Outcome != "default" {
+		t.Fatalf("outcome = %q, want default", res.Outcome)
 	}
 }

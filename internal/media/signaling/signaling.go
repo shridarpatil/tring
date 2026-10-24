@@ -664,7 +664,14 @@ func (s *Server) routeEvent(e room.Event) {
 		s.clearHold(e.Room)
 		// If no human participants remain, end the call: stop the IVR — and if a
 		// phone leg is attached with nobody serving it, hang it up (pstn.go).
-		if r, ok := s.rooms.Get(e.Room); !ok || len(r.Participants()) == 0 {
+		if r, ok := s.rooms.Get(e.Room); (!ok || len(r.Participants()) == 0) && s.resumeHandoffIfAgentLeft(e.Room, e.Participant) {
+			// A phone caller (the room's port, not a participant) whose transfer's
+			// agent just hung up: resume the IVR so a node wired to the transfer's
+			// "completed" edge runs to them, instead of hanging up the leg. The agent
+			// ended the conversation, so they stay who hung up when the flow ends.
+			s.setHangupBy(e.Room, leaverBy)
+			return
+		} else if !ok || len(r.Participants()) == 0 {
 			s.setHangupBy(e.Room, leaverBy) // no-op if a bye / system end was recorded first
 			s.endTransfer(e.Room) // caller gone → stop any in-flight blind-transfer ring
 			s.stopIVR(e.Room)
