@@ -3,11 +3,9 @@ import { ref, onMounted, computed } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
-import { Trash2 } from "lucide-vue-next";
 import type { Agent, Team, TeamStrategy } from "../api/types";
 import {
   Button,
-  IconButton,
   Select,
   TextField,
   Modal,
@@ -192,13 +190,13 @@ onMounted(load);
                 <td>{{ strategyLabel(t.strategy) }}</td>
                 <td class="align-right text-light">{{ t.ring_seconds }}s</td>
                 <td class="align-right text-light">{{ t.max_wait_seconds }}s</td>
-                <td class="align-right" style="white-space: nowrap" @click.stop>
-                  <Button variant="ghost" size="sm" @click="open(t)">
-                    {{ selected && selected.name === t.name ? "Close" : "Manage" }}
-                  </Button>
-                  <IconButton title="Delete team" size="sm" variant="danger" @click="destroy(t)">
-                    <Trash2 :size="16" />
-                  </IconButton>
+                <td @click.stop>
+                  <div class="hstack row-actions">
+                    <Button variant="secondary" size="sm" @click="open(t)">
+                      {{ selected && selected.name === t.name ? "Close" : "Manage" }}
+                    </Button>
+                    <Button variant="danger" size="sm" @click="destroy(t)">Delete</Button>
+                  </div>
                 </td>
               </tr>
               <tr v-if="selected && selected.name === t.name" style="background: var(--secondary)">
@@ -222,10 +220,10 @@ onMounted(load);
                           <td class="text-lighter" style="width: 2.5rem">{{ m.position }}</td>
                           <td class="mono">{{ m.sip_username }}</td>
                           <td class="text-light">{{ m.display_name }}</td>
-                          <td class="align-right">
-                            <IconButton title="Remove member" size="sm" variant="danger" @click="removeMember(m.agent_id)">
-                              <Trash2 :size="16" />
-                            </IconButton>
+                          <td>
+                            <div class="hstack row-actions">
+                              <Button variant="danger" size="sm" @click="removeMember(m.agent_id)">Remove</Button>
+                            </div>
                           </td>
                         </tr>
                         <tr v-if="!selected.members?.length">
@@ -279,3 +277,7 @@ onMounted(load);
     </Modal>
   </div>
 </template>
+
+<style scoped>
+.row-actions { justify-content: flex-end; flex-wrap: nowrap; }
+</style>
