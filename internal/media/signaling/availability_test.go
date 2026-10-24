@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 )
 
 type fakeAvailability struct{ available bool }
@@ -55,4 +57,29 @@ func TestPushAvailability(t *testing.T) {
 		t.Fatalf("got %+v, want availability=true", m)
 	}
 	s.PushAvailability("t1", "bob", false) // not connected here: no-op
+}
+
+// An agent the backend marked Away stays connected but is never a ring
+// candidate — for ring-all (the live socket registry) and a direct-agent target
+// alike — and becomes one again once marked available.
+func TestRingCandidatesSkipAway(t *testing.T) {
+	s := newHandoffServer(t)
+	s.agents["t"] = map[string]*conn{"alice": {}, "bob": {}}
+	s.setAway("t", "bob", true)
+
+	ringAll, _, cleanup := s.Prepare(context.Background(), "t/ring-all", ivrdrive.Target{}, true, nil, "", "")
+	defer cleanup()
+	if got := ringAll(context.Background()); len(got) != 1 || got[0] != "alice" {
+		t.Fatalf("ring-all candidates = %v, want [alice]", got)
+	}
+	direct, _, cleanup2 := s.Prepare(context.Background(), "t/direct", ivrdrive.Target{AgentSIP: "bob"}, false, []string{"bob"}, "", "")
+	defer cleanup2()
+	if got := direct(context.Background()); len(got) != 0 {
+		t.Fatalf("direct candidates for an Away agent = %v, want none", got)
+	}
+
+	s.setAway("t", "bob", false)
+	if got := direct(context.Background()); len(got) != 1 || got[0] != "bob" {
+		t.Fatalf("direct candidates after available = %v, want [bob]", got)
+	}
 }

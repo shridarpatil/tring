@@ -203,6 +203,7 @@ type Server struct {
 	pstnCalls    map[room.RoomID]room.CallID                          // live phone legs by room (pstn.go)
 	outboundLegs map[room.RoomID]room.ParticipantID                   // agent-initiated outbound legs by room (outbound.go)
 	onCall       map[string]int                                       // "tenant|sip" → active call legs (drives on_call presence)
+	away         map[string]bool                                      // "tenant|sip" → connected but backend-marked Away: never a ring candidate (agents.go)
 	callers      map[room.RoomID]room.ParticipantID                   // the IVR caller per room (flow-pinned joiner) — see handoff.go
 	handoffs     map[room.RoomID]*handoff                             // rooms waiting for a transfer handoff to end (handoff.go)
 	holds        map[room.RoomID]func()                               // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
@@ -246,6 +247,7 @@ func New(cfg Config) *Server {
 		pstnCalls:    make(map[room.RoomID]room.CallID),
 		outboundLegs: make(map[room.RoomID]room.ParticipantID),
 		onCall:       make(map[string]int),
+		away:         make(map[string]bool),
 		callers:      make(map[room.RoomID]room.ParticipantID),
 		handoffs:     make(map[room.RoomID]*handoff),
 		holds:        make(map[room.RoomID]func()),
