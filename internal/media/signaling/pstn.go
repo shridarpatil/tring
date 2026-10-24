@@ -107,6 +107,7 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 // and the port.
 func (s *Server) endPstnRoom(roomID room.RoomID) {
 	s.forgetPstn(roomID)
+	s.endTransfer(roomID) // stop any blind-transfer ring the caller was waiting on
 	s.stopIVR(roomID)
 	// The leg ended on its own unless we hung it up (hangupPstnIfAbandoned
 	// recorded "system", or the agent's leave recorded "agent"). Settle BEFORE
@@ -165,6 +166,14 @@ func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 	s.log.Info("pstn: no one serving the caller, hanging up", "room", roomID)
 	s.setHangupBy(roomID, "system") // no-op if the agent's leave was recorded first
 	_ = s.pstnGW.Hangup(callID)
+}
+
+// phoneLive reports whether roomID's inbound phone leg is still connected.
+func (s *Server) phoneLive(roomID room.RoomID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.pstnCalls[roomID]
+	return ok
 }
 
 func (s *Server) forgetPstn(roomID room.RoomID) {

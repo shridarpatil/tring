@@ -373,3 +373,100 @@ func TestTransferGuardLifecycle(t *testing.T) {
 		t.Fatal("endTransfer must cancel the transfer context")
 	}
 }
+
+// A phone caller is the room's port, not a participant, so the transferring
+// agent leaving empties the room. That must not cancel the ring or hang up the
+// phone leg: the caller waits for the transfer target.
+func TestPhoneTransferKeepsCallerWhileRinging(t *testing.T) {
+	s := newHandoffServer(t)
+	rid := room.RoomID("t/pstn-guard")
+	plug := &hangupPlug{hangups: make(chan room.CallID, 1)}
+	pstnRoom(s, plug, rid, "call-guard")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	ctx, ok := s.beginTransfer(rid)
+	if !ok {
+		t.Fatal("beginTransfer should succeed")
+	}
+	agent.Leave()
+
+	if ctx.Err() != nil || !s.transferActive(rid) {
+		t.Fatal("the transfer ring was cancelled when the transferring agent left")
+	}
+	select {
+	case id := <-plug.hangups:
+		t.Fatalf("phone leg %q was hung up during the transfer ring", id)
+	default:
+	}
+}
+
+// A phone caller who hangs up while the transfer rings stops the ring.
+func TestPhoneCallerHangupEndsTransferRing(t *testing.T) {
+	s := newHandoffServer(t)
+	rid := room.RoomID("t/pstn-guard-2")
+	pstnRoom(s, &hangupPlug{hangups: make(chan room.CallID, 1)}, rid, "call-guard-2")
+	ctx, ok := s.beginTransfer(rid)
+	if !ok {
+		t.Fatal("beginTransfer should succeed")
+	}
+
+	s.endPstnRoom(rid)
+
+	if ctx.Err() == nil || s.transferActive(rid) {
+		t.Fatal("the transfer ring kept going after the phone caller hung up")
+	}
+}
+
+// A blind transfer of a phone call that nobody answers plays the no-answer
+// message and then hangs up the phone leg (endIfAlone can't: the caller is a port).
+func TestFailedPhoneTransferHangsUpCaller(t *testing.T) {
+	sf, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	xm := &failXferMsg{}
+	s := New(Config{
+		SFU:             sf,
+		Teams:           shortTeams{members: map[string][]string{"sales": {"carol"}}},
+		TransferMessage: xm,
+	})
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/pstn-fail")
+	plug := &hangupPlug{hangups: make(chan room.CallID, 1)}
+	pstnRoom(s, plug, rid, "call-fail")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	target := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"carol": target.conn("carol-pid")}
+	s.mu.Unlock()
+
+	fc := &fakeConn{}
+	done := make(chan struct{})
+	go func() {
+		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "agent", msg{Type: msgTransfer, ToTeam: "sales"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleTransfer did not return (the ring never timed out)")
+	}
+
+	if got := xm.count(); got != 1 {
+		t.Fatalf("no-answer message resolved %d times, want 1", got)
+	}
+	select {
+	case id := <-plug.hangups:
+		if id != "call-fail" {
+			t.Fatalf("hung up %q, want call-fail", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the phone caller was not hung up after the failed transfer")
+	}
+}
