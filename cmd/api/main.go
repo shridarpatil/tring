@@ -45,6 +45,10 @@ func csv(s string) []string {
 // rather than the long aliased package name everywhere.
 var migrateRun = tringmigrate.Run
 
+// version is stamped at build time (-ldflags "-X main.version=…", by the
+// Dockerfile and GoReleaser); a plain `go build` reports "dev".
+var version = "dev"
+
 func main() {
 	// Config: defaults + TRING_* env (koanf). Flags below take precedence
 	// by defaulting to the resolved value, so flag > env > default.
@@ -198,6 +202,7 @@ func main() {
 		TrustedProxies:   csv(k.String("trusted_proxies")),
 		OutboundAllow:    outboundAllow,
 		Secrets:          secrets,
+		Version:          version,
 		Logger:           logger,
 	})
 

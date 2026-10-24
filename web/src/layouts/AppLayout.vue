@@ -27,6 +27,7 @@ import Toaster from "../components/ui/Toaster.vue";
 
 const router = useRouter();
 const tenant = ref<Tenant | null>(null);
+const version = ref("…");
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -48,6 +49,11 @@ onMounted(async () => {
   } catch {
     /* 401 handled by the client + guard */
   }
+  try {
+    version.value = (await api.get<{ version: string }>("/v1/version")).version;
+  } catch {
+    /* footer keeps its placeholder */
+  }
 });
 
 function logout() {
@@ -64,7 +70,7 @@ function logout() {
         <span class="brand-name">Tring</span>
       </div>
       <SidebarNav :items="nav" />
-      <div class="sidebar-foot">v0.1 console</div>
+      <div class="sidebar-foot">{{ version }} console</div>
     </aside>
 
     <div class="main-col">

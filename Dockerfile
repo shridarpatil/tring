@@ -62,6 +62,9 @@ RUN npm run build && \
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS builder
 
 ARG CMD=api
+# VERSION is stamped into the api binary (main.version) and shown in the
+# console footer. CI passes the tag, or develop-<short sha> for :develop.
+ARG VERSION=dev
 # TARGETOS and TARGETARCH are auto-populated by BuildKit to the target
 # platform of the current build (e.g. linux/arm64). Go's cross-compiler
 # reads these via the GOOS/GOARCH env vars below.
@@ -122,7 +125,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       cp -L "/usr/lib/$triple/libopus.so.0" /out/lib/; \
     else \
       CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-      go build -trimpath -ldflags="-s -w" -o /out/tring ./cmd/${CMD}; \
+      go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/tring ./cmd/${CMD}; \
     fi
 
 # ---- piper TTS stage -----------------------------------------------------
