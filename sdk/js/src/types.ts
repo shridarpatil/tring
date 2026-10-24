@@ -88,6 +88,9 @@ export type CallDirection = "inbound" | "outbound";
 
 export type TringEvent =
   | { type: "registered" }
+  // The backend marked this agent Away/Break (available: false) or back
+  // (true) via POST /v1/agents/{id}/availability. Sent live on every change.
+  | { type: "availability"; available: boolean }
   | { type: "unregistered"; reason?: string }
   | { type: "reconnecting"; attempt: number }
   | { type: "call:ringing"; call: Call }

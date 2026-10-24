@@ -172,13 +172,16 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
 
   // Tring.init resolves once already registered — that first `registered` fired
   // during init, before these listeners attached, so set the initial UI here.
+  // Connected + backend-marked Away shows Away, not Online.
+  const connectedState = () => (tring.available ? "online" : "away");
   panel.setStatus("idle", "ready");
-  badge.set("online");
+  badge.set(connectedState());
 
   tring.on("registered", () => {
     panel.setStatus("idle", "ready");
-    badge.set("online");
+    badge.set(connectedState());
   });
+  tring.on("availability", () => badge.set(connectedState()));
   tring.on("reconnecting", ({ attempt }) => badge.set("reconnecting", attempt));
   tring.on("unregistered", () => {
     panel.setStatus("idle", "disconnected");
@@ -197,13 +200,12 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   return tring;
 }
 
-// createStatusBadge renders an always-visible connection indicator (online /
-// reconnecting / offline). It reflects the gateway SOCKET only — agent
-// availability (Away/Break) is the integrator's own UI, driven from their
-// backend via POST /v1/agents/{id}/availability.
+// createStatusBadge renders an always-visible status indicator (online / away /
+// reconnecting / offline). Away = connected but marked unavailable by the
+// integrator's backend (POST /v1/agents/{id}/availability), pushed live.
 interface StatusBadge {
   root: HTMLElement;
-  set(state: "online" | "reconnecting" | "offline", attempt?: number, label?: string): void;
+  set(state: "online" | "away" | "reconnecting" | "offline", attempt?: number, label?: string): void;
 }
 
 function createStatusBadge(): StatusBadge {
@@ -220,9 +222,11 @@ function createStatusBadge(): StatusBadge {
         label ??
         (state === "online"
           ? "Online"
-          : state === "reconnecting"
-            ? `Reconnecting${attempt ? ` (${attempt})` : ""}…`
-            : "Offline");
+          : state === "away"
+            ? "Away"
+            : state === "reconnecting"
+              ? `Reconnecting${attempt ? ` (${attempt})` : ""}…`
+              : "Offline");
     },
   };
 }
@@ -720,6 +724,7 @@ function injectStyles(): void {
       width: 8px; height: 8px; border-radius: 50%; background: #6b7280;
     }
     .tring-status-badge[data-state="online"] .tring-status-dot { background: #34d399; }
+    .tring-status-badge[data-state="away"] .tring-status-dot { background: #fbbf24; }
     .tring-status-badge[data-state="reconnecting"] .tring-status-dot {
       background: #fbbf24; animation: tring-pulse 1s ease-in-out infinite;
     }
