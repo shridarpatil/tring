@@ -18,15 +18,32 @@ func (f fakeAvailability) AgentAvailable(context.Context, uuid.UUID, string) (bo
 	return f.available, nil
 }
 
+// gatedAvailability holds the on-connect lookup until release is closed, so a
+// test can act inside the window between registration and the lookup landing.
+type gatedAvailability struct {
+	release   chan struct{}
+	available bool
+}
+
+func (g gatedAvailability) AgentAvailable(context.Context, uuid.UUID, string) (bool, error) {
+	<-g.release
+	return g.available, nil
+}
+
 // An agent the backend already marked Away is told so on connect; an available
 // agent gets no message (the SDK assumes available).
 func TestSendAvailabilityOnConnect(t *testing.T) {
 	tenant := uuid.NewString()
 	for _, available := range []bool{false, true} {
-		s := &Server{cfg: Config{Availability: fakeAvailability{available}}, log: slog.Default()}
 		serverConn, clientConn := net.Pipe()
+		c := &conn{Conn: serverConn}
+		s := &Server{
+			cfg:    Config{Availability: fakeAvailability{available}},
+			agents: map[string]map[string]*conn{tenant: {"alice": c}},
+			log:    slog.Default(),
+		}
 		go func() {
-			s.sendAvailability(&conn{Conn: serverConn}, tenant, "alice")
+			s.sendAvailability(c, tenant, "alice")
 			_ = serverConn.Close()
 		}()
 		_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -64,8 +81,9 @@ func TestPushAvailability(t *testing.T) {
 // alike — and becomes one again once marked available.
 func TestRingCandidatesSkipAway(t *testing.T) {
 	s := newHandoffServer(t)
-	s.agents["t"] = map[string]*conn{"alice": {}, "bob": {}}
-	s.setAway("t", "bob", true)
+	bob := &conn{}
+	s.agents["t"] = map[string]*conn{"alice": {}, "bob": bob}
+	s.setAway(bob, "t", "bob", true)
 
 	ringAll, _, cleanup := s.Prepare(context.Background(), "t/ring-all", ivrdrive.Target{}, true, nil, "", "")
 	defer cleanup()
@@ -78,8 +96,96 @@ func TestRingCandidatesSkipAway(t *testing.T) {
 		t.Fatalf("direct candidates for an Away agent = %v, want none", got)
 	}
 
-	s.setAway("t", "bob", false)
+	s.setAway(bob, "t", "bob", false)
 	if got := direct(context.Background()); len(got) != 1 || got[0] != "bob" {
 		t.Fatalf("direct candidates after available = %v, want [bob]", got)
+	}
+}
+
+// connectAgent runs alice's presence socket on s and reads past `ready`. The
+// returned client end is closed at cleanup, which ends the handler.
+func connectAgent(t *testing.T, s *Server, tenant string) net.Conn {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	go s.handleAgentPresence(&conn{Conn: serverConn}, tenant, "alice")
+	t.Cleanup(func() { _ = clientConn.Close() })
+	if m := readMsg(t, clientConn); m.Type != msgReady {
+		t.Fatalf("first message = %+v, want ready", m)
+	}
+	return clientConn
+}
+
+func ringAllCandidates(t *testing.T, s *Server, tenant string) []string {
+	t.Helper()
+	cands, _, cleanup := s.Prepare(context.Background(), tenant+"/r-"+uuid.NewString(), ivrdrive.Target{}, true, nil, "", "")
+	defer cleanup()
+	return cands(context.Background())
+}
+
+func waitCandidates(t *testing.T, s *Server, tenant string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(ringAllCandidates(t, s, tenant)) != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("ring-all candidates = %v, want %d", ringAllCandidates(t, s, tenant), want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Between registering and the availability lookup landing, a just-connected
+// agent is not ringable; once the lookup says available, they are.
+func TestConnectNotRingableUntilLookup(t *testing.T) {
+	tenant := uuid.NewString()
+	gate := gatedAvailability{release: make(chan struct{}), available: true}
+	s := newHandoffServer(t)
+	s.cfg.Availability = gate
+	connectAgent(t, s, tenant)
+
+	if got := ringAllCandidates(t, s, tenant); len(got) != 0 {
+		t.Fatalf("candidates before the lookup = %v, want none", got)
+	}
+	close(gate.release)
+	waitCandidates(t, s, tenant, 1)
+}
+
+// Without any way to read the flag, a connecting agent falls back to ringable
+// instead of staying Away forever.
+func TestConnectRingableWithoutResolver(t *testing.T) {
+	tenant := uuid.NewString()
+	s := newHandoffServer(t)
+	connectAgent(t, s, tenant)
+	waitCandidates(t, s, tenant, 1)
+}
+
+// A push that lands while the on-connect lookup is in flight is newer than what
+// the lookup read, so the stale lookup result neither overwrites the Away state
+// nor sends the agent a second, contradicting message.
+func TestPushDuringLookupWins(t *testing.T) {
+	for _, pushed := range []bool{false, true} {
+		tenant := uuid.NewString()
+		gate := gatedAvailability{release: make(chan struct{}), available: !pushed}
+		s := newHandoffServer(t)
+		s.cfg.Availability = gate
+		client := connectAgent(t, s, tenant)
+
+		go s.PushAvailability(tenant, "alice", pushed)
+		if m := readMsg(t, client); m.Type != msgAvailability || m.Available == nil || *m.Available != pushed {
+			t.Fatalf("push message = %+v, want availability=%v", m, pushed)
+		}
+		close(gate.release)
+
+		_ = client.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if _, err := client.Read(make([]byte, 1)); err == nil {
+			t.Fatal("stale lookup sent a message after the push")
+		}
+		want := 0
+		if pushed {
+			want = 1
+		}
+		time.Sleep(20 * time.Millisecond) // let the lookup goroutine finish
+		if got := ringAllCandidates(t, s, tenant); len(got) != want {
+			t.Fatalf("pushed available=%v: candidates = %v, want %d", pushed, got, want)
+		}
 	}
 }

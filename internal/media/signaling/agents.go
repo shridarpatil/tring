@@ -80,6 +80,12 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		s.agents[tenant] = make(map[string]*conn)
 	}
 	s.agents[tenant][sip] = c
+	// Away until sendAvailability has read the backend flag, so a ring in that
+	// gap can't reach an agent the backend set Away.
+	if s.away == nil {
+		s.away = map[string]bool{}
+	}
+	s.away[tenant+"|"+sip] = true
 	s.mu.Unlock()
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
@@ -145,31 +151,49 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 
 // sendAvailability tells a just-connected agent their backend Away/Break flag.
 // Only Away is worth a message (the SDK assumes available), and a failed lookup
-// leaves the agent showing Online rather than blocking the connect. Read through
-// the Redis cache (the API invalidates it on update) so reconnects don't hit the DB.
+// leaves the agent showing Online rather than blocking the connect.
+//
+// The agent was registered as Away (handleAgentPresence), so no ring reaches
+// them before this lookup lands. A live push that arrives while it's in flight
+// is newer than what the lookup read, so the lookup then yields to it.
 func (s *Server) sendAvailability(c *conn, tenant, sip string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	available, ok := s.cfg.Presence.CachedAvailability(ctx, tenant, sip)
+	available, ok := s.lookupAvailability(tenant, sip)
 	if !ok {
-		if s.cfg.Availability == nil {
-			return
-		}
-		tid, err := uuid.Parse(tenant)
-		if err != nil {
-			return
-		}
-		available, err = s.cfg.Availability.AgentAvailable(ctx, tid, sip)
-		if err != nil {
-			s.log.Warn("agent availability lookup failed", "tenant", tenant, "sip", sip, "err", err)
-			return
-		}
-		s.cfg.Presence.CacheAvailability(ctx, tenant, sip, available)
+		available = true // unknown: ringable, as before the Away flag reached the gateway
 	}
-	s.setAway(tenant, sip, !available)
+	c.availMu.Lock()
+	defer c.availMu.Unlock()
+	if c.availPushed || !s.setAway(c, tenant, sip, !available) {
+		return
+	}
 	if !available {
 		_ = c.send(msg{Type: msgAvailability, Available: &available})
 	}
+}
+
+// lookupAvailability reads an agent's available_for_calls through the Redis
+// cache (the API invalidates it on update), so reconnects don't hit the DB.
+// ok=false when it can't be known.
+func (s *Server) lookupAvailability(tenant, sip string) (available, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if available, ok := s.cfg.Presence.CachedAvailability(ctx, tenant, sip); ok {
+		return available, true
+	}
+	if s.cfg.Availability == nil {
+		return false, false
+	}
+	tid, err := uuid.Parse(tenant)
+	if err != nil {
+		return false, false
+	}
+	available, err = s.cfg.Availability.AgentAvailable(ctx, tid, sip)
+	if err != nil {
+		s.log.Warn("agent availability lookup failed", "tenant", tenant, "sip", sip, "err", err)
+		return false, false
+	}
+	s.cfg.Presence.CacheAvailability(ctx, tenant, sip, available)
+	return available, true
 }
 
 // PushAvailability forwards a backend availability change (the API's
@@ -179,10 +203,13 @@ func (s *Server) PushAvailability(tenant, sip string, available bool) {
 	s.mu.Lock()
 	c := s.agents[tenant][sip]
 	s.mu.Unlock()
-	if c != nil {
-		s.setAway(tenant, sip, !available)
+	if c == nil {
+		return
 	}
-	if c != nil {
+	c.availMu.Lock()
+	defer c.availMu.Unlock()
+	c.availPushed = true
+	if s.setAway(c, tenant, sip, !available) {
 		_ = c.send(msg{Type: msgAvailability, Available: &available})
 	}
 }
@@ -190,18 +217,23 @@ func (s *Server) PushAvailability(tenant, sip string, available bool) {
 // setAway records whether a connected agent is backend-marked Away, so the ring
 // candidates skip them (the team lookup already filters on available_for_calls;
 // ring-all and direct-agent targets come from the live socket registry instead).
-func (s *Server) setAway(tenant, sip string, away bool) {
-	k := tenant + "|" + sip
+// It reports false, changing nothing, when c is no longer the agent's socket.
+func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.agents[tenant][sip] != c {
+		return false
+	}
+	k := tenant + "|" + sip
 	if !away {
 		delete(s.away, k)
-		return
+		return true
 	}
 	if s.away == nil {
 		s.away = map[string]bool{}
 	}
 	s.away[k] = true
+	return true
 }
 
 // handleDecline delivers an agent's rejection of a ringing call to that room's
