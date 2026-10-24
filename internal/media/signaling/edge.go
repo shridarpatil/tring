@@ -60,6 +60,33 @@ func (s *Server) waitForConnected(roomID room.RoomID, d time.Duration) {
 // ivrConnectWait bounds how long the first prompt waits for the caller's media.
 const ivrConnectWait = 6 * time.Second
 
+// waitMediaUp blocks until every participant in the room has its media flowing
+// (an answering agent's WebRTC connection is up), the room empties, or d passes.
+func (s *Server) waitMediaUp(roomID room.RoomID, d time.Duration) {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		r, ok := s.rooms.Get(roomID)
+		if !ok {
+			return
+		}
+		up := true
+		for _, p := range r.Participants() {
+			if p.State() != room.StateConnected {
+				up = false
+				break
+			}
+		}
+		if up {
+			return // also an emptied room: nobody left to wait for
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// answerMediaWait bounds how long the caller's hold music outlasts an agent's
+// answer while the agent's media connects (ICE via TURN can take seconds).
+const answerMediaWait = 10 * time.Second
+
 // removeParticipant drops a leg from the room (e.g. an agent who transferred the
 // call out): it leaves the room (peers get peer-left) and its socket is closed,
 // so the client sees the call end.

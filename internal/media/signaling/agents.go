@@ -203,7 +203,19 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	}
 
 	cleanup := func() {
-		eff.stopHold() // stop the queue/ring hold music (no-op if it never started)
+		// Stop the queue/ring hold music (no-op if it never started). An agent who
+		// answered has joined, but their audio only flows once their WebRTC
+		// connection is up — keep the music until then so the caller isn't left in
+		// silence for that gap.
+		select {
+		case <-ring:
+			go func() {
+				s.waitMediaUp(rid, answerMediaWait)
+				eff.stopHold()
+			}()
+		default:
+			eff.stopHold()
+		}
 		eff.cancelRung()
 		if s.cfg.Calls != nil {
 			s.cfg.Calls.RingStop(roomID) // no-op if answered — reverts to the IVR phase on no-answer
