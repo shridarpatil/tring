@@ -30,6 +30,7 @@ type Queries struct {
 	ListAgents           string `query:"list-agents"`
 	GetAgent             string `query:"get-agent"`
 	SetAgentAvailability string `query:"set-agent-availability"`
+	GetAgentAvailability string `query:"get-agent-availability"` // gateway: Away badge on connect
 
 	// ---- api: teams (GetTeam + ListTeamAgentSips also used by orchestrator) ----
 	CreateTeam        string `query:"create-team"`

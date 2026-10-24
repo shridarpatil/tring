@@ -21,6 +21,12 @@ func TestDisabledStoreIsSafe(t *testing.T) {
 	// MarkOnline/Offline on a nil store must be no-ops, not panics.
 	nilStore.MarkOnline(ctx, "t1", "1001")
 	nilStore.Offline(ctx, "t1", "1001")
+	// The availability cache misses (so callers read the DB) and never panics.
+	if _, ok := nilStore.CachedAvailability(ctx, "t1", "1001"); ok {
+		t.Error("nil *Store must miss the availability cache")
+	}
+	nilStore.CacheAvailability(ctx, "t1", "1001", false)
+	nilStore.InvalidateAvailability(ctx, "t1", "1001")
 
 	// Built on a nil cache (Redis disabled) — same contract.
 	s := New(nil)

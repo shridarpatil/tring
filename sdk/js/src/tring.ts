@@ -32,6 +32,8 @@ export class Tring extends Emitter<TringEvent> {
   private readonly agent: RtcAgent;
   private readonly autoAnswer: boolean;
   private ringing: Call | null = null; // the not-yet-accepted inbound call, if any
+  /** The backend's Away/Break flag for this agent; false = Away (won't be rung). */
+  available = true;
 
   static async init(opts: InitOpts): Promise<Tring> {
     const t = new Tring(opts);
@@ -57,7 +59,16 @@ export class Tring extends Emitter<TringEvent> {
       getToken,
       iceServers: opts.iceServers,
     });
-    this.agent.on("online", () => this.emit({ type: "registered" }));
+    this.agent.on("online", () => {
+      // The gateway sends `availability` right after `ready` only when Away, so
+      // each (re)connect starts from available.
+      this.available = true;
+      this.emit({ type: "registered" });
+    });
+    this.agent.on("availability", ({ available }) => {
+      this.available = available;
+      this.emit({ type: "availability", available });
+    });
     this.agent.on("reconnecting", () => this.emit({ type: "reconnecting", attempt: 0 }));
     this.agent.on("offline", () => this.emit({ type: "unregistered" }));
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));

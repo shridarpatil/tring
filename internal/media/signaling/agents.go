@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
@@ -81,6 +83,9 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	s.mu.Unlock()
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
+	// Read after registering above, so a change that lands meanwhile is either
+	// in this read or pushed to the socket by PushAvailability.
+	s.sendAvailability(c, tenant, sip)
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
@@ -134,6 +139,46 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		if m.Type == msgDecline {
 			s.handleDecline(tenant, sip, m.Room)
 		}
+	}
+}
+
+// sendAvailability tells a just-connected agent their backend Away/Break flag.
+// Only Away is worth a message (the SDK assumes available), and a failed lookup
+// leaves the agent showing Online rather than blocking the connect. Read through
+// the Redis cache (the API invalidates it on update) so reconnects don't hit the DB.
+func (s *Server) sendAvailability(c *conn, tenant, sip string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	available, ok := s.cfg.Presence.CachedAvailability(ctx, tenant, sip)
+	if !ok {
+		if s.cfg.Availability == nil {
+			return
+		}
+		tid, err := uuid.Parse(tenant)
+		if err != nil {
+			return
+		}
+		available, err = s.cfg.Availability.AgentAvailable(ctx, tid, sip)
+		if err != nil {
+			s.log.Warn("agent availability lookup failed", "tenant", tenant, "sip", sip, "err", err)
+			return
+		}
+		s.cfg.Presence.CacheAvailability(ctx, tenant, sip, available)
+	}
+	if !available {
+		_ = c.send(msg{Type: msgAvailability, Available: &available})
+	}
+}
+
+// PushAvailability forwards a backend availability change (the API's
+// agent.status event, POST /v1/agents/{id}/availability) to the agent's
+// presence socket on this gateway, if they're connected here.
+func (s *Server) PushAvailability(tenant, sip string, available bool) {
+	s.mu.Lock()
+	c := s.agents[tenant][sip]
+	s.mu.Unlock()
+	if c != nil {
+		_ = c.send(msg{Type: msgAvailability, Available: &available})
 	}
 }
 
