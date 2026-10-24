@@ -808,6 +808,12 @@ type conn struct {
 	pid     room.ParticipantID
 	peer    *sfu.Peer
 	writeMu sync.Mutex
+
+	// Agent presence sockets only: availMu orders the on-connect availability
+	// lookup against live pushes; availPushed means a push has landed, so the
+	// (older) lookup result must not overwrite it (agents.go).
+	availMu     sync.Mutex
+	availPushed bool
 }
 
 // defaultJoinTimeout bounds the wait for a socket's first (join/register) message.
