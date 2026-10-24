@@ -295,6 +295,21 @@ func (s *SFU) PinPortFeed(roomID room.RoomID, pid room.ParticipantID) {
 	}
 }
 
+// ReleasePortFeed frees every port's forwarded feed (without banning it) so the
+// next publisher to send claims it. A transfer's answered agent needs this: the
+// IVR's voice stays the phone leg's feed after its last prompt, idle but still
+// active, so the caller would never hear the agent while the IVR waits out the
+// call. The idle IVR can claim the feed back when it next plays.
+func (s *SFU) ReleasePortFeed(roomID room.RoomID) {
+	for _, p := range s.roomPorts(roomID) {
+		p.mu.Lock()
+		if p.pinned == "" {
+			p.active = ""
+		}
+		p.mu.Unlock()
+	}
+}
+
 // roomPorts snapshots a room's ports.
 func (s *SFU) roomPorts(roomID room.RoomID) []*roomPort {
 	s.mu.Lock()

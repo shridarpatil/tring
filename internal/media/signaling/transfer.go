@@ -121,7 +121,14 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 
 	if outcome != "completed" {
 		s.playTransferFailMessage(rid, tenant)
-		s.endIfAlone(rid) // hang up the stranded caller
+		s.endIfAlone(rid) // hang up the stranded web caller
+		// A phone caller is the port, so endIfAlone leaves it. Its IVR may still be
+		// parked behind the voided handoff; stopping it hangs up the abandoned leg.
+		if s.brain.Running(rid) {
+			s.stopIVR(rid)
+		} else {
+			s.hangupPstnIfAbandoned(rid)
+		}
 		s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
 		return
 	}

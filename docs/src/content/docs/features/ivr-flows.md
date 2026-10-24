@@ -65,7 +65,7 @@ Prompt fields are shared by several nodes:
 | Field | Default | What it does |
 |---|---|---|
 | `greeting_text` / `audio_file` | | The prompt. |
-| `interruptible` | `false` | Saved by the editor. The live call currently plays the greeting to the end regardless. |
+| `interruptible` | `false` | When `true`, the caller's first keypress stops the greeting and the flow moves on. That key only skips the greeting; it isn't passed to a following menu. |
 
 Outcome: `default`.
 
@@ -156,13 +156,15 @@ Other fields:
 | `label` | team, agent, all | the caller's identity | What the ringing agent sees instead of the caller's number. Use it to mask the number, for example `Customer {{mask}}`. With no label and no caller identity, agents see `Web Caller`. |
 | `ring_seconds` | number | `30` | How long to ring the number. |
 | `caller_id` | number | the trunk's own number | The number the person dialed sees. Must be one of your tenant's active numbers, or the dial is refused. |
+| `greeting_text` | all | | An announcement played to the caller before anyone rings, for example "This call may be recorded for quality purposes". Spoken with text-to-speech when the flow is saved. |
+| `audio_file` | all | | An announcement from your sound library instead of text. If it can't be played, the transfer goes ahead without it. |
 | `priority` | team | `false` | Saved by the editor ("let them skip the line"). The live routing engine does not apply it yet; callers queue in arrival order. |
 
 While a number rings, the caller hears the tenant's hold music. A number transfer needs the SIP plug (`TRING_FSPLUG_ENABLED=true`) and an outbound trunk. The live call normalizes the number as an Indian number (`+91XXXXXXXXXX`). A blank number, or one that still contains an unresolved variable, is not dialed.
 
 | Outcome | When |
 |---|---|
-| `completed` | Someone answered. For an agent transfer, the edge runs **after the agent hangs up** while the caller is still on the line, so you can play a survey or goodbye. If the caller hangs up first, the flow stops. |
+| `completed` | Someone answered. For an agent transfer, the edge runs **after the agent hangs up** while the caller (web or phone) is still on the line, so you can play a survey or goodbye. If the caller hangs up first, the flow stops. With no `completed` edge, the call ends when the agent hangs up. |
 | `no_answer` | Nobody answered in time, no one was available, the team wait ran out, the number was busy or invalid, there was no trunk, or the caller ID was refused. |
 
 The editor also shows a `queue_timeout` handle and the Test panel can force it, but live calls report a queue wait that runs out as `no_answer`. Wire `no_answer` for your fallback.

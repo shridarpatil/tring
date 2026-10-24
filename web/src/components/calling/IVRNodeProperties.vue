@@ -351,6 +351,16 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           </select>
         </label>
 
+        <!-- Optional announcement played to the caller before anyone rings. -->
+        <label class="fld">
+          <span class="fl">Announcement before connecting (optional)</span>
+          <textarea v-model="config.greeting_text" rows="2" placeholder="e.g. This call may be recorded for quality and training purposes." />
+        </label>
+        <div>
+          <span class="fl">Announcement audio (from your sound library)</span>
+          <AudioPicker v-model="config.audio_file" default-label="None (use announcement text above)" />
+        </div>
+
         <!-- Phone number: dialed over the outbound trunk; answer → completed. -->
         <template v-if="transferTarget === 'number'">
           <div class="grid grid-2">

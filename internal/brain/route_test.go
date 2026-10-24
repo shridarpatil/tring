@@ -2,6 +2,7 @@ package brain
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -71,16 +72,17 @@ func TestAgentRouterWaitsForHandoffThenCompletes(t *testing.T) {
 	}
 }
 
-// When the caller leaves during the handoff, the transfer reports "" (terminal)
-// so the flow stops instead of playing a post-call node to an empty room.
+// When the caller leaves during the handoff, the transfer still reports
+// "completed" (an agent answered) with ErrCallEnded, so the flow stops instead
+// of playing a post-call node to an empty room.
 func TestAgentRouterHandoffCallerGoneIsTerminal(t *testing.T) {
 	tp := &handoffTransport{fakeTransport: fakeTransport{eff: &answerEffects{}}, resumeToCaller: false}
 	out, err := newRouter(tp).Ring(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{Team: "sales"})
-	if err != nil {
-		t.Fatalf("Ring err: %v", err)
+	if !errors.Is(err, ivrdrive.ErrCallEnded) {
+		t.Fatalf("Ring err = %v, want ErrCallEnded", err)
 	}
-	if out != "" {
-		t.Fatalf("outcome = %q, want \"\" (terminal)", out)
+	if out != "completed" {
+		t.Fatalf("outcome = %q, want completed", out)
 	}
 }
 
