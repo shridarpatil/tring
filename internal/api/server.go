@@ -115,6 +115,9 @@ type Config struct {
 	// nil = no key configured: new passwords are stored as plaintext and only
 	// legacy plaintext can be read. See secrets.go.
 	Secrets *secretbox.Box
+
+	// Version is the build's version (-X main.version), shown in the console.
+	Version string
 }
 
 type Server struct {
@@ -186,6 +189,8 @@ type Server struct {
 
 	secrets *secretbox.Box // nil = plaintext mode (no TRING_SECRETS_KEY)
 
+	version string
+
 	log *slog.Logger
 }
 
@@ -233,6 +238,7 @@ func NewServer(cfg Config) *Server {
 		loginByEmail:     newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		outboundAllow:    cfg.OutboundAllow,
 		secrets:          cfg.Secrets,
+		version:          cfg.Version,
 		log:              logger,
 	}
 }
@@ -415,6 +421,7 @@ func (s *Server) Router() http.Handler {
 				r.Group(func(r chi.Router) {
 					r.Use(s.RequireFullScope)
 					r.Get("/tenants/me", s.handleGetMyTenant)
+					r.Get("/version", s.handleVersion)
 					r.Patch("/tenants/me", s.handlePatchMyTenant)
 					r.Get("/guest-config", s.handleGetGuestConfig)
 					r.Patch("/guest-config", s.handlePatchGuestConfig)
@@ -556,6 +563,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleVersion reports the build version for the console footer. Behind auth
+// so the exact build isn't advertised to anyone probing the API.
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": s.version})
 }
 
 // pageEnvelope is the uniform shape every paginated list endpoint returns:
