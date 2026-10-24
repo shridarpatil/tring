@@ -175,12 +175,14 @@ Rings agents and connects the caller, or dials a phone number.
 | `number` | string | Dial this phone number instead of ringing agents. The presence of the `number` key switches the node to number mode. |
 | `caller_id` | string | Number mode: the caller ID to present. Must be one of your tenant's numbers. Empty uses the trunk's own DID. |
 | `ring_seconds` | integer | Number mode: how long to ring, default `30`. |
+| `greeting_text` | string | Optional announcement played to the caller before anyone rings, such as "This call may be recorded". Spoken with text-to-speech when the flow is saved. Doesn't take `{{vars}}`. |
+| `audio_file` | string | Optional announcement audio from your sound library. Wins over `greeting_text`. If it can't be played, the transfer goes ahead without it. |
 
-All of these accept `{{vars}}`. In agent mode, if both `agent_sip` and `team` are set, `agent_sip` is used. With neither, all available agents ring.
+The target fields (`team`, `agent_sip`, `label`, `number`, `caller_id`) accept `{{vars}}`. In agent mode, if both `agent_sip` and `team` are set, `agent_sip` is used. With neither, all available agents ring.
 
 Outcomes:
 
-- `completed`: an agent, or the dialed number, answered. In agent mode, the `completed` edge runs after the agent hangs up, if the caller is still on the line (for example, to play a survey or a goodbye). If the caller hangs up first, the flow ends.
+- `completed`: an agent, or the dialed number, answered. In agent mode, the `completed` edge runs after the agent hangs up, if the caller (web or phone) is still on the line (for example, to play a survey or a goodbye). If the caller hangs up first, the flow ends.
 - `no_answer`: nobody answered in time, no one was available, or the number couldn't be dialed. A number or `caller_id` that still contains an unresolved `{{var}}` is not dialed and gives `no_answer`.
 
 :::danger

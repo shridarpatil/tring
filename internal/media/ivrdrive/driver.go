@@ -49,9 +49,14 @@ type Target struct {
 // leaves once an agent is admitted; from the caller's side the IVR voice is
 // simply replaced by the agent. The signaling layer implements this against
 // agent presence; tests fake it. A nil Agents means transfer reports no_answer.
+// An agent answered but the caller then hung up is ("completed", ErrCallEnded).
 type Agents interface {
 	Ring(ctx context.Context, room string, t Target) (outcome string, err error)
 }
+
+// ErrCallEnded is returned by Agents.Ring when an agent answered and the call
+// then ended: the transfer is recorded with its outcome, and the flow stops.
+var ErrCallEnded = errors.New("ivrdrive: call ended")
 
 // Dialer places an outbound phone call to number and, once it answers, joins it
 // into the call's room (the transfer-to-number counterpart of Agents.Ring). It
@@ -240,11 +245,39 @@ func (d *Driver) collect(ctx context.Context, playDone <-chan struct{}, timeout 
 	}
 }
 
-// Greeting plays the greeting and continues.
+// Greeting plays the greeting and continues. An interruptible greeting stops at
+// the caller's first keypress (that key is consumed, not passed to a next menu).
 func (d *Driver) Greeting(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
-	file, err := d.play(ctx, n)
-	if err != nil {
-		return ivr.NodeResult{}, err
+	if !ivr.BoolFromConfig(n.Config, "interruptible") {
+		file, err := d.play(ctx, n)
+		if err != nil {
+			return ivr.NodeResult{}, err
+		}
+		return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: file}, nil
+	}
+
+	file := ivr.StringFromConfig(n.Config, "audio_file")
+	if file == "" {
+		return ivr.NodeResult{Outcome: "default", Action: "play_audio"}, nil
+	}
+	d.played = append(d.played, file)
+	d.drainDTMF() // a key pressed before the greeting began doesn't skip it
+
+	playDone := make(chan struct{})
+	var playErr error
+	go func() {
+		defer close(playDone)
+		playErr = d.prompts.Play(ctx, file)
+	}()
+	select {
+	case digit := <-d.dtmf:
+		d.prompts.Stop()
+		<-playDone
+		return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: file, DTMF: digit}, nil
+	case <-playDone:
+	}
+	if playErr != nil {
+		return ivr.NodeResult{}, playErr
 	}
 	return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: file}, nil
 }
@@ -336,7 +369,12 @@ func (d *Driver) Timing(_ context.Context, n *ivr.Node) (ivr.NodeResult, error) 
 // Agents/agents), it's "no_answer" so the flow can branch. A node with a
 // `number` dials that phone number instead (see transferToNumber). All targets
 // accept {{vars}} — e.g. a number or team returned by an earlier http_callback.
+// The node's optional prompt (e.g. "this call may be recorded") plays first.
 func (d *Driver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	// A missing announcement must not cost the caller their agent: log and ring.
+	if file, err := d.play(ctx, n); err != nil && ctx.Err() == nil {
+		d.log.Warn("ivrdrive transfer: announcement failed, transferring anyway", "file", file, "err", err)
+	}
 	if _, isNumber := n.Config["number"]; isNumber {
 		return d.transferToNumber(ctx, n, ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "number"), d.vars))
 	}
@@ -364,6 +402,9 @@ func (d *Driver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, err
 		return ivr.NodeResult{Outcome: "no_answer", Action: "transfer", Detail: detail}, nil
 	}
 	outcome, err := d.agents.Ring(ctx, d.room, target)
+	if errors.Is(err, ErrCallEnded) {
+		return ivr.NodeResult{Outcome: outcome, Action: "transfer", Detail: detail, End: true}, nil
+	}
 	if err != nil {
 		return ivr.NodeResult{Action: "transfer", Detail: detail}, err
 	}

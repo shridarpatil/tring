@@ -67,7 +67,7 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 	// disconnects (to the caller only). If the caller leaves first → end the flow.
 	if hw, ok := a.tport.(HandoffWaiter); ok {
 		if !hw.AwaitHandoffEnd(ctx, roomID) {
-			return "", nil
+			return "completed", ivrdrive.ErrCallEnded // answered; the caller has since left
 		}
 	}
 	return "completed", nil

@@ -26,6 +26,7 @@ type NodeResult struct {
 	Action  string // play_audio, speak, prompt_dtmf, transfer, hangup, branch, http_call…
 	Detail  string // file, agent label, URL, …
 	DTMF    string // digit consumed at a menu/gather, if any
+	End     bool   // record Outcome, but stop here: the call is over (a caller who hung up mid-transfer)
 }
 
 // CallDriver is the per-node effect contract: the shared Walk owns graph
@@ -78,8 +79,8 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 		if err != nil {
 			return path, fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
 		}
-		if res.Outcome == "" {
-			return path, nil // terminal node
+		if res.Outcome == "" || res.End {
+			return path, nil // terminal node, or the call ended during it
 		}
 		next := FindNextNode(flow, nodeID, res.Outcome)
 		if next == "" {
