@@ -536,7 +536,7 @@ type fakeDialer struct {
 	gotRing time.Duration
 }
 
-func (f *fakeDialer) Dial(_ context.Context, room, number, callerID string, ring time.Duration) (string, error) {
+func (f *fakeDialer) Dial(_ context.Context, room, number, callerID string, ring time.Duration, _ func()) (string, error) {
 	f.calls++
 	f.gotRoom, f.gotNum, f.gotCID, f.gotRing = room, number, callerID, ring
 	return f.outcome, nil
@@ -660,14 +660,23 @@ func TestTransferBlankNumberDoesNotRingAgents(t *testing.T) {
 }
 
 // gateDialer blocks Dial until release closes — a callee still ringing.
+// gateDialer rings until release (the callee answers: it calls answered), then
+// talks until hangup (the callee hangs up).
 type gateDialer struct {
 	release chan struct{}
+	hangup  chan struct{}
 	outcome string
 }
 
-func (g *gateDialer) Dial(ctx context.Context, _, _, _ string, _ time.Duration) (string, error) {
+func (g *gateDialer) Dial(ctx context.Context, _, _, _ string, _ time.Duration, answered func()) (string, error) {
 	select {
 	case <-g.release:
+	case <-ctx.Done():
+		return "no_answer", nil
+	}
+	answered()
+	select {
+	case <-g.hangup:
 	case <-ctx.Done():
 	}
 	return g.outcome, nil
@@ -675,7 +684,7 @@ func (g *gateDialer) Dial(ctx context.Context, _, _, _ string, _ time.Duration) 
 
 func TestTransferDialPlaysHoldAudioWhileRinging(t *testing.T) {
 	prompts := newBlockingPrompts()
-	dialer := &gateDialer{release: make(chan struct{}), outcome: "completed"}
+	dialer := &gateDialer{release: make(chan struct{}), hangup: make(chan struct{}), outcome: "completed"}
 	d := ivrdrive.New(ivrdrive.Config{
 		Prompts: prompts, Dialer: dialer, Room: "r",
 		DialAudio: func() string { return "moh.ogg" },
@@ -693,16 +702,45 @@ func TestTransferDialPlaysHoldAudioWhileRinging(t *testing.T) {
 		t.Fatal("no hold audio while the number rang")
 	}
 	close(dialer.release) // the callee answers
+	deadline := time.Now().Add(2 * time.Second)
+	for prompts.stopCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if prompts.stopCount() == 0 {
+		t.Fatal("hold audio was not stopped when the callee answered")
+	}
+	// The flow waits out the conversation: "completed" runs after it ends.
+	select {
+	case p := <-done:
+		t.Fatalf("walk went on while the callee was still talking: %v", ids(p))
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(dialer.hangup)
 	select {
 	case p := <-done:
 		if !eq(ids(p), []string{"x", "done"}) {
 			t.Fatalf("path = %v", ids(p))
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("walk hung after the callee answered")
+		t.Fatal("walk hung after the callee hung up")
 	}
-	if prompts.stopCount() == 0 {
-		t.Fatal("hold audio was not stopped when the callee answered")
+}
+
+// endedDialer reports an answered call whose caller then hung up.
+type endedDialer struct{}
+
+func (endedDialer) Dial(context.Context, string, string, string, time.Duration, func()) (string, error) {
+	return "completed", ivrdrive.ErrCallEnded
+}
+
+// A number transfer whose caller hung up records "completed" and stops the flow.
+func TestTransferDialCallEndedStops(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: endedDialer{}, Room: "r"})
+	flow := dialFlow(map[string]interface{}{"number": "+919812345678"})
+	path := runFlow(t, d, fake, flow, nil)
+	if !eq(ids(path), []string{"x"}) || path[0].Outcome != "completed" {
+		t.Fatalf("path = %v (outcome %q), want [x] completed", ids(path), path[0].Outcome)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shridarpatil/tring/internal/ivr"
@@ -60,13 +61,16 @@ var ErrCallEnded = errors.New("ivrdrive: call ended")
 
 // Dialer places an outbound phone call to number and, once it answers, joins it
 // into the call's room (the transfer-to-number counterpart of Agents.Ring). It
-// blocks until the callee answers ("completed") or the ring fails — busy, no
-// answer within ring, invalid number, no trunk ("no_answer"). The signaling
+// calls answered (stop the ringing audio) once the callee picks up, then blocks
+// until that call ends: the callee hanging up with the caller still on the line
+// is "completed"; the caller hanging up is ("completed", ErrCallEnded). A ring
+// that fails — busy, no answer within ring, invalid number, no trunk — is
+// "no_answer". The signaling
 // layer implements it on the PSTN originator; tests fake it. A nil Dialer means
 // a number transfer reports no_answer. callerID is the number to present ("" =
 // the trunk's own pick); the Dialer must refuse one the tenant doesn't hold.
 type Dialer interface {
-	Dial(ctx context.Context, room, number, callerID string, ring time.Duration) (outcome string, err error)
+	Dial(ctx context.Context, room, number, callerID string, ring time.Duration, answered func()) (outcome string, err error)
 }
 
 // defaultRingSeconds bounds a transfer-to-number ring when the node sets none.
@@ -452,8 +456,11 @@ func (d *Driver) transferToNumber(ctx context.Context, n *ivr.Node, number strin
 	}
 	ring := time.Duration(ivr.IntFromConfig(n.Config, "ring_seconds", defaultRingSeconds)) * time.Second
 	stopAudio := d.loopDialAudio(ctx)
-	outcome, err := d.dialer.Dial(ctx, d.room, number, callerID, ring)
-	stopAudio()
+	outcome, err := d.dialer.Dial(ctx, d.room, number, callerID, ring, stopAudio)
+	stopAudio() // no answer: the ring is over
+	if errors.Is(err, ErrCallEnded) {
+		return ivr.NodeResult{Outcome: outcome, Action: "transfer", Detail: number, End: true}, nil
+	}
 	if err != nil {
 		return ivr.NodeResult{Action: "transfer", Detail: number}, err
 	}
@@ -464,7 +471,8 @@ func (d *Driver) transferToNumber(ctx context.Context, n *ivr.Node, number strin
 // the IVR's own voice until the returned stop func runs — so the caller isn't
 // left in silence while the number rings. It rides the IVR player rather than a
 // separate source because a phone caller's port hears one publisher at a time,
-// and during the walk that's the IVR. No-op when no audio is configured.
+// and during the walk that's the IVR. No-op when no audio is configured. The
+// stop func is idempotent (the dialer stops it on answer, the driver after).
 func (d *Driver) loopDialAudio(ctx context.Context) func() {
 	file := ""
 	if d.dialAudio != nil {
@@ -486,9 +494,12 @@ func (d *Driver) loopDialAudio(ctx context.Context) func() {
 			}
 		}
 	}()
+	var once sync.Once
 	return func() {
-		cancel()
-		d.prompts.Stop() // flush the clip already queued on the player
-		<-done
+		once.Do(func() {
+			cancel()
+			d.prompts.Stop() // flush the clip already queued on the player
+			<-done
+		})
 	}
 }

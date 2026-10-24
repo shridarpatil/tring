@@ -182,7 +182,7 @@ The target fields (`team`, `agent_sip`, `label`, `number`, `caller_id`) accept `
 
 Outcomes:
 
-- `completed`: an agent, or the dialed number, answered. In agent mode, the `completed` edge runs after the agent hangs up, if the caller (web or phone) is still on the line (for example, to play a survey or a goodbye). If the caller hangs up first, the flow ends.
+- `completed`: an agent, or the dialed number, answered. The `completed` edge runs after the agent or dialed number hangs up, if the caller (web or phone) is still on the line (for example, to play a survey or a goodbye). If the caller hangs up first, the flow ends.
 - `no_answer`: nobody answered in time, no one was available, or the number couldn't be dialed. A number or `caller_id` that still contains an unresolved `{{var}}` is not dialed and gives `no_answer`.
 
 :::danger
