@@ -193,6 +193,7 @@ function fmt(d?: string) {
             <th>Started</th>
             <th class="align-right">Dur</th>
             <th>Recording</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -233,18 +234,16 @@ function fmt(d?: string) {
                 </button>
                 <span v-else class="text-lighter">—</span>
               </td>
-              <td>
-                <button type="button" class="plain text-light" @click.stop="openDetail(c)">
-                  Details
-                </button>
+              <td class="align-right" style="white-space: nowrap">
+                <Button variant="secondary" size="sm" @click.stop="openDetail(c)">Details</Button>
               </td>
             </tr>
           </template>
           <tr v-if="!loading && calls.length === 0">
-            <td colspan="8" class="align-center text-lighter">No calls</td>
+            <td colspan="9" class="align-center text-lighter">No calls</td>
           </tr>
           <tr v-if="loading">
-            <td colspan="8" class="align-center text-lighter">Loading…</td>
+            <td colspan="9" class="align-center text-lighter">Loading…</td>
           </tr>
         </tbody>
       </table>
