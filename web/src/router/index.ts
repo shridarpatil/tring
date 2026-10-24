@@ -32,6 +32,7 @@ const routes: RouteRecordRaw[] = [
       { path: "", name: "dashboard", component: () => import("../views/DashboardView.vue") },
       { path: "agents", name: "agents", component: () => import("../views/AgentsView.vue") },
       { path: "teams", name: "teams", component: () => import("../views/TeamsView.vue") },
+      { path: "teams/:name", name: "team", component: () => import("../views/TeamDetailView.vue") },
       { path: "sounds", name: "sounds", component: () => import("../views/SoundsView.vue") },
       { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue") },
       // calls/:id opens that call's detail (?view=log → full log), so a call
