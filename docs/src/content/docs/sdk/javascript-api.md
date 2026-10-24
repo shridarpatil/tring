@@ -106,6 +106,7 @@ await tring.disconnect();
 | Event | Payload | When |
 |---|---|---|
 | `registered` | `{}` | The agent is online. Fires again after every successful reconnect. |
+| `availability` | `{ available: boolean }` | Your backend marked the agent Away (`false`) or back (`true`) with `POST /v1/agents/{id}/availability`. Arrives right after `registered` if the agent is already Away, then live on every change. `tring.available` holds the current value. |
 | `reconnecting` | `{ attempt: number }` | The connection dropped unexpectedly. The SDK retries with backoff (1 s, doubling, up to 10 s) and fetches a fresh token each time. `attempt` is currently always `0`. |
 | `unregistered` | `{ reason?: string }` | The connection was closed by `disconnect()`. `reason` is currently not set. |
 | `call:ringing` | `{ call: Call }` | A call is ringing this agent. With `autoAnswer: true`, the SDK accepts it right away. |
@@ -116,7 +117,8 @@ await tring.disconnect();
 | `error` | `{ error: Error }` | A signaling, microphone or token error. If accepting a call fails, you get `error`, then `call:ended` for that call. |
 
 ```js
-tring.on("registered", () => setBadge("online"));
+tring.on("registered", () => setBadge(tring.available ? "online" : "away"));
+tring.on("availability", ({ available }) => setBadge(available ? "online" : "away"));
 tring.on("reconnecting", () => setBadge("reconnecting"));
 tring.on("call:ringing", ({ call }) => showIncoming(call.displayName ?? "Incoming call"));
 tring.on("call:answered", ({ call }) => openRecordFor(call.to));

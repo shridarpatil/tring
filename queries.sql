@@ -28,6 +28,11 @@ UPDATE agents SET available_for_calls = $1
 WHERE id = $2 AND tenant_id = $3
 RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at;
 
+-- name: get-agent-availability
+-- The gateway reads this when an agent's presence socket connects, so the SDK
+-- shows Away for an agent the backend already marked unavailable.
+SELECT available_for_calls FROM agents WHERE tenant_id = $1 AND sip_username = $2;
+
 -- ===========================================================================
 -- teams (tenant-scoped agent groups; identified by name)
 -- ===========================================================================

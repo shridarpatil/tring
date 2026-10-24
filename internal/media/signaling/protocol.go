@@ -38,6 +38,7 @@ const (
 	msgIncoming       = "incoming"        // s→agent: a call is ringing — {room, from}
 	msgCancelRing     = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
 	msgReady          = "ready"           // s→agent: presence registered
+	msgAvailability   = "availability"    // s→agent: backend Away/Break toggle — {available}; sent after ready and on every change
 	msgEnded          = "ended"           // s→client: the call is over (terminal — don't reconnect)
 	msgError          = "error"           // {reason}
 	msgTransferOK     = "transfer-ok"     // s→agent: blind transfer accepted; this leg will end
@@ -89,6 +90,9 @@ type msg struct {
 	// supervisor
 	Mode    string `json:"mode,omitempty"`
 	Present bool   `json:"present,omitempty"`
+
+	// availability (s→agent): a pointer so `false` (Away) still goes on the wire
+	Available *bool `json:"available,omitempty"`
 }
 
 // ICEServer is the browser-facing STUN/TURN entry sent in `joined` (ephemeral

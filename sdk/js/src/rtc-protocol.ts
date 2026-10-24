@@ -12,8 +12,8 @@
 //                     (hold/resume/transfer are agent-only: a visitor token gets
 //                     `error` / `transfer-failed` and the message is ignored)
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
-//                     | incoming | incoming-cancel | ready | error | supervisor
-//                     | transfer-failed
+//                     | incoming | incoming-cancel | ready | availability | error
+//                     | supervisor | transfer-failed
 // Trickle ICE rides `ice` both ways. Resumption: the client stores
 // `session_token` from `joined` and re-sends it in a later `join`.
 
@@ -43,6 +43,7 @@ export const ServerMsgType = {
   Incoming: "incoming",
   IncomingCancel: "incoming-cancel",
   Ready: "ready",
+  Availability: "availability",
   Ended: "ended",
   Error: "error",
   Supervisor: "supervisor",
@@ -99,4 +100,7 @@ export interface RtcMessage {
   // supervisor (server → agent legs only)
   present?: boolean;
   mode?: string;
+
+  // availability (server → agent presence socket): the backend Away/Break toggle
+  available?: boolean;
 }

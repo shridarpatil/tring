@@ -44,6 +44,7 @@ type Hub struct {
 	forward map[string]bool
 	recomp  map[string][]*recomputer
 	pending map[string]bool
+	on      map[string][]func(tenant string, data json.RawMessage)
 
 	// after schedules f after d. Overridable in tests (see Task 3).
 	after func(d time.Duration, f func())
@@ -72,6 +73,7 @@ func NewHub(addr, password string, logger *slog.Logger) (*Hub, error) {
 		forward: map[string]bool{},
 		recomp:  map[string][]*recomputer{},
 		pending: map[string]bool{},
+		on:      map[string][]func(string, json.RawMessage){},
 		after:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}, nil
 }
@@ -85,6 +87,16 @@ func (h *Hub) Forward(types ...string) {
 	for _, t := range types {
 		h.forward[t] = true
 	}
+}
+
+// On registers an in-process handler for an event type — for a binary that
+// reacts to bus events itself instead of fanning them to SSE clients (the
+// gateway pushing availability to agent sockets). Call before Run.
+func (h *Hub) On(typ string, fn func(tenant string, data json.RawMessage)) {
+	if h == nil {
+		return
+	}
+	h.on[typ] = append(h.on[typ], fn)
 }
 
 // Subscribe registers a client for a tenant's events. Returns nil on a nil hub.
@@ -139,14 +151,17 @@ func (h *Hub) dispatch(tenant string, frame []byte) {
 	}
 }
 
-// handle processes one decoded event: forward it if configured, and trigger any
-// recomputers (scheduling wired in Task 3).
+// handle processes one decoded event: forward it if configured, trigger any
+// recomputers (scheduling wired in Task 3), and call any On handlers.
 func (h *Hub) handle(tenant string, evt Event) {
 	if h.forward[evt.Type] {
 		h.dispatch(tenant, Frame(evt.Type, evt.Data))
 	}
 	for _, rc := range h.recomp[evt.Type] {
 		h.schedule(tenant, rc)
+	}
+	for _, fn := range h.on[evt.Type] {
+		fn(tenant, evt.Data)
 	}
 }
 
@@ -197,6 +212,7 @@ func NewTestHub() *Hub {
 		forward: map[string]bool{},
 		recomp:  map[string][]*recomputer{},
 		pending: map[string]bool{},
+		on:      map[string][]func(string, json.RawMessage){},
 		after:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}
 }
