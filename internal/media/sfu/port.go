@@ -33,6 +33,7 @@ type roomPort struct {
 	mu     sync.Mutex
 	active room.ParticipantID
 	pinned room.ParticipantID // when set, the only feed forwarded (hold music) until it leaves
+	yield  room.ParticipantID // released by ReleasePortFeed: may not re-claim the feed until a publisher leaves
 	gone   map[room.ParticipantID]struct{} // removed publishers; their copy-loop tail packets must not re-claim the feed
 	seq    uint16
 	ts     uint32
@@ -67,6 +68,10 @@ func (p *roomPort) WriteRTP(from room.ParticipantID, pkt *rtp.Packet) error {
 		p.active = p.pinned // a pinned feed (hold music) preempts whoever was talking
 	}
 	if p.active == "" {
+		if from == p.yield {
+			p.mu.Unlock()
+			return nil // a released feed's late packet; another publisher takes over
+		}
 		p.active = from
 	}
 	if from != p.active {
@@ -180,6 +185,7 @@ func (p *roomPort) clearActive(gone room.ParticipantID) {
 		p.gone = make(map[room.ParticipantID]struct{})
 	}
 	p.gone[gone] = struct{}{}
+	p.yield = "" // membership changed: whoever speaks next takes the feed
 	if p.pinned == gone {
 		p.pinned = ""
 	}
@@ -295,16 +301,17 @@ func (s *SFU) PinPortFeed(roomID room.RoomID, pid room.ParticipantID) {
 	}
 }
 
-// ReleasePortFeed frees every port's forwarded feed (without banning it) so the
-// next publisher to send claims it. A transfer's answered agent needs this: the
-// IVR's voice stays the phone leg's feed after its last prompt, idle but still
-// active, so the caller would never hear the agent while the IVR waits out the
-// call. The idle IVR can claim the feed back when it next plays.
+// ReleasePortFeed frees every port's forwarded feed so another publisher claims
+// it. A transfer that connects someone needs this: the IVR's voice stays the
+// phone leg's feed after its last prompt (or ringing music), idle but still
+// active, so the caller would never hear the agent or dialed number while the
+// IVR waits out the call. The released feed yields — a late packet of it can't
+// take the feed back — until a publisher leaves; then the IVR can speak again.
 func (s *SFU) ReleasePortFeed(roomID room.RoomID) {
 	for _, p := range s.roomPorts(roomID) {
 		p.mu.Lock()
 		if p.pinned == "" {
-			p.active = ""
+			p.yield, p.active = p.active, ""
 		}
 		p.mu.Unlock()
 	}

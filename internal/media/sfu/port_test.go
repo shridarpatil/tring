@@ -212,3 +212,43 @@ func TestPortPinnedFeedWinsUntilRemoved(t *testing.T) {
 		t.Fatalf("after hold the port forwarded %v, want only agent (0xBB)", got)
 	}
 }
+
+// ReleasePortFeed hands the leg from the publisher it was forwarding (the IVR)
+// to another one (the agent or dialed number), and the released feed's late
+// packets can't take it back — until a publisher leaves, when it may again.
+func TestPortReleasedFeedYieldsUntilMembershipChanges(t *testing.T) {
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	caller := &slowSource{id: "phone-leg", mark: 0xCC, total: 1000}
+	out := &pktCollector{}
+	if err := s.AttachPort("call", caller, out.write); err != nil {
+		t.Fatalf("attach port: %v", err)
+	}
+	ivrSrc := &slowSource{id: "ivr", mark: 0xAA, total: 1000}
+	if err := s.InjectSource("call", ivrSrc, opusCap()); err != nil {
+		t.Fatalf("inject ivr: %v", err)
+	}
+	waitCount(t, out, 10, "port hears the IVR")
+	agent := &slowSource{id: "agent", mark: 0xBB, total: 1000}
+	if err := s.InjectSource("call", agent, opusCap()); err != nil {
+		t.Fatalf("inject agent: %v", err)
+	}
+
+	s.ReleasePortFeed("call")
+	time.Sleep(50 * time.Millisecond) // let in-flight IVR packets drain
+	mark := out.count()
+	waitCount(t, out, mark+20, "port hears the agent")
+	if got := out.marksSince(mark); got[0xBB] == 0 || got[0xAA] > 0 {
+		t.Fatalf("after release the port forwarded %v, want only agent (0xBB)", got)
+	}
+
+	s.RemoveSource("call", "agent")
+	time.Sleep(50 * time.Millisecond)
+	mark = out.count()
+	waitCount(t, out, mark+20, "port hears the IVR again")
+	if got := out.marksSince(mark); got[0xAA] == 0 {
+		t.Fatalf("after the agent left the port forwarded %v, want the IVR (0xAA)", got)
+	}
+}
