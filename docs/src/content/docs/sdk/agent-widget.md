@@ -10,7 +10,7 @@ The widget **cannot place calls**. It has no access to the Tring API for startin
 The widget renders:
 
 - a call panel, bottom-right. While a call rings, it shows **Accept** and **Decline**. During a call, it shows a timer and buttons for **Mute**, **Keypad** (DTMF), **Share screen**, **Hold**, **Transfer** and **Hang up**.
-- a connection badge, bottom-left: **Online**, **Reconnecting…** or **Offline**
+- a status badge, bottom-left: **Online**, **Away**, **Reconnecting…** or **Offline**
 - a ring tone for incoming calls, the caller's shared screen when they share it, and a "Supervising" or "Whisper" badge when a supervisor joins the call
 
 ## Add it to a page
@@ -142,7 +142,7 @@ On the WebRTC media plane, backend click-to-call to a **phone number** isn't ful
 
 ## Events
 
-The widget doesn't expose its `Tring` instance or any callbacks to the page. It sets `window.Tring` to the class, but calling `Tring.init` alongside the widget opens a **second** presence connection for the same agent. If you need call events in your own code (for example, to open the customer's record when a call is answered), drop the widget and build your panel on the [JavaScript API](/tring/sdk/javascript-api/#tring), which emits `registered`, `unregistered`, `reconnecting`, `call:ringing`, `call:answered`, `call:ended`, `call:remote-video`, `call:supervisor` and `error`.
+The widget doesn't expose its `Tring` instance or any callbacks to the page. It sets `window.Tring` to the class, but calling `Tring.init` alongside the widget opens a **second** presence connection for the same agent. If you need call events in your own code (for example, to open the customer's record when a call is answered), drop the widget and build your panel on the [JavaScript API](/tring/sdk/javascript-api/#tring), which emits `registered`, `availability`, `unregistered`, `reconnecting`, `call:ringing`, `call:answered`, `call:ended`, `call:remote-video`, `call:supervisor` and `error`.
 
 ## Staying online across page navigation
 
@@ -154,7 +154,7 @@ On short network drops (Wi-Fi blips, gateway redeploys, an expired token), the w
 
 ## Agent availability
 
-The badge shows only whether the **connection** is up. Whether the agent is Away or on a break is up to your CRM: set it from your backend with `POST /v1/agents/{id}/availability` and `{"available": false}`. An unavailable agent stays connected but isn't rung. See [Agents API](/tring/api-reference/agents/).
+Whether the agent is Away or on a break is up to your CRM: set it from your backend with `POST /v1/agents/{id}/availability` and `{"available": false}`. An unavailable agent stays connected but isn't rung, and the badge switches to **Away** straight away (no reload). It switches back to **Online** when you send `{"available": true}`. See [Agents API](/tring/api-reference/agents/).
 
 ## Complete CRM example
 
@@ -319,7 +319,7 @@ The widget adds its CSS as `<style id="tring-styles">` in `<head>`, **unless an 
 | `.tring-panel-dialpad`, `.tring-dtmf`, `.tring-panel-dialed` | Dialpad, its keys, and the digits pressed so far |
 | `.tring-panel-picker`, `.tring-picker-item` | Transfer list |
 | `.tring-panel-supervisor` | Supervisor badge |
-| `.tring-status-badge[data-state="…"]` (`online`, `reconnecting`, `offline`) | Connection badge (fixed bottom-left, `z-index: 999998`) |
+| `.tring-status-badge[data-state="…"]` (`online`, `away`, `reconnecting`, `offline`) | Status badge (fixed bottom-left, `z-index: 999998`) |
 
 ## Troubleshooting
 

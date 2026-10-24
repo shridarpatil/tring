@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -142,6 +143,7 @@ func main() {
 	var supervisors signaling.SupervisorLog
 	var webhooks signaling.Webhooks
 	var didResolver signaling.DIDResolver
+	var availability signaling.AvailabilityResolver
 	var trunkRes *outboundtrunks.Resolver
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
@@ -149,6 +151,7 @@ func main() {
 		store := flowstore.New(database)
 		flows, teams, holdMusic, didResolver = store, store, store, store
 		transferMessage = store
+		availability = store
 		trunkRes = outboundtrunks.New(database)
 		// CDRs + recordings for media-plane calls (web + phone): same calls table,
 		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
@@ -199,11 +202,31 @@ func main() {
 		Calls:           calls,                    // CDRs + recordings (one path for web + phone)
 		Cache:           redisCache,               // publish web team-queue depth for the dashboard
 		Events:          eventsPub,
-		Supervisors:     supervisors, // supervisor session audit (nil DB → nil, no audit)
-		HTTP:            ivrHTTP,     // SSRF-guarded client for IVR http_callback nodes
-		Webhooks:        webhooks,    // IVR node webhooks (nil without a DB)
+		Supervisors:     supervisors,  // supervisor session audit (nil DB → nil, no audit)
+		HTTP:            ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes
+		Webhooks:        webhooks,     // IVR node webhooks (nil without a DB)
+		Availability:    availability, // agent's Away flag sent on connect (nil without a DB)
 		Logger:          logger,
 	})
+
+	// Backend Away/Break toggles (the api's agent.status event) reach the SDK
+	// live: forward each to the agent's presence socket if they're connected
+	// here. Best-effort: without Redis the agent only learns it on reconnect.
+	hub, err := events.NewHub(k.String("redis_addr"), k.String("redis_password"), logger)
+	if err != nil {
+		logger.Warn("redis unavailable, live agent availability disabled", "err", err)
+	}
+	defer hub.Close()
+	hub.On(events.TypeAgentStatus, func(tenant string, data json.RawMessage) {
+		var e struct {
+			Sip       string `json:"sip_username"`
+			Available bool   `json:"available_for_calls"`
+		}
+		if json.Unmarshal(data, &e) == nil {
+			sig.PushAvailability(tenant, e.Sip, e.Available)
+		}
+	})
+	go hub.Run(context.Background())
 
 	// FreeSWITCH SIP plug (internal/fsplug) — inbound PSTN calls over
 	// FreeSWITCH, routed through the room.Plug seam. OFF by default; needs

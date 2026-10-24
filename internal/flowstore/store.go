@@ -115,3 +115,14 @@ func (s *Store) TenantTransferFailedAudio(ctx context.Context, tenantID uuid.UUI
 	}
 	return path, nil
 }
+
+// AgentAvailable reports the agent's backend-managed availability
+// (available_for_calls — the integrator's Away/Break toggle). The gateway reads
+// it when the agent's presence socket connects so the SDK can show Away.
+func (s *Store) AgentAvailable(ctx context.Context, tenantID uuid.UUID, sip string) (bool, error) {
+	var available bool
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetAgentAvailability, tenantID, sip).Scan(&available); err != nil {
+		return false, err
+	}
+	return available, nil
+}

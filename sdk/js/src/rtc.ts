@@ -420,6 +420,7 @@ export interface RtcAgentOpts {
 
 export type RtcAgentEvent =
   | { type: "online" }
+  | { type: "availability"; available: boolean }
   | { type: "reconnecting" }
   | { type: "offline" }
   | { type: "incoming"; room: string; from?: string }
@@ -478,6 +479,8 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
       if (m.type === ServerMsgType.Ready) {
         this.backoffMs = 1000; // healthy → reset reconnect backoff
         this.emit({ type: "online" });
+      } else if (m.type === ServerMsgType.Availability) {
+        this.emit({ type: "availability", available: m.available ?? true });
       } else if (m.type === ServerMsgType.Incoming) {
         this.incoming = { room: m.room ?? "", from: m.from };
         this.emit({ type: "incoming", room: this.incoming.room, from: m.from });

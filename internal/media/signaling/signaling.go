@@ -105,7 +105,16 @@ type Config struct {
 	HTTP *http.Client
 	// Webhooks sends the IVR's node webhooks (webhook.Notifier); nil = off.
 	Webhooks Webhooks
-	Logger   *slog.Logger
+	// Availability reads an agent's backend Away/Break flag when their presence
+	// socket connects (internal/flowstore implements it). nil → the agent is
+	// told nothing and the SDK shows plain Online.
+	Availability AvailabilityResolver
+	Logger       *slog.Logger
+}
+
+// AvailabilityResolver reads an agent's available_for_calls by SIP username.
+type AvailabilityResolver interface {
+	AgentAvailable(ctx context.Context, tenantID uuid.UUID, sip string) (bool, error)
 }
 
 // Webhooks sends an event to one registered webhook, in the background.

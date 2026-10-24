@@ -17,6 +17,7 @@ func newTestHub() *Hub {
 		forward: map[string]bool{},
 		recomp:  map[string][]*recomputer{},
 		pending: map[string]bool{},
+		on:      map[string][]func(string, json.RawMessage){},
 		after:   func(_ time.Duration, _ func()) {},
 	}
 }
@@ -143,5 +144,22 @@ func TestRecomputeRearmsAfterFire(t *testing.T) {
 	h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
 	if len(fired) != 2 {
 		t.Fatalf("scheduled %d, want 2 (re-armed after fire)", len(fired))
+	}
+}
+
+func TestOnHandlerCalled(t *testing.T) {
+	h := newTestHub()
+	var gotTenant, gotData string
+	h.On(TypeAgentStatus, func(tenant string, data json.RawMessage) {
+		gotTenant, gotData = tenant, string(data)
+	})
+
+	h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+	if gotTenant != "" {
+		t.Fatal("handler ran for another event type")
+	}
+	h.handle("t1", Event{Type: TypeAgentStatus, Data: json.RawMessage(`{"available_for_calls":false}`)})
+	if gotTenant != "t1" || gotData != `{"available_for_calls":false}` {
+		t.Fatalf("handler got (%q, %q)", gotTenant, gotData)
 	}
 }

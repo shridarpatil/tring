@@ -32,6 +32,10 @@ const TTL = 30 * time.Second
 // generous but not load-bearing.
 const FreedTTL = time.Hour
 
+// AvailabilityTTL bounds a cached available_for_calls. The API deletes the key
+// on every update, so this only caps drift from a missed invalidation.
+const AvailabilityTTL = 10 * time.Minute
+
 // RefreshInterval is how often the gateway should re-mark a live agent online.
 const RefreshInterval = 10 * time.Second
 
@@ -65,6 +69,44 @@ func key(tenant, sip string) string {
 
 func freedKey(tenant, sip string) string {
 	return "presence:freed:" + tenant + ":" + sip
+}
+
+func availabilityKey(tenant, sip string) string {
+	return "presence:available:" + tenant + ":" + sip
+}
+
+// CachedAvailability returns the agent's cached available_for_calls (the
+// backend Away/Break flag). ok=false on a miss — read the DB and CacheAvailability.
+func (s *Store) CachedAvailability(ctx context.Context, tenant, sip string) (available, ok bool) {
+	if !s.Enabled() {
+		return false, false
+	}
+	v, ok := s.c.Get(ctx, availabilityKey(tenant, sip))
+	if !ok {
+		return false, false
+	}
+	return string(v) == "1", true
+}
+
+// CacheAvailability stores the agent's available_for_calls read from the DB.
+func (s *Store) CacheAvailability(ctx context.Context, tenant, sip string, available bool) {
+	if !s.Enabled() {
+		return
+	}
+	v := "0"
+	if available {
+		v = "1"
+	}
+	s.c.Set(ctx, availabilityKey(tenant, sip), []byte(v), AvailabilityTTL)
+}
+
+// InvalidateAvailability drops the cached flag after the API updates it, so the
+// next read goes to the DB.
+func (s *Store) InvalidateAvailability(ctx context.Context, tenant, sip string) {
+	if !s.Enabled() {
+		return
+	}
+	_ = s.c.Delete(ctx, availabilityKey(tenant, sip))
 }
 
 // MarkFreed records that an agent just finished a call (became free) at now.
