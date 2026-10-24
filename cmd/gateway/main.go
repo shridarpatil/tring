@@ -34,6 +34,7 @@ import (
 	"github.com/shridarpatil/tring/internal/outboundtrunks"
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/safehttp"
+	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/webhook"
 )
 
@@ -55,6 +56,19 @@ func main() {
 		os.Exit(1)
 	}
 	ivrHTTP := safehttp.NewClient(outboundAllow, 0) // per-node timeout via ctx (ivrdrive)
+	// TRING_SECRETS_KEY opens sealed webhook headers (the api seals them). A
+	// set-and-malformed key is fatal, as in the api.
+	var secrets *secretbox.Box
+	if v := k.String("secrets_key"); v != "" {
+		key, err := secretbox.ParseKey(v)
+		if err == nil {
+			secrets, err = secretbox.New(key)
+		}
+		if err != nil {
+			logger.Error("invalid TRING_SECRETS_KEY", "err", err)
+			os.Exit(1)
+		}
+	}
 	webhookHTTP := safehttp.NewClient(outboundAllow, webhook.DeliveryTimeout)
 
 	turnURL := k.String("turn_url")
@@ -126,6 +140,7 @@ func main() {
 	var transferMessage signaling.TransferMessageResolver
 	var calls signaling.CallLog
 	var supervisors signaling.SupervisorLog
+	var webhooks signaling.Webhooks
 	var didResolver signaling.DIDResolver
 	var trunkRes *outboundtrunks.Resolver
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
@@ -153,11 +168,14 @@ func main() {
 		// each interface-typed var from its concrete type so a nil DB leaves BOTH
 		// unset (a typed-nil stored in an interface would compare != nil and break
 		// the "Calls != nil"/"Supervisors != nil" best-effort checks downstream).
-		// The call log emits call.answered / call.ended webhooks: the gateway is
-		// the one process that sees each media-plane call answer and end, so
-		// each fires exactly once however many api replicas run.
+		// IVR flows send their webhooks from here: the gateway runs every flow
+		// and sees each media-plane call end (call.ended to a flow's "on call
+		// end" webhook), so each fires once however many api replicas run.
+		notifier := webhook.New(database).WithLogger(logger).WithHTTPClient(webhookHTTP).
+			WithCache(redisCache).WithSecrets(secrets)
+		webhooks = notifier
 		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub).
-			WithWebhooks(webhook.New(database).WithLogger(logger).WithHTTPClient(webhookHTTP))
+			WithWebhooks(notifier)
 		calls = cdrLog
 		supervisors = cdrLog
 	}
@@ -183,6 +201,7 @@ func main() {
 		Events:          eventsPub,
 		Supervisors:     supervisors, // supervisor session audit (nil DB → nil, no audit)
 		HTTP:            ivrHTTP,     // SSRF-guarded client for IVR http_callback nodes
+		Webhooks:        webhooks,    // IVR node webhooks (nil without a DB)
 		Logger:          logger,
 	})
 

@@ -54,7 +54,7 @@ import TimingNode from "../../components/calling/nodes/TimingNode.vue";
 import HangupNode from "../../components/calling/nodes/HangupNode.vue";
 import IVRNodeProperties from "../../components/calling/IVRNodeProperties.vue";
 
-import type { Flow, IVRFlowData, IVRNodeType, Agent, Team, Paginated } from "../../api/types";
+import type { Flow, IVRFlowData, IVRNodeType, Agent, Team, Paginated, Webhook } from "../../api/types";
 import { confirmDialog } from "../../lib/confirm";
 
 const route = useRoute();
@@ -338,6 +338,9 @@ const availableFlows = ref<Flow[]>([]);
 const availableAgents = ref<Agent[]>([]);
 // Teams are the primary Transfer-node target ("ring this team by its strategy").
 const availableTeams = ref<Team[]>([]);
+// Registered webhooks: a node's "Notify webhook" and the flow's "On call end".
+const availableWebhooks = ref<Webhook[]>([]);
+const endWebhookId = ref("");
 
 function buildIVRFlowData(): IVRFlowData {
   return {
@@ -357,10 +360,12 @@ function buildIVRFlowData(): IVRFlowData {
       to: e.target,
       condition: (e.sourceHandle as string) || "default",
     })),
+    ...(endWebhookId.value ? { end_webhook_id: endWebhookId.value } : {}),
   };
 }
 
 function loadFromIVRFlowData(d: IVRFlowData) {
+  endWebhookId.value = d.end_webhook_id || "";
   removeNodes(nodes.value);
   removeEdges(edges.value);
   for (const n of d.nodes) {
@@ -458,14 +463,16 @@ async function saveFlow() {
 
 onMounted(async () => {
   try {
-    const [f, list, agents, teams] = await Promise.all([
+    const [f, list, agents, teams, hooks] = await Promise.all([
       api.get<Flow>(`/v1/flows/${flowId.value}`),
       api.get<Paginated<Flow>>("/v1/flows"),
       api.get<Agent[]>("/v1/agents"),
       api.get<Team[]>("/v1/teams"),
+      api.get<Webhook[]>("/v1/webhooks"),
     ]);
     availableAgents.value = agents;
     availableTeams.value = teams;
+    availableWebhooks.value = hooks;
     flowName.value = f.name;
     isActive.value = f.is_active;
     isOutgoingEnd.value = f.is_outgoing_end;
@@ -493,6 +500,18 @@ onMounted(async () => {
       <input v-model="flowName" placeholder="Flow name" class="fe-name-input" />
       <Toggle v-model="isActive" label="Active" />
       <Toggle v-model="isOutgoingEnd" label="Outgoing Post-Call" :disabled="!isActive" />
+      <label class="fe-endhook" title="Sent call.ended when a call through this flow ends, however it ended">
+        <span>On call end</span>
+        <select v-model="endWebhookId">
+          <option value="">No webhook</option>
+          <option v-for="w in availableWebhooks" :key="w.id" :value="w.id">
+            {{ w.name }}{{ w.active ? "" : " (disabled)" }}
+          </option>
+          <option v-if="endWebhookId && !availableWebhooks.some((w) => w.id === endWebhookId)" :value="endWebhookId">
+            Deleted webhook
+          </option>
+        </select>
+      </label>
       <div class="fe-spacer" />
       <span v-if="savedMsg" class="fe-saved-msg">{{ savedMsg }}</span>
       <Button variant="secondary" size="sm" @click="showSimPanel = !showSimPanel">
@@ -552,6 +571,7 @@ onMounted(async () => {
           :available-flows="availableFlows"
           :available-agents="availableAgents"
           :available-teams="availableTeams"
+          :available-webhooks="availableWebhooks"
           @update:node="onUpdateNode"
           @delete="requestDeleteSelectedNode"
         />
@@ -679,6 +699,8 @@ onMounted(async () => {
   flex-shrink: 0;
 }
 .fe-name-input { max-width: 280px; }
+.fe-endhook { display: flex; align-items: center; gap: 0.5rem; font-size: var(--text-8); color: var(--muted-foreground); white-space: nowrap; }
+.fe-endhook select { margin: 0; max-width: 200px; }
 .fe-spacer { flex: 1 1 auto; }
 .fe-saved-msg { font-size: var(--text-8); color: var(--success); }
 

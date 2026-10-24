@@ -170,13 +170,18 @@ export interface Call {
   supervisor?: string;
 }
 
+// A registered webhook that IVR flows pick by id (a node's "Notify webhook",
+// a flow's "On call end"). Header values are write-only: only names return.
 export interface Webhook {
   id: string;
   tenant_id: string;
+  name: string;
   url: string;
   secret?: string; // only returned on create
-  events: string[];
+  header_names: string[];
+  active: boolean;
   created_at: string;
+  updated_at: string;
 }
 
 export interface WebhookDelivery {
@@ -238,6 +243,7 @@ export interface IVRFlowData {
   nodes: IVRNode[];
   edges: IVREdge[];
   entry_node: string;
+  end_webhook_id?: string; // webhook sent call.ended when a call through this flow ends
 }
 
 export interface Flow {

@@ -15,7 +15,7 @@ Tring has two click-to-call endpoints. Both go out through FreeSWITCH over your 
 | Caller ID | Trunk's number, or `caller_id` | Trunk's number on both legs |
 | Agent sees | `agent_label` (or a generic incoming call) | Your trunk's number on their phone |
 
-Both return `201` with the new call record (status `ringing`) and send a `call.ringing` [webhook](/tring/features/webhooks/). Details are in the [Calls API](/tring/api-reference/calls/).
+Both return `201` with the new call record (status `ringing`). They don't run an IVR flow, so they send no [webhooks](/tring/features/webhooks/). Details are in the [Calls API](/tring/api-reference/calls/).
 
 ## Click-to-call to a browser agent
 

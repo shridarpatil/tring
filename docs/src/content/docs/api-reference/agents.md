@@ -181,7 +181,7 @@ curl -sS -X POST "$TRING_URL/v1/agents/agent-1042/availability" \
 
 **Response** `200 OK` with the updated agent (same shape as `GET /v1/agents/{id}`).
 
-Each change also sends an `agent.status` [webhook](/tring/api-reference/webhooks/) and an `agent.status` event on the [dashboard stream](/tring/api-reference/queues-and-stats/#get-v1streamdashboard), with this data:
+Each change also sends an `agent.status` event on the [dashboard stream](/tring/api-reference/queues-and-stats/#get-v1streamdashboard), with this data:
 
 ```json
 {

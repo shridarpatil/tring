@@ -68,7 +68,7 @@ What happens:
 1. `caller_id`, if set, is checked against your tenant's active numbers.
 2. Trunks are chosen from your active outbound numbers by the tenant's `outbound_strategy`: `failover` tries every route in priority order, `round_robin` picks the next one, `manual` uses only the lowest-priority one. `load_based` is reserved and returns `400`.
 3. `to` is normalised. Each trunk leg presents that trunk's own DID as caller ID, or `caller_id` on every leg when you set it. With `failover` and more than one route, FreeSWITCH moves to the next trunk only on the tenant's configured failover causes.
-4. The call is created with `status: "ringing"` and a [`call.ringing` webhook](/tring/api-reference/webhooks/#callringing) is sent.
+4. The call is created with `status: "ringing"`. These calls don't run an IVR flow, so they send no [webhooks](/tring/api-reference/webhooks/).
 
 :::caution
 With no active outbound number on an active trunk, Tring falls back to a FreeSWITCH loopback dial meant for local development, with no normalisation (the destination must still be a bare number). Make sure production tenants have at least one outbound number with a trunk.
@@ -142,7 +142,7 @@ curl -sS -X POST "$TRING_URL/v1/calls/connect" \
   -d '{"agent_number": "+919800000004", "client_number": "+919800000005"}'
 ```
 
-**Response:** `201 Created`. `from_number` is the agent's number, `to_number` the client's, and there's no `agent_id`. A [`call.ringing` webhook](/tring/api-reference/webhooks/#callringing) is sent.
+**Response:** `201 Created`. `from_number` is the agent's number, `to_number` the client's, and there's no `agent_id`.
 
 ```json
 {

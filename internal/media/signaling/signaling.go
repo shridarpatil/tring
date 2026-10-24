@@ -102,8 +102,15 @@ type Config struct {
 	// HTTP is the client IVR http_callback nodes call tenant URLs with. Must be
 	// SSRF-guarded (internal/safehttp); nil → the guarded default with no
 	// private-range allowlist.
-	HTTP   *http.Client
-	Logger *slog.Logger
+	HTTP *http.Client
+	// Webhooks sends the IVR's node webhooks (webhook.Notifier); nil = off.
+	Webhooks Webhooks
+	Logger   *slog.Logger
+}
+
+// Webhooks sends an event to one registered webhook, in the background.
+type Webhooks interface {
+	Send(tenantID, webhookID uuid.UUID, eventType string, data interface{})
 }
 
 // FlowLoader loads a tenant's parsed IVR flow by id (internal/flowstore
@@ -419,16 +426,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.syncSupervisors(roomID)
 	}
 
-	// Flow-pinned room → run the IVR as a participant (once per room). The dev
-	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
-	if flowID != "" {
-		if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
-			// Record the caller so a later transfer handoff can tell the caller apart
-			// from the answering agent (post-call IVR runs to the caller). See handoff.go.
-			s.setCaller(roomID, p.ID())
-			s.startIVR(roomID, flowID, princ.clientRef, map[string]string{"caller": princ.clientRef}) // brain runs the IVR in-process
-		}
-	}
 	// A flow-pinned FRESH join is a web CALL — open its CDR (and attach the
 	// caller's recording leg when the tenant records). Reattaches (page refresh)
 	// keep the original CDR; plain rooms (no flow) get none.
@@ -447,6 +444,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		if sink := s.cfg.Calls.Started(r.Context(), princ.tenant, string(roomID), from, flowName, "web", princ.clientRef, p.ID()); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
+		}
+	}
+	// Flow-pinned room → run the IVR as a participant (once per room), after the
+	// CDR is open so the flow's webhooks can name the call. The dev
+	// flow ("dev", when dev tokens are on) needs no DB — it just rings agents.
+	if flowID != "" {
+		if s.cfg.Flows != nil || (s.cfg.DevTokens && flowID == devFlowID) {
+			// Record the caller so a later transfer handoff can tell the caller apart
+			// from the answering agent (post-call IVR runs to the caller). See handoff.go.
+			s.setCaller(roomID, p.ID())
+			s.startIVR(roomID, flowID, princ.clientRef, map[string]string{"caller": princ.clientRef}) // brain runs the IVR in-process
 		}
 	}
 	// A non-visitor (agent) joining an existing call room is answering it: mark the

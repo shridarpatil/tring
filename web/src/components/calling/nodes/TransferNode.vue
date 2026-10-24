@@ -18,6 +18,7 @@ const summary = computed(() => {
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Transfer'"
     header-class="bg-amber-600"
     :output-handles="[

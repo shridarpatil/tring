@@ -25,10 +25,8 @@ import (
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/queries"
-	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/tts"
-	"github.com/shridarpatil/tring/internal/webhook"
 	"github.com/shridarpatil/tring/internal/webui"
 	"github.com/shridarpatil/tring/internal/widget"
 )
@@ -126,7 +124,6 @@ type Server struct {
 	fsBasicUser string
 	fsBasicPass string
 	fs          *freeswitch.Client
-	notifier    *webhook.Notifier
 	cache       *cache.Cache    // shared Redis; used to invalidate cached IVR flows
 	presence    *presence.Store // agent online status published by the gateway
 
@@ -208,9 +205,6 @@ func NewServer(cfg Config) *Server {
 		logger = slog.Default()
 	}
 	logger = logger.With("component", "api")
-	// Webhook URLs are tenant-supplied: deliver through the SSRF guard.
-	notifier := webhook.New(cfg.DB).WithLogger(cfg.Logger).
-		WithHTTPClient(safehttp.NewClient(cfg.OutboundAllow, webhook.DeliveryTimeout))
 	return &Server{
 		db:               cfg.DB,
 		q:                queries.MustLoad(),
@@ -218,7 +212,6 @@ func NewServer(cfg Config) *Server {
 		fsBasicUser:      user,
 		fsBasicPass:      pass,
 		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		notifier:         notifier,
 		cache:            cfg.Cache,
 		presence:         presence.New(cfg.Cache),
 		agentTransport:   cfg.AgentTransport,
@@ -447,6 +440,7 @@ func (s *Server) Router() http.Handler {
 
 					r.Post("/webhooks", s.handleCreateWebhook)
 					r.Get("/webhooks", s.handleListWebhooks)
+					r.Patch("/webhooks/{id}", s.handleUpdateWebhook)
 					r.Delete("/webhooks/{id}", s.handleDeleteWebhook)
 					r.Get("/webhooks/{id}/deliveries", s.handleListDeliveries)
 

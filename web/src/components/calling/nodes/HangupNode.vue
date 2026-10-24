@@ -9,6 +9,7 @@ defineProps<{ data: Record<string, any> }>();
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Hangup'"
     header-class="bg-red-600"
     :output-handles="[]"

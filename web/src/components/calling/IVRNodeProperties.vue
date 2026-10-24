@@ -4,7 +4,7 @@
 // node types. Bare inputs are styled by Oat; only structural layout is scoped.
 import { computed, ref, watch } from "vue";
 import { Trash2, Volume2, Grid3X3, Hash, Globe, Users, ExternalLink, Clock, PhoneOff, Plus, X } from "lucide-vue-next";
-import type { IVRNodeType, Flow, Agent, Team } from "../../api/types";
+import type { IVRNodeType, Flow, Agent, Team, Webhook } from "../../api/types";
 import AudioPicker from "../AudioPicker.vue";
 
 interface VueFlowNode {
@@ -23,6 +23,7 @@ const props = defineProps<{
   availableFlows?: Flow[];
   availableAgents?: Agent[];
   availableTeams?: Team[];
+  availableWebhooks?: Webhook[];
 }>();
 
 const emit = defineEmits<{
@@ -144,6 +145,22 @@ function removeHeader(k: string) {
   delete h[k];
   config.value = { ...config.value, headers: h };
 }
+
+// ─── Notify webhook ─────────────────────────────────────────────────
+// config.webhook_id names a registered webhook sent ivr.node when this step
+// finishes (a transfer: when someone answers, or nobody does).
+const webhookId = computed<string>({
+  get: () => config.value.webhook_id || "",
+  set(v: string) {
+    const next = { ...config.value };
+    if (v) next.webhook_id = v;
+    else delete next.webhook_id;
+    config.value = next;
+  },
+});
+const webhookMissing = computed(
+  () => !!webhookId.value && !(props.availableWebhooks || []).some((w) => w.id === webhookId.value),
+);
 
 // ─── Timing schedule defaults ──────────────────────────────────────
 const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"] as const;
@@ -455,6 +472,23 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
           />
         </div>
       </template>
+
+      <!-- ── NOTIFY WEBHOOK (every node) ──────────────────────── -->
+      <label class="fld webhook-fld">
+        <span class="fl">Notify webhook</span>
+        <select v-model="webhookId">
+          <option value="">None</option>
+          <option v-for="w in availableWebhooks || []" :key="w.id" :value="w.id">
+            {{ w.name }}{{ w.active ? "" : " (disabled)" }}
+          </option>
+          <option v-if="webhookMissing" :value="webhookId">Deleted webhook</option>
+        </select>
+        <span class="sub-note">
+          <template v-if="node.type === 'transfer'">Sent when someone answers, or when nobody does.</template>
+          <template v-else>Sent when this step finishes, with its result and the caller's input.</template>
+          Doesn't delay the call. Register webhooks on the <strong>Webhooks</strong> page.
+        </span>
+      </label>
     </div>
   </div>
 </template>
@@ -507,6 +541,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
   font-size: var(--text-7);
 }
 .fld { display: block; }
+.webhook-fld { border-top: 1px solid var(--border); padding-top: 1rem; }
 .fld > input,
 .fld > textarea,
 .fld > select { margin-top: 0.25rem; }
