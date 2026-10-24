@@ -237,8 +237,9 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
-	// Drop the gateway's cached flag so a reconnecting agent reads the new one.
-	s.presence.InvalidateAvailability(r.Context(), t.ID.String(), a.SipUsername)
+	// Overwrite the gateway's cached flag so a reconnecting agent reads the new
+	// one (a write, not a delete: see presence.FillAvailability).
+	s.presence.SetAvailability(r.Context(), t.ID.String(), a.SipUsername, a.AvailableForCalls)
 	s.events.Publish(r.Context(), t.ID.String(), events.TypeAgentStatus, map[string]any{
 		"agent_id":            a.ID,
 		"sip_username":        a.SipUsername,
