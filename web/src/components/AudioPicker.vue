@@ -10,7 +10,7 @@ import type { Audio } from "../api/types";
 // OR upload a new one inline (uploads transcode to Opus-Ogg server-side so they
 // play on both the web and phone planes).
 const props = defineProps<{
-  modelValue: string;
+  modelValue?: string; // unset (a node with no audio_file yet) = default
   label?: string;
   defaultLabel?: string; // text for the empty option (e.g. "Use text-to-speech" / "Default")
 }>();
@@ -46,7 +46,7 @@ const isGenerated = computed(() => val.value.includes("/tts/"));
 const override = ref(false);
 
 const val = computed({
-  get: () => props.modelValue,
+  get: () => props.modelValue ?? "",
   set: (v: string) => emit("update:modelValue", v),
 });
 
