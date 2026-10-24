@@ -3,7 +3,6 @@ package signaling
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -130,12 +129,15 @@ func TestIVRDialCallerHangupIsCaller(t *testing.T) {
 	rid := room.RoomID(uuid.NewString() + "/pstn-c")
 	pstnRoom(s, &hangupPlug{hangups: make(chan room.CallID, 2)}, rid, "call-c")
 
-	if o, _ := s.dialFromIVR(context.Background(), rid, "9812345678", "", time.Second); o != "completed" {
-		t.Fatalf("outcome = %q, want completed", o)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	answered, res := dialAsync(ctx, s, rid, "")
+	waitAnswered(t, answered, "callee never answered")
+	waitOutboundLeg(t, s, rid)
+	cancel() // endPstnRoom → stopIVR cancels the walk
 	s.endPstnRoom(rid)
 	src.Close()
 	close(done)
+	waitDial(t, res)
 	if got := cl.endedCauses(); len(got) == 0 || got[0] != "caller_hangup" {
 		t.Fatalf("causes = %v, want caller_hangup first", got)
 	}
