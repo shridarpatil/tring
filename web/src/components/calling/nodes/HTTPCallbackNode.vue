@@ -22,6 +22,7 @@ const outputHandles = [
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'HTTP Callback'"
     header-class="bg-orange-600"
     :output-handles="outputHandles"

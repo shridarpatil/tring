@@ -25,6 +25,7 @@ const outputHandles = [
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Gather'"
     header-class="bg-blue-600"
     :output-handles="outputHandles"

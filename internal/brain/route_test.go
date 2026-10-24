@@ -133,3 +133,17 @@ func TestAgentRouterRoutesTeamTransfer(t *testing.T) {
 		t.Fatalf("router was not driven with candidates")
 	}
 }
+
+// Ring calls the target's Answered once an agent picks up (a transfer node's
+// webhook fires then), before waiting out the call.
+func TestAgentRouterCallsAnswered(t *testing.T) {
+	tp := &handoffTransport{fakeTransport: fakeTransport{eff: &answerEffects{}}, resumeToCaller: true}
+	answered := false
+	target := ivrdrive.Target{Team: "sales", Answered: func() { answered = !tp.waited }}
+	if _, err := newRouter(tp).Ring(context.Background(), uuid.New().String()+"/call", target); err != nil {
+		t.Fatalf("Ring err: %v", err)
+	}
+	if !answered {
+		t.Fatal("Answered was not called before the handoff wait")
+	}
+}

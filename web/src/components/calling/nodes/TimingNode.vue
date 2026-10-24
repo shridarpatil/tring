@@ -22,6 +22,7 @@ const outputHandles = [
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Timing'"
     header-class="bg-cyan-600"
     :output-handles="outputHandles"

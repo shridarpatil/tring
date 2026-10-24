@@ -52,6 +52,10 @@ type Flow struct {
 	Nodes     []Node `json:"nodes"`
 	Edges     []Edge `json:"edges"`
 	EntryNode string `json:"entry_node"`
+	// EndWebhookID is the registered webhook sent call.ended when a call that
+	// ran this flow ends ("" = none). A node's own webhook is its config's
+	// "webhook_id".
+	EndWebhookID string `json:"end_webhook_id,omitempty"`
 }
 
 // Parse unmarshals a flow definition and enforces the one invariant the walker

@@ -41,6 +41,7 @@ All routes on this page take a tenant API key or a console session. See [Authent
 | `entry_node` | string | ID of the first node. Required: a flow with an empty `entry_node` can't run or be simulated. |
 | `nodes` | array | The nodes. |
 | `edges` | array | The connections. |
+| `end_webhook_id` | UUID | Optional. A registered [webhook](/tring/api-reference/webhooks/) sent `call.ended` when a call through this flow ends ("On call end" in the editor). |
 
 **Node**
 
@@ -50,7 +51,7 @@ All routes on this page take a tenant API key or a console session. See [Authent
 | `type` | string | One of the node types below. |
 | `label` | string | Shown in the editor, and as the interactive simulator's prompt when a node has no text or audio. |
 | `position` | `{x, y}` | Editor canvas position. Ignored at call time. |
-| `config` | object | Type-specific settings. |
+| `config` | object | Type-specific settings. Any node may also set `webhook_id`, a registered [webhook](/tring/api-reference/webhooks/) sent `ivr.node` when the node finishes (a transfer: when someone answers, or nobody does). |
 
 **Edge**
 

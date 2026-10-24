@@ -268,8 +268,8 @@ def agent_availability():
     """The CRM's own Away/Break toggle hits THIS endpoint; the backend (which
     holds the API key) sets the agent available/unavailable via the Tring API.
     Availability is intentionally backend-controlled — the browser SDK can't set
-    it — so the CRM owns it and can track away time from the agent.status
-    webhook. Unavailable agents stay connected but the orchestrator stops
+    it — so the CRM owns it and can track away time itself, since it makes
+    every change. Unavailable agents stay connected but the orchestrator stops
     ringing them."""
     if not API_KEY:
         return jsonify({"error": "server misconfigured: TRING_API_KEY not set"}), 500

@@ -13,6 +13,7 @@ import (
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 // devFlowID is the magic flow id that, with dev tokens on, runs the built-in
@@ -64,6 +65,9 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 		Vars:      vars,
 		HTTP:      s.cfg.HTTP,
 		Logger:    s.log,
+		OnNodeEvent: func(ev ivrdrive.NodeEvent) {
+			s.sendNodeWebhook(roomID, flowID, ev)
+		},
 	})
 
 	var (
@@ -84,6 +88,8 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 		_ = player.Close()
 		return
 	}
+
+	s.setEndWebhook(roomID, flow.EndWebhookID)
 
 	onJourney := func(path []ivr.Step) {
 		if s.cfg.Calls != nil {
@@ -201,4 +207,46 @@ func (p *filePrompts) load(file string) ([][]byte, error) {
 	p.cache[file] = frames
 	p.mu.Unlock()
 	return frames, nil
+}
+
+// sendNodeWebhook sends ivr.node to the webhook a node names. Best-effort: an
+// unparseable id or no webhook sender skips it.
+func (s *Server) sendNodeWebhook(roomID room.RoomID, flowID string, ev ivrdrive.NodeEvent) {
+	if s.cfg.Webhooks == nil {
+		return
+	}
+	tenantStr, _, _ := strings.Cut(string(roomID), "/")
+	tenant, err := uuid.Parse(tenantStr)
+	if err != nil {
+		return
+	}
+	hookID, err := uuid.Parse(ivr.StringFromConfig(ev.Node.Config, "webhook_id"))
+	if err != nil {
+		return
+	}
+	callID := uuid.Nil
+	if cl, ok := s.cfg.Calls.(interface{ CallID(string) uuid.UUID }); ok {
+		callID = cl.CallID(string(roomID))
+	}
+	s.cfg.Webhooks.Send(tenant, hookID, webhook.EventIVRNode, map[string]any{
+		"call_id":    callID,
+		"flow_id":    flowID,
+		"node_id":    ev.Node.ID,
+		"node_type":  ev.Node.Type,
+		"node_label": ev.Node.Label,
+		"outcome":    ev.Outcome,
+		"dtmf":       ev.DTMF,
+		"vars":       ev.Vars,
+	})
+}
+
+// setEndWebhook records the flow's "on call end" webhook on the room's CDR.
+func (s *Server) setEndWebhook(roomID room.RoomID, webhookID string) {
+	id, err := uuid.Parse(webhookID)
+	if err != nil {
+		return // none set
+	}
+	if cl, ok := s.cfg.Calls.(interface{ EndWebhook(string, uuid.UUID) }); ok {
+		cl.EndWebhook(string(roomID), id)
+	}
 }

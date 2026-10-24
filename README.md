@@ -30,7 +30,7 @@ Open-source, API-first voice calling for any CRM. Bring your own SIP trunk.
   Stereo call recordings (agent and customer on separate channels), stored locally or on S3.
 
 - **Call logs & webhooks**
-  One call log for every channel, a per-call timeline, and signed `call.*` webhooks.
+  One call log for every channel, a per-call timeline, and signed webhooks you pick per IVR step and flow.
 
 - **Multi-tenant**
   Isolated tenants with their own API keys, admin console and trunks.

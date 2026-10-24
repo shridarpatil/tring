@@ -1,35 +1,45 @@
 ---
 title: Webhooks
-description: Event types, payload shape, HMAC-SHA256 signature verification in Go and Node, retries and the delivery log.
+description: Register webhooks, pick them per IVR node and flow, payloads, HMAC-SHA256 signature verification in Go and Node, retries and the delivery log.
 ---
 
-Webhooks push events from Tring to your backend as signed HTTP `POST` requests. Register endpoints in the console (**Webhooks**) or with the API; the endpoints are documented in the [Webhooks API](/tring/api-reference/webhooks/).
+Webhooks push call events from Tring to your backend as signed HTTP `POST` requests. You register each webhook once, a URL with optional headers and an on/off status, in the console (**Webhooks**) or with the [Webhooks API](/tring/api-reference/webhooks/). Then you choose, in each IVR flow, which steps send to which webhook. Different flows (for example one per client) can send to different endpoints.
 
-## Events
+## Choosing what sends
 
-| Event | Sent when | `data` |
+| Where | Event | Sent when |
 |---|---|---|
-| `call.ringing` | Your backend starts a call with `POST /v1/calls` or `POST /v1/calls/connect` | `{ "call": <call record> }` |
-| `agent.status` | An agent's availability changes (`POST /v1/agents/{id}/availability`) | `{ "agent_id", "sip_username", "available_for_calls" }` |
-| `call.answered` | An agent answers a web, inbound phone (including WhatsApp) or agent-dialed call | `{ "call": <call record> }` |
-| `call.ended` | One of those calls ends, answered or not | `{ "call": <call record> }` |
+| Any IVR node: **Notify webhook** in the node's properties panel | `ivr.node` | The step finishes, with its result and the caller's input. A **Transfer** sends it when someone answers, or when nobody does. |
+| The flow: **On call end** in the flow editor's toolbar | `call.ended` | A call through this flow ends, however it ended: the caller hung up in a menu or the queue, after talking to an agent, or the flow ended the call. |
 
-:::note[Current coverage]
-- Inbound and browser calls don't send `call.ringing`; their first webhook is `call.answered`, or `call.ended` if nobody answers.
-- Calls your backend places with `POST /v1/calls` or `/v1/calls/connect` send `call.ringing` only. They go straight through FreeSWITCH and don't reach answered/ended yet, so poll `GET /v1/calls/{id}` for their outcome.
-- `call.ended` arrives before the recording is merged, so it has no `recording_url`. Fetch the call later for that.
+Nodes that send a webhook show a bell icon on the canvas.
+
+- **A gather node** sends the digits the caller entered, for example an account number to look up in your CRM.
+- **A menu node** sends the option chosen (`digit:2`).
+- **A transfer node** sends `answered` the moment an agent or the dialed number picks up, useful for a CRM screen-pop, or `no_answer`.
+- **On call end** sends the settled call record: duration, hang-up cause and the agent who handled it.
+
+A webhook that is **disabled** on the Webhooks page is never sent, from any flow. Turn it back on and every flow that picks it sends again, with no flow changes. Webhooks are sent in the background, so a slow or failing endpoint never delays the caller. This is the difference from the [HTTP callback node](/tring/features/ivr-flows/#http-callback), which waits for your response and branches on it.
+
+:::note
+- `call.ended` arrives before the recording is merged, so it has no `recording_url`. Fetch the call or its recording later.
+- Calls your backend places with `POST /v1/calls` or `POST /v1/calls/connect` don't run an IVR flow and send no webhooks.
+- Agent availability changes aren't webhooks. Watch them on the dashboard event stream.
 :::
 
-When you register a webhook, `events` lists the events it wants. An empty list subscribes to **all** events.
+## Registering a webhook
 
 ```bash
 curl -sS -X POST https://api.example.com/v1/webhooks \
   -H "Authorization: Bearer $TRING_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"url":"https://crm.example.com/hooks/tring","events":["call.ringing","agent.status"]}'
+  -d '{"name":"CRM","url":"https://crm.example.com/hooks/tring","headers":{"Authorization":"Bearer crm-token"}}'
 ```
 
-If you do not pass a `secret`, Tring generates one (`whsec_…`). The secret is returned **only in this response**; store it in your secret manager.
+- **Headers** are sent with every request, for example an auth token your endpoint checks. Their values are stored encrypted and never shown again, only their names. Editing a webhook's headers replaces the whole set.
+- **Secret:** if you don't pass one, Tring generates one (`whsec_…`). It's returned **only in this response**, so store it in your secret manager. It signs every request (see [Signature](#signature)).
+
+Changes to a webhook (URL, headers, on/off) apply to the next send. The gateway caches each tenant's webhooks in Redis and the API clears that cache on every change.
 
 ## Payload
 
@@ -37,34 +47,31 @@ If you do not pass a `secret`, Tring generates one (`whsec_…`). The secret is 
 POST /hooks/tring HTTP/1.1
 Content-Type: application/json
 User-Agent: Tring-Webhook/0.1
-Tring-Event: call.ringing
+Authorization: Bearer crm-token
+Tring-Event: ivr.node
 Tring-Delivery: 6f1c2d3e-0000-4000-8000-000000000001
 Tring-Signature: t=1760000000,v1=5d41402abc4b2a76b9719d911017c592...
 ```
 
 ```json
 {
-  "event": "call.ringing",
+  "event": "ivr.node",
   "delivery_id": "6f1c2d3e-0000-4000-8000-000000000001",
-  "created": "2026-10-16T09:30:00Z",
+  "created": "2026-10-24T09:30:00Z",
   "data": {
-    "call": {
-      "id": "…",
-      "tenant_id": "…",
-      "direction": "outbound",
-      "status": "ringing",
-      "from_number": "+919800000002",
-      "to_number": "+919800000001",
-      "agent_id": "…",
-      "source": "phone",
-      "leg_id": "…",
-      "started_at": "2026-10-16T09:30:00Z"
-    }
+    "call_id": "…",
+    "flow_id": "…",
+    "node_id": "n_account",
+    "node_type": "gather",
+    "node_label": "Account number",
+    "outcome": "default",
+    "dtmf": "40213",
+    "vars": { "caller": "+919800000001", "did": "+912265915000", "account": "40213" }
   }
 }
 ```
 
-The call object has the same shape as the [Calls API](/tring/api-reference/calls/) response, so one decoder works for both. `delivery_id` matches the `Tring-Delivery` header; use it to drop duplicates, because a retry resends the same delivery.
+`call.ended` carries `{ "call": <call record> }`, the same shape as the [Calls API](/tring/api-reference/calls/), so one decoder works for both. Both payloads are described field by field in the [Webhooks API](/tring/api-reference/webhooks/#ivrnode). `delivery_id` matches the `Tring-Delivery` header; use it to drop duplicates, because a retry resends the same delivery.
 
 ## Signature
 
@@ -220,5 +227,5 @@ The console shows the same log under **Webhooks**.
 
 - Use an `https://` endpoint.
 - Verify every signature and enforce the timestamp tolerance.
-- Keep the webhook secret in a secret manager, never in front-end code or source control. To rotate it, register a new webhook with a new secret, switch your receiver to accept both, then delete the old webhook.
+- Keep the webhook secret in a secret manager, never in front-end code or source control. To rotate it, register a new webhook with a new secret, switch your receiver to accept both, repoint your flows to the new webhook, then delete the old one.
 - Treat payloads as data: validate fields before using them.
