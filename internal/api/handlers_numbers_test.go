@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
@@ -258,5 +260,118 @@ func TestListNumbersWithValidToken(t *testing.T) {
 	body := strings.TrimSpace(rec.Body.String())
 	if !strings.HasPrefix(body, "[") {
 		t.Errorf("body should be JSON array, got %q", body)
+	}
+}
+
+// ─── editing e164 / type / trunk, and delete ────────────────────────
+//
+// A number registered with the wrong digits, type or trunk is corrected in
+// place; each edit is held to the same rules as create.
+
+func seedOwnTrunk(t *testing.T, f *dbtest.Fixture, name string) string {
+	t.Helper()
+	var id string
+	if err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO trunks (tenant_id, name, provider_type, register, active)
+		VALUES ($1, $2, 'generic', false, true) RETURNING id
+	`, f.TenantID, name).Scan(&id); err != nil {
+		t.Fatalf("insert trunk: %v", err)
+	}
+	return id
+}
+
+func TestPatchNumberEditsE164TypeAndTrunk(t *testing.T) {
+	f := dbtest.Setup(t)
+	trunk := seedOwnTrunk(t, f, "tata")
+	numID := insertInboundForHandlerTest(t, f, "02265915000")
+	s := newTestServer(f)
+
+	rec := serve(t, s, f, "PATCH", "/v1/numbers/"+numID,
+		`{"e164":"+912265915000","type":"outbound","trunk_id":"`+trunk+`"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]interface{}
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	if out["e164"] != "+912265915000" || out["type"] != "outbound" || out["trunk_id"] != trunk {
+		t.Errorf("returned row = %v, want the edited e164/type/trunk", out)
+	}
+}
+
+func TestPatchNumberEditRejections(t *testing.T) {
+	f := dbtest.Setup(t)
+	other, otherTrunk, _ := otherTenant(t, f)
+	if _, err := f.DB.Pool.Exec(context.Background(), `
+		INSERT INTO numbers (tenant_id, e164, type, active) VALUES ($1, '+919800000010', 'inbound', true)
+	`, other); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	trunk := seedOwnTrunk(t, f, "own")
+	inbound := insertInboundForHandlerTest(t, f, "+919800000011")
+	insertInboundForHandlerTest(t, f, "+919800000012")
+	var outbound string
+	if err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO numbers (tenant_id, e164, type, trunk_id, active)
+		VALUES ($1, '+919800000013', 'outbound', $2, true) RETURNING id
+	`, f.TenantID, trunk).Scan(&outbound); err != nil {
+		t.Fatalf("seed outbound: %v", err)
+	}
+	s := newTestServer(f)
+
+	cases := []struct {
+		name, id, body string
+		want           int
+	}{
+		{"bad e164", inbound, `{"e164":"not-a-number"}`, http.StatusBadRequest},
+		{"bad type", inbound, `{"type":"sideways"}`, http.StatusBadRequest},
+		{"outbound without trunk", inbound, `{"type":"outbound"}`, http.StatusBadRequest},
+		{"foreign trunk", inbound, `{"trunk_id":"` + otherTrunk.String() + `"}`, http.StatusBadRequest},
+		{"inbound DID held elsewhere", inbound, `{"e164":"+919800000010"}`, http.StatusConflict},
+		{"duplicate in tenant", inbound, `{"e164":"+919800000012"}`, http.StatusConflict},
+		{"last outbound changed to inbound", outbound, `{"type":"inbound"}`, http.StatusConflict},
+		{"unknown number", uuid.NewString(), `{"type":"masking"}`, http.StatusNotFound},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if rec := serve(t, s, f, "PATCH", "/v1/numbers/"+c.id, c.body); rec.Code != c.want {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, c.want, rec.Body.String())
+			}
+		})
+	}
+}
+
+// Delete is the explicit way out of the last-outbound guardrail, so it is
+// allowed even for the only active outbound number.
+func TestDeleteNumber(t *testing.T) {
+	f := dbtest.Setup(t)
+	id := insertOutboundForHandlerTest(t, f, "+918001234567", true)
+	s := newTestServer(f)
+
+	if rec := serve(t, s, f, "DELETE", "/v1/numbers/"+id, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body.String())
+	}
+	if rec := serve(t, s, f, "DELETE", "/v1/numbers/"+id, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("second delete status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeleteNumberOfAnotherTenantIsNotFound(t *testing.T) {
+	f := dbtest.Setup(t)
+	other, _, _ := otherTenant(t, f)
+	var id string
+	if err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO numbers (tenant_id, e164, type, active) VALUES ($1, '+919800000020', 'inbound', true) RETURNING id
+	`, other).Scan(&id); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	s := newTestServer(f)
+
+	if rec := serve(t, s, f, "DELETE", "/v1/numbers/"+id, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+	var n int
+	_ = f.DB.Pool.QueryRow(context.Background(), `SELECT count(*) FROM numbers WHERE id = $1`, id).Scan(&n)
+	if n != 1 {
+		t.Fatal("another tenant's number was deleted")
 	}
 }

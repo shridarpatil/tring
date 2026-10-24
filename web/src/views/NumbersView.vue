@@ -1,11 +1,12 @@
 <script setup lang="ts">
-// NumbersView — register DIDs and bind them to a trunk. Outbound numbers
-// MUST reference a trunk (where the call lands); inbound/masking numbers
-// can stand alone.
+// NumbersView — register, edit and delete DIDs and bind them to a trunk.
+// Outbound numbers MUST reference a trunk (where the call lands);
+// inbound/masking numbers can stand alone.
 import { ref, onMounted, computed } from "vue";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
+import { confirmDialog } from "../lib/confirm";
 import type { PhoneNumber, Trunk, Flow, Paginated } from "../api/types";
 import {
   Button,
@@ -25,6 +26,8 @@ const loading = ref(true);
 
 const showForm = ref(false);
 const saving = ref(false);
+// The number being edited; null = the modal registers a new one.
+const editing = ref<PhoneNumber | null>(null);
 const form = ref<{
   e164: string;
   type: "inbound" | "outbound" | "masking";
@@ -82,6 +85,65 @@ async function load() {
     toast.error(errMessage(e, "failed to load"));
   } finally {
     loading.value = false;
+  }
+}
+
+function openCreate() {
+  editing.value = null;
+  form.value = { e164: "", type: "outbound", trunk_id: "", flow_id: "", priority: 100 };
+  showForm.value = true;
+}
+
+function openEdit(n: PhoneNumber) {
+  editing.value = n;
+  form.value = {
+    e164: n.e164,
+    type: n.type as "inbound" | "outbound" | "masking",
+    trunk_id: n.trunk_id ?? "",
+    flow_id: n.flow_id ?? "",
+    priority: n.priority,
+  };
+  showForm.value = true;
+}
+
+async function submit() {
+  if (editing.value) await update(editing.value);
+  else await create();
+}
+
+// update sends only the fields that changed, so an untouched field is never
+// re-validated. Flow is assigned from the row, not here.
+async function update(n: PhoneNumber) {
+  const body: Record<string, unknown> = {};
+  if (form.value.e164 !== n.e164) body.e164 = form.value.e164;
+  if (form.value.type !== n.type) body.type = form.value.type;
+  if (form.value.trunk_id && form.value.trunk_id !== n.trunk_id) body.trunk_id = form.value.trunk_id;
+  if (form.value.priority !== n.priority) body.priority = form.value.priority;
+  if (Object.keys(body).length === 0) {
+    showForm.value = false;
+    return;
+  }
+  saving.value = true;
+  try {
+    await api.patch(`/v1/numbers/${n.id}`, body);
+    showForm.value = false;
+    await load();
+    toast.success("Number updated");
+  } catch (e) {
+    toast.error(errMessage(e, "update failed"));
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function remove(n: PhoneNumber) {
+  if (!(await confirmDialog(`Delete number ${n.e164}?`))) return;
+  try {
+    await api.del(`/v1/numbers/${n.id}`);
+    await load();
+    toast.success("Number deleted");
+  } catch (e) {
+    toast.error(errMessage(e, "delete failed"));
   }
 }
 
@@ -144,7 +206,7 @@ onMounted(load);
   <div class="view">
     <div class="row-between">
       <h1 class="page-title">Numbers</h1>
-      <Button @click="showForm = true">Register number</Button>
+      <Button @click="openCreate">Register number</Button>
     </div>
 
     <Panel>
@@ -163,15 +225,19 @@ onMounted(load);
           <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
         </template>
         <template #row-actions="{ row }">
-          <Button variant="secondary" size="sm" @click="toggleActive(row)">
-            {{ row.active ? "Deactivate" : "Activate" }}
-          </Button>
+          <div class="hstack">
+            <Button variant="secondary" size="sm" @click="openEdit(row)">Edit</Button>
+            <Button variant="secondary" size="sm" @click="toggleActive(row)">
+              {{ row.active ? "Deactivate" : "Activate" }}
+            </Button>
+            <Button variant="danger" size="sm" @click="remove(row)">Delete</Button>
+          </div>
         </template>
       </DataTable>
     </Panel>
 
-    <Modal v-model:open="showForm" title="Register number">
-      <form id="number-form" class="vstack" @submit.prevent="create">
+    <Modal v-model:open="showForm" :title="editing ? 'Edit number' : 'Register number'">
+      <form id="number-form" class="vstack" @submit.prevent="submit">
         <TextField v-model="form.e164" label="E.164" mono required placeholder="+918001234567" />
         <Select v-model="form.type" label="Type" :options="typeOptions" />
         <Select
@@ -180,12 +246,14 @@ onMounted(load);
           :options="trunkOptions"
           :required="form.type === 'outbound'"
         />
-        <Select v-model="form.flow_id" label="Flow" :options="flowOptions" />
+        <Select v-if="!editing" v-model="form.flow_id" label="Flow" :options="flowOptions" />
         <TextField v-model.number="form.priority" label="Priority" type="number" />
       </form>
       <template #footer>
         <Button variant="ghost" @click="showForm = false">Cancel</Button>
-        <Button type="submit" form="number-form" :loading="saving">Register</Button>
+        <Button type="submit" form="number-form" :loading="saving">
+          {{ editing ? "Save" : "Register" }}
+        </Button>
       </template>
     </Modal>
   </div>

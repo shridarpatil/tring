@@ -286,14 +286,7 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "e164 and type are required")
 		return
 	}
-	if !dial.IsNumber(req.E164) {
-		writeError(w, http.StatusBadRequest, "e164 must be digits with an optional leading + (3-15 digits)")
-		return
-	}
-	switch req.Type {
-	case "inbound", "outbound", "masking":
-	default:
-		writeError(w, http.StatusBadRequest, "type must be inbound|outbound|masking")
+	if !validNumberFields(w, req.E164, req.Type) {
 		return
 	}
 	// Outbound numbers MUST reference a trunk so the call has somewhere
@@ -307,18 +300,8 @@ func (s *Server) handleCreateNumber(w http.ResponseWriter, r *http.Request) {
 	if !s.checkNumberRefs(w, r, t.ID, req.TrunkID, req.FlowID) {
 		return
 	}
-	// Inbound routing is by DID alone, so a DID another tenant already
-	// receives on can't be claimed here (it would take over their calls).
-	if req.Type == "inbound" {
-		var held bool
-		if err := s.db.Pool.QueryRow(r.Context(), s.q.InboundHeldElsewhere, req.E164, t.ID).Scan(&held); err != nil {
-			writeError(w, http.StatusInternalServerError, "lookup failed")
-			return
-		}
-		if held {
-			writeError(w, http.StatusConflict, "number is already in use")
-			return
-		}
+	if req.Type == "inbound" && !s.inboundFree(w, r, t.ID, req.E164) {
+		return
 	}
 
 	priority := 100
@@ -372,6 +355,37 @@ func (s *Server) checkNumberRefs(w http.ResponseWriter, r *http.Request, tenantI
 	return true
 }
 
+// validNumberFields checks an e164/type pair for create or edit. Writes a 400
+// and returns false on failure.
+func validNumberFields(w http.ResponseWriter, e164, typ string) bool {
+	if !dial.IsNumber(e164) {
+		writeError(w, http.StatusBadRequest, "e164 must be digits with an optional leading + (3-15 digits)")
+		return false
+	}
+	switch typ {
+	case "inbound", "outbound", "masking":
+		return true
+	}
+	writeError(w, http.StatusBadRequest, "type must be inbound|outbound|masking")
+	return false
+}
+
+// inboundFree confirms no other tenant receives on e164. Inbound routing is by
+// DID alone, so a DID another tenant already receives on can't be claimed here
+// (it would take over their calls). Writes a 409/500 and returns false on failure.
+func (s *Server) inboundFree(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, e164 string) bool {
+	var held bool
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.InboundHeldElsewhere, e164, tenantID).Scan(&held); err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup failed")
+		return false
+	}
+	if held {
+		writeError(w, http.StatusConflict, "number is already in use")
+		return false
+	}
+	return true
+}
+
 type patchNumberRequest struct {
 	Priority *int  `json:"priority,omitempty"`
 	Active   *bool `json:"active,omitempty"`
@@ -380,19 +394,28 @@ type patchNumberRequest struct {
 	// also carry a `clear_flow` flag for the explicit-unassign case.
 	FlowID    *uuid.UUID `json:"flow_id,omitempty"`
 	ClearFlow bool       `json:"clear_flow,omitempty"`
+	// E164, Type and TrunkID correct a number registered wrong. nil = no change.
+	E164    *string    `json:"e164,omitempty"`
+	Type    *string    `json:"type,omitempty"`
+	TrunkID *uuid.UUID `json:"trunk_id,omitempty"`
 }
 
-// handlePatchNumber updates a number's priority / active flag. Used to
-// flip a trunk on or off without deleting the row (preserves the DID
-// allocation record for audit). Operators driving `manual` strategy use
-// this to switch primary; failover/round_robin tenants use it to
-// quarantine a misbehaving trunk.
+// handlePatchNumber edits a number: priority / active flag / flow, and the
+// e164, type and trunk it was registered with. Flipping `active` turns a
+// trunk on or off without deleting the row (preserves the DID allocation
+// record for audit). Operators driving `manual` strategy use this to switch
+// primary; failover/round_robin tenants use it to quarantine a misbehaving
+// trunk.
 //
-// Guardrail: deactivating the *last* active outbound trunk would leave
-// the tenant with zero usable trunks and silently break every outbound
-// call. We reject that with 409. Operators must register a replacement
-// first, or accept that no calls will work and explicitly DELETE the
-// number (Phase 2 endpoint) instead.
+// Every edit is validated against the number's resulting state with the same
+// rules as create (format, outbound needs a trunk, trunk/flow in this tenant,
+// inbound DID not held by another tenant).
+//
+// Guardrail: deactivating the *last* active outbound trunk — or turning it
+// into a non-outbound number — would leave the tenant with zero usable
+// trunks and silently break every outbound call. We reject that with 409.
+// Operators must register a replacement first, or accept that no calls will
+// work and explicitly DELETE the number instead.
 func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -405,46 +428,73 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.Priority == nil && req.Active == nil && req.FlowID == nil && !req.ClearFlow {
-		writeError(w, http.StatusBadRequest, "at least one of priority, active, flow_id, or clear_flow is required")
-		return
-	}
-	if !s.checkNumberRefs(w, r, t.ID, nil, req.FlowID) {
+	if req.Priority == nil && req.Active == nil && req.FlowID == nil && !req.ClearFlow &&
+		req.E164 == nil && req.Type == nil && req.TrunkID == nil {
+		writeError(w, http.StatusBadRequest, "at least one of priority, active, flow_id, clear_flow, e164, type, or trunk_id is required")
 		return
 	}
 
-	// If the request would deactivate an outbound trunk, check this isn't
-	// the only active outbound trunk left. Skip the check for inbound /
-	// masking numbers (they don't carry outbound caller-ID and have
-	// different invariants).
-	if req.Active != nil && !*req.Active {
-		var rowType string
-		var rowActive bool
-		err := s.db.Pool.QueryRow(r.Context(), s.q.GetNumberTypeActive,
-			id, t.ID,
-		).Scan(&rowType, &rowActive)
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "number not found")
-			return
-		}
+	var (
+		cur       Number
+		curActive bool
+	)
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetNumberForUpdate, id, t.ID).
+		Scan(&cur.E164, &cur.Type, &curActive, &cur.TrunkID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "number not found")
+		return
+	}
+	if err != nil {
+		s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
+		return
+	}
+
+	// The number as it will be after this edit.
+	e164, typ, trunkID, active := cur.E164, cur.Type, cur.TrunkID, curActive
+	if req.E164 != nil {
+		e164 = *req.E164
+	}
+	if req.Type != nil {
+		typ = *req.Type
+	}
+	if req.TrunkID != nil {
+		trunkID = req.TrunkID
+	}
+	if req.Active != nil {
+		active = *req.Active
+	}
+
+	if !validNumberFields(w, e164, typ) {
+		return
+	}
+	// Only when the type is being set: an outbound row can already lack a
+	// trunk (deleting a trunk nulls it), and that mustn't block other edits.
+	if req.Type != nil && typ == "outbound" && trunkID == nil {
+		writeError(w, http.StatusBadRequest, "trunk_id is required for outbound numbers")
+		return
+	}
+	if !s.checkNumberRefs(w, r, t.ID, req.TrunkID, req.FlowID) {
+		return
+	}
+	if typ == "inbound" && (req.E164 != nil || req.Type != nil) && !s.inboundFree(w, r, t.ID, e164) {
+		return
+	}
+
+	// Skip the last-trunk check for inbound / masking numbers (they don't
+	// carry outbound caller-ID and have different invariants).
+	if cur.Type == "outbound" && curActive && (typ != "outbound" || !active) {
+		var otherActive int
+		err = s.db.Pool.QueryRow(r.Context(), s.q.CountOtherActiveOutbound,
+			t.ID, id).Scan(&otherActive)
 		if err != nil {
 			s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
 			return
 		}
-		if rowType == "outbound" && rowActive {
-			var otherActive int
-			err = s.db.Pool.QueryRow(r.Context(), s.q.CountOtherActiveOutbound,
-				t.ID, id).Scan(&otherActive)
-			if err != nil {
-				s.writeServerError(w, r, http.StatusInternalServerError, "lookup failed", err)
-				return
-			}
-			if otherActive == 0 {
-				writeError(w, http.StatusConflict,
-					"cannot deactivate the last active outbound trunk for this tenant; "+
-						"register another outbound number first")
-				return
-			}
+		if otherActive == 0 {
+			writeError(w, http.StatusConflict,
+				"cannot remove the last active outbound trunk for this tenant; "+
+					"register another outbound number first")
+			return
 		}
 	}
 
@@ -454,11 +504,16 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 	//   neither           → keep existing
 	var n Number
 	err = s.db.Pool.QueryRow(r.Context(), s.q.UpdateNumber,
-		req.Priority, req.Active, req.ClearFlow, req.FlowID, id, t.ID).Scan(
+		req.Priority, req.Active, req.ClearFlow, req.FlowID, id, t.ID,
+		req.E164, req.Type, req.TrunkID).Scan(
 		&n.ID, &n.TenantID, &n.E164, &n.Type, &n.TrunkID, &n.FlowID, &n.ProviderDIDID, &n.Priority, &n.Active, &n.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "number not found")
+		return
+	}
+	if isUniqueViolation(err) {
+		writeError(w, http.StatusConflict, "number already registered for this tenant")
 		return
 	}
 	if err != nil {
@@ -466,6 +521,28 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
+}
+
+// handleDeleteNumber removes a number outright. Unlike deactivating, this is
+// allowed for the last active outbound number: it is the explicit "I accept
+// outbound calls stop working" path the PATCH guardrail points operators to.
+func (s *Server) handleDeleteNumber(w http.ResponseWriter, r *http.Request) {
+	t := tenantFromCtx(r.Context())
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteNumber, id, t.ID)
+	if err != nil {
+		s.writeServerError(w, r, http.StatusInternalServerError, "delete failed", err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "number not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type patchTenantRequest struct {
