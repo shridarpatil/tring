@@ -87,6 +87,8 @@ function alignCls(a?: string) {
 .dt-sticky { position: sticky; top: 0; z-index: 10; background: var(--card); }
 .dt-msg { padding: 2.5rem 1rem; text-align: center; color: var(--faint-foreground); }
 .dt-actions { white-space: nowrap; }
+/* A flex row of actions ignores the cell's text-align; push it right too. */
+.dt-actions :slotted(.hstack) { justify-content: flex-end; flex-wrap: nowrap; }
 .dt-spin { display: inline; vertical-align: -2px; margin-right: 0.5rem; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 </style>
