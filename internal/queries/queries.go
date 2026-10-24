@@ -46,9 +46,10 @@ type Queries struct {
 
 	// ---- api: numbers ----
 	CreateNumber             string `query:"create-number"`
-	GetNumberTypeActive      string `query:"get-number-type-active"`
+	GetNumberForUpdate       string `query:"get-number-for-update"`
 	CountOtherActiveOutbound string `query:"count-other-active-outbound"`
 	UpdateNumber             string `query:"update-number"`
+	DeleteNumber             string `query:"delete-number"`
 	ListNumbers              string `query:"list-numbers"`
 
 	// ---- api: tenants ----
