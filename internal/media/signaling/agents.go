@@ -121,6 +121,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		s.mu.Lock()
 		if s.agents[tenant][sip] == c {
 			delete(s.agents[tenant], sip)
+			delete(s.away, tenant+"|"+sip)
 		}
 		s.mu.Unlock()
 		_ = c.Close()
@@ -165,6 +166,7 @@ func (s *Server) sendAvailability(c *conn, tenant, sip string) {
 		}
 		s.cfg.Presence.CacheAvailability(ctx, tenant, sip, available)
 	}
+	s.setAway(tenant, sip, !available)
 	if !available {
 		_ = c.send(msg{Type: msgAvailability, Available: &available})
 	}
@@ -178,8 +180,28 @@ func (s *Server) PushAvailability(tenant, sip string, available bool) {
 	c := s.agents[tenant][sip]
 	s.mu.Unlock()
 	if c != nil {
+		s.setAway(tenant, sip, !available)
+	}
+	if c != nil {
 		_ = c.send(msg{Type: msgAvailability, Available: &available})
 	}
+}
+
+// setAway records whether a connected agent is backend-marked Away, so the ring
+// candidates skip them (the team lookup already filters on available_for_calls;
+// ring-all and direct-agent targets come from the live socket registry instead).
+func (s *Server) setAway(tenant, sip string, away bool) {
+	k := tenant + "|" + sip
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !away {
+		delete(s.away, k)
+		return
+	}
+	if s.away == nil {
+		s.away = map[string]bool{}
+	}
+	s.away[k] = true
 }
 
 // handleDecline delivers an agent's rejection of a ringing call to that room's
@@ -213,22 +235,26 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 		declineCh: make(chan struct{}, 1),
 	}
 
-	// candidates excludes agents who declined this call (as well as busy/offline
-	// ones) so the router never re-rings a decliner and the queue/hold logic sees
-	// the true remaining pool.
+	// candidates excludes agents who declined this call (as well as busy, Away
+	// and offline ones) so the router never re-rings a decliner and the
+	// queue/hold logic sees the true remaining pool.
 	candidates := func(context.Context) []string {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		free := func(sip string) bool {
+			k := tenant + "|" + sip
+			return s.onCall[k] == 0 && !s.away[k] && !eff.declined[sip]
+		}
 		var out []string
 		if ringAll {
 			for sip := range s.agents[tenant] {
-				if s.onCall[tenant+"|"+sip] == 0 && !eff.declined[sip] {
+				if free(sip) {
 					out = append(out, sip)
 				}
 			}
 		} else {
 			for _, sip := range sips {
-				if c := s.agents[tenant][sip]; c != nil && s.onCall[tenant+"|"+sip] == 0 && !eff.declined[sip] {
+				if s.agents[tenant][sip] != nil && free(sip) {
 					out = append(out, sip)
 				}
 			}

@@ -38,7 +38,7 @@ curl -sS -X POST https://api.example.com/v1/agents/crm-user-17/availability \
 Each change updates the live dashboard. An agent who is connected but unavailable shows as `away`.
 
 :::caution
-Availability is applied when Tring builds a **team**'s member list: unavailable members are not rung. A transfer to "all available agents" or to one specific agent checks presence only (connected and not on a call), not `available_for_calls`. If you rely on Away for those targets, route through a team.
+Unavailable agents are never rung, whatever the target: a team, "all available agents", or one specific agent. They're also left out of the agent widget's transfer picker, and a blind transfer to one is refused straight away.
 :::
 
 Presence needs Redis (`TRING_REDIS_ADDR`). Without it, the console cannot show who is online.
@@ -89,7 +89,7 @@ Presence only flips to `on_call` when an agent **answers**. Without extra care, 
 
 | Transfer target | Behaviour |
 |---|---|
-| All available agents | Rings every connected, idle agent of the tenant at once. No queue settings apply; the default wait is 2 minutes and each ring attempt is 30 seconds. |
+| All available agents | Rings every connected, idle, available agent of the tenant at once. No queue settings apply; the default wait is 2 minutes and each ring attempt is 30 seconds. |
 | One agent (`agent_sip`) | Rings that agent, with the same defaults. The caller hears the tenant's hold music while waiting. |
 
 ## What the agent sees

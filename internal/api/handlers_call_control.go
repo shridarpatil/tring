@@ -94,8 +94,8 @@ func (s *Server) sdkHold(w http.ResponseWriter, r *http.Request, hold bool) {
 	writeJSON(w, http.StatusOK, map[string]any{"held": hold})
 }
 
-// handleSdkTransferTargets lists where the agent can transfer their call: online
-// agents (by name) and teams. Powers the widget's transfer picker.
+// handleSdkTransferTargets lists where the agent can transfer their call: online,
+// available agents (by name) and teams. Powers the widget's transfer picker.
 func (s *Server) handleSdkTransferTargets(w http.ResponseWriter, r *http.Request) {
 	claims := agentFromCtx(r.Context())
 	if claims == nil {
@@ -119,7 +119,7 @@ func (s *Server) handleSdkTransferTargets(w http.ResponseWriter, r *http.Request
 			if err := rows.Scan(&id, &tid, &sip, &name, &avail, &created); err != nil {
 				continue
 			}
-			if id == selfID || !s.agentReachable(r.Context(), claims.TenantID, sip) {
+			if id == selfID || !avail || !s.agentReachable(r.Context(), claims.TenantID, sip) {
 				continue
 			}
 			if name == "" {

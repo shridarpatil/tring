@@ -136,14 +136,15 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 }
 
 // targetReachable reports whether a transfer target has any agent that could answer
-// right now: for a specific SIP, that agent must be online + not on a call; for a
+// right now: for a specific SIP, that agent must be online, not Away and not on a call; for a
 // team, at least one resolved member must be. Best-effort — the ring itself is the
 // source of truth, this only avoids dropping the agent into an obviously-dead ring.
 func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) bool {
 	free := func(sip string) bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.agents[tenant][sip] != nil && s.onCall[tenant+"|"+sip] == 0
+		k := tenant + "|" + sip
+		return s.agents[tenant][sip] != nil && s.onCall[k] == 0 && !s.away[k]
 	}
 	if sip != "" {
 		return free(sip)
@@ -153,7 +154,7 @@ func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) 
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		for a := range s.agents[tenant] {
-			if s.onCall[tenant+"|"+a] == 0 {
+			if k := tenant + "|" + a; s.onCall[k] == 0 && !s.away[k] {
 				return true
 			}
 		}
