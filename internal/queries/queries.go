@@ -132,6 +132,7 @@ type Queries struct {
 	// ---- api: webhooks ----
 	CreateWebhook         string `query:"create-webhook"`
 	ListWebhooks          string `query:"list-webhooks"`
+	UpdateWebhook         string `query:"update-webhook"`
 	DeleteWebhook         string `query:"delete-webhook"`
 	GetWebhookOwner       string `query:"get-webhook-owner"`
 	ListWebhookDeliveries string `query:"list-webhook-deliveries"`
@@ -177,11 +178,12 @@ type Queries struct {
 	InsertUser   string `query:"insert-user"`
 
 	// ---- webhook notifier (shared: api + orchestrator) ----
-	ListWebhookSubscribers string `query:"list-webhook-subscribers"`
-	InsertWebhookDelivery  string `query:"insert-webhook-delivery"`
-	UpdateDeliveryAttempt  string `query:"update-delivery-attempt"`
-	MarkDeliverySuccess    string `query:"mark-delivery-success"`
-	MarkDeliveryExhausted  string `query:"mark-delivery-exhausted"`
+	ListTenantWebhooks    string `query:"list-tenant-webhooks"`
+	InsertWebhookDelivery string `query:"insert-webhook-delivery"`
+	SetDeliveryPayload    string `query:"set-delivery-payload"`
+	UpdateDeliveryAttempt string `query:"update-delivery-attempt"`
+	MarkDeliverySuccess   string `query:"mark-delivery-success"`
+	MarkDeliveryExhausted string `query:"mark-delivery-exhausted"`
 }
 
 // MustLoad parses the embedded queries.sql and returns a populated Queries.

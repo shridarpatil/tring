@@ -17,7 +17,6 @@ import (
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
-	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 // Ensure pgx errors are reachable in PATCH endpoints below.
@@ -238,11 +237,6 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
-	s.notifier.Emit(r.Context(), t.ID, webhook.EventAgentStatus, map[string]any{
-		"agent_id":            a.ID,
-		"sip_username":        a.SipUsername,
-		"available_for_calls": a.AvailableForCalls,
-	})
 	s.events.Publish(r.Context(), t.ID.String(), events.TypeAgentStatus, map[string]any{
 		"agent_id":            a.ID,
 		"sip_username":        a.SipUsername,

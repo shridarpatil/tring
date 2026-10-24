@@ -20,6 +20,7 @@ const outputHandles = [{ id: "default", label: "next" }];
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Greeting'"
     header-class="bg-green-600"
     :output-handles="outputHandles"

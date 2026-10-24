@@ -42,6 +42,7 @@ type Target struct {
 	Team     string // ring a team (with its strategy/queue) — takes precedence
 	AgentSIP string // ring one specific agent
 	Label    string // what the agent's incoming-call UI shows (never an internal id); the node's `label` overrides the caller ref
+	Answered func() // optional: called once an agent answers, before the call is waited out
 }
 
 // Agents rings an agent into the call's room — the transfer membership change.
@@ -73,6 +74,15 @@ type Dialer interface {
 	Dial(ctx context.Context, room, number, callerID string, ring time.Duration, answered func()) (outcome string, err error)
 }
 
+// NodeEvent is a node whose webhook should be sent: it finished with Outcome,
+// or (a transfer) it was "answered". Vars is a copy of the flow vars.
+type NodeEvent struct {
+	Node    *ivr.Node
+	Outcome string
+	DTMF    string
+	Vars    map[string]string
+}
+
 // defaultRingSeconds bounds a transfer-to-number ring when the node sets none.
 const defaultRingSeconds = 30
 
@@ -93,6 +103,7 @@ type Driver struct {
 	now       func() time.Time  // clock for Timing (injectable in tests)
 	http      *http.Client      // http_callback client
 	vars      map[string]string // flow vars gathered along the way
+	onNode    func(NodeEvent)   // sends a node's webhook (nil = off)
 	log       *slog.Logger
 
 	played []string // prompt files played, in order (trace/test visibility)
@@ -113,6 +124,10 @@ type Config struct {
 	// number / client ref) and {{did}} (the number they dialed) — so an
 	// http_callback can tell the backend who is calling which number.
 	Vars map[string]string
+	// OnNodeEvent is called for a node that names a webhook (config
+	// "webhook_id") when it finishes — a transfer when it's answered or not
+	// answered. It must not block the walk.
+	OnNodeEvent func(NodeEvent)
 }
 
 // New builds a pion IVR driver. The DTMF inbox is buffered so a digit that
@@ -139,6 +154,7 @@ func New(cfg Config) *Driver {
 		now:       cfg.Now,
 		http:      cfg.HTTP,
 		vars:      vars,
+		onNode:    cfg.OnNodeEvent,
 		log:       cfg.Logger.With("component", "ivrdrive"),
 	}
 }
@@ -150,6 +166,27 @@ func (d *Driver) DTMF(digit string) {
 	case d.dtmf <- digit:
 	default:
 	}
+}
+
+// StepDone (ivr.Walk's step hook) sends a finished node's webhook. An answered
+// transfer already sent its own when the agent or number picked up.
+func (d *Driver) StepDone(_ context.Context, n *ivr.Node, st ivr.Step) {
+	if n.Type == ivr.NodeTransfer && st.Outcome == "completed" {
+		return
+	}
+	d.nodeEvent(n, st.Outcome, st.DTMFInput)
+}
+
+// nodeEvent sends n's webhook, if it names one.
+func (d *Driver) nodeEvent(n *ivr.Node, outcome, dtmf string) {
+	if d.onNode == nil || ivr.StringFromConfig(n.Config, "webhook_id") == "" {
+		return
+	}
+	vars := make(map[string]string, len(d.vars))
+	for k, v := range d.vars {
+		vars[k] = v
+	}
+	d.onNode(NodeEvent{Node: n, Outcome: outcome, DTMF: dtmf, Vars: vars})
 }
 
 // Played returns the prompt files played, in order (test/trace visibility).
@@ -393,6 +430,7 @@ func (d *Driver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, err
 		Team:     ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "team"), d.vars),
 		AgentSIP: ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "agent_sip"), d.vars),
 		Label:    label,
+		Answered: func() { d.nodeEvent(n, "answered", "") },
 	}
 	detail := target.Team
 	if detail == "" {
@@ -456,7 +494,11 @@ func (d *Driver) transferToNumber(ctx context.Context, n *ivr.Node, number strin
 	}
 	ring := time.Duration(ivr.IntFromConfig(n.Config, "ring_seconds", defaultRingSeconds)) * time.Second
 	stopAudio := d.loopDialAudio(ctx)
-	outcome, err := d.dialer.Dial(ctx, d.room, number, callerID, ring, stopAudio)
+	answered := func() {
+		stopAudio()
+		d.nodeEvent(n, "answered", "")
+	}
+	outcome, err := d.dialer.Dial(ctx, d.room, number, callerID, ring, answered)
 	stopAudio() // no answer: the ring is over
 	if errors.Is(err, ErrCallEnded) {
 		return ivr.NodeResult{Outcome: outcome, Action: "transfer", Detail: number, End: true}, nil

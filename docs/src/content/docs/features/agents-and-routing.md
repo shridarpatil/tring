@@ -35,7 +35,7 @@ curl -sS -X POST https://api.example.com/v1/agents/crm-user-17/availability \
   -d '{"available": false}'
 ```
 
-Each change sends an `agent.status` [webhook](/tring/features/webhooks/) and updates the live dashboard. An agent who is connected but unavailable shows as `away`.
+Each change updates the live dashboard. An agent who is connected but unavailable shows as `away`.
 
 :::caution
 Availability is applied when Tring builds a **team**'s member list: unavailable members are not rung. A transfer to "all available agents" or to one specific agent checks presence only (connected and not on a call), not `available_for_calls`. If you rely on Away for those targets, route through a team.

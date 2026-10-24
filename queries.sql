@@ -574,13 +574,24 @@ SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2;
 -- ===========================================================================
 
 -- name: create-webhook
-INSERT INTO webhooks (tenant_id, url, secret, events)
-VALUES ($1, $2, $3, $4)
-RETURNING id, tenant_id, url, secret, events, created_at;
+INSERT INTO webhooks (tenant_id, name, url, secret, headers, active)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, name, url, secret, headers, active, created_at, updated_at;
 
 -- name: list-webhooks
-SELECT id, tenant_id, url, events, created_at
+SELECT id, tenant_id, name, url, headers, active, created_at, updated_at
 FROM webhooks WHERE tenant_id = $1 ORDER BY created_at DESC;
+
+-- name: update-webhook
+-- NULL leaves a field unchanged.
+UPDATE webhooks SET
+    name       = COALESCE($3, name),
+    url        = COALESCE($4, url),
+    headers    = COALESCE($5, headers),
+    active     = COALESCE($6, active),
+    updated_at = now()
+WHERE id = $1 AND tenant_id = $2
+RETURNING id, tenant_id, name, url, headers, active, created_at, updated_at;
 
 -- name: delete-webhook
 DELETE FROM webhooks WHERE id = $1 AND tenant_id = $2;
@@ -807,16 +818,18 @@ VALUES ($1, $2, $3, $4);
 -- webhook notifier (shared: api + orchestrator)
 -- ===========================================================================
 
--- name: list-webhook-subscribers
--- Hooks for the tenant subscribed to this event (empty events[] = all).
-SELECT id, url, secret, events
+-- name: list-tenant-webhooks
+-- Every webhook of a tenant, for the notifier's per-tenant cache.
+SELECT id, url, secret, headers, active
 FROM webhooks
-WHERE tenant_id = $1
-  AND (cardinality(events) = 0 OR $2 = ANY(events));
+WHERE tenant_id = $1;
 
 -- name: insert-webhook-delivery
 INSERT INTO webhook_deliveries (webhook_id, event_type, payload)
 VALUES ($1, $2, $3) RETURNING id;
+
+-- name: set-delivery-payload
+UPDATE webhook_deliveries SET payload = $1 WHERE id = $2;
 
 -- name: update-delivery-attempt
 UPDATE webhook_deliveries

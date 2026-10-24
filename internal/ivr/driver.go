@@ -13,6 +13,12 @@ import (
 // traces deterministic and untimed.
 type clocked interface{ Now() time.Time }
 
+// stepObserver is optionally implemented by a runtime driver to hear about
+// each node once Walk has recorded it (e.g. to send the node's webhook).
+type stepObserver interface {
+	StepDone(ctx context.Context, n *Node, st Step)
+}
+
 // MaxDepth bounds graph traversal so a cyclic (mis-authored) flow can't loop
 // forever. Matches the live executor's historical limit.
 const MaxDepth = 64
@@ -55,6 +61,7 @@ type CallDriver interface {
 func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, error) {
 	var path []Step
 	clk, timed := d.(clocked)
+	obs, observed := d.(stepObserver)
 	nodeID := entry
 	for depth := 0; depth < MaxDepth; depth++ {
 		node, ok := FindNode(flow, nodeID)
@@ -76,6 +83,9 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 			Action: res.Action, Detail: res.Detail, DTMFInput: res.DTMF,
 			Outcome: outcome, At: at,
 		})
+		if observed {
+			obs.StepDone(ctx, node, path[len(path)-1])
+		}
 		if err != nil {
 			return path, fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
 		}

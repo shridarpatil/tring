@@ -35,6 +35,7 @@ The definition is JSON:
 | `entry_node` | Id of the first node. The editor always saves its Start node, `node_start`. Required. |
 | `nodes[]` | `id`, `type`, `label`, `position` (editor canvas only) and a type-specific `config` object. |
 | `edges[]` | `from` node id, `to` node id, and `condition`: the **outcome** of the `from` node that follows this edge. |
+| `end_webhook_id` | Optional. The webhook sent `call.ended` when a call through this flow ends, however it ended. Set with **On call end** in the editor's toolbar. See [Webhooks](/tring/features/webhooks/). |
 
 ### How a call walks the graph
 
@@ -46,6 +47,8 @@ The definition is JSON:
 Wire every outcome you care about. On a live call, an outcome with no edge ends the flow. The path a call took is saved on the call record as `ivr_path` (see [Recording and call logs](/tring/features/recording-and-call-logs/)).
 
 ## Node types
+
+Every node can also **notify a webhook**: pick one under **Notify webhook** in its properties panel (`config.webhook_id`). The step then sends `ivr.node` with its result and the caller's input when it finishes. A transfer sends it when someone answers, or when nobody does. It runs in the background and never changes or delays the call. See [Webhooks](/tring/features/webhooks/).
 
 Prompt fields are shared by several nodes:
 
