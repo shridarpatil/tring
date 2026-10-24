@@ -4,14 +4,12 @@ import { ref } from "vue";
 import { errMessage } from "../../lib/errors";
 import { usePagedList } from "../../composables/usePagedList";
 import { useRouter } from "vue-router";
-import { Trash2, ArrowRight, Copy } from "lucide-vue-next";
 import { api } from "../../api/client";
 import { toast } from "../../lib/toast";
 import type { Flow } from "../../api/types";
 import {
   Button,
   Badge,
-  IconButton,
   Modal,
   Panel,
   Pagination,
@@ -124,19 +122,13 @@ async function deleteFlow(id: string) {
           <span class="text-light">{{ new Date(String(value)).toLocaleString() }}</span>
         </template>
         <template #row-actions="{ row }">
-          <Button
-            variant="ghost"
-            size="sm"
-            @click="router.push({ name: 'flow-editor', params: { id: row.id } })"
-          >
-            Edit <ArrowRight :size="12" />
-          </Button>
-          <IconButton title="Duplicate flow" size="sm" @click="openDuplicate(row as Flow)">
-            <Copy :size="16" />
-          </IconButton>
-          <IconButton title="Delete flow" size="sm" variant="danger" @click="deleteFlow(row.id)">
-            <Trash2 :size="16" />
-          </IconButton>
+          <div class="hstack">
+            <Button variant="secondary" size="sm" @click="router.push({ name: 'flow-editor', params: { id: row.id } })">
+              Edit
+            </Button>
+            <Button variant="secondary" size="sm" @click="openDuplicate(row as Flow)">Duplicate</Button>
+            <Button variant="danger" size="sm" @click="deleteFlow(row.id)">Delete</Button>
+          </div>
         </template>
       </DataTable>
       <Pagination

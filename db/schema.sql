@@ -304,8 +304,11 @@ CREATE TABLE webhooks (
     tenant_id uuid NOT NULL,
     url text NOT NULL,
     secret text NOT NULL,
-    events text[] DEFAULT '{}'::text[] NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    name text DEFAULT ''::text NOT NULL,
+    headers text DEFAULT ''::text NOT NULL,
+    active boolean DEFAULT true NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 --

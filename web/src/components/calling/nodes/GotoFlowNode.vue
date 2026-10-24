@@ -18,6 +18,7 @@ const summary = computed(() => {
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Goto Flow'"
     header-class="bg-teal-600"
     :output-handles="[]"

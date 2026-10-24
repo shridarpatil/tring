@@ -63,28 +63,47 @@ type activeCall struct {
 	recFormat  string           // tenant's recording format (record.Formats), read at call start
 	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
 	ringAgents []string         // agents rung in the current window — names the no_answer event
+	endHook    uuid.UUID        // the flow's "on call end" webhook (uuid.Nil = none)
 }
 
-// Webhooks delivers tenant-registered webhooks; *webhook.Notifier implements
-// it. The call log is the one place that knows when a media-plane call is
-// answered or ends, so it emits call.answered / call.ended (the api emits
-// call.ringing when it places a call).
+// Webhooks delivers registered webhooks; *webhook.Notifier implements it.
+// The call log is the one place that knows when a media-plane call ends, so it
+// sends call.ended to the flow's "on call end" webhook (see EndWebhook).
 type Webhooks interface {
-	Emit(ctx context.Context, tenantID uuid.UUID, eventType string, data interface{})
+	Send(tenantID, webhookID uuid.UUID, eventType string, data interface{})
 }
 
-// WithWebhooks turns on call.answered / call.ended delivery and returns l for
-// chaining.
+// WithWebhooks turns on call.ended delivery and returns l for chaining.
 func (l *Log) WithWebhooks(w Webhooks) *Log {
 	l.hooks = w
 	return l
 }
 
-// emitCall sends a call.* webhook carrying the call's current row, the same
-// {"call": …} object the api's call.ringing carries. Best-effort: a missing
-// row or a lookup error logs and skips the event.
-func (l *Log) emitCall(ctx context.Context, ac *activeCall, event string) {
-	if l.hooks == nil {
+// EndWebhook sets the webhook sent call.ended when roomID's call ends — the
+// "on call end" webhook of the flow the call runs. No-op for an unknown room.
+func (l *Log) EndWebhook(roomID string, webhookID uuid.UUID) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ac := l.calls[roomID]; ac != nil {
+		ac.endHook = webhookID
+	}
+}
+
+// CallID returns the calls.id of roomID's live call (uuid.Nil if none).
+func (l *Log) CallID(roomID string) uuid.UUID {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ac := l.calls[roomID]; ac != nil {
+		return ac.id
+	}
+	return uuid.Nil
+}
+
+// emitCall sends event, carrying the call's current row (the same {"call": …}
+// object GET /v1/calls/{id} returns), to webhookID. Best-effort: a missing
+// row or a lookup error logs and skips it.
+func (l *Log) emitCall(ctx context.Context, ac *activeCall, webhookID uuid.UUID, event string) {
+	if l.hooks == nil || webhookID == uuid.Nil {
 		return
 	}
 	c, err := callrow.Get(ctx, l.db, l.q, ac.tenant, ac.id)
@@ -92,7 +111,7 @@ func (l *Log) emitCall(ctx context.Context, ac *activeCall, event string) {
 		l.log.Warn("cdr: webhook payload lookup failed", "event", event, "call", ac.id, "err", err)
 		return
 	}
-	l.hooks.Emit(ctx, ac.tenant, event, callrow.Payload(c))
+	l.hooks.Send(ac.tenant, webhookID, event, callrow.Payload(c))
 }
 
 // New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
@@ -263,7 +282,6 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	if l.events != nil {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, answeredAgentName, time.Now()))
 	}
-	l.emitCall(ctx, ac, webhook.EventCallAnswered)
 	if ac.rec == nil {
 		return nil
 	}
@@ -460,7 +478,7 @@ func (l *Log) Ended(roomID, cause string) {
 	}
 	// recording_url isn't in this payload yet: the recording is merged and
 	// stamped after the call ends (finalizeRecording, below).
-	l.emitCall(ctx, ac, webhook.EventCallEnded)
+	l.emitCall(ctx, ac, ac.endHook, webhook.EventCallEnded)
 	if ac.rec != nil {
 		go l.finalizeRecording(ac)
 	}

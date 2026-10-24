@@ -4,6 +4,7 @@
 // node-type identity, not theme tokens. Card chrome uses Operator tokens.
 import { computed } from "vue";
 import { Handle, Position } from "@vue-flow/core";
+import { Bell } from "lucide-vue-next";
 
 const props = withDefaults(
   defineProps<{
@@ -11,6 +12,7 @@ const props = withDefaults(
     headerClass: string;
     hasInput?: boolean;
     outputHandles?: { id: string; label: string; title?: string }[];
+    notifies?: boolean; // the node sends a webhook (config.webhook_id)
   }>(),
   { hasInput: true },
 );
@@ -51,6 +53,7 @@ function handleLeft(idx: number, len: number): string {
     <div class="node-head" :style="{ background: headerBg }">
       <slot name="icon" />
       <span class="truncate">{{ label }}</span>
+      <Bell v-if="notifies" :size="12" class="node-bell" aria-label="Sends a webhook" />
     </div>
 
     <div class="node-body">
@@ -136,4 +139,5 @@ function handleLeft(idx: number, len: number): string {
   pointer-events: none;
   white-space: nowrap;
 }
+.node-bell { margin-left: auto; flex-shrink: 0; opacity: 0.9; }
 </style>

@@ -29,6 +29,7 @@ const outputHandles = computed(() => {
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     :label="data?.label || 'Menu'"
     header-class="bg-purple-600"
     :output-handles="outputHandles"

@@ -897,3 +897,98 @@ func TestGreetingNotInterruptibleIgnoresKeypress(t *testing.T) {
 		t.Fatalf("outcome = %q, want default", res.Outcome)
 	}
 }
+
+// eventLog collects the node webhook events a driver fires.
+type eventLog struct {
+	mu  sync.Mutex
+	got []ivrdrive.NodeEvent
+}
+
+func (e *eventLog) add(ev ivrdrive.NodeEvent) {
+	e.mu.Lock()
+	e.got = append(e.got, ev)
+	e.mu.Unlock()
+}
+
+func (e *eventLog) outcomes() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := []string{}
+	for _, ev := range e.got {
+		out = append(out, ev.Node.ID+":"+ev.Outcome)
+	}
+	return out
+}
+
+// A node that names a webhook fires it once it finishes, with the digits and
+// the flow vars; a node without one fires nothing.
+func TestNodeWebhookFiresWhenNodeFinishes(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	log := &eventLog{}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, OnNodeEvent: log.add, Vars: map[string]string{"caller": "+919800000001"}})
+	flow := &ivr.Flow{
+		EntryNode: "g",
+		Nodes: []ivr.Node{
+			{ID: "g", Type: ivr.NodeGreeting, Config: map[string]interface{}{"audio_file": "hi.ogg"}},
+			{ID: "acct", Type: ivr.NodeGather, Config: map[string]interface{}{"audio_file": "acct.ogg", "max_digits": 4, "store_as": "acct", "webhook_id": "hook-1"}},
+			{ID: "bye", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "g", To: "acct", Condition: "default"},
+			{From: "acct", To: "bye", Condition: "default"},
+		},
+	}
+	runFlow(t, d, fake, flow, map[string][]string{"acct.ogg": {"1", "2", "3", "4"}})
+	if got := log.outcomes(); !eq(got, []string{"acct:default"}) {
+		t.Fatalf("events = %v, want only acct:default", got)
+	}
+	ev := log.got[0]
+	if ev.DTMF != "1234" || ev.Vars["acct"] != "1234" || ev.Vars["caller"] != "+919800000001" {
+		t.Fatalf("event = %+v, want dtmf 1234 and the flow vars", ev)
+	}
+}
+
+// A transfer fires its webhook when the agent answers — not again when the
+// conversation later ends — and with no_answer when nobody picks up.
+func TestTransferWebhookFiresOnAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		outcome string
+		want    []string
+	}{
+		{"completed", []string{"x:answered"}},
+		{"no_answer", []string{"x:no_answer"}},
+	} {
+		fake := &fakePrompts{played: make(chan string, 16)}
+		log := &eventLog{}
+		agents := &fakeAgents{outcome: tc.outcome}
+		d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r", OnNodeEvent: log.add})
+		agents.onRing = func() {
+			if tc.outcome == "completed" {
+				agents.gotTgt.Answered() // the router calls this once an agent picks up
+			}
+		}
+		flow := &ivr.Flow{
+			EntryNode: "x",
+			Nodes:     []ivr.Node{{ID: "x", Type: ivr.NodeTransfer, Config: map[string]interface{}{"team": "sales", "webhook_id": "hook-1"}}},
+		}
+		runFlow(t, d, fake, flow, nil)
+		if got := log.outcomes(); !eq(got, tc.want) {
+			t.Fatalf("%s: events = %v, want %v", tc.outcome, got, tc.want)
+		}
+	}
+}
+
+// A number transfer fires on answer, once.
+func TestNumberTransferWebhookFiresOnAnswer(t *testing.T) {
+	log := &eventLog{}
+	dialer := &gateDialer{release: make(chan struct{}), hangup: make(chan struct{}), outcome: "completed"}
+	close(dialer.release)
+	close(dialer.hangup)
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r", OnNodeEvent: log.add})
+	flow := dialFlow(map[string]interface{}{"number": "+919812345678", "webhook_id": "hook-1"})
+	runFlow(t, d, fake, flow, nil)
+	if got := log.outcomes(); !eq(got, []string{"x:answered"}) {
+		t.Fatalf("events = %v, want x:answered once", got)
+	}
+}

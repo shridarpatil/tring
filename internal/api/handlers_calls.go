@@ -22,7 +22,6 @@ import (
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/provider"
-	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 // Call is a call-log row; the shared definition lives in callrow so the
@@ -227,9 +226,6 @@ func (s *Server) originateForAgent(
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
 	}
 
-	// Fire call.ringing webhook async (best-effort; can't block originate
-	// on third-party endpoint latency).
-	s.notifier.Emit(ctx, t.ID, webhook.EventCallRinging, callPayload(c))
 	return c, 0, nil
 }
 
@@ -316,7 +312,6 @@ func (s *Server) originateBridge(
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
 	}
 
-	s.notifier.Emit(ctx, t.ID, webhook.EventCallRinging, callPayload(c))
 	return c, 0, nil
 }
 
@@ -350,10 +345,6 @@ func buildBridgeLegs(trunks []trunk, agentNumber, clientNumber string) (aLeg str
 	}
 	return aLeg, bLegs, primary.E164
 }
-
-// callPayload is the data shape we ship in webhook envelopes. Mirrors the
-// REST response so integrators can use one decoder for both surfaces.
-func callPayload(c Call) map[string]interface{} { return callrow.Payload(c) }
 
 const (
 	callsDefaultLimit = 50

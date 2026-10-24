@@ -62,6 +62,9 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 	if a.runRing(ctx, roomID, t) != routing.OutcomeCompleted {
 		return "no_answer", nil
 	}
+	if t.Answered != nil {
+		t.Answered()
+	}
 	// An agent answered. If the transport can tell us when the handoff ends, wait
 	// so a node wired to the transfer's "completed" edge runs AFTER the agent
 	// disconnects (to the caller only). If the caller leaves first → end the flow.

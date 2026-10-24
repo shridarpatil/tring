@@ -16,6 +16,7 @@ const outputHandles = [{ id: "default", label: "Start", title: "Flow entry point
 
 <template>
   <BaseNode
+    :notifies="!!data?.config?.webhook_id"
     label="Start"
     header-class="bg-slate-700"
     :output-handles="outputHandles"
