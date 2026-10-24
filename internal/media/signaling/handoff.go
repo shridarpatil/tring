@@ -11,9 +11,11 @@ import (
 // the answered agent leaves with the caller still present, resume is closed so
 // AwaitHandoffEnd returns true and a node wired to the transfer's "completed"
 // edge runs to the caller (e.g. a post-call survey). See AwaitHandoffEnd +
-// resumeHandoffIfAgentLeft.
+// resumeHandoffIfAgentLeft. A phone caller is the room's port, not a
+// participant: phone is set and caller is empty.
 type handoff struct {
 	caller room.ParticipantID
+	phone  bool
 	resume chan struct{}
 }
 
@@ -50,24 +52,26 @@ func (s *Server) voidHandoff(roomID room.RoomID) {
 // AwaitHandoffEnd implements brain.HandoffWaiter. Called after an agent answers a
 // transfer, it blocks until the agent leaves while the caller is still connected
 // (returns true → the flow continues to the caller) or the call ends / the caller
-// leaves / ctx is cancelled (returns false → the flow stops). For a phone room (a
-// port caller) or an untracked caller it returns true immediately, preserving the
-// legacy "continue the moment an agent answers" behaviour.
+// leaves / ctx is cancelled (returns false → the flow stops). For an untracked
+// caller it returns true immediately, preserving the legacy "continue the moment
+// an agent answers" behaviour.
 func (s *Server) AwaitHandoffEnd(ctx context.Context, roomID string) bool {
 	rid := room.RoomID(roomID)
-	if s.sfu.HasPort(rid) {
-		return true // phone plug: no web post-call handling yet
-	}
 
 	s.mu.Lock()
 	caller, ok := s.callers[rid]
-	if !ok {
+	_, phone := s.pstnCalls[rid]
+	if !ok && !phone {
 		s.mu.Unlock()
 		return true // no tracked caller → legacy behaviour
 	}
 	resume := make(chan struct{})
-	s.handoffs[rid] = &handoff{caller: caller, resume: resume}
+	s.handoffs[rid] = &handoff{caller: caller, phone: phone, resume: resume}
 	s.mu.Unlock()
+
+	if phone {
+		s.sfu.ReleasePortFeed(rid) // the phone leg hears the agent, not the idle IVR
+	}
 
 	defer func() {
 		s.mu.Lock()
@@ -79,7 +83,7 @@ func (s *Server) AwaitHandoffEnd(ctx context.Context, roomID string) bool {
 
 	// Backstop the race where the agent hangs up before we registered the handoff:
 	// resolve from the current membership instead of waiting for an event we missed.
-	if done, callerPresent := s.handoffSettled(rid, caller); done {
+	if done, callerPresent := s.handoffSettled(rid, caller, phone); done {
 		return callerPresent
 	}
 
@@ -94,9 +98,16 @@ func (s *Server) AwaitHandoffEnd(ctx context.Context, roomID string) bool {
 // handoffSettled reports whether the bridged call is already down to just the
 // caller (done, callerPresent=true → resume) or the caller is already gone
 // (done, callerPresent=false → stop). done=false means an agent is still present
-// and AwaitHandoffEnd should wait for the leave event.
-func (s *Server) handoffSettled(rid room.RoomID, caller room.ParticipantID) (done, callerPresent bool) {
+// and AwaitHandoffEnd should wait for the leave event. A phone room whose agent
+// already left was torn down by routeEvent (nothing to resume), so it stops.
+func (s *Server) handoffSettled(rid room.RoomID, caller room.ParticipantID, phone bool) (done, callerPresent bool) {
 	r, ok := s.rooms.Get(rid)
+	if phone {
+		if !ok || len(r.Participants()) == 0 {
+			return true, false
+		}
+		return false, true
+	}
 	if !ok {
 		return true, false
 	}
@@ -122,19 +133,28 @@ func (s *Server) handoffSettled(rid room.RoomID, caller room.ParticipantID) (don
 // present, it resumes the IVR (closing resume) and returns true so the caller is
 // NOT ended. Otherwise (the caller left, or no handoff) it clears any handoff and
 // returns false so normal teardown proceeds. The leaving participant has already
-// been removed from the room's membership by the time this runs.
+// been removed from the room's membership by the time this runs. A phone caller
+// is still on the line while its leg is live; it resumes once no agent remains.
 func (s *Server) resumeHandoffIfAgentLeft(roomID room.RoomID, left room.ParticipantID) bool {
 	s.mu.Lock()
 	h := s.handoffs[roomID]
-	if h == nil || left == h.caller {
+	if h == nil || (!h.phone && left == h.caller) {
 		delete(s.handoffs, roomID)
 		s.mu.Unlock()
 		return false
 	}
 	delete(s.handoffs, roomID)
+	_, phoneLive := s.pstnCalls[roomID]
 	s.mu.Unlock()
 
 	r, ok := s.rooms.Get(roomID)
+	if h.phone {
+		if phoneLive && (!ok || len(r.Participants()) == 0) {
+			close(h.resume)
+			return true
+		}
+		return false
+	}
 	if !ok {
 		return false
 	}

@@ -115,3 +115,68 @@ func TestAwaitHandoffEndStopsWhenCallerLeaves(t *testing.T) {
 		t.Fatal("AwaitHandoffEnd did not return after ctx cancel")
 	}
 }
+
+// A phone caller is the room's port, not a participant. Once an agent answers,
+// AwaitHandoffEnd waits for the agent to hang up (not the instant they answer),
+// then resumes the flow without hanging up the phone leg.
+func TestAwaitHandoffEndPhoneWaitsForAgentHangup(t *testing.T) {
+	s := newHandoffServer(t)
+	rid := room.RoomID("t/pstn-handoff")
+	plug := &hangupPlug{hangups: make(chan room.CallID, 1)}
+	pstnRoom(s, plug, rid, "call-1")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	got := make(chan bool, 1)
+	go func() { got <- s.AwaitHandoffEnd(context.Background(), string(rid)) }()
+	waitHandoff(t, s, rid)
+	select {
+	case v := <-got:
+		t.Fatalf("AwaitHandoffEnd returned %v while the agent is still talking", v)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	agent.Leave()
+
+	select {
+	case v := <-got:
+		if !v {
+			t.Fatal("AwaitHandoffEnd = false, want true (agent hung up, phone caller on the line)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AwaitHandoffEnd did not return after the agent hung up")
+	}
+	select {
+	case id := <-plug.hangups:
+		t.Fatalf("phone leg %q was hung up; the post-call flow should run to the caller", id)
+	default:
+	}
+}
+
+// A phone caller who hangs up during the handoff stops the flow.
+func TestAwaitHandoffEndPhoneStopsWhenCallerHangsUp(t *testing.T) {
+	s := newHandoffServer(t)
+	rid := room.RoomID("t/pstn-handoff-2")
+	pstnRoom(s, &hangupPlug{hangups: make(chan room.CallID, 1)}, rid, "call-2")
+	if _, err := s.rooms.Join(rid, "agent"); err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan bool, 1)
+	go func() { got <- s.AwaitHandoffEnd(ctx, string(rid)) }()
+	waitHandoff(t, s, rid)
+
+	s.forgetPstn(rid)
+	cancel() // endPstnRoom → stopIVR cancels the walk
+	select {
+	case v := <-got:
+		if v {
+			t.Fatal("AwaitHandoffEnd = true, want false (caller hung up)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("AwaitHandoffEnd did not return after the caller hung up")
+	}
+}

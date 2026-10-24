@@ -28,5 +28,8 @@ const summary = computed(() => {
   >
     <template #icon><Users :size="16" /></template>
     <p class="truncate">{{ summary }}</p>
+    <p v-if="data?.config?.greeting_text || data?.config?.audio_file" class="truncate">
+      {{ data.config.greeting_text || data.config.audio_file }}
+    </p>
   </BaseNode>
 </template>
