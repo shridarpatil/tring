@@ -17,7 +17,6 @@ import {
   TextField,
   Select,
 } from "../components/ui";
-import { Power } from "lucide-vue-next";
 
 const numbers = ref<PhoneNumber[]>([]);
 const trunks = ref<Trunk[]>([]);
@@ -164,8 +163,7 @@ onMounted(load);
           <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
         </template>
         <template #row-actions="{ row }">
-          <Button variant="ghost" size="sm" @click="toggleActive(row)">
-            <Power :size="16" />
+          <Button variant="secondary" size="sm" @click="toggleActive(row)">
             {{ row.active ? "Deactivate" : "Activate" }}
           </Button>
         </template>

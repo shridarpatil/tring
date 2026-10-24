@@ -123,7 +123,7 @@ async function setAvailability(a: Agent, available: boolean) {
           <span class="text-light">{{ new Date(String(value)).toLocaleDateString() }}</span>
         </template>
         <template #row-actions="{ row }">
-          <Button variant="ghost" size="sm" @click="mintToken(row)">Get token</Button>
+          <Button variant="secondary" size="sm" @click="mintToken(row)">Get token</Button>
         </template>
       </DataTable>
     </Panel>
