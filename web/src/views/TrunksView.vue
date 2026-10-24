@@ -16,7 +16,6 @@ import { trunkStatusTone } from "../lib/status";
 import type { Trunk } from "../api/types";
 import {
   Button,
-  IconButton,
   Panel,
   DataTable,
   type Column,
@@ -26,7 +25,6 @@ import {
   Select,
   Toggle,
 } from "../components/ui";
-import { Pencil, Trash2 } from "lucide-vue-next";
 import { confirmDialog } from "../lib/confirm";
 
 // status string → human label for the status badge.
@@ -272,12 +270,10 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
           <Badge :tone="row.active ? 'success' : 'neutral'">{{ row.active ? "yes" : "no" }}</Badge>
         </template>
         <template #row-actions="{ row }">
-          <IconButton title="Edit" variant="ghost" size="sm" @click="startEdit(row)">
-            <Pencil :size="16" />
-          </IconButton>
-          <IconButton title="Delete" variant="danger" size="sm" @click="removeTrunk(row)">
-            <Trash2 :size="16" />
-          </IconButton>
+          <div class="hstack">
+            <Button variant="secondary" size="sm" @click="startEdit(row)">Edit</Button>
+            <Button variant="danger" size="sm" @click="removeTrunk(row)">Delete</Button>
+          </div>
         </template>
         <template #empty>
           No trunks yet — click <span>New trunk</span> to add one.

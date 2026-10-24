@@ -6,8 +6,7 @@ import { api } from "../api/client";
 import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import type { Audio } from "../api/types";
-import { Button, IconButton, Panel, DataTable, Modal, TextField, type Column } from "../components/ui";
-import { Trash2 } from "lucide-vue-next";
+import { Button, Panel, DataTable, Modal, TextField, type Column } from "../components/ui";
 import { confirmDialog } from "../lib/confirm";
 
 const { items: sounds, loading, load } = useList<Audio>("/v1/audio");
@@ -104,9 +103,7 @@ function fmtSize(n: number) {
           <Button v-else variant="ghost" size="sm" @click="preview(row)">▶ Play</Button>
         </template>
         <template #row-actions="{ row }">
-          <IconButton title="Delete" variant="danger" @click="destroy(row)">
-            <Trash2 />
-          </IconButton>
+          <Button variant="danger" size="sm" @click="destroy(row)">Delete</Button>
         </template>
       </DataTable>
     </Panel>
