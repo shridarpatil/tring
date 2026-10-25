@@ -10,6 +10,7 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -49,6 +50,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 
 	pid := room.ParticipantID("ivr-" + uuid.NewString())
 	player := prompt.NewPlayer(pid, 0)
+	tagParticipant(pid, "ivr")
 	driver := ivrdrive.New(ivrdrive.Config{
 		Prompts: &filePrompts{
 			dir:       s.cfg.AudioDir,
@@ -120,6 +122,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 	s.log.Info("ivr started", "room", roomID, "flow", flowID, "entry", flow.EntryNode)
 	if !s.brain.Start(context.Background(), roomID, flow, driver, setup, onJourney, onDone) {
 		_ = player.Close() // lost the race or setup failed — nothing injected for us to remove
+		logging.ClearParticipant(string(pid))
 		return
 	}
 }

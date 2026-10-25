@@ -2,6 +2,7 @@ package signaling
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -231,6 +232,7 @@ func (s *Server) handleSupervisor(c *conn, princ *principal, first msg, tenant s
 	pid := room.ParticipantID("sup-" + uuid.NewString())
 	c.pid = pid
 	s.setRole(pid, roleSupervisor)
+	tagParticipant(pid, "supervisor", slog.String("user", princ.name))
 	s.mu.Lock()
 	s.conns[pid] = c
 	s.mu.Unlock()

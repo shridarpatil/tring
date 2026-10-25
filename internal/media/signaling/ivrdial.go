@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
@@ -68,8 +69,10 @@ func (s *Server) dialFromIVR(ctx context.Context, roomID room.RoomID, number, ca
 	if answered != nil {
 		answered() // the caller hears the callee, not the ringing music
 	}
+	tagParticipant(pid, "callee")
 	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
 		ocancel()
+		logging.ClearParticipant(string(pid))
 		s.log.Error("ivr dial: attach port failed", "room", roomID, "err", err)
 		_ = s.cfg.Originator.HangupOutbound(pid)
 		return "no_answer", nil

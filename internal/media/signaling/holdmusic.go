@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
@@ -57,11 +58,13 @@ func (s *Server) playHold(roomID room.RoomID, moh string) func() {
 
 	pid := room.ParticipantID("hold-" + uuid.NewString())
 	player := prompt.NewPlayer(pid, 0)
+	tagParticipant(pid, "hold")
 	if err := s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
 	}); err != nil {
 		s.log.Warn("hold: inject hold music failed", "room", roomID, "err", err)
 		_ = player.Close()
+		logging.ClearParticipant(string(pid))
 		return func() {}
 	}
 	// A phone leg forwards ONE feed; the held party's agent keeps sending (muted)

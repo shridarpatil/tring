@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
@@ -67,7 +68,9 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 	s.pstnCalls[roomID] = ic.CallID
 	s.mu.Unlock()
 
+	tagParticipant(leg.Source.ID(), "caller")
 	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
+		logging.ClearParticipant(string(leg.Source.ID()))
 		s.log.Error("pstn: attach port failed", "room", roomID, "err", err)
 		_ = s.pstnGW.Hangup(ic.CallID)
 		s.forgetPstn(roomID)
@@ -106,6 +109,10 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 // IVR (both paths), any agent still in the room (they get a terminal `ended`),
 // and the port.
 func (s *Server) endPstnRoom(roomID room.RoomID) {
+	s.mu.Lock()
+	callerPID := s.pstnCalls[roomID]
+	s.mu.Unlock()
+	defer logging.ClearParticipant(string(callerPID)) // the caller's port is never detached on its own
 	s.forgetPstn(roomID)
 	s.endTransfer(roomID) // stop any blind-transfer ring the caller was waiting on
 	s.stopIVR(roomID)
