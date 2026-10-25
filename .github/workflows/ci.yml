@@ -7,9 +7,9 @@ name: CI
 # that doesn't need FreeSWITCH: pure-function tests, JWT, masking, webhook
 # signing, plus DB-backed handler/trunks tests against a Postgres service
 # container. The slower `integration` job boots the full docker-compose stack
-# and runs the FreeSWITCH-tagged tests against a real ESL endpoint. PRs don't get
-# the integration job (gating on FS boot would wedge unrelated PRs); it runs only
-# on main + manual dispatch.
+# and runs the FreeSWITCH-tagged tests against a real ESL endpoint, after checking
+# the FreeSWITCH image boots with a worst-case random password. It runs on main,
+# manual dispatch and PRs from this repo (not forks).
 #
 # Build/release stage (gated on the tests, push events only):
 #   - images : three images -> :develop on main, :<tag> on a v* tag, to
@@ -56,10 +56,10 @@ jobs:
           --health-retries 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
@@ -82,7 +82,7 @@ jobs:
         run: go vet ./...
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -125,13 +125,14 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    needs: unit
+    # No `needs: unit`: the two test jobs run side by side to save wall-clock
+    # time. `images` and `release` still need both.
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
@@ -151,6 +152,29 @@ jobs:
             sleep 2
           done
           docker compose ps
+
+      # The base image gives each new container a random default_password
+      # (12 chars that may include '-'). FreeSWITCH expands $${vars} even in
+      # comments, so a value with "--" there breaks the XML and FS won't start
+      # (~1 container in 370). Boot this PR's image with a worst-case password
+      # seeded, so any config that would break on it fails here, not on deploy.
+      - name: FreeSWITCH config survives a worst-case password
+        run: |
+          docker build -q -t tring-fs-pwcheck ./freeswitch
+          docker run -d --name fs-pwcheck --entrypoint sh tring-fs-pwcheck -c '
+            mkdir -p /etc/freeswitch &&
+            cp -arf /usr/share/freeswitch/conf/vanilla/* /etc/freeswitch/ &&
+            sed -i "s/default_password=[^\"]*/default_password=-a--b--c--d-/" /etc/freeswitch/vars.xml &&
+            exec /entrypoint.sh'
+          for i in $(seq 1 30); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' fs-pwcheck 2>/dev/null || echo none)
+            if [ "$state" = "healthy" ]; then echo "FreeSWITCH is up"; docker rm -f fs-pwcheck; exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' fs-pwcheck)" != "true" ]; then break; fi
+            sleep 2
+          done
+          echo "FreeSWITCH did not start with default_password=-a--b--c--d-:"
+          docker logs fs-pwcheck 2>&1 | grep -E "Cannot Initialize|error near" || docker logs fs-pwcheck 2>&1 | tail -50
+          exit 1
 
       - name: Run integration tests
         env:
@@ -195,22 +219,22 @@ jobs:
           - { name: freeswitch, context: "freeswitch", file: "freeswitch/Dockerfile", args: "",          platforms: "linux/amd64" }
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -226,7 +250,7 @@ jobs:
 
       - name: Image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.name }}
@@ -236,7 +260,7 @@ jobs:
             type=ref,event=tag
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
@@ -260,37 +284,37 @@ jobs:
       packages: write   # for ghcr.io
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0   # full history so GoReleaser can build the changelog
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.26"
           cache: true
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
