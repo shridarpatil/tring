@@ -8,6 +8,7 @@ import (
 	"github.com/pion/webrtc/v4"
 
 	"github.com/shridarpatil/tring/internal/events"
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -197,10 +198,12 @@ func (s *Server) playTransferFailMessage(rid room.RoomID, tenantID uuid.UUID) {
 	}
 	pid := room.ParticipantID("xfermsg-" + uuid.NewString())
 	player := prompt.NewPlayer(pid, 0)
+	tagParticipant(pid, "xfermsg")
 	if err := s.sfu.InjectSource(rid, player, webrtc.RTPCodecCapability{
 		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
 	}); err != nil {
 		_ = player.Close()
+		logging.ClearParticipant(string(pid))
 		return
 	}
 	<-player.Play(frames) // one-shot (not looped)

@@ -1,11 +1,13 @@
 package signaling_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +22,7 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/media/signaling"
@@ -1055,5 +1058,50 @@ func TestWebCallCDRFromIsNotTheVisitorName(t *testing.T) {
 			t.Fatalf("started hooks = %v, want 1", got)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// syncBuf is a goroutine-safe log sink: the server logs from its own goroutines.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// TestJoinLogsAgentRoleAndSIP: an agent's lines name who it is — the join line
+// carries role=agent and its SIP username, so a call's log reads by party.
+func TestJoinLogsAgentRoleAndSIP(t *testing.T) {
+	var buf syncBuf
+	ts := newServerCfg(t, signaling.Config{
+		Logger: slog.New(logging.WithCallIDs(slog.NewTextHandler(&buf, nil))),
+	})
+	c := dial(t, ts.URL, mintToken(t, uuid.New(), "alice"))
+	c.send(map[string]any{"type": "join", "room": "room-1", "name": "A"})
+	c.readUntil("joined")
+
+	var line string
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		for _, l := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(l, `msg="participant joined"`) {
+				line = l
+			}
+		}
+		if line != "" {
+			break
+		}
+	}
+	if !strings.Contains(line, "role=agent") || !strings.Contains(line, "sip=alice") {
+		t.Fatalf("participant joined line %q lacks role=agent sip=alice", line)
 	}
 }
