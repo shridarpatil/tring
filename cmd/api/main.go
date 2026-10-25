@@ -19,6 +19,7 @@ import (
 	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/config"
 	"github.com/shridarpatil/tring/internal/db"
+	"github.com/shridarpatil/tring/internal/eslcdr"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/logging"
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
@@ -226,6 +227,11 @@ func main() {
 		events.TypeQueues, 800*time.Millisecond, apiSrv.QueuesData,
 	)
 	go hub.Run(ctx)
+
+	// Status of the calls the API places through FreeSWITCH (POST /v1/calls,
+	// /v1/calls/connect): they're bgapi originates, so ringing → answered /
+	// ended / failed only arrives as ESL events.
+	go eslcdr.New(database, k.String("esl_addr"), k.String("esl_password"), logger).Run(ctx)
 
 	// ReadTimeout bounds a slow-trickled request body (slowloris); IdleTimeout
 	// reaps idle keep-alives. No WriteTimeout: /v1/stream/dashboard is a

@@ -82,11 +82,16 @@ type OriginateRequest struct {
 	UUID     string
 	CallerID string
 	Vars     map[string]string
+	// JobUUID, when set, is sent as the bgapi Job-UUID header, so the caller
+	// knows the job id before FreeSWITCH replies and can store the call row
+	// first: a fast failure's BACKGROUND_JOB event can otherwise beat the
+	// insert, leaving nothing for eslcdr to mark failed.
+	JobUUID string
 }
 
 // OriginateResult holds the two FreeSWITCH identifiers tied to a single
 // originate request: the pre-allocated channel UUID we set (== req.UUID),
-// and the bgapi Job-UUID returned in the reply. The orchestrator uses the
+// and the bgapi Job-UUID returned in the reply. eslcdr uses the
 // job UUID to catch failed-to-create-channel originates via BACKGROUND_JOB
 // events (no channel = no CHANNEL_HANGUP_COMPLETE, so the job event is the
 // only signal we get).
@@ -121,7 +126,7 @@ func (c *Client) Originate(ctx context.Context, req OriginateRequest) (Originate
 	// which causes trigger the rollover.
 	bridgeArgs := strings.Join(req.BLegs, "|")
 	args := fmt.Sprintf("%s%s &bridge(%s)", buildVarBlock(vars), req.ALeg, bridgeArgs)
-	if err := checkArgs(args); err != nil {
+	if err := checkArgs(args, req.JobUUID); err != nil {
 		return OriginateResult{}, err
 	}
 
@@ -131,11 +136,7 @@ func (c *Client) Originate(ctx context.Context, req OriginateRequest) (Originate
 	}
 	defer conn.Close()
 
-	resp, err := conn.SendCommand(ctx, command.API{
-		Command:    "originate",
-		Arguments:  args,
-		Background: true,
-	})
+	resp, err := conn.SendCommand(ctx, bgapi{command: "originate", args: args, jobUUID: req.JobUUID})
 	if err != nil {
 		return OriginateResult{}, fmt.Errorf("send originate: %w", err)
 	}
@@ -177,6 +178,18 @@ func (c *Client) Command(ctx context.Context, cmd, args string) (string, error) 
 		return "", fmt.Errorf("freeswitch %s rejected: %s", cmd, reply)
 	}
 	return reply, nil
+}
+
+// bgapi is eslgo's command.API{Background: true} plus an optional Job-UUID
+// header, which eslgo has no field for.
+type bgapi struct{ command, args, jobUUID string }
+
+func (b bgapi) BuildMessage() string {
+	msg := "bgapi " + b.command + " " + b.args
+	if b.jobUUID != "" {
+		msg += "\r\nJob-UUID: " + b.jobUUID
+	}
+	return msg
 }
 
 // parseJobUUID extracts the job-uuid from a bgapi reply like:
