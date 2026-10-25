@@ -15,6 +15,7 @@ import (
 // New returns a slog.Logger writing to stderr. format is "json" (for log
 // shippers) or "text" (logfmt, friendlier locally); anything else is text.
 // level is debug|info|warn|error, defaulting to info.
+// Lines naming a room with a live call also get that call's id (see SetCall).
 func New(format, level string) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: parseLevel(level)}
 	var h slog.Handler
@@ -23,7 +24,7 @@ func New(format, level string) *slog.Logger {
 	} else {
 		h = slog.NewTextHandler(os.Stderr, opts)
 	}
-	return slog.New(h)
+	return slog.New(WithCallIDs(h))
 }
 
 func parseLevel(s string) slog.Level {
