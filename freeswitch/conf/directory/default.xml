@@ -32,8 +32,10 @@
     </variables>
 
     <!-- No static users: the stock 1000-1019 demo users (password
-         $${default_password}) were removed. Agents are served per tenant by
-         mod_xml_curl (/fs/directory). -->
+         default_password) were removed. Agents are served per tenant by
+         mod_xml_curl (/fs/directory). Don't put $ variables in comments:
+         they are expanded there too, and a random value containing two
+         dashes ends the comment early, so FreeSWITCH won't start. -->
 
   </domain>
 </include>
