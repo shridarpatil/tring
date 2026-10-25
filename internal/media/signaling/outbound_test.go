@@ -653,9 +653,12 @@ func (f *fakeOutboundCallLog) StartedOutbound(_ context.Context, _ uuid.UUID, ro
 
 func (f *fakeOutboundCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
 func (f *fakeOutboundCallLog) RingStart(context.Context, string, string, string)          {}
-func (f *fakeOutboundCallLog) RingAgent(string, string)                                    {}
+func (f *fakeOutboundCallLog) RingAgent(string, string)                                   {}
 func (f *fakeOutboundCallLog) RingStop(string)                                            {}
 func (f *fakeOutboundCallLog) Transferred(string, string, string)                         {}
+func (f *fakeOutboundCallLog) Failed(string, string)                                      {}
+func (f *fakeOutboundCallLog) Customer(string, room.ParticipantID) room.TrackSink         { return nil }
+func (f *fakeOutboundCallLog) CallID(string) uuid.UUID                                    { return uuid.Nil }
 func (f *fakeOutboundCallLog) Journey(string, []ivr.Step)                                 {}
 func (f *fakeOutboundCallLog) Ended(_, cause string) {
 	f.mu.Lock()

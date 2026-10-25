@@ -168,6 +168,14 @@ type CallLog interface {
 	Transferred(roomID, from, to string)
 	Journey(roomID string, steps []ivr.Step)
 	Ended(roomID, cause string)
+	// Failed settles a call that never connected (connect.go: a number that
+	// didn't answer or couldn't be dialed) as failed instead of ended.
+	Failed(roomID, cause string)
+	// Customer names the customer leg of a call opened before it existed
+	// (connect.go dials the agent's number first) and returns its recorder sink.
+	Customer(roomID string, pid room.ParticipantID) room.TrackSink
+	// CallID is the calls.id of roomID's live call (uuid.Nil if none).
+	CallID(roomID string) uuid.UUID
 }
 
 // Server is the /rtc signaling surface.

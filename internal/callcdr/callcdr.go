@@ -454,10 +454,34 @@ func (l *Log) Journey(roomID string, steps []ivr.Step) {
 	}
 }
 
+// Customer names pid the call's customer leg once it exists, for a call opened
+// before its customer was dialed (two-number connect: the agent's number rings
+// first). Returns the recorder sink for pid's publication (nil if not recording
+// or unknown room).
+func (l *Log) Customer(roomID string, pid room.ParticipantID) room.TrackSink {
+	l.mu.Lock()
+	ac := l.calls[roomID]
+	if ac != nil {
+		ac.callerPID = pid
+	}
+	l.mu.Unlock()
+	if ac == nil || ac.rec == nil {
+		return nil
+	}
+	ac.rec.Label(pid, "customer")
+	return ac.rec
+}
+
 // Ended settles the call (status ended, duration, cause) and finalizes the
 // recording in the background (merge stereo → spool → optional S3). Idempotent —
 // the first call wins.
-func (l *Log) Ended(roomID, cause string) {
+func (l *Log) Ended(roomID, cause string) { l.end(roomID, "ended", cause) }
+
+// Failed is Ended for a call that never connected (the number didn't answer,
+// was busy, or couldn't be dialed): status failed, same settlement otherwise.
+func (l *Log) Failed(roomID, cause string) { l.end(roomID, "failed", cause) }
+
+func (l *Log) end(roomID, status, cause string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
 	delete(l.calls, roomID)
@@ -469,10 +493,10 @@ func (l *Log) Ended(roomID, cause string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	duration := int(time.Since(ac.startedAt).Seconds())
-	if _, err := l.db.Pool.Exec(ctx, l.q.SettleCall, "ended", duration, cause, ac.legID); err != nil {
+	if _, err := l.db.Pool.Exec(ctx, l.q.SettleCall, status, duration, cause, ac.legID); err != nil {
 		l.log.Warn("cdr: settle failed", "room", roomID, "err", err)
 	}
-	l.log.Info("cdr: call ended", "room", roomID, "call", ac.id, "duration_s", duration)
+	l.log.Info("cdr: call "+status, "room", roomID, "call", ac.id, "duration_s", duration, "cause", cause)
 	l.timelineEvent(ac.tenant, ac.id, "ended", map[string]any{
 		"cause": cause, "duration_seconds": duration,
 	})

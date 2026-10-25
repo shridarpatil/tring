@@ -5,7 +5,7 @@ description: Click-to-call from your backend with POST /v1/calls and POST /v1/ca
 
 Outbound calls are always started by **your backend** with a tenant API key. The browser SDK cannot place calls: an agent's own button calls your backend, which calls Tring. That way the agent never sees the dialed number, and a stolen agent token cannot place billable calls.
 
-Tring has two click-to-call endpoints. Both go out through FreeSWITCH over your outbound trunks, chosen by the tenant's [outbound strategy](/tring/features/numbers-and-trunks/#outbound-trunk-strategies).
+Tring has two click-to-call endpoints. Both go out over your outbound trunks, chosen by the tenant's [outbound strategy](/tring/features/numbers-and-trunks/#outbound-trunk-strategies). `POST /v1/calls` goes straight through FreeSWITCH; `POST /v1/calls/connect` is placed by the media gateway, so it's recorded and supervisable like inbound calls.
 
 | | `POST /v1/calls` | `POST /v1/calls/connect` |
 |---|---|---|
@@ -14,6 +14,7 @@ Tring has two click-to-call endpoints. Both go out through FreeSWITCH over your 
 | Who rings first | The agent's browser leg, which **auto-answers** (the agent clicked to call), then the customer | The agent's phone, then the customer once the agent answers |
 | Caller ID | Trunk's number, or `caller_id` | Trunk's number on both legs |
 | Agent sees | `agent_label` (or a generic incoming call) | Your trunk's number on their phone |
+| Recorded | No | Yes, when the tenant records calls |
 
 Both return `201` with the new call record (status `ringing`). They don't run an IVR flow, so they send no [webhooks](/tring/features/webhooks/). Details are in the [Calls API](/tring/api-reference/calls/).
 
@@ -51,7 +52,7 @@ curl -sS -X POST https://api.example.com/v1/calls/connect \
   -d '{"agent_number":"+919800000003","client_number":"+919800000001"}'
 ```
 
-Both numbers are normalized like `to` above. Both legs show your primary trunk's number. This endpoint has **no** `caller_id` override, and it uses only the first selected trunk. The call record has no `agent_id`.
+Both numbers are normalized to Indian `+91` mobile numbers. Both legs show your primary trunk's number. While the client's phone rings, the agent hears your hold music. This endpoint has **no** `caller_id` override, and it uses only the first selected trunk. The call record has no `agent_id`; a call that never connects ends `failed` with a `hangup_cause` saying which side didn't answer ([details](/tring/api-reference/calls/#post-v1callsconnect)).
 
 ## Number masking
 
