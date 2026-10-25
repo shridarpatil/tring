@@ -393,3 +393,74 @@ func TestLogLinesCarryCallID(t *testing.T) {
 		t.Errorf("line after the call ended still tagged: %q", lines[1])
 	}
 }
+
+// TestConnectCallRecordsBothLegs: a two-number connect opens its row before
+// the client leg exists (Customer names it later) and records agent + client
+// like any answered call.
+func TestConnectCallRecordsBothLegs(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = true WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("enable recording: %v", err)
+	}
+	dir := t.TempDir()
+	l := callcdr.New(fx.DB, nil, dir, nil, nil)
+	roomID := fx.TenantID.String() + "/connect-test"
+	l.StartedOutbound(ctx, fx.TenantID, roomID, "+919876543210", "+919812345678", "", "")
+	if l.CallID(roomID) == uuid.Nil {
+		t.Fatal("no call row opened")
+	}
+
+	clientSink := l.Customer(roomID, "out-client")
+	agentSink := l.Answered(roomID, "out-agent", "")
+	if clientSink == nil || agentSink == nil {
+		t.Fatalf("sinks: client %v agent %v, want both (tenant records)", clientSink, agentSink)
+	}
+	for i := range 20 {
+		_ = clientSink.WriteRTP("out-client", opusPkt(uint32(i*960)))
+		_ = agentSink.WriteRTP("out-agent", opusPkt(uint32(i*960)))
+	}
+	l.Ended(roomID, "client_hangup")
+
+	var legID, status, cause, direction string
+	if err := fx.DB.Pool.QueryRow(ctx, `SELECT leg_id, status::text, hangup_cause, direction::text FROM calls WHERE tenant_id = $1`,
+		fx.TenantID).Scan(&legID, &status, &cause, &direction); err != nil {
+		t.Fatalf("read call row: %v", err)
+	}
+	if status != "ended" || cause != "client_hangup" || direction != "outbound" {
+		t.Fatalf("row = %s/%s/%s, want ended/client_hangup/outbound", status, cause, direction)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var recURL string
+		_ = fx.DB.Pool.QueryRow(ctx, `SELECT COALESCE(recording_url,'') FROM calls WHERE leg_id = $1`, legID).Scan(&recURL)
+		if recURL != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("recording never finalized")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestFailedSettlesFailed: a call that never connected settles as failed with
+// its cause, not ended.
+func TestFailedSettlesFailed(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
+	roomID := fx.TenantID.String() + "/connect-fail"
+	l.StartedOutbound(ctx, fx.TenantID, roomID, "+919876543210", "+919812345678", "", "")
+	l.Failed(roomID, "agent_not_answered")
+	l.Ended(roomID, "late") // first settlement wins
+
+	var status, cause string
+	if err := fx.DB.Pool.QueryRow(ctx, `SELECT status::text, hangup_cause FROM calls WHERE tenant_id = $1`, fx.TenantID).
+		Scan(&status, &cause); err != nil {
+		t.Fatalf("read call row: %v", err)
+	}
+	if status != "failed" || cause != "agent_not_answered" {
+		t.Errorf("row = %s/%s, want failed/agent_not_answered", status, cause)
+	}
+}

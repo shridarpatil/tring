@@ -69,6 +69,9 @@ type Config struct {
 	// GatewayPublicURL is the browser-reachable base URL of the media gateway,
 	// returned to visitors in a guest mint response (ADR-001 M5).
 	GatewayPublicURL string
+	// GatewayControlURL is where the API reaches the gateway's loopback control
+	// listener (two-number connect, POST /v1/calls/connect).
+	GatewayControlURL string
 
 	// TTS synthesizes IVR node prompt text to an audio file at flow-save time
 	// (so both planes play it via the normal audio_file path). nil/disabled →
@@ -137,7 +140,9 @@ type Server struct {
 	agentJitter    string
 	// gatewayPublicURL: browser-reachable gateway base URL, returned to
 	// visitors in a guest mint response.
-	gatewayPublicURL string
+	gatewayPublicURL  string
+	gatewayControlURL string       // gateway control listener base URL (connect)
+	gatewayHTTP       *http.Client // for gatewayControlURL
 
 	// tts pre-renders IVR node prompt text to an audio file on flow save. nil →
 	// text nodes stay silent (no Piper). See handlers_flows.go.
@@ -211,35 +216,37 @@ func NewServer(cfg Config) *Server {
 	}
 	logger = logger.With("component", "api")
 	return &Server{
-		db:               cfg.DB,
-		q:                queries.MustLoad(),
-		jwtSecret:        []byte(cfg.JWTSecret),
-		fsBasicUser:      user,
-		fsBasicPass:      pass,
-		fs:               freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
-		cache:            cfg.Cache,
-		presence:         presence.New(cfg.Cache),
-		agentTransport:   cfg.AgentTransport,
-		agentGateway:     cfg.AgentGateway,
-		agentJitter:      cfg.AgentJitter,
-		gatewayPublicURL: cfg.GatewayPublicURL,
-		tts:              cfg.TTS,
-		audioDir:         cfg.AudioDir,
-		recordingsDir:    cfg.RecordingsDir,
-		blob:             cfg.Blob,
-		iceServers:       buildICEServers(cfg),
-		turnURL:          cfg.TURNURL,
-		turnSecret:       cfg.TURNSecret,
-		simManager:       brain.NewSimManager(),
-		hub:              cfg.Hub,
-		events:           cfg.Events,
-		trustedProxies:   cfg.TrustedProxies,
-		loginByIP:        newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
-		loginByEmail:     newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
-		outboundAllow:    cfg.OutboundAllow,
-		secrets:          cfg.Secrets,
-		version:          cfg.Version,
-		log:              logger,
+		db:                cfg.DB,
+		q:                 queries.MustLoad(),
+		jwtSecret:         []byte(cfg.JWTSecret),
+		fsBasicUser:       user,
+		fsBasicPass:       pass,
+		fs:                freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
+		cache:             cfg.Cache,
+		presence:          presence.New(cfg.Cache),
+		agentTransport:    cfg.AgentTransport,
+		agentGateway:      cfg.AgentGateway,
+		agentJitter:       cfg.AgentJitter,
+		gatewayPublicURL:  cfg.GatewayPublicURL,
+		gatewayControlURL: strings.TrimRight(cfg.GatewayControlURL, "/"),
+		gatewayHTTP:       &http.Client{Timeout: 10 * time.Second},
+		tts:               cfg.TTS,
+		audioDir:          cfg.AudioDir,
+		recordingsDir:     cfg.RecordingsDir,
+		blob:              cfg.Blob,
+		iceServers:        buildICEServers(cfg),
+		turnURL:           cfg.TURNURL,
+		turnSecret:        cfg.TURNSecret,
+		simManager:        brain.NewSimManager(),
+		hub:               cfg.Hub,
+		events:            cfg.Events,
+		trustedProxies:    cfg.TrustedProxies,
+		loginByIP:         newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		loginByEmail:      newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		outboundAllow:     cfg.OutboundAllow,
+		secrets:           cfg.Secrets,
+		version:           cfg.Version,
+		log:               logger,
 	}
 }
 

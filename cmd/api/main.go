@@ -179,32 +179,33 @@ func main() {
 	defer eventsPub.Close()
 
 	apiSrv := api.NewServer(api.Config{
-		DB:               database,
-		TTS:              ttsEngine,
-		JWTSecret:        k.String("jwt_secret"),
-		FSBasicAuth:      k.String("fs_basic_auth"),
-		ESLAddr:          k.String("esl_addr"),
-		ESLPassword:      k.String("esl_password"),
-		STUNURL:          k.String("stun_url"),
-		TURNURL:          k.String("turn_url"),
-		TURNUsername:     k.String("turn_username"),
-		TURNPassword:     k.String("turn_password"),
-		TURNSecret:       k.String("turn_secret"),
-		AgentTransport:   k.String("agent_transport"),
-		AgentGateway:     k.String("agent_gateway"),
-		AgentJitter:      k.String("agent_jitter_msec"),
-		GatewayPublicURL: k.String("gateway_public_url"),
-		AudioDir:         k.String("audio_dir"),
-		RecordingsDir:    k.String("recordings_dir"),
-		Blob:             blob,
-		Cache:            flowCache,
-		Hub:              hub,
-		Events:           eventsPub,
-		TrustedProxies:   csv(k.String("trusted_proxies")),
-		OutboundAllow:    outboundAllow,
-		Secrets:          secrets,
-		Version:          version,
-		Logger:           logger,
+		DB:                database,
+		TTS:               ttsEngine,
+		JWTSecret:         k.String("jwt_secret"),
+		FSBasicAuth:       k.String("fs_basic_auth"),
+		ESLAddr:           k.String("esl_addr"),
+		ESLPassword:       k.String("esl_password"),
+		STUNURL:           k.String("stun_url"),
+		TURNURL:           k.String("turn_url"),
+		TURNUsername:      k.String("turn_username"),
+		TURNPassword:      k.String("turn_password"),
+		TURNSecret:        k.String("turn_secret"),
+		AgentTransport:    k.String("agent_transport"),
+		AgentGateway:      k.String("agent_gateway"),
+		AgentJitter:       k.String("agent_jitter_msec"),
+		GatewayPublicURL:  k.String("gateway_public_url"),
+		GatewayControlURL: k.String("gateway_control_url"),
+		AudioDir:          k.String("audio_dir"),
+		RecordingsDir:     k.String("recordings_dir"),
+		Blob:              blob,
+		Cache:             flowCache,
+		Hub:               hub,
+		Events:            eventsPub,
+		TrustedProxies:    csv(k.String("trusted_proxies")),
+		OutboundAllow:     outboundAllow,
+		Secrets:           secrets,
+		Version:           version,
+		Logger:            logger,
 	})
 
 	// Register live forwards + coalesced recomputers, then start the subscriber.
@@ -228,8 +229,8 @@ func main() {
 	)
 	go hub.Run(ctx)
 
-	// Status of the calls the API places through FreeSWITCH (POST /v1/calls,
-	// /v1/calls/connect): they're bgapi originates, so ringing → answered /
+	// Status of the calls the API places through FreeSWITCH (POST /v1/calls):
+	// they're bgapi originates, so ringing → answered /
 	// ended / failed only arrives as ESL events.
 	go eslcdr.New(database, k.String("esl_addr"), k.String("esl_password"), logger).Run(ctx)
 

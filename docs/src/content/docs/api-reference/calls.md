@@ -116,13 +116,15 @@ curl -sS -X POST "$TRING_URL/v1/calls" \
 | `500` | `agent lookup failed` / `internal error` |
 | `502` | `originate failed` (FreeSWITCH rejected the call or couldn't be reached) |
 
-:::caution
-Calls placed with `POST /v1/calls` and `POST /v1/calls/connect` go out through FreeSWITCH directly. In the current code, nothing moves these rows past `ringing` when the call is answered or ends. Don't rely on their `status`, `answered_at` or `duration_seconds`. Calls that go through the media gateway (inbound phone, web, and agent-dialed calls from the widget) are updated normally.
+:::note
+`POST /v1/calls` goes out through FreeSWITCH, and its row follows FreeSWITCH's events: `answered` when the agent's leg answers, then `ended`, or `failed` with the carrier's cause (for example `NO_ANSWER` or `GATEWAY_DOWN`). These calls aren't recorded.
 :::
 
 ### POST /v1/calls/connect
 
-Bridge two phone numbers over your trunk, without a softphone. Tring rings `agent_number` first; when it answers, it dials `client_number` and connects them. Both legs present the first-choice trunk's own DID as caller ID. This is the callback pattern: both parties just need a phone.
+Connect two phone numbers over your trunk, without a softphone. Tring rings `agent_number` first; when it answers, it dials `client_number` and connects them. While the client's phone rings, the agent hears your tenant's hold music. Both legs present the first-choice trunk's own DID as caller ID. This is the callback pattern: both parties just need a phone.
+
+The media gateway places the call, so it's handled like every other gateway call: recorded when the tenant records calls (agent on the left channel, client on the right), shown live on the dashboard, and open to [supervisors](/tring/features/call-control/#supervision).
 
 **Auth:** tenant API key or console session.
 
@@ -133,7 +135,7 @@ Bridge two phone numbers over your trunk, without a softphone. Tring rings `agen
 | `agent_number` | string | yes | Rung first. |
 | `client_number` | string | yes | Dialed once the agent answers. |
 
-Both numbers are normalised by the first-choice trunk's `provider_type`. Only the first-choice trunk is used; there's no failover between trunks. There's no `caller_id` override.
+Both numbers are normalised to Indian E.164 (`+91XXXXXXXXXX`; `+91`, `91`, `0`-prefixed and bare 10-digit mobile numbers are accepted). Only the first-choice trunk is used; there's no failover between trunks. There's no `caller_id` override. Each number rings for up to 60 seconds.
 
 ```bash
 curl -sS -X POST "$TRING_URL/v1/calls/connect" \
@@ -142,7 +144,7 @@ curl -sS -X POST "$TRING_URL/v1/calls/connect" \
   -d '{"agent_number": "+919800000004", "client_number": "+919800000005"}'
 ```
 
-**Response:** `201 Created`. `from_number` is the agent's number, `to_number` the client's, and there's no `agent_id`.
+**Response:** `201 Created` with the call, still `ringing`. `from_number` is the agent's number, `to_number` the client's, and there's no `agent_id`.
 
 ```json
 {
@@ -158,16 +160,25 @@ curl -sS -X POST "$TRING_URL/v1/calls/connect" \
 }
 ```
 
+Poll [`GET /v1/calls/{id}`](#get-v1callsid) for the outcome. The call becomes `answered` once **both** numbers have answered. It ends with one of these `hangup_cause` values:
+
+| Status | `hangup_cause` | Meaning |
+|---|---|---|
+| `failed` | `agent_not_answered` | The agent's number was busy, didn't answer or couldn't be reached. The client was never dialed. |
+| `failed` | `client_not_answered` | The agent answered, but the client didn't. The agent's call is hung up. |
+| `failed` | `agent_hangup` | The agent hung up while the client was ringing. |
+| `ended` | `agent_hangup` / `client_hangup` | They talked; this side hung up first. |
+
 **Errors**
 
 | Status | Message |
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `agent_number and client_number are required` |
-| `400` | `invalid agent_number "…": …` / `invalid client_number "…": …` |
-| `400` | `load_based strategy is reserved and not yet implemented` |
-| `500` | `internal error` |
-| `502` | `originate failed` |
+| `400` | `invalid destination number: agent_number: …` / `…: client_number: …` |
+| `422` | `no outbound trunk` |
+| `503` | `outbound calling not available` (the gateway's phone plug is off) |
+| `502` | `media gateway unavailable` / `call not placed` |
 
 ## Reading the call log
 

@@ -282,6 +282,23 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	// The API's control calls (two-number connect) on their own loopback
+	// listener, like the api's fs_addr: never reachable through gateway_addr.
+	ctlSrv := &http.Server{
+		Addr:              k.String("gateway_control_addr"),
+		Handler:           sig.ControlHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	go func() {
+		logger.Info("gateway control listening", "addr", ctlSrv.Addr)
+		if err := ctlSrv.ListenAndServe(); err != nil {
+			logger.Error("gateway control serve failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+
 	logger.Info("gateway listening", "addr", addr)
 	if err := srv.ListenAndServe(); err != nil {
 		logger.Error("gateway serve failed", "err", err)

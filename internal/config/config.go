@@ -84,6 +84,14 @@ var defaults = map[string]any{
 	"gateway_addr":       ":8087",
 	"gateway_udp_min":    10000,
 	"gateway_udp_max":    10100,
+
+	// gateway_control_addr is the gateway's loopback-only listener for the
+	// API's control calls (POST /control/connect, two-number connect), and
+	// gateway_control_url is where the API reaches it. Kept off gateway_addr,
+	// which browsers reach.
+	"gateway_control_addr": "127.0.0.1:8089",
+	"gateway_control_url":  "http://127.0.0.1:8089",
+
 	// media_grace_seconds is the room reconnect window: how long a dropped
 	// participant's slot is held for a page-refresh. The pion media-plane
 	// signaling WebSocket (/rtc) is served by cmd/gateway on gateway_addr.

@@ -5,9 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -599,10 +599,13 @@ func (f *fakeCallLog) Answered(roomID string, pid room.ParticipantID, agentSip s
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeCallLog) RingStart(context.Context, string, string, string) {}
+func (f *fakeCallLog) RingStart(context.Context, string, string, string)  {}
 func (f *fakeCallLog) RingAgent(string, string)                           {}
 func (f *fakeCallLog) RingStop(string)                                    {}
 func (f *fakeCallLog) Transferred(string, string, string)                 {}
+func (f *fakeCallLog) Failed(string, string)                              {}
+func (f *fakeCallLog) Customer(string, room.ParticipantID) room.TrackSink { return nil }
+func (f *fakeCallLog) CallID(string) uuid.UUID                            { return uuid.Nil }
 func (f *fakeCallLog) Journey(string, []ivr.Step)                         {}
 func (f *fakeCallLog) Ended(roomID, cause string) {
 	f.mu.Lock()
@@ -719,10 +722,13 @@ func (o *orderedCallLog) StartedOutbound(context.Context, uuid.UUID, string, str
 	return nil
 }
 func (o *orderedCallLog) Answered(string, room.ParticipantID, string) room.TrackSink { return nil }
-func (o *orderedCallLog) RingStart(context.Context, string, string, string)           {}
-func (o *orderedCallLog) RingAgent(string, string)                                    {}
-func (o *orderedCallLog) RingStop(string)                                             {}
-func (o *orderedCallLog) Transferred(string, string, string)                          {}
+func (o *orderedCallLog) RingStart(context.Context, string, string, string)          {}
+func (o *orderedCallLog) RingAgent(string, string)                                   {}
+func (o *orderedCallLog) RingStop(string)                                            {}
+func (o *orderedCallLog) Transferred(string, string, string)                         {}
+func (o *orderedCallLog) Failed(string, string)                                      {}
+func (o *orderedCallLog) Customer(string, room.ParticipantID) room.TrackSink         { return nil }
+func (o *orderedCallLog) CallID(string) uuid.UUID                                    { return uuid.Nil }
 func (o *orderedCallLog) Journey(_ string, steps []ivr.Step) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
