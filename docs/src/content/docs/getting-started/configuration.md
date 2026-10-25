@@ -124,10 +124,27 @@ The gateway (`cmd/gateway`) runs browser WebRTC on `/rtc`, the IVR, agent routin
 |---|---|---|
 | `TRING_TRUNK_IP` | empty | IP the FreeSWITCH trunk (external) profile binds **and** advertises. Empty uses the primary interface and advertises `TRING_PUBLIC_IP`. Set it when the carrier reaches you on a private circuit on another interface. |
 | `TRING_CARRIER_CIDRS` | empty | Comma-separated IPs/CIDRs your carriers send SIP from. When set, FreeSWITCH's trunk profile rejects inbound INVITEs from any other address with `403` (fake inbound calls, spoofed caller ID). Empty accepts any source. Restart the `freeswitch` container after changing it. |
+| `TRING_SIP_RELAYS` | empty | Shares this server's carrier trunk with other Tring servers (a UAT box, a dedicated instance). `name=ipv4:port:numbers` entries separated by `;`, where `numbers` is a comma-separated list of E.164 numbers and `A-B` ranges (at most 1000 per relay). Calls to a relay's numbers are sent to that server; calls from that server's IP go out over the carrier, keeping their caller ID only if it is one of the relay's numbers (otherwise the relay's first number). Each relay's IP is added to the carrier ACL. Malformed entries are skipped and logged. See [Sharing a trunk with another server](#sharing-a-trunk-with-another-server). |
+| `TRING_SIP_RELAY_GATEWAY` | empty | Gateway name of the carrier trunk that relays call out on (`t_…`, shown in the FreeSWITCH log and `sofia status`). Unset rejects relays' outbound calls. |
 | `TRING_WHATSAPP_ENABLED` | `false` | Loads the TLS-only `whatsapp` SIP profile for inbound WhatsApp calls. Off binds nothing. Needs the certificates described in the [WhatsApp guide](/tring/guides/whatsapp-sip/). |
 | `TRING_WHATSAPP_IP` | empty | IP the `whatsapp` profile binds. Empty uses the primary interface. |
 | `TRING_WHATSAPP_PUBLIC_IP` | empty | IP advertised to Meta in SIP/SDP. Empty falls back to `TRING_PUBLIC_IP`, then the bind IP. |
 | `TRING_WHATSAPP_TLS_PORT` | `5061` | TLS port Meta connects to (the port set on the business number). |
+
+### Sharing a trunk with another server
+
+When a second Tring server (UAT, or a dedicated instance for one client) can't have its own carrier connection, the server that holds the trunk relays calls for it:
+
+```
+TRING_SIP_RELAYS=uat=10.0.5.20:5080:+912265915001-+912265915030
+TRING_SIP_RELAY_GATEWAY=t_4cc0a6963ea0
+```
+
+- **On the trunk server:** set the two variables above and restart the `freeswitch` container. Store the numbers in the format the carrier sends (for Tata, `+91…`).
+- **On the relayed server:** add a trunk pointing at the trunk server's FreeSWITCH (`<ip>:5080`, IP authentication), set `TRING_CARRIER_CIDRS` to that IP, and add the relayed numbers as inbound numbers.
+- **Network:** the two servers must reach each other on UDP `5080` and the RTP range. Open them between those two hosts only. The trunk server stays in the audio path.
+
+A relay's IP can place calls over your carrier, so only list hosts you control.
 
 ### Inbound phone calls (SIP plug)
 
