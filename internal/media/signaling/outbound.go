@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/dial"
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/trunkselect"
 )
@@ -193,7 +194,9 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, sip strin
 		return
 	}
 
+	tagParticipant(leg.Source.ID(), "callee")
 	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
+		logging.ClearParticipant(string(leg.Source.ID()))
 		s.log.Error("outbound: attach port failed", "room", roomID, "err", err)
 		_ = s.cfg.Originator.HangupOutbound(leg.Source.ID())
 		s.sendError(agentPID, "call failed")

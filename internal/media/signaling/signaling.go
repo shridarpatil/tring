@@ -393,6 +393,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	role := roleAgent
 	if princ.isVisitor {
 		role = roleVisitor
+		tagParticipant(p.ID(), "caller")
+	} else {
+		tagParticipant(p.ID(), "agent", slog.String("sip", princ.sip))
 	}
 	s.setRole(p.ID(), role)
 
@@ -699,7 +702,7 @@ func (s *Server) routeEvent(e room.Event) {
 			return
 		} else if !ok || len(r.Participants()) == 0 {
 			s.setHangupBy(e.Room, leaverBy) // no-op if a bye / system end was recorded first
-			s.endTransfer(e.Room) // caller gone → stop any in-flight blind-transfer ring
+			s.endTransfer(e.Room)           // caller gone → stop any in-flight blind-transfer ring
 			s.stopIVR(e.Room)
 			s.hangupPstnIfAbandoned(e.Room)
 			s.hangupOutboundIfAbandoned(e.Room)
