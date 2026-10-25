@@ -21,6 +21,7 @@ FROM safarov/freeswitch@sha256:f156e01a96d48944078ed7f0e24304be63ea15f6466cf607a
 
 # Static config → vanilla templates (mirrors the docker-compose :ro mounts).
 COPY --chmod=755 tring-carrier-acl.sh             /usr/local/bin/tring-carrier-acl
+COPY --chmod=755 tring-sip-relays.sh              /usr/local/bin/tring-sip-relays
 COPY conf/vars.xml                               /usr/share/freeswitch/conf/vanilla/vars.xml
 COPY conf/dialplan/default.xml                   /usr/share/freeswitch/conf/vanilla/dialplan/default.xml
 COPY conf/dialplan/public.xml                     /usr/share/freeswitch/conf/vanilla/dialplan/public.xml
