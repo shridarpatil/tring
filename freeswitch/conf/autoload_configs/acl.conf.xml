@@ -61,6 +61,9 @@
          inbound calls (spoofed caller ID into IVRs, agents and webhooks). -->
     <list name="carriers" default="deny">
       <X-PRE-PROCESS cmd="exec" data="/usr/local/bin/tring-carrier-acl"/>
+      <!-- Plus each SIP relay's IP (TRING_SIP_RELAYS): relays send their
+           outbound calls here to go out over the carrier trunk. -->
+      <X-PRE-PROCESS cmd="exec" data="/usr/local/bin/tring-sip-relays acl"/>
     </list>
 
   </network-lists>
