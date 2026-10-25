@@ -69,6 +69,19 @@ func TestRealIPTrustedProxies(t *testing.T) {
 	}
 }
 
+// TestRealIPUntrustedPeerIgnoresXFF is the regression guard for chi's
+// ClientIPFromXFF advisory (fixed in chi v5.4.0): with proxies configured, a
+// caller that reaches the API directly, from outside those CIDRs, must not
+// choose its address by sending a chain that starts with a trusted-looking hop.
+func TestRealIPUntrustedPeerIgnoresXFF(t *testing.T) {
+	// chi falls back to the direct peer's IP (without the port).
+	got := serveRealIP([]string{"10.0.0.0/8"}, "203.0.113.9:44321",
+		map[string]string{"X-Forwarded-For": "10.0.0.7, 198.51.100.42"})
+	if got != "203.0.113.9" {
+		t.Errorf("RemoteAddr = %q, want %q (XFF from an untrusted peer must be ignored)", got, "203.0.113.9")
+	}
+}
+
 // TestRealIPInvalidCIDRPanics documents that a typo'd TRING_TRUSTED_PROXIES
 // fails loudly at construction rather than silently trusting nothing.
 func TestRealIPInvalidCIDRPanics(t *testing.T) {
