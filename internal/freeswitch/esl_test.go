@@ -75,3 +75,13 @@ func TestBuildVarBlockMultipleVars(t *testing.T) {
 		t.Errorf("multiple vars should be comma-separated: %q", got)
 	}
 }
+
+func TestBgapiMessage(t *testing.T) {
+	if got := (bgapi{command: "originate", args: "a b"}).BuildMessage(); got != "bgapi originate a b" {
+		t.Errorf("no job uuid: got %q", got)
+	}
+	got := (bgapi{command: "originate", args: "a b", jobUUID: "j-1"}).BuildMessage()
+	if got != "bgapi originate a b\r\nJob-UUID: j-1" {
+		t.Errorf("with job uuid: got %q", got)
+	}
+}
