@@ -88,14 +88,14 @@ Some carriers check the host part of the `From` header and expect your own circu
 
 ### Providers
 
-`provider_type` picks the number rules used for outbound calls placed through the api (`POST /v1/calls`, `POST /v1/calls/connect`):
+`provider_type` picks the number rules used for outbound calls placed through the api (`POST /v1/calls`):
 
 | Provider | Destination numbers |
 |---|---|
 | `airtel`, `jio`, `tata` | Indian numbers, normalized to `+91XXXXXXXXXX`. Accepts `+91`, `91`, `0`-prefixed and bare 10-digit forms of mobile numbers starting 6–9. Anything else is rejected before it reaches the carrier. |
 | `generic` | No normalization; the number is passed as given. |
 
-Outbound calls dialed from the media plane (an IVR [transfer to a number](/tring/features/ivr-flows/#transfer)) always use the Indian rules.
+Outbound calls dialed from the media plane (an IVR [transfer to a number](/tring/features/ivr-flows/#transfer), and `POST /v1/calls/connect`) always use the Indian rules.
 
 :::caution[Keep FreeSWITCH private]
 Only open the trunk profile's SIP port and RTP range to your carrier's IP ranges. Trunk credentials are stored in the database in plain text; restrict database access accordingly.

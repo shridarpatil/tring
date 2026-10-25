@@ -1,6 +1,6 @@
 // Package eslcdr keeps the call rows of FreeSWITCH-originated calls (the API's
-// POST /v1/calls and /v1/calls/connect) in step with what FreeSWITCH reports.
-// Those calls are placed with bgapi, so the API only ever learns "queued"; the
+// POST /v1/calls) in step with what FreeSWITCH reports. Those calls are placed
+// with bgapi, so the API only ever learns "queued"; the
 // outcome arrives later as ESL events:
 //
 //	BACKGROUND_JOB -ERR     -> failed (no channel was ever created)
