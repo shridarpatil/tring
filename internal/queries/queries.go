@@ -155,7 +155,7 @@ type Queries struct {
 	ListPlaintextAgentSecrets string `query:"list-plaintext-agent-secrets"`
 	SetAgentSecret            string `query:"set-agent-secret"`
 
-	// ---- orchestrator: CDR settlement (runner.go) ----
+	// ---- FreeSWITCH-originated call status (eslcdr) + callcdr settlement ----
 	FailCallByJob     string `query:"fail-call-by-job"`
 	MarkCallAnswered  string `query:"mark-call-answered"`
 	GetCallSettlement string `query:"get-call-settlement"`

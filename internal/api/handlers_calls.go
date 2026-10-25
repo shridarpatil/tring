@@ -199,34 +199,46 @@ func (s *Server) originateForAgent(
 		originateVars["continue_on_fail"] = "'" + strings.Join(t.FailoverCauses, ",") + "'"
 	}
 
-	or, err := s.fs.Originate(ctx, freeswitch.OriginateRequest{
-		ALeg:     aLeg,
-		BLegs:    bLegs,
-		UUID:     fsUUID.String(),
-		CallerID: primaryDID,
-		Vars:     originateVars,
-	})
-	if err != nil {
-		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
-	}
-
 	// from_number for the CDR is the primary DID (the one we expected
 	// the call to come from). If failover kicked in and we actually
 	// used a secondary, the orchestrator will (Phase 3) record which
 	// trunk-leg was answered.
 	outboundE164 := primaryDID
 
+	// Row first, then originate (see OriginateRequest.JobUUID). No pion room
+	// for the ESL/FreeSWITCH outbound path — room_id stays NULL (nothing for
+	// a supervisor to join on this leg).
+	jobUUID := uuid.NewString()
 	var c Call
-	// No pion room for the ESL/FreeSWITCH outbound path — room_id stays NULL
-	// (nothing for a supervisor to join on this leg).
 	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallOutbound,
-		t.ID, outboundE164, to, agentID, or.ChannelUUID, or.JobUUID, "").
+		t.ID, outboundE164, to, agentID, fsUUID.String(), jobUUID, "").
 		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
 	}
 
+	_, err = s.fs.Originate(ctx, freeswitch.OriginateRequest{
+		ALeg:     aLeg,
+		BLegs:    bLegs,
+		UUID:     fsUUID.String(),
+		CallerID: primaryDID,
+		Vars:     originateVars,
+		JobUUID:  jobUUID,
+	})
+	if err != nil {
+		s.failOriginate(ctx, jobUUID)
+		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
+	}
+
 	return c, 0, nil
+}
+
+// failOriginate marks a call row failed when FreeSWITCH never accepted its
+// originate, so it doesn't sit in "ringing" forever.
+func (s *Server) failOriginate(ctx context.Context, jobUUID string) {
+	if _, err := s.db.Pool.Exec(ctx, s.q.FailCallByJob, "ORIGINATE_FAILED", jobUUID); err != nil {
+		s.log.Error("mark originate failed", "job_uuid", jobUUID, "err", err)
+	}
 }
 
 type connectCallRequest struct {
@@ -290,26 +302,29 @@ func (s *Server) originateBridge(
 
 	aLeg, bLegs, callerID := buildBridgeLegs(trunks, agentNorm, clientNorm)
 
-	fsUUID := uuid.New()
-	or, err := s.fs.Originate(ctx, freeswitch.OriginateRequest{
-		ALeg:     aLeg,
-		BLegs:    bLegs,
-		UUID:     fsUUID.String(),
-		CallerID: callerID, // caller ID the agent's phone sees (the DID)
-		Vars:     bridgeOriginateVars(),
-	})
-	if err != nil {
-		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
-	}
-
 	// from = agent (the party rung first), to = client (the destination).
 	// agent_id is NULL — this path bridges raw numbers, not a SIP agent.
+	// Row first, then originate (see OriginateRequest.JobUUID).
+	fsUUID, jobUUID := uuid.NewString(), uuid.NewString()
 	var c Call
 	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallBridge,
-		t.ID, agentNorm, clientNorm, or.ChannelUUID, or.JobUUID).
+		t.ID, agentNorm, clientNorm, fsUUID, jobUUID).
 		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
 	if err != nil {
 		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
+	}
+
+	_, err = s.fs.Originate(ctx, freeswitch.OriginateRequest{
+		ALeg:     aLeg,
+		BLegs:    bLegs,
+		UUID:     fsUUID,
+		CallerID: callerID, // caller ID the agent's phone sees (the DID)
+		Vars:     bridgeOriginateVars(),
+		JobUUID:  jobUUID,
+	})
+	if err != nil {
+		s.failOriginate(ctx, jobUUID)
+		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
 	}
 
 	return c, 0, nil
