@@ -7,9 +7,9 @@ name: CI
 # that doesn't need FreeSWITCH: pure-function tests, JWT, masking, webhook
 # signing, plus DB-backed handler/trunks tests against a Postgres service
 # container. The slower `integration` job boots the full docker-compose stack
-# and runs the FreeSWITCH-tagged tests against a real ESL endpoint. PRs don't get
-# the integration job (gating on FS boot would wedge unrelated PRs); it runs only
-# on main + manual dispatch.
+# and runs the FreeSWITCH-tagged tests against a real ESL endpoint, after checking
+# the FreeSWITCH image boots with a worst-case random password. It runs on main,
+# manual dispatch and PRs from this repo (not forks).
 #
 # Build/release stage (gated on the tests, push events only):
 #   - images : three images -> :develop on main, :<tag> on a v* tag, to
@@ -151,6 +151,29 @@ jobs:
             sleep 2
           done
           docker compose ps
+
+      # The base image gives each new container a random default_password
+      # (12 chars that may include '-'). FreeSWITCH expands $${vars} even in
+      # comments, so a value with "--" there breaks the XML and FS won't start
+      # (~1 container in 370). Boot this PR's image with a worst-case password
+      # seeded, so any config that would break on it fails here, not on deploy.
+      - name: FreeSWITCH config survives a worst-case password
+        run: |
+          docker build -q -t tring-fs-pwcheck ./freeswitch
+          docker run -d --name fs-pwcheck --entrypoint sh tring-fs-pwcheck -c '
+            mkdir -p /etc/freeswitch &&
+            cp -arf /usr/share/freeswitch/conf/vanilla/* /etc/freeswitch/ &&
+            sed -i "s/default_password=[^\"]*/default_password=-a--b--c--d-/" /etc/freeswitch/vars.xml &&
+            exec /entrypoint.sh'
+          for i in $(seq 1 30); do
+            state=$(docker inspect -f '{{.State.Health.Status}}' fs-pwcheck 2>/dev/null || echo none)
+            if [ "$state" = "healthy" ]; then echo "FreeSWITCH is up"; docker rm -f fs-pwcheck; exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' fs-pwcheck)" != "true" ]; then break; fi
+            sleep 2
+          done
+          echo "FreeSWITCH did not start with default_password=-a--b--c--d-:"
+          docker logs fs-pwcheck 2>&1 | grep -E "Cannot Initialize|error near" || docker logs fs-pwcheck 2>&1 | tail -50
+          exit 1
 
       - name: Run integration tests
         env:
