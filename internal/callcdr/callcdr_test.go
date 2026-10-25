@@ -1,9 +1,12 @@
 package callcdr_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/shridarpatil/tring/internal/callcdr"
 	"github.com/shridarpatil/tring/internal/dbtest"
 	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/logging"
 )
 
 // routingSink captures the last call.routing event's data, for asserting what the
@@ -359,5 +363,33 @@ func TestNoRecordingWhenTenantOff(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 0 {
 		t.Fatalf("unexpected files in spool: %v", entries)
+	}
+}
+
+// TestLogLinesCarryCallID: while a call is live, any log line naming its room
+// (from signaling, the IVR, the SFU, …) gets call=<id>; once it ends, not.
+func TestLogLinesCarryCallID(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = false WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("disable recording: %v", err)
+	}
+	var buf bytes.Buffer
+	log := slog.New(logging.WithCallIDs(slog.NewTextHandler(&buf, nil)))
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
+
+	roomID := fx.TenantID.String() + "/pstn-logs"
+	l.Started(ctx, fx.TenantID, roomID, "+919800000001", "+919800000002", "phone", "", "caller-pid")
+	callID := l.CallID(roomID)
+	log.Info("ivr started", "room", roomID)
+	l.Ended(roomID, "caller_hangup")
+	log.Info("pstn: room ended", "room", roomID)
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if want := "call=" + callID.String(); !strings.Contains(lines[0], want) {
+		t.Errorf("live call line %q lacks %s", lines[0], want)
+	}
+	if strings.Contains(lines[1], "call=") {
+		t.Errorf("line after the call ended still tagged: %q", lines[1])
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/record"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/queries"
@@ -226,6 +227,7 @@ func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, r
 	l.mu.Lock()
 	l.calls[roomID] = ac
 	l.mu.Unlock()
+	logging.SetCall(roomID, callID.String()) // every log line naming this room now carries call=
 	l.log.Info("cdr: call started", "room", roomID, "call", callID, "direction", direction, "recording", recordOn)
 	l.timelineEvent(tenant, callID, "started", map[string]any{
 		"from": from, "to": to, "source": source, "direction": direction,
@@ -463,6 +465,7 @@ func (l *Log) Ended(roomID, cause string) {
 	if ac == nil {
 		return
 	}
+	defer logging.ClearCall(roomID, ac.id.String())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	duration := int(time.Since(ac.startedAt).Seconds())
