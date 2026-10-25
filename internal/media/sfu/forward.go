@@ -7,6 +7,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
@@ -461,6 +462,7 @@ func (s *SFU) Unpublish(roomID room.RoomID, pid room.ParticipantID, kind webrtc.
 // fan-out tracks from every subscriber (renegotiating them), and closes the PC.
 // Idempotent.
 func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
+	defer logging.ClearParticipant(string(pid)) // after its last log line
 	s.mu.Lock()
 	r := s.rooms[roomID]
 	if r == nil {
