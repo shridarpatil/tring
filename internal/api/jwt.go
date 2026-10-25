@@ -21,6 +21,10 @@ const (
 	// join a live web call in monitor/whisper/barge. Single-use jti (burned by the
 	// gateway), room-pinned server-side. Distinct audience from every other token.
 	supervisorAudience = "tring.supervisor"
+	// controlAudience scopes the API's own short-lived token for the gateway's
+	// loopback control endpoints (POST /control/connect). Minted per request;
+	// never handed to a client.
+	controlAudience = "tring.control"
 )
 
 // GatewayCallClaims are carried in a visitor's gateway call token. The token
@@ -98,6 +102,27 @@ func (s *Server) IssueSupervisorToken(tenantID uuid.UUID, roomName, userID, name
 		return "", time.Time{}, err
 	}
 	return signed, exp, nil
+}
+
+// ControlClaims are carried in the API's token for the gateway's control
+// endpoints: just the tenant the call is placed for.
+type ControlClaims struct {
+	TenantID uuid.UUID `json:"tenant"`
+	jwt.RegisteredClaims
+}
+
+// issueControlToken mints the token for one control call to the gateway.
+func (s *Server) issueControlToken(tenantID uuid.UUID) (string, error) {
+	now := time.Now()
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, ControlClaims{
+		TenantID: tenantID,
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(30 * time.Second)),
+			Issuer:    jwtIssuer,
+			Audience:  []string{controlAudience},
+		},
+	}).SignedString(s.jwtSecret)
 }
 
 // AgentClaims are the JWT claims carried in tokens issued for the JS SDK.

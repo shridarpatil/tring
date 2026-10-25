@@ -147,58 +147,6 @@ func TestSelectTrunksEmptyStrategyDefaultsToFailover(t *testing.T) {
 	}
 }
 
-// buildBridgeLegs is the dial-string construction for the two-PSTN-number
-// connect/callback flow. These tests pin the exact strings FreeSWITCH
-// expects so the curl works the moment a real trunk is live — no DB needed.
-
-func TestBuildBridgeLegsWithTrunk(t *testing.T) {
-	trunks := []trunk{{E164: "+918001234567", Gateway: "tata", ProviderType: "tata"}}
-	aLeg, bLegs, callerID := buildBridgeLegs(trunks, "+919876543210", "+919812345678")
-
-	if aLeg != "sofia/gateway/tata/+919876543210" {
-		t.Errorf("aLeg = %q, want sofia/gateway/tata/+919876543210", aLeg)
-	}
-	if callerID != "+918001234567" {
-		t.Errorf("callerID = %q, want the trunk DID +918001234567", callerID)
-	}
-	if len(bLegs) != 1 {
-		t.Fatalf("want 1 b-leg, got %d", len(bLegs))
-	}
-	want := "[effective_caller_id_number=+918001234567]sofia/gateway/tata/+919812345678"
-	if bLegs[0] != want {
-		t.Errorf("bLeg = %q, want %q", bLegs[0], want)
-	}
-}
-
-func TestBuildBridgeLegsLoopbackFallback(t *testing.T) {
-	// No trunk (dev) → loopback dial strings, no caller ID.
-	aLeg, bLegs, callerID := buildBridgeLegs(nil, "1001", "1002")
-	if aLeg != "loopback/1001" {
-		t.Errorf("aLeg = %q, want loopback/1001", aLeg)
-	}
-	if len(bLegs) != 1 || bLegs[0] != "loopback/1002" {
-		t.Errorf("bLegs = %v, want [loopback/1002]", bLegs)
-	}
-	if callerID != "" {
-		t.Errorf("callerID = %q, want empty (no DID in loopback)", callerID)
-	}
-}
-
-func TestBuildBridgeLegsUsesPrimaryTrunk(t *testing.T) {
-	// With multiple trunks, the bridge uses the first (primary) for both legs.
-	trunks := []trunk{
-		{E164: "+918002222222", Gateway: "jio", ProviderType: "jio"},
-		{E164: "+918003333333", Gateway: "airtel", ProviderType: "airtel"},
-	}
-	aLeg, _, callerID := buildBridgeLegs(trunks, "+919876543210", "+919812345678")
-	if aLeg != "sofia/gateway/jio/+919876543210" {
-		t.Errorf("aLeg = %q, want primary (jio) gateway", aLeg)
-	}
-	if callerID != "+918002222222" {
-		t.Errorf("callerID = %q, want primary DID", callerID)
-	}
-}
-
 func TestSelectTrunksInactiveExcluded(t *testing.T) {
 	f := dbtest.Setup(t)
 	insertOutbound(t, f, "+918001111111", "airtel", 100, true)
@@ -235,13 +183,5 @@ func TestCheckCallerID(t *testing.T) {
 	}
 	if err := s.checkCallerID(ctx, f.TenantID, "02299999999"); err == nil {
 		t.Error("unowned caller_id accepted")
-	}
-}
-
-// The agent's leg must truly answer before the client is dialed: a carrier's
-// 183 early media (always sent by Tata) must not count as answered.
-func TestBridgeOriginateWaitsForRealAnswer(t *testing.T) {
-	if got := bridgeOriginateVars()["ignore_early_media"]; got != "true" {
-		t.Fatalf("ignore_early_media = %q, want true", got)
 	}
 }

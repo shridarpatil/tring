@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -246,11 +247,13 @@ type connectCallRequest struct {
 	ClientNumber string `json:"client_number"`
 }
 
-// handleConnectCall bridges two PSTN numbers over the tenant's trunk: it
-// rings agent_number first and, on answer, bridges client_number. Both legs
-// present the trunk's DID as caller ID (regulatory: you can only present a
-// number you own). This is the click-to-call / callback pattern — neither
-// party needs a softphone, just a phone that rings.
+// handleConnectCall connects two PSTN numbers over the tenant's trunk: it
+// rings agent_number first and, on answer, client_number, both presenting the
+// trunk's DID as caller ID (regulatory: you can only present a number you
+// own). This is the click-to-call / callback pattern — neither party needs a
+// softphone, just a phone that rings. The media gateway places the call
+// (signaling/connect.go), so it's recorded and tracked like every other call;
+// the response is the call row, still ringing.
 //
 //	curl -X POST .../v1/calls/connect -H "Authorization: Bearer $KEY" \
 //	  -d '{"agent_number":"+919876543210","client_number":"+919812345678"}'
@@ -265,100 +268,56 @@ func (s *Server) handleConnectCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent_number and client_number are required")
 		return
 	}
-	c, code, err := s.originateBridge(r.Context(), t, req.AgentNumber, req.ClientNumber)
+	callID, code, msg := s.gatewayConnect(r.Context(), t.ID, req)
+	if code != 0 {
+		writeError(w, code, msg)
+		return
+	}
+	c, err := scanCall(s.db.Pool.QueryRow(r.Context(), s.q.GetCall, callID, t.ID))
 	if err != nil {
-		s.writeCallError(w, r, code, err)
+		s.writeServerError(w, r, http.StatusInternalServerError, "internal error", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, c)
 }
 
-// originateBridge rings agent_number and bridges client_number, both over the
-// tenant's selected trunk. Returns (call, http_status_on_error, err).
-func (s *Server) originateBridge(
-	ctx context.Context,
-	t *Tenant,
-	agentNumber, clientNumber string,
-) (Call, int, error) {
-	trunks, err := s.selectTrunks(ctx, t)
+// gatewayConnect asks the media gateway to place a connect call and returns
+// its call id, or the status + message to answer with. The gateway's own 4xx
+// (bad number, no trunk) pass through; anything else is a 502.
+func (s *Server) gatewayConnect(ctx context.Context, tenantID uuid.UUID, req connectCallRequest) (uuid.UUID, int, string) {
+	tok, err := s.issueControlToken(tenantID)
 	if err != nil {
-		return Call{}, statusFor(err), err
+		s.log.Error("connect: sign control token", "err", err)
+		return uuid.Nil, http.StatusInternalServerError, "internal error"
 	}
-
-	// Normalize both numbers with the primary trunk's provider_type rules
-	// (loopback passthrough in dev when no trunk is configured).
-	primaryProvider := provider.For("loopback")
-	if len(trunks) > 0 {
-		primaryProvider = provider.For(trunks[0].ProviderType)
-	}
-	agentNorm, err := primaryProvider.NormalizeE164(agentNumber)
+	body, _ := json.Marshal(req)
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayControlURL+"/control/connect", bytes.NewReader(body))
 	if err != nil {
-		return Call{}, http.StatusBadRequest, fmt.Errorf("invalid agent_number %q: %w", agentNumber, err)
+		s.log.Error("connect: build gateway request", "err", err)
+		return uuid.Nil, http.StatusInternalServerError, "internal error"
 	}
-	clientNorm, err := primaryProvider.NormalizeE164(clientNumber)
+	hreq.Header.Set("Authorization", "Bearer "+tok)
+	hreq.Header.Set("Content-Type", "application/json")
+	resp, err := s.gatewayHTTP.Do(hreq)
 	if err != nil {
-		return Call{}, http.StatusBadRequest, fmt.Errorf("invalid client_number %q: %w", clientNumber, err)
+		s.log.Error("connect: gateway unreachable", "url", s.gatewayControlURL, "err", err)
+		return uuid.Nil, http.StatusBadGateway, "media gateway unavailable"
 	}
-
-	aLeg, bLegs, callerID := buildBridgeLegs(trunks, agentNorm, clientNorm)
-
-	// from = agent (the party rung first), to = client (the destination).
-	// agent_id is NULL — this path bridges raw numbers, not a SIP agent.
-	// Row first, then originate (see OriginateRequest.JobUUID).
-	fsUUID, jobUUID := uuid.NewString(), uuid.NewString()
-	var c Call
-	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallBridge,
-		t.ID, agentNorm, clientNorm, fsUUID, jobUUID).
-		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
-	if err != nil {
-		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
+	defer resp.Body.Close()
+	var out struct {
+		CallID uuid.UUID `json:"call_id"`
+		Error  string    `json:"error"`
 	}
-
-	_, err = s.fs.Originate(ctx, freeswitch.OriginateRequest{
-		ALeg:     aLeg,
-		BLegs:    bLegs,
-		UUID:     fsUUID,
-		CallerID: callerID, // caller ID the agent's phone sees (the DID)
-		Vars:     bridgeOriginateVars(),
-		JobUUID:  jobUUID,
-	})
-	if err != nil {
-		s.failOriginate(ctx, jobUUID)
-		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out)
+	switch {
+	case resp.StatusCode == http.StatusCreated && out.CallID != uuid.Nil:
+		return out.CallID, 0, ""
+	case resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusUnauthorized:
+		return uuid.Nil, resp.StatusCode, out.Error
+	default:
+		s.log.Error("connect: gateway refused", "status", resp.StatusCode, "error", out.Error)
+		return uuid.Nil, http.StatusBadGateway, "call not placed"
 	}
-
-	return c, 0, nil
-}
-
-// bridgeOriginateVars are the originate (A-leg) variables for a two-number
-// bridge. ignore_early_media makes FreeSWITCH wait for the agent's phone to
-// really ANSWER before dialing the client: carriers like Tata answer every
-// INVITE with 183 + early media (ringback/announcements), which FS otherwise
-// treats as success — it dialed the client while the agent's phone hadn't
-// even rung.
-func bridgeOriginateVars() map[string]string {
-	return map[string]string{"ignore_early_media": "true"}
-}
-
-// buildBridgeLegs constructs the originate legs for a two-PSTN-number bridge.
-// A-leg rings the agent's phone; on answer FS bridges to the client. Both
-// present the trunk's DID as caller ID. With no trunk (dev), falls back to
-// loopback dial strings and no caller ID. Pure function — unit-tested for the
-// exact dial-string shape FreeSWITCH expects.
-func buildBridgeLegs(trunks []trunk, agentNumber, clientNumber string) (aLeg string, bLegs []string, callerID string) {
-	if len(trunks) == 0 {
-		lp := provider.For("loopback")
-		return lp.DialString(agentNumber), []string{lp.DialString(clientNumber)}, ""
-	}
-	primary := trunks[0]
-	aLeg = fmt.Sprintf("sofia/gateway/%s/%s", primary.Gateway, agentNumber)
-	bLegs = []string{
-		fmt.Sprintf(
-			"[effective_caller_id_number=%s]sofia/gateway/%s/%s",
-			primary.E164, primary.Gateway, clientNumber,
-		),
-	}
-	return aLeg, bLegs, primary.E164
 }
 
 const (

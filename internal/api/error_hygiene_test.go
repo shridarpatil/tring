@@ -86,8 +86,4 @@ func TestOriginateDBFailureIsInternal(t *testing.T) {
 	if code != http.StatusInternalServerError {
 		t.Errorf("originateForAgent code = %d, want 500", code)
 	}
-	_, code, _ = s.originateBridge(ctx, &Tenant{ID: f.TenantID}, "+919800000000", "+919800000001")
-	if code != http.StatusInternalServerError {
-		t.Errorf("originateBridge code = %d, want 500", code)
-	}
 }
