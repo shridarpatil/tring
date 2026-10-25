@@ -713,7 +713,7 @@ WHERE n.tenant_id = $1
 ORDER BY n.priority ASC, n.created_at ASC;
 
 -- ===========================================================================
--- orchestrator: CDR settlement (runner.go)
+-- FreeSWITCH-originated call status (internal/eslcdr) + callcdr settlement
 -- ===========================================================================
 
 -- name: fail-call-by-job
@@ -723,15 +723,16 @@ UPDATE calls
 SET status='failed'::call_status, ended_at=now(),
     duration_seconds=0, hangup_cause=$1
 WHERE job_uuid=$2 AND status='ringing'::call_status
-RETURNING leg_id;
+RETURNING id;
 
 -- name: mark-call-answered
 UPDATE calls
 SET status = 'answered'::call_status, answered_at = now()
-WHERE leg_id = $1 AND status = 'ringing'::call_status;
+WHERE leg_id = $1 AND status = 'ringing'::call_status
+RETURNING id;
 
 -- name: get-call-settlement
-SELECT started_at, answered_at, status::text FROM calls WHERE leg_id = $1;
+SELECT id, started_at, answered_at, status::text FROM calls WHERE leg_id = $1;
 
 -- name: settle-call
 UPDATE calls
