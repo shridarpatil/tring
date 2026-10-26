@@ -194,6 +194,10 @@ services:
         CMD: gateway
     container_name: tring-gateway
     network_mode: host
+    # docker stop waits this long before SIGKILL. On SIGTERM the gateway stops
+    # taking new calls and lets live ones finish for up to
+    # TRING_GATEWAY_DRAIN_SECONDS (default 300); keep this above it.
+    stop_grace_period: 330s
     # Run as the host user (like the api) so the bind-mounted recordings spool
     # below is writable — the gateway, not FreeSWITCH, writes recordings now, so
     # they no longer need a root-owned volume. Override TRING_API_UID/GID to match.

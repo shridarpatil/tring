@@ -15,10 +15,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/shridarpatil/tring/internal/blobstore"
@@ -270,6 +273,7 @@ func main() {
 	root := http.NewServeMux()
 	root.Handle("/rtc", sigHandler)
 	root.Handle("/rtc/", sigHandler)
+	root.Handle("/healthz", sigHandler) // 503 while draining
 
 	// ReadTimeout/IdleTimeout only govern the HTTP upgrade request: Hijack
 	// (inside ws.UpgradeHTTP) clears the conn deadlines, and the signaling
@@ -293,15 +297,36 @@ func main() {
 	}
 	go func() {
 		logger.Info("gateway control listening", "addr", ctlSrv.Addr)
-		if err := ctlSrv.ListenAndServe(); err != nil {
+		if err := ctlSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("gateway control serve failed", "err", err)
 			os.Exit(1)
 		}
 	}()
 
-	logger.Info("gateway listening", "addr", addr)
-	if err := srv.ListenAndServe(); err != nil {
-		logger.Error("gateway serve failed", "err", err)
-		os.Exit(1)
+	go func() {
+		logger.Info("gateway listening", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("gateway serve failed", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	// Graceful shutdown: on SIGTERM (docker stop) take no new calls and let the
+	// live ones finish, up to gateway_drain_seconds; then exit. Keep compose's
+	// stop_grace_period above that, or Docker SIGKILLs mid-drain. A second
+	// signal (stop() restores the default) exits at once.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	<-ctx.Done()
+	stop()
+	drainCtx, cancel := context.WithTimeout(context.Background(), time.Duration(k.Int("gateway_drain_seconds"))*time.Second)
+	if left := sig.Drain(drainCtx); left > 0 {
+		logger.Warn("drain timed out, ending live calls", "calls", left)
+	} else {
+		logger.Info("drained, shutting down")
 	}
+	cancel()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(shutdownCtx)
+	_ = ctlSrv.Shutdown(shutdownCtx)
 }
