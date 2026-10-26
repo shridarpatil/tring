@@ -96,6 +96,10 @@ var defaults = map[string]any{
 	// participant's slot is held for a page-refresh. The pion media-plane
 	// signaling WebSocket (/rtc) is served by cmd/gateway on gateway_addr.
 	"media_grace_seconds": 30,
+	// gateway_drain_seconds: on SIGTERM the gateway stops taking new calls and
+	// waits this long for live ones to end before exiting. docker-compose's
+	// gateway stop_grace_period must be longer.
+	"gateway_drain_seconds": 300,
 	// rtc_dev_tokens mounts an UNAUTHENTICATED agent-token mint at /rtc/dev-token
 	// so the local test client (examples/rtc-test.html) works with `make gateway`
 	// alone. Dev only — never enable in production.

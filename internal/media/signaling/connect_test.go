@@ -321,3 +321,56 @@ func TestControlConnect(t *testing.T) {
 	close(agent.done)
 	waitEnd(t, cl)
 }
+
+func TestConnectRefusedWhileDraining(t *testing.T) {
+	o := newConnectOriginator()
+	cl := newConnectCallLog()
+	srv := newConnectServer(t, o, cl)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	srv.Drain(ctx)
+
+	if _, err := srv.Connect(context.Background(), uuid.New(), "9876543210", "09812345678"); !errors.Is(err, errDraining) {
+		t.Fatalf("err = %v, want errDraining", err)
+	}
+	if ev := cl.snapshot(); len(ev) != 0 {
+		t.Fatalf("a refused connect must not open a call row; events %v", ev)
+	}
+	select {
+	case to := <-o.dialed:
+		t.Fatalf("dialed %s while draining", to)
+	default:
+	}
+}
+
+func TestDrainWaitsForConnectCall(t *testing.T) {
+	agent, client := newConnectLeg("out-agent"), newConnectLeg("out-client")
+	cl := newConnectCallLog()
+	srv := newConnectServer(t, newConnectOriginator(agent, client), cl)
+	if _, err := srv.Connect(context.Background(), uuid.New(), "9876543210", "09812345678"); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	left := make(chan int, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		left <- srv.Drain(ctx)
+	}()
+	select {
+	case <-left:
+		t.Fatal("Drain returned while a connect call was live")
+	case <-time.After(time.Second):
+	}
+
+	close(client.done)
+	waitEnd(t, cl)
+	select {
+	case n := <-left:
+		if n != 0 {
+			t.Fatalf("calls left = %d, want 0", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drain never saw the connect call end")
+	}
+}
