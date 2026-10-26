@@ -50,11 +50,16 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 		return uuid.Nil, fmt.Errorf("%w: %v", errDialNoTrunk, err)
 	}
 
+	if !s.startPortCall() {
+		return uuid.Nil, errDraining
+	}
+
 	// from = the agent (rung first), to = the client.
 	roomID := room.RoomID(tenant.String() + "/connect-" + uuid.NewString())
 	s.cfg.Calls.StartedOutbound(ctx, tenant, string(roomID), agent, client, "", "")
 	callID := s.cfg.Calls.CallID(string(roomID))
 	if callID == uuid.Nil {
+		s.endPortCall()
 		return uuid.Nil, errConnectNoCDR
 	}
 	go s.runConnect(roomID, tenant, agent, client)
@@ -64,6 +69,7 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 // runConnect places a Connect call: agent first, then client, then waits for
 // either side to hang up.
 func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client string) {
+	defer s.endPortCall()
 	octx, cancel := context.WithTimeout(context.Background(), connectRingTimeout)
 	agentLeg, callerID, _, err := s.originateOut(octx, tenant, agent, "", nil)
 	cancel()
@@ -214,6 +220,9 @@ func (s *Server) handleControlConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, errDialUnavailable):
 		controlError(w, http.StatusServiceUnavailable, "outbound calling not available")
+		return
+	case errors.Is(err, errDraining):
+		controlError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	case err != nil:
 		s.log.Error("connect: call not placed", "tenant", c.TenantID, "err", err)

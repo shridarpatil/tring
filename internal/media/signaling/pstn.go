@@ -48,6 +48,12 @@ func (s *Server) AttachOriginator(o Originator, t TrunkResolver) {
 
 // handleInboundPhone runs one phone call: resolve → answer → port → IVR → end.
 func (s *Server) handleInboundPhone(ic room.InboundCall) {
+	if !s.startPortCall() {
+		s.log.Warn("pstn: draining, rejecting call", "did", ic.To)
+		_ = s.pstnGW.Reject(ic.CallID)
+		return
+	}
+	defer s.endPortCall()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	tenant, flowID, err := s.pstnDID.ResolveDID(ctx, ic.To)
 	cancel()

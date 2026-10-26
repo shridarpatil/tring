@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -223,6 +224,9 @@ type Server struct {
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
 	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
 
+	draining  atomic.Bool  // shutting down: no new calls (drain.go)
+	portCalls atomic.Int64 // phone/connect calls in progress (drain.go)
+
 	// router runs the shared queue/ring discipline (internal/routing) — the same
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
 	// max_wait, reservations and queue depth identically. The pion plane supplies
@@ -285,6 +289,10 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if s.draining.Load() {
+			http.Error(w, "draining", http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -376,6 +384,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if !s.cfg.DevTokens && s.roomOccupied(roomID) && (princ.isVisitor || !s.takeInvite(roomID, princ.sip)) {
 			s.log.Warn("join refused: call already in progress", "room", roomID, "visitor", princ.isVisitor, "sip", princ.sip)
 			_ = c.send(msg{Type: msgError, Reason: "not invited to this call"})
+			_ = netConn.Close()
+			return
+		}
+		// Draining: a fresh join may still enter a live call, but not start one.
+		if s.draining.Load() && !s.roomOccupied(roomID) {
+			_ = c.send(msg{Type: msgError, Reason: errDraining.Error()})
 			_ = netConn.Close()
 			return
 		}
