@@ -60,7 +60,14 @@
       <condition field="destination_number" expression="^(\+?\d+)$">
         <action application="set" data="effective_caller_id_number=${sip_from_user}"/>
         <action application="set" data="continue_on_fail=NORMAL_TEMPORARY_FAILURE,NO_ROUTE_DESTINATION,RECOVERY_ON_TIMER_EXPIRE"/>
-        <action application="bridge" data="sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
+        <!-- G.711 on the CARRIER leg, as {} vars on the bridge. fsplug offers
+             Opus only, and without this FS offered the carrier that same
+             Opus-only SDP (m=audio … 102 101); Tata's IBCF refused it with an
+             instant 487, so no gateway-placed outbound call ever rang. Now
+             the carrier gets G.711 and FS transcodes to Opus for the plug —
+             the mirror of public.xml's tring_inbound_to_gateway. Quoted so
+             the comma doesn't end the {} block. -->
+        <action application="bridge" data="{absolute_codec_string='PCMA,PCMU'}sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
       </condition>
     </extension>
 
