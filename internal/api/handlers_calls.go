@@ -21,6 +21,7 @@ import (
 	"github.com/shridarpatil/tring/internal/agentleg"
 	"github.com/shridarpatil/tring/internal/callrow"
 	"github.com/shridarpatil/tring/internal/dial"
+	"github.com/shridarpatil/tring/internal/eslcdr"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/provider"
 )
@@ -195,7 +196,8 @@ func (s *Server) originateForAgent(
 	// FS rolls to the next trunk only on the causes the operator opted in
 	// for. Single-quote-wrapped so the commas inside don't terminate the
 	// `{}` vars block.
-	originateVars := map[string]string{}
+	// TrackVar lets eslcdr pick this call's events out of every channel's.
+	originateVars := map[string]string{eslcdr.TrackVar: "true"}
 	if len(bLegs) > 1 && len(t.FailoverCauses) > 0 {
 		originateVars["continue_on_fail"] = "'" + strings.Join(t.FailoverCauses, ",") + "'"
 	}
