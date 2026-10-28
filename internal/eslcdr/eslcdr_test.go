@@ -96,7 +96,7 @@ func TestHandle(t *testing.T) {
 
 	t.Run("unanswered hangup fails with the cause", func(t *testing.T) {
 		seed("leg-noans", "job-3")
-		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", legID: "leg-noans", cause: "NO_ANSWER", answered: "0"})
+		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", tracked: true, legID: "leg-noans", cause: "NO_ANSWER", answered: "0"})
 		if st, cause, _ := row("leg-noans"); st != "failed" || cause != "NO_ANSWER" {
 			t.Errorf("got (%s, %q), want (failed, NO_ANSWER)", st, cause)
 		}
@@ -104,11 +104,11 @@ func TestHandle(t *testing.T) {
 
 	t.Run("answer then hangup ends the call", func(t *testing.T) {
 		seed("leg-ans", "job-4")
-		w.handle(ctx, event{name: "CHANNEL_ANSWER", legID: "leg-ans"})
+		w.handle(ctx, event{name: "CHANNEL_ANSWER", tracked: true, legID: "leg-ans"})
 		if st, _, answered := row("leg-ans"); st != "answered" || !answered {
 			t.Errorf("after answer: got (%s, answered=%v)", st, answered)
 		}
-		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", legID: "leg-ans", cause: "NORMAL_CLEARING"})
+		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", tracked: true, legID: "leg-ans", cause: "NORMAL_CLEARING"})
 		if st, cause, _ := row("leg-ans"); st != "ended" || cause != "NORMAL_CLEARING" {
 			t.Errorf("after hangup: got (%s, %q), want (ended, NORMAL_CLEARING)", st, cause)
 		}
@@ -117,16 +117,27 @@ func TestHandle(t *testing.T) {
 	t.Run("hangup handled before its answer still ends the call", func(t *testing.T) {
 		seed("leg-race", "job-5")
 		at := strconv.FormatInt(time.Now().Add(-3*time.Second).UnixMicro(), 10)
-		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", legID: "leg-race", cause: "NORMAL_CLEARING", answered: at})
-		w.handle(ctx, event{name: "CHANNEL_ANSWER", legID: "leg-race"})
+		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", tracked: true, legID: "leg-race", cause: "NORMAL_CLEARING", answered: at})
+		w.handle(ctx, event{name: "CHANNEL_ANSWER", tracked: true, legID: "leg-race"})
 		if st, _, _ := row("leg-race"); st != "ended" {
 			t.Errorf("got %s, want ended", st)
 		}
 	})
 
 	t.Run("events for unknown channels are ignored", func(t *testing.T) {
-		w.handle(ctx, event{name: "CHANNEL_ANSWER", legID: "not-ours"})
-		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", legID: "not-ours", cause: "NORMAL_CLEARING"})
+		w.handle(ctx, event{name: "CHANNEL_ANSWER", tracked: true, legID: "not-ours"})
+		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", tracked: true, legID: "not-ours", cause: "NORMAL_CLEARING"})
 		w.handle(ctx, event{name: "BACKGROUND_JOB", jobUUID: "not-ours", jobReply: "-ERR X"})
+	})
+
+	// A channel without TrackVar (a gateway plug leg, a bridge B-leg) is skipped
+	// before the DB, even if its uuid happened to match a row.
+	t.Run("untracked channel events are skipped", func(t *testing.T) {
+		seed("leg-untracked", "job-6")
+		w.handle(ctx, event{name: "CHANNEL_ANSWER", legID: "leg-untracked"})
+		w.handle(ctx, event{name: "CHANNEL_HANGUP_COMPLETE", legID: "leg-untracked", cause: "NORMAL_CLEARING"})
+		if st, _, answered := row("leg-untracked"); st != "ringing" || answered {
+			t.Errorf("got (%s, answered=%v), want untouched ringing", st, answered)
+		}
 	})
 }

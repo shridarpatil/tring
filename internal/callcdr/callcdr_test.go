@@ -3,6 +3,7 @@ package callcdr_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,7 +15,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/rtp"
 
+	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/callcdr"
+	"github.com/shridarpatil/tring/internal/callrow"
 	"github.com/shridarpatil/tring/internal/dbtest"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/logging"
@@ -462,5 +465,100 @@ func TestFailedSettlesFailed(t *testing.T) {
 	}
 	if status != "failed" || cause != "agent_not_answered" {
 		t.Errorf("row = %s/%s, want failed/agent_not_answered", status, cause)
+	}
+}
+
+// The tenant's recording settings are served from the cache once read, and
+// re-read from the DB after the api drops the key on a settings change.
+func TestRecordingSettingsThroughCache(t *testing.T) {
+	fx := dbtest.Setup(t)
+	addr := os.Getenv("TRING_TEST_REDIS")
+	if addr == "" {
+		addr = "127.0.0.1:6379"
+	}
+	c, err := cache.New(addr, os.Getenv("TRING_TEST_REDIS_PASSWORD"))
+	if err != nil || c == nil {
+		t.Skipf("redis not reachable at %s: %v", addr, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	ctx := context.Background()
+	key := callrow.RecordingCacheKey(fx.TenantID)
+	_ = c.Delete(ctx, key)
+	setRecording := func(on bool) {
+		t.Helper()
+		if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = $2 WHERE id = $1`, fx.TenantID, on); err != nil {
+			t.Fatalf("set record_calls: %v", err)
+		}
+	}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil).WithCache(c)
+	start := func(n int) bool {
+		roomID := fmt.Sprintf("%s/cache-%d", fx.TenantID, n)
+		defer l.Ended(roomID, "test")
+		return l.Started(ctx, fx.TenantID, roomID, "+919900112233", "16001122", "phone", "", "caller-pid") != nil
+	}
+
+	setRecording(true)
+	if !start(1) {
+		t.Fatal("cold read: expected a recording sink")
+	}
+	setRecording(false) // behind the cache's back
+	if !start(2) {
+		t.Error("warm read: expected the cached setting (recording on)")
+	}
+	_ = c.Delete(ctx, key) // what the api does on PATCH /v1/tenants/me
+	if start(3) {
+		t.Error("after invalidate: expected recording off")
+	}
+}
+
+// An agent's id + label are cached once looked up: a ring after the row
+// changes still names the agent as first read.
+func TestAgentLookupThroughCache(t *testing.T) {
+	fx := dbtest.Setup(t)
+	addr := os.Getenv("TRING_TEST_REDIS")
+	if addr == "" {
+		addr = "127.0.0.1:6379"
+	}
+	c, err := cache.New(addr, os.Getenv("TRING_TEST_REDIS_PASSWORD"))
+	if err != nil || c == nil {
+		t.Skipf("redis not reachable at %s: %v", addr, err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = false WHERE id = $1`, fx.TenantID); err != nil {
+		t.Fatalf("disable recording: %v", err)
+	}
+	if _, err := fx.DB.Pool.Exec(ctx,
+		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1, 'carol', 'x', 'Carol A')`,
+		fx.TenantID); err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
+	_ = c.Delete(ctx, "agent:sip:"+fx.TenantID.String()+":carol")
+	_ = c.Delete(ctx, callrow.RecordingCacheKey(fx.TenantID))
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil).WithCache(c)
+
+	ringName := func(n int) string {
+		t.Helper()
+		roomID := fmt.Sprintf("%s/agent-cache-%d", fx.TenantID, n)
+		l.Started(ctx, fx.TenantID, roomID, "+919900112233", "16001122", "phone", "", "caller-pid")
+		l.RingAgent(roomID, "carol")
+		callID := l.CallID(roomID)
+		l.Ended(roomID, "test")
+		var name string
+		if err := fx.DB.Pool.QueryRow(ctx,
+			`SELECT detail->>'agent' FROM call_events WHERE call_id = $1 AND type = 'ring'`, callID).Scan(&name); err != nil {
+			t.Fatalf("read ring event: %v", err)
+		}
+		return name
+	}
+
+	if got := ringName(1); got != "Carol A" {
+		t.Fatalf("cold ring named %q, want Carol A", got)
+	}
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE agents SET display_name = 'Carol B' WHERE sip_username = 'carol'`); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if got := ringName(2); got != "Carol A" {
+		t.Errorf("warm ring named %q, want cached Carol A", got)
 	}
 }

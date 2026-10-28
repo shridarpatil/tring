@@ -27,6 +27,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/blobstore"
+	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/callrow"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
@@ -46,8 +47,9 @@ type Log struct {
 	blob   *blobstore.Store // nil/disabled → recordings stay on local disk
 	dir    string           // local recordings spool (shared with the API's serve)
 	log    *slog.Logger
-	events events.Sink // nil = events disabled (no-op)
-	hooks  Webhooks    // nil = tenant webhooks off (no-op)
+	events events.Sink  // nil = events disabled (no-op)
+	hooks  Webhooks     // nil = tenant webhooks off (no-op)
+	cache  *cache.Cache // nil = no caching (every call reads the recording settings)
 
 	mu    sync.Mutex
 	calls map[string]*activeCall // by room id
@@ -72,6 +74,24 @@ type activeCall struct {
 // sends call.ended to the flow's "on call end" webhook (see EndWebhook).
 type Webhooks interface {
 	Send(tenantID, webhookID uuid.UUID, eventType string, data interface{})
+}
+
+// recordingCacheTTL backstops a missed invalidation; the api deletes
+// callrow.RecordingCacheKey whenever the tenant's settings change.
+const recordingCacheTTL = time.Hour
+
+// recordingPolicy is a tenant's recording settings, as cached.
+type recordingPolicy struct {
+	On     bool   `json:"on"`
+	Rate   int    `json:"rate"`
+	Format string `json:"format"`
+}
+
+// WithCache caches the tenant recording settings read at call start, and
+// returns l for chaining. A nil cache disables it.
+func (l *Log) WithCache(c *cache.Cache) *Log {
+	l.cache = c
+	return l
 }
 
 // WithWebhooks turns on call.ended delivery and returns l for chaining.
@@ -211,10 +231,12 @@ func (l *Log) StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, fro
 // Started and StartedOutbound once the calls-table row already exists.
 func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, roomID, from, to, source, direction, legID string, callerPID room.ParticipantID) room.TrackSink {
 	ac := &activeCall{id: callID, legID: legID, tenant: tenant, startedAt: time.Now(), callerPID: callerPID}
-	var recordOn bool
-	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&recordOn, &ac.recRate, &ac.recFormat); err != nil {
+	pol, err := l.recordingPolicy(ctx, tenant)
+	if err != nil {
 		l.log.Warn("cdr: record policy read failed", "err", err)
 	}
+	recordOn := pol.On
+	ac.recRate, ac.recFormat = pol.Rate, pol.Format
 	if recordOn {
 		ac.rec = record.New(l.dir, legID)
 		ac.rec.Label(callerPID, "customer")
@@ -239,6 +261,53 @@ func (l *Log) started(ctx context.Context, tenant uuid.UUID, callID uuid.UUID, r
 		return nil
 	}
 	return ac.rec
+}
+
+// recordingPolicy reads the tenant's recording settings, from the cache when warm.
+func (l *Log) recordingPolicy(ctx context.Context, tenant uuid.UUID) (recordingPolicy, error) {
+	key := callrow.RecordingCacheKey(tenant)
+	var p recordingPolicy
+	if b, ok := l.cache.Get(ctx, key); ok && json.Unmarshal(b, &p) == nil {
+		return p, nil
+	}
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetTenantRecordCalls, tenant).Scan(&p.On, &p.Rate, &p.Format); err != nil {
+		return recordingPolicy{}, err
+	}
+	if b, err := json.Marshal(p); err == nil {
+		l.cache.Set(ctx, key, b, recordingCacheTTL)
+	}
+	return p, nil
+}
+
+// agentCacheTTL bounds a cached agent lookup. No api endpoint edits or deletes
+// an agent's id or display name today, so nothing invalidates it; an endpoint
+// that does must delete agentCacheKey.
+const agentCacheTTL = time.Hour
+
+func agentCacheKey(tenant uuid.UUID, sip string) string {
+	return "agent:sip:" + tenant.String() + ":" + sip
+}
+
+type agentEntry struct {
+	ID    uuid.UUID `json:"id"`
+	Label string    `json:"label"`
+}
+
+// agentBySIP resolves an agent's id + display label (falling back to the SIP
+// username), from the cache when warm. An unknown SIP errors and isn't cached.
+func (l *Log) agentBySIP(ctx context.Context, tenant uuid.UUID, sip string) (uuid.UUID, string, error) {
+	key := agentCacheKey(tenant, sip)
+	var e agentEntry
+	if b, ok := l.cache.Get(ctx, key); ok && json.Unmarshal(b, &e) == nil {
+		return e.ID, e.Label, nil
+	}
+	if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, tenant, sip).Scan(&e.ID, &e.Label); err != nil {
+		return uuid.Nil, "", err
+	}
+	if b, err := json.Marshal(e); err == nil {
+		l.cache.Set(ctx, key, b, agentCacheTTL)
+	}
+	return e.ID, e.Label, nil
 }
 
 // Answered marks the call answered (an agent joined), attributes the answering
@@ -266,9 +335,8 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	var answeredAgentID *uuid.UUID
 	var answeredAgentName string
 	if agentSip != "" {
-		var agentID uuid.UUID
-		var label string
-		if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, agentSip).Scan(&agentID, &label); err != nil {
+		agentID, label, err := l.agentBySIP(ctx, ac.tenant, agentSip)
+		if err != nil {
 			l.log.Warn("cdr: agent lookup failed", "sip", agentSip, "err", err)
 		} else if _, err := l.db.Pool.Exec(ctx, l.q.SetCallAgentID, ac.legID, agentID); err != nil {
 			l.log.Warn("cdr: stamp agent failed", "err", err)
@@ -323,9 +391,7 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 		target = team
 	case agentSIP != "":
 		target = agentSIP // fall back to the SIP username if the name lookup fails
-		var id uuid.UUID
-		var name string
-		if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, agentSIP).Scan(&id, &name); err == nil && name != "" {
+		if _, name, err := l.agentBySIP(ctx, ac.tenant, agentSIP); err == nil && name != "" {
 			target = name
 		}
 	}
@@ -351,9 +417,8 @@ func (l *Log) RingAgent(roomID, sip string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	name := sip
-	var id uuid.UUID
-	var label string
-	if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, ac.tenant, sip).Scan(&id, &label); err == nil && label != "" {
+	id, label, err := l.agentBySIP(ctx, ac.tenant, sip)
+	if err == nil && label != "" {
 		name = label
 	}
 	var roster string
@@ -430,9 +495,7 @@ func (l *Log) resolveAgentName(tenant uuid.UUID, s string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	var id uuid.UUID
-	var name string
-	if err := l.db.Pool.QueryRow(ctx, l.q.GetAgentBySIP, tenant, s).Scan(&id, &name); err == nil && name != "" {
+	if _, name, err := l.agentBySIP(ctx, tenant, s); err == nil && name != "" {
 		return name
 	}
 	return s

@@ -67,6 +67,12 @@ func Scan(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	return c, err
 }
 
+// RecordingCacheKey is the Redis key for a tenant's recording settings
+// (get-tenant-record-calls), which the gateway's call log reads on every call.
+// Here so the api can invalidate it on a settings change without importing the
+// media plane.
+func RecordingCacheKey(tenantID uuid.UUID) string { return "tenant:recording:" + tenantID.String() }
+
 // Get loads one of the tenant's calls by id.
 func Get(ctx context.Context, d *db.DB, q *queries.Queries, tenantID, id uuid.UUID) (Call, error) {
 	return Scan(d.Pool.QueryRow(ctx, q.GetCall, id, tenantID))

@@ -151,7 +151,7 @@ func main() {
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
-		store := flowstore.New(database)
+		store := flowstore.New(database).WithCache(redisCache) // DID + flow reads on every inbound call
 		flows, teams, holdMusic, didResolver = store, store, store, store
 		transferMessage = store
 		availability = store
@@ -181,7 +181,7 @@ func main() {
 			WithCache(redisCache).WithSecrets(secrets)
 		webhooks = notifier
 		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub).
-			WithWebhooks(notifier)
+			WithWebhooks(notifier).WithCache(redisCache)
 		calls = cdrLog
 		supervisors = cdrLog
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/shridarpatil/tring/internal/brain"
+	"github.com/shridarpatil/tring/internal/flowstore"
 )
 
 // flowListCacheTTL bounds staleness of the cached per-tenant flow list if an
@@ -316,10 +317,10 @@ func (s *Server) handlePatchFlow(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
-	// Invalidate the brain's cached definition (read on the call
+	// Invalidate the gateway's cached definition (read on the call
 	// path) and the tenant's cached list so the edit takes effect on the
 	// next call/list instead of after the TTL. Best-effort.
-	if err := s.cache.Delete(r.Context(), brain.FlowCacheKey(id)); err != nil {
+	if err := s.cache.Delete(r.Context(), flowstore.FlowCacheKey(id)); err != nil {
 		s.log.Warn("flow definition cache invalidate failed", "flow", id, "err", err)
 	}
 	s.invalidateFlowList(r.Context(), t.ID)
@@ -333,6 +334,12 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	// The numbers routed here, read before the delete nulls their flow_id: their
+	// cached DID routes still name this flow and must go with it.
+	dids, err := s.flowInboundNumbers(r.Context(), id, t.ID)
+	if err != nil {
+		s.log.Warn("list flow numbers failed; their cached routes expire by TTL", "flow", id, "err", err)
+	}
 	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteFlow, id, t.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
@@ -342,11 +349,30 @@ func (s *Server) handleDeleteFlow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "flow not found")
 		return
 	}
-	if err := s.cache.Delete(r.Context(), brain.FlowCacheKey(id)); err != nil {
+	if err := s.cache.Delete(r.Context(), flowstore.FlowCacheKey(id)); err != nil {
 		s.log.Warn("flow definition cache invalidate failed", "flow", id, "err", err)
 	}
+	s.invalidateDIDs(r.Context(), dids...)
 	s.invalidateFlowList(r.Context(), t.ID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// flowInboundNumbers lists the inbound DIDs routed to a flow.
+func (s *Server) flowInboundNumbers(ctx context.Context, flowID, tenantID uuid.UUID) ([]string, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListFlowInboundNumbers, flowID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var dids []string
+	for rows.Next() {
+		var e164 string
+		if err := rows.Scan(&e164); err != nil {
+			return nil, err
+		}
+		dids = append(dids, e164)
+	}
+	return dids, rows.Err()
 }
 
 // handleSimulateFlow runs the flow through the pure-Go simulator and

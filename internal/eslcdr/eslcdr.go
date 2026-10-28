@@ -7,9 +7,10 @@
 //	CHANNEL_ANSWER          -> answered
 //	CHANNEL_HANGUP_COMPLETE -> ended, or failed if it was never answered
 //
-// Rows are matched by leg_id (the origination uuid) or job_uuid, so events for
-// channels Tring didn't originate this way — the gateway's plug legs, the
-// B-legs of a bridge — match nothing and are ignored.
+// Rows are matched by leg_id (the origination uuid) or job_uuid. The api tags
+// the channels it originates with TrackVar; channel events without it — the
+// gateway's plug legs, the B-legs of a bridge — are skipped before any DB
+// lookup, so an inbound call costs no queries here.
 package eslcdr
 
 import (
@@ -71,6 +72,10 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
+// TrackVar is the channel variable the api sets on the calls it originates
+// (POST /v1/calls). Only channels carrying it can have a row to update.
+const TrackVar = "tring_api_call"
+
 func (w *Watcher) runOnce(ctx context.Context) error {
 	disconnected := make(chan struct{})
 	conn, err := eslgo.Dial(w.addr, w.password, func() { close(disconnected) })
@@ -83,14 +88,7 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 		// Own context: a DB write mustn't be cut short by shutdown mid-update.
 		dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		w.handle(dbCtx, event{
-			name:     e.GetName(),
-			legID:    e.GetHeader("Unique-ID"),
-			jobUUID:  e.GetHeader("Job-UUID"),
-			cause:    e.GetHeader("Hangup-Cause"),
-			answered: e.GetHeader("Caller-Channel-Answered-Time"),
-			jobReply: string(e.Body),
-		})
+		w.handle(dbCtx, toEvent(e))
 	})
 	if _, err := conn.SendCommand(ctx, command.Event{
 		Format: "plain",
@@ -108,10 +106,24 @@ func (w *Watcher) runOnce(ctx context.Context) error {
 	}
 }
 
+// toEvent reads the headers the watcher uses from an ESL event.
+func toEvent(e *eslgo.Event) event {
+	return event{
+		name:     e.GetName(),
+		legID:    e.GetHeader("Unique-ID"),
+		tracked:  e.GetHeader("variable_"+TrackVar) != "",
+		jobUUID:  e.GetHeader("Job-UUID"),
+		cause:    e.GetHeader("Hangup-Cause"),
+		answered: e.GetHeader("Caller-Channel-Answered-Time"),
+		jobReply: string(e.Body),
+	}
+}
+
 // event is the part of an ESL event the watcher reads.
 type event struct {
 	name     string
 	legID    string // Unique-ID: the channel uuid (== calls.leg_id for the A-leg)
+	tracked  bool   // the channel carries TrackVar (an api-originated call)
 	jobUUID  string // BACKGROUND_JOB only
 	cause    string // CHANNEL_HANGUP_COMPLETE only
 	answered string // CHANNEL_HANGUP_COMPLETE: answer time in epoch µs, "0" if never
@@ -149,8 +161,8 @@ func (w *Watcher) onJob(ctx context.Context, e event) {
 }
 
 func (w *Watcher) onAnswer(ctx context.Context, e event) {
-	if e.legID == "" {
-		return
+	if e.legID == "" || !e.tracked {
+		return // not a call the api originated
 	}
 	var callID uuid.UUID
 	err := w.db.Pool.QueryRow(ctx, w.q.MarkCallAnswered, e.legID).Scan(&callID)
@@ -165,8 +177,8 @@ func (w *Watcher) onAnswer(ctx context.Context, e event) {
 }
 
 func (w *Watcher) onHangup(ctx context.Context, e event) {
-	if e.legID == "" {
-		return
+	if e.legID == "" || !e.tracked {
+		return // not a call the api originated
 	}
 	var (
 		callID     uuid.UUID
