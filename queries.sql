@@ -55,11 +55,11 @@ SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, cre
 FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: get-team-moh
--- Team queue settings + the tenant's system hold music, for the orchestrator's
--- effective-MOH resolution (team override → tenant hold music → built-in default).
-SELECT t.strategy, t.ring_seconds, t.max_wait_seconds, t.moh_sound,
-       COALESCE((SELECT hold_music FROM tenants WHERE id = t.tenant_id), '')
-FROM teams t WHERE t.tenant_id = $1 AND t.name = $2;
+-- A team's own queue settings for the gateway's transfer ring. The tenant's
+-- hold music (the effective-MOH fallback) is read and cached separately
+-- (get-tenant-audio), so each invalidates on its own write.
+SELECT strategy, ring_seconds, max_wait_seconds, moh_sound
+FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: update-team
 -- Partial update: a NULL arg keeps the existing value (name is the PK, immutable).
@@ -137,7 +137,8 @@ WHERE id = $5 AND tenant_id = $6
 RETURNING id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at;
 
 -- name: delete-number
-DELETE FROM numbers WHERE id = $1 AND tenant_id = $2;
+-- Returns the e164 so the api can drop its cached DID route.
+DELETE FROM numbers WHERE id = $1 AND tenant_id = $2 RETURNING e164;
 
 -- name: list-numbers
 SELECT id, tenant_id, e164, type::text, trunk_id, flow_id, COALESCE(provider_did_id, ''), priority, active, created_at
@@ -197,13 +198,11 @@ SELECT tenant_id, started_at FROM calls WHERE leg_id = $1;
 -- Mark a recording as stored in S3 (after a successful upload).
 UPDATE calls SET recording_s3_key = $2 WHERE leg_id = $1;
 
--- name: get-tenant-hold-music
-SELECT hold_music FROM tenants WHERE id = $1;
-
--- name: get-tenant-transfer-audio
--- The synthesized "no one answered" prompt path (played on a failed blind transfer),
--- "" when unset (TTS disabled at save). Read by the gateway on the pion plane.
-SELECT COALESCE(transfer_failed_audio, '') FROM tenants WHERE id = $1;
+-- name: get-tenant-audio
+-- The tenant's system hold music and the synthesized "no one answered" prompt
+-- path (played on a failed blind transfer; "" when unset — TTS disabled at
+-- save). Read by the gateway on the pion plane.
+SELECT hold_music, COALESCE(transfer_failed_audio, '') FROM tenants WHERE id = $1;
 
 -- ===========================================================================
 -- audio assets (tenant sound library)
@@ -574,6 +573,11 @@ RETURNING id, tenant_id, name, description, is_active, is_outgoing_end,
 -- name: delete-flow
 DELETE FROM flows WHERE id = $1 AND tenant_id = $2;
 
+-- name: list-flow-inbound-numbers
+-- Inbound DIDs routed to a flow. Read before delete-flow (the FK nulls their
+-- flow_id) so the api can drop their cached DID routes.
+SELECT e164 FROM numbers WHERE flow_id = $1 AND tenant_id = $2 AND type = 'inbound';
+
 -- name: get-flow-definition
 SELECT definition::text FROM flows WHERE id = $1 AND tenant_id = $2;
 
@@ -780,10 +784,9 @@ SELECT EXISTS (
 
 -- name: resolve-inbound-number
 -- Inbound DID → owning tenant + attached flow id (NULL if none). The flow
--- DEFINITION is loaded separately by id (get-active-flow-by-id) so it can be
--- served from the cache; this stays a cheap indexed point read that always
--- hits the DB, since a number's flow assignment can change independently of
--- the flow's contents.
+-- DEFINITION is loaded separately by id (get-active-flow-by-id), so the two
+-- are cached under separate keys: a number's flow assignment can change
+-- independently of the flow's contents (see flowstore).
 --
 -- Cross-tenant guards: the flow must belong to the number's own tenant (a
 -- foreign flow_id resolves to NULL → call rejected), and if two tenants ever

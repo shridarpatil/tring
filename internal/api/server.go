@@ -87,9 +87,9 @@ type Config struct {
 	// Blob is the optional S3 store recordings are streamed from when uploaded.
 	Blob *blobstore.Store
 
-	// Cache is the shared Redis cache. The API uses it only to invalidate
-	// flow definitions the brain caches (handlers_flows.go). May be
-	// nil — invalidation becomes a no-op (the brain then relies on
+	// Cache is the shared Redis cache. The API uses it to invalidate the
+	// DID routes and flow definitions the gateway caches (flowstore). May be
+	// nil — invalidation becomes a no-op (the gateway then relies on
 	// the TTL, or is itself uncached).
 	Cache *cache.Cache
 
@@ -130,7 +130,7 @@ type Server struct {
 	fsBasicUser string
 	fsBasicPass string
 	fs          *freeswitch.Client
-	cache       *cache.Cache    // shared Redis; used to invalidate cached IVR flows
+	cache       *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
 	presence    *presence.Store // agent online status published by the gateway
 
 	// agentTransport / agentGateway: how an agent's own call leg is routed
