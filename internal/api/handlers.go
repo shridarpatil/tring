@@ -13,8 +13,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/shridarpatil/tring/internal/callrow"
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/events"
+	"github.com/shridarpatil/tring/internal/flowstore"
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
 )
@@ -520,7 +522,19 @@ func (s *Server) handlePatchNumber(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
+	s.invalidateDIDs(r.Context(), cur.E164, n.E164) // old + new, in case e164 changed
 	writeJSON(w, http.StatusOK, n)
+}
+
+// invalidateDIDs drops the gateway's cached inbound routes (flowstore) for
+// e164s so a number edit takes effect on the next call instead of after the
+// TTL. Best-effort.
+func (s *Server) invalidateDIDs(ctx context.Context, e164s ...string) {
+	for _, e := range e164s {
+		if err := s.cache.Delete(ctx, flowstore.DIDCacheKey(e)); err != nil {
+			s.log.Warn("DID cache invalidate failed", "e164", e, "err", err)
+		}
+	}
 }
 
 // handleDeleteNumber removes a number outright. Unlike deactivating, this is
@@ -533,15 +547,17 @@ func (s *Server) handleDeleteNumber(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteNumber, id, t.ID)
+	var e164 string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.DeleteNumber, id, t.ID).Scan(&e164)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "number not found")
+		return
+	}
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "delete failed", err)
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "number not found")
-		return
-	}
+	s.invalidateDIDs(r.Context(), e164)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -665,6 +681,14 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
+	}
+	// Drop the gateway's cached tenant settings (recording; hold music + transfer
+	// prompt) so the change applies to the next call instead of after the TTL.
+	// Best-effort.
+	for _, key := range []string{callrow.RecordingCacheKey(t.ID), flowstore.TenantAudioCacheKey(t.ID)} {
+		if err := s.cache.Delete(r.Context(), key); err != nil {
+			s.log.Warn("tenant settings cache invalidate failed", "key", key, "err", err)
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

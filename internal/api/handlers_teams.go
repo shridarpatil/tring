@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/shridarpatil/tring/internal/flowstore"
 )
 
 // ---- Teams --------------------------------------------------------------
@@ -169,7 +172,16 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
+	s.invalidateTeam(r.Context(), t.ID, name)
 	writeJSON(w, http.StatusOK, tm)
+}
+
+// invalidateTeam drops the gateway's cached queue settings for a team so an
+// edit takes effect on the next transfer instead of after the TTL. Best-effort.
+func (s *Server) invalidateTeam(ctx context.Context, tenantID uuid.UUID, team string) {
+	if err := s.cache.Delete(ctx, flowstore.TeamCacheKey(tenantID, team)); err != nil {
+		s.log.Warn("team cache invalidate failed", "team", team, "err", err)
+	}
 }
 
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +196,7 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
 	}
+	s.invalidateTeam(r.Context(), t.ID, name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

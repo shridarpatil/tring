@@ -2,10 +2,8 @@ package routing
 
 import (
 	"context"
-	"errors"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/queries"
@@ -17,28 +15,17 @@ type TeamConfig struct {
 	Strategy    string // ring_all | round_robin | sequential | longest_wait
 	RingSeconds int    // per-attempt ring timeout
 	MaxWait     int    // total queue timeout (seconds)
-	MOH         string // resolved hold music
+	MOH         string // hold music: the team's own from LoadTeamConfig, resolved via EffectiveMOH
 }
 
-// LoadTeamConfig fetches a team's queue settings and resolves its effective hold
-// music; ok=false when the team doesn't exist. Shared by both planes so the web
-// and phone sides honor the same team strategy / max-wait / hold music.
-func LoadTeamConfig(ctx context.Context, d *db.DB, q *queries.Queries, tenantID uuid.UUID, team string) (TeamConfig, bool, error) {
-	var (
-		cfg       TeamConfig
-		holdMusic string // the tenant's system hold music (subselected by get-team-moh)
-	)
+// LoadTeamConfig fetches a team's own queue settings. MOH is the team's
+// moh_sound, unresolved — combine it with the tenant's hold music via
+// EffectiveMOH. Returns pgx.ErrNoRows when the team doesn't exist.
+func LoadTeamConfig(ctx context.Context, d *db.DB, q *queries.Queries, tenantID uuid.UUID, team string) (TeamConfig, error) {
+	cfg := TeamConfig{Name: team}
 	err := d.Pool.QueryRow(ctx, q.GetTeamMOH, tenantID, team).Scan(
-		&cfg.Strategy, &cfg.RingSeconds, &cfg.MaxWait, &cfg.MOH, &holdMusic)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return TeamConfig{}, false, nil
-	}
-	if err != nil {
-		return TeamConfig{}, false, err
-	}
-	cfg.Name = team
-	cfg.MOH = EffectiveMOH(cfg.MOH, holdMusic)
-	return cfg, true, nil
+		&cfg.Strategy, &cfg.RingSeconds, &cfg.MaxWait, &cfg.MOH)
+	return cfg, err
 }
 
 // EffectiveMOH resolves the hold music a team plays: an explicit per-team

@@ -129,9 +129,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Shared Redis cache. The API only uses it to invalidate IVR flow
-	// definitions the orchestrator caches — must point at the SAME Redis as
-	// the orchestrator. Optional: log-and-disable if unreachable.
+	// Shared Redis cache. The API uses it to invalidate the inbound routes and
+	// IVR flows the gateway caches — must point at the SAME Redis as the
+	// gateway. Optional: log-and-disable if unreachable.
 	flowCache, err := cache.New(k.String("redis_addr"), k.String("redis_password"))
 	if err != nil {
 		logger.Warn("redis unavailable, flow-cache invalidation disabled", "err", err)

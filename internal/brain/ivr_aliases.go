@@ -1,7 +1,6 @@
 package brain
 
 import (
-	"github.com/google/uuid"
 	"github.com/shridarpatil/tring/internal/ivr"
 )
 
@@ -38,7 +37,3 @@ var (
 	substituteVars    = ivr.SubstituteVars
 	evalTimingOutcome = ivr.EvalTimingOutcome
 )
-
-// FlowCacheKey is the cache key for a flow's definition. Exported so the API
-// can invalidate the key when a flow is updated (PATCH /v1/flows/{id}).
-func FlowCacheKey(flowID uuid.UUID) string { return "ivr:flow:" + flowID.String() }
