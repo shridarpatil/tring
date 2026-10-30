@@ -53,6 +53,24 @@
          /usr/local/bin/tring-sip-relays; empty when no relays are set. -->
     <X-PRE-PROCESS cmd="exec" data="/usr/local/bin/tring-sip-relays dialplan"/>
 
+    <!-- The carrier leg's audio rate, for the gateway leg's Opus: sent as
+         X-Tring-Audio-Rate on the bridge below, and the plug answers with Opus
+         capped at it (maxplaybackrate), so FS runs that leg at 8 kHz for G.711
+         instead of 48 kHz — no resampling, and about a third of the CPU per
+         call. Read from the carrier's first offered codec, which is the one FS
+         picks (inbound-codec-negotiation is generous). Any other first codec
+         sets nothing: full band, as before. -->
+    <extension name="tring_carrier_audio_rate_8k" continue="true">
+      <condition field="${ep_codec_string}" expression="^[^,]*\.(PCMU|PCMA)@">
+        <action application="set" data="tring_audio_rate=8000"/>
+      </condition>
+    </extension>
+    <extension name="tring_carrier_audio_rate_16k" continue="true">
+      <condition field="${ep_codec_string}" expression="^[^,]*\.G722@">
+        <action application="set" data="tring_audio_rate=16000"/>
+      </condition>
+    </extension>
+
     <!-- Carrier-inbound to the gateway plug: any numeric (optionally
          +-prefixed) destination_number is bridged into the media plane via
          the tring-gw gateway, forcing Opus for the plug leg. -->
@@ -65,7 +83,7 @@
              dropped it (INCOMPATIBLE_DESTINATION) and sent the carrier 488.
              Now the carrier leg negotiates its own codec (G.711) and FS
              transcodes to Opus for the plug. -->
-        <action application="bridge" data="{absolute_codec_string=opus,rtp_secure_media=false}sofia/gateway/tring-gw/${destination_number}"/>
+        <action application="bridge" data="{absolute_codec_string=opus,rtp_secure_media=false,sip_h_X-Tring-Audio-Rate=${tring_audio_rate}}sofia/gateway/tring-gw/${destination_number}"/>
       </condition>
     </extension>
 

@@ -3,6 +3,7 @@ package fsplug
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,5 +133,65 @@ func TestPlugRejectUnknownDID(t *testing.T) {
 	err = dlg.WaitAnswer(ctx, sipgo.AnswerOptions{})
 	if err == nil {
 		t.Fatal("expected a non-2xx (reject), got an answer")
+	}
+}
+
+// TestPlugAnswersAtCarrierRate: the X-Tring-Audio-Rate FreeSWITCH puts on a
+// carrier call caps the Opus answer at that rate; a call without it (WhatsApp)
+// stays full band.
+func TestPlugAnswersAtCarrierRate(t *testing.T) {
+	cfg := Config{SIPListen: "127.0.0.1:15070", SIPAdvertise: "127.0.0.1", RTPMin: 12400, RTPMax: 12500, OpusPT: 111, DTMFPT: 101}
+	p, err := New(cfg, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	inbound := make(chan room.InboundCall, 1)
+	p.OnInbound(func(ic room.InboundCall) { inbound <- ic })
+
+	ua, _ := sipgo.NewUA()
+	client, _ := sipgo.NewClient(ua)
+	dc := sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15071}})
+
+	for _, tc := range []struct {
+		header string
+		want   string // in the answer's Opus fmtp; "" = no cap
+	}{
+		{"8000", "maxplaybackrate=8000;sprop-maxcapturerate=8000"},
+		{"", ""},
+	} {
+		hdrs := []sip.Header{sip.NewHeader("Content-Type", "application/sdp")}
+		if tc.header != "" {
+			hdrs = append(hdrs, sip.NewHeader("X-Tring-Audio-Rate", tc.header))
+		}
+		dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000001", Host: "127.0.0.1", Port: 15070}, []byte(fsOffer), hdrs...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ic room.InboundCall
+		select {
+		case ic = <-inbound:
+		case <-time.After(2 * time.Second):
+			t.Fatal("OnInbound never fired")
+		}
+		leg, err := p.Answer(ic.CallID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		ans := string(dlg.InviteResponse.Body())
+		if tc.want != "" && !strings.Contains(ans, tc.want) {
+			t.Errorf("X-Tring-Audio-Rate %q: answer lacks %q:\n%s", tc.header, tc.want, ans)
+		}
+		if tc.want == "" && strings.Contains(ans, "maxplaybackrate") {
+			t.Errorf("no X-Tring-Audio-Rate: answer caps Opus:\n%s", ans)
+		}
+		_ = dlg.Ack(ctx)
+		_ = dlg.Bye(ctx)
+		<-leg.Done
 	}
 }
