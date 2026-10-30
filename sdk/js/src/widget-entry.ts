@@ -27,6 +27,9 @@
 // credentials) to data-control-url — a same-origin endpoint on YOUR backend
 // that proxies to Tring's POST /v1/calls/{id}/hold with the tenant API key.
 // Omit data-control-url and the Hold button is hidden.
+//
+// Call buttons: onclick="Tring.startCall('/crm/call?id=abc')" POSTs to YOUR endpoint,
+// which originates the call (see Tring.startCall in tring.ts).
 
 import { bootstrap } from "./widget";
 import { Tring } from "./tring";

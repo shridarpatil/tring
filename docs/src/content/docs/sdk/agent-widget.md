@@ -134,7 +134,32 @@ Content-Type: application/json
 { "agent_id": "<agent UUID>", "to": "<number>", "agent_label": "Ticket #4821" }
 ```
 
-The agent's call then rings their widget, and the panel shows only `agent_label`. See [Calls API](/tring/api-reference/calls/) and [Outbound calls & masking](/tring/features/outbound-calls/).
+The agent's call then rings their widget, and the panel shows only `agent_label`.
+
+### Call buttons
+
+Instead of writing the request yourself, call `Tring.startCall(url, data?)` from your button. `agent.js` exposes `Tring` globally:
+
+```html
+<button onclick="Tring.startCall('/crm/call?id=c1')">Call</button>
+<button onclick="Tring.startCall('/crm/call?id=c1', { ticket: 'T-99' })">Call about T-99</button>
+```
+
+It sends `POST url` to **your** endpoint with same-origin cookies (`credentials: "same-origin"`). If you pass `data`, it goes as a JSON body (`Content-Type: application/json`). If the page has a `<meta name="csrf-token" content="…">` tag, its value goes in an `X-CSRF-Token` header.
+
+`Tring.startCall` returns a Promise. It resolves with your endpoint's `Response`, and rejects when:
+
+- the agent's widget isn't connected (the call couldn't ring them),
+- another `Tring.startCall` is still in flight (this stops double-clicks from placing two calls),
+- or your endpoint returns a non-2xx status.
+
+```js
+Tring.startCall(`/crm/call?id=${encodeURIComponent(id)}`).catch((e) => showToast(e.message));
+```
+
+Pass only IDs, never a phone number: query strings show up in access and proxy logs, and anything the browser sends can be read in devtools. Your endpoint must check that the signed-in agent may call that ID, since the agent can change it.
+
+See [Calls API](/tring/api-reference/calls/) and [Outbound calls & masking](/tring/features/outbound-calls/).
 
 :::caution
 On the WebRTC media plane, backend click-to-call to a **phone number** isn't fully wired yet, according to the SDK source. Today the widget mainly receives IVR transfers, web visitors, and WhatsApp calls. Test outbound calling on your deployment before relying on it.
@@ -197,8 +222,9 @@ type agentSession struct {
 // Replace with your real session lookup (cookie → logged-in agent).
 func currentAgent(r *http.Request) *agentSession { return nil }
 
-// tring calls the Tring API with the tenant API key and relays the response.
-func tring(w http.ResponseWriter, r *http.Request, method, path string, body any) {
+// tring calls the Tring API with the tenant API key and relays its status, plus
+// the body when passBody (never for /v1/calls: that body holds the number).
+func tring(w http.ResponseWriter, r *http.Request, method, path string, body any, passBody bool) {
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -219,6 +245,11 @@ func tring(w http.ResponseWriter, r *http.Request, method, path string, body any
 		return
 	}
 	defer resp.Body.Close()
+	if !passBody {
+		// Status only: the call record holds the customer's number.
+		w.WriteHeader(resp.StatusCode)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(resp.StatusCode)
@@ -232,10 +263,10 @@ func agentToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"not signed in"}`, http.StatusUnauthorized)
 		return
 	}
-	tring(w, r, http.MethodGet, "/v1/agents/"+a.TringAgentID+"/token", nil)
+	tring(w, r, http.MethodGet, "/v1/agents/"+a.TringAgentID+"/token", nil, true)
 }
 
-// POST /crm/call {"customer":"c1"}. The browser sends an id, never a number.
+// POST /crm/call?id=c1. The browser sends an id, never a number.
 func placeCall(w http.ResponseWriter, r *http.Request) {
 	a := currentAgent(r)
 	if r.Method != http.MethodPost {
@@ -246,16 +277,14 @@ func placeCall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"not signed in"}`, http.StatusUnauthorized)
 		return
 	}
-	var in struct{ Customer string }
-	_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&in)
-	c, ok := customers[in.Customer]
+	c, ok := customers[r.URL.Query().Get("id")]
 	if !ok {
 		http.Error(w, `{"error":"unknown customer"}`, http.StatusBadRequest)
 		return
 	}
 	tring(w, r, http.MethodPost, "/v1/calls", map[string]string{
 		"agent_id": a.TringAgentID, "to": c.Number, "agent_label": c.Label,
-	})
+	}, false)
 }
 
 var page = template.Must(template.New("crm").Parse(`<!doctype html>
@@ -264,20 +293,9 @@ var page = template.Must(template.New("crm").Parse(`<!doctype html>
   <h1>Customers</h1>
   <ul>
   {{range $id, $c := .}}
-    <li>{{$c.Name}} <button data-customer="{{$id}}">Call</button></li>
+    <li>{{$c.Name}} <button data-id="{{$id}}" onclick="Tring.startCall('/crm/call?id=' + encodeURIComponent(this.dataset.id))">Call</button></li>
   {{end}}
   </ul>
-
-  <script>
-    // Your own Call buttons hit YOUR backend. The widget never places calls.
-    document.querySelectorAll("button[data-customer]").forEach((b) =>
-      b.addEventListener("click", () =>
-        fetch("/crm/call", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ customer: b.dataset.customer }),
-        })));
-  </script>
 
   <script src="https://tring.example.com/sdk/agent.js"
           data-token-url="/tring/agent-token"></script>
