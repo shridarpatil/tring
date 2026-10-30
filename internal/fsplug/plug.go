@@ -45,6 +45,7 @@ type call struct {
 	media   *mediaSession
 	offerIP string
 	offerPt int
+	rate    int // carrier leg's audio rate for the Opus answer (0 = full band)
 
 	// responded is closed once Answer or Reject has sent the final
 	// response, unblocking onInvite's wait (see ringTimeout above).
@@ -182,7 +183,7 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 	id := room.CallID(req.CallID().Value())
-	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, responded: make(chan struct{})}
+	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, rate: audioRate(req), responded: make(chan struct{})}
 	p.mu.Lock()
 	p.calls[id] = c
 	cb := p.onInbound
@@ -225,7 +226,7 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	c.media = m
 	p.mu.Unlock()
 
-	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT)
+	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
 
 	// Deliberately NOT c.sess.RespondSDP(answer): DialogServerSession.WriteResponse
 	// (which RespondSDP wraps) sends the 200 and then BLOCKS the caller for up to
