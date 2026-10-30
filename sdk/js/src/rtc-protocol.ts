@@ -87,8 +87,10 @@ export interface RtcMessage {
   state?: string;
   ice_servers?: RtcIceServer[];
 
-  // incoming (server → agent)
+  // incoming (server → agent); auto = the agent's own click-to-call, answer it
+  // without asking
   from?: string;
+  auto?: boolean;
 
   // transfer (agent → server): re-route target
   to_team?: string;

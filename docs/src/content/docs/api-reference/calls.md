@@ -48,9 +48,11 @@ Every outbound call is dialed on your trunk and billed to you. Never dial a numb
 
 ### POST /v1/calls
 
-Click-to-call for an agent. Tring rings the agent's own leg first, auto-answering it in the agent widget (the agent clicked to call), then dials `to` over your outbound trunk and bridges the two.
+Click-to-call for an agent in the browser. Tring rings the agent's widget, which answers by itself (the agent clicked to call). Once the agent is in, Tring dials `to` over your outbound trunk and connects the two. While the customer's phone rings, the agent hears your tenant's hold music.
 
 Your backend chooses the agent and the destination. The agent's browser never receives the dialed number; it only sees `agent_label`.
+
+The media gateway places the call, so it's handled like every other gateway call: recorded when the tenant records calls (agent on the left channel, customer on the right), shown live on the dashboard, and open to [supervisors](/tring/features/call-control/#supervision).
 
 **Auth:** tenant API key or console session.
 
@@ -58,21 +60,12 @@ Your backend chooses the agent and the destination. The agent's browser never re
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `agent_id` | UUID | yes | The agent to connect. Must be the agent's UUID (not its `sip_username`) and belong to your tenant. |
-| `to` | string | yes | Destination number. Normalised by the first-choice trunk's `provider_type` before dialing. |
-| `agent_label` | string | no | Text shown to the agent for this call, for example a ticket reference. Don't put the customer's number or other personal data here. Empty shows a generic incoming-call label. |
-| `caller_id` | string | no | The number the callee sees. Must be one of your tenant's **active** numbers (any type), matched exactly. Use it, for example, to present your support line on a masked callback. Empty uses each trunk's own outbound DID. |
+| `agent_id` | string | yes | The agent's UUID or `sip_username`, in your tenant. With `sip_username` you can pass your CRM's own user ID if you used it as the agent's SIP username. |
+| `to` | string | yes | Destination number, normalised to Indian E.164 (`+91XXXXXXXXXX`; `+91`, `91`, `0`-prefixed and bare 10-digit mobile numbers are accepted). |
+| `agent_label` | string | no | Text shown to the agent for this call, for example a ticket reference. Don't put the customer's number or other personal data here. Empty shows a generic label. |
+| `caller_id` | string | no | The number the customer sees. Must be one of your tenant's **active** numbers (any type), matched exactly. Use it, for example, to present your support line on a masked callback. Empty uses the first-choice trunk's own DID. |
 
-What happens:
-
-1. `caller_id`, if set, is checked against your tenant's active numbers.
-2. Trunks are chosen from your active outbound numbers by the tenant's `outbound_strategy`: `failover` tries every route in priority order, `round_robin` picks the next one, `manual` uses only the lowest-priority one. `load_based` is reserved and returns `400`.
-3. `to` is normalised. Each trunk leg presents that trunk's own DID as caller ID, or `caller_id` on every leg when you set it. With `failover` and more than one route, FreeSWITCH moves to the next trunk only on the tenant's configured failover causes.
-4. The call is created with `status: "ringing"`. These calls don't run an IVR flow, so they send no [webhooks](/tring/api-reference/webhooks/).
-
-:::caution
-With no active outbound number on an active trunk, Tring falls back to a FreeSWITCH loopback dial meant for local development, with no normalisation (the destination must still be a bare number). Make sure production tenants have at least one outbound number with a trunk.
-:::
+The agent must have the [agent widget](/tring/sdk/agent-widget/) open and connected, and must not already be on a call. Only the first-choice trunk is used; there's no failover between trunks. The agent's widget has 30 seconds to answer, and the customer's number rings for up to 60 seconds.
 
 ```bash
 curl -sS -X POST "$TRING_URL/v1/calls" \
@@ -86,7 +79,7 @@ curl -sS -X POST "$TRING_URL/v1/calls" \
   }'
 ```
 
-**Response:** `201 Created` with the new call.
+**Response:** `201 Created` with the call, still `ringing`. `from_number` is the caller ID the customer sees, `to_number` the customer's number. `agent_id` is set once the customer answers.
 
 ```json
 {
@@ -96,29 +89,37 @@ curl -sS -X POST "$TRING_URL/v1/calls" \
   "status": "ringing",
   "from_number": "+919800000001",
   "to_number": "+919800000003",
-  "agent_id": "a1b2c3d4-0000-4000-8000-000000000001",
   "source": "phone",
   "leg_id": "6b8d2f10-7777-4c00-8a00-000000000001",
   "started_at": "2026-10-16T11:02:45.118204+05:30"
 }
 ```
 
+Don't pass this response on to the agent's browser: `to_number` is the customer's number.
+
+Poll [`GET /v1/calls/{id}`](#get-v1callsid) for the outcome. The call becomes `answered` once the **customer** answers. These calls don't run an IVR flow, so they send no [webhooks](/tring/api-reference/webhooks/). It ends with one of these `hangup_cause` values:
+
+| Status | `hangup_cause` | Meaning |
+|---|---|---|
+| `failed` | `agent_not_answered` | The agent's widget didn't join within 30 seconds. The customer was never dialed. |
+| `failed` | `client_not_answered` | The customer's number was busy, didn't answer or couldn't be reached. The agent's call is ended. |
+| `failed` | `agent_hangup` | The agent hung up while the customer was ringing. |
+| `ended` | `agent` / `client_hangup` | They talked; the agent or the customer hung up first. |
+
 **Errors**
 
 | Status | Message |
 |---|---|
-| `400` | `invalid JSON body` (including an `agent_id` that isn't a UUID) |
+| `400` | `invalid JSON body` |
 | `400` | `agent_id and to are required` |
-| `400` | `caller_id "…" is not one of this tenant's numbers` |
-| `400` | `invalid destination "…": …`, for example `not a valid Indian mobile number` |
-| `400` | `load_based strategy is reserved and not yet implemented` |
+| `400` | `invalid destination number: …` |
+| `400` | `caller id is not one of the tenant's numbers: <caller_id>` |
 | `404` | `agent not found` |
-| `500` | `agent lookup failed` / `internal error` |
-| `502` | `originate failed` (FreeSWITCH rejected the call or couldn't be reached) |
-
-:::note
-`POST /v1/calls` goes out through FreeSWITCH, and its row follows FreeSWITCH's events: `answered` when the agent's leg answers, then `ended`, or `failed` with the carrier's cause (for example `NO_ANSWER` or `GATEWAY_DOWN`). These calls aren't recorded.
-:::
+| `409` | `agent is not connected` (the widget isn't open, or is reconnecting) |
+| `409` | `agent is already on a call` |
+| `422` | `no outbound trunk` |
+| `502` | `media gateway unavailable` / `call not placed` |
+| `503` | `outbound calling not available` (the gateway has no phone plug) / the gateway is shutting down |
 
 ### POST /v1/calls/connect
 

@@ -63,14 +63,14 @@ curl -sS -X POST https://api.example.com/v1/calls/<call-id>/resume \
 The call must be `answered` (else `409`). Hold plays the tenant's hold music, or FreeSWITCH's built-in music, into the customer's leg on FreeSWITCH. Response: `{"id": "<call-id>", "held": true}`.
 
 :::note
-The REST hold, resume and transfer endpoints act on a call's **FreeSWITCH** leg: calls placed through FreeSWITCH, such as `POST /v1/calls`. For calls that live only on the gateway (browser visitor calls, IVR transfers), use the agent SDK controls above.
+The REST hold, resume and transfer endpoints act on a call's **FreeSWITCH** leg. For calls that live only on the gateway (browser visitor calls, IVR transfers, `POST /v1/calls` click-to-calls), use the agent SDK controls above.
 :::
 
 The agent-token REST endpoints `POST /v1/sdk/calls/hold`, `POST /v1/sdk/calls/resume` and `POST /v1/sdk/calls/transfer` (`{"to_sip": …}` or `{"to_team": …}`) do the same on the agent's own newest answered call, resolved from the token. A team transfer through this path rings all reachable members at once. See the [Calls API](/tring/api-reference/calls/).
 
 ## Supervision
 
-A console user with the supervise permission can join a live call silently and switch modes. This works on web, phone and WhatsApp calls: any call whose audio runs through the gateway. Calls placed with `POST /v1/calls` go through FreeSWITCH only and can't be supervised.
+A console user with the supervise permission can join a live call silently and switch modes. This works on web, phone and WhatsApp calls: any call whose audio runs through the gateway, including click-to-calls placed with `POST /v1/calls` and `POST /v1/calls/connect`.
 
 | Mode | Supervisor hears | Who hears the supervisor |
 |---|---|---|
