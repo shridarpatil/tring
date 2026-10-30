@@ -57,6 +57,16 @@ await fetch("https://your-tring-host/v1/calls", {
 });
 ```
 
+Or let the SDK send that request: `Tring.startCall(url, data?)` POSTs to **your**
+endpoint (same-origin cookies, `data` as a JSON body, `X-CSRF-Token` from
+`<meta name="csrf-token">` if present). It rejects if the agent isn't connected,
+a previous call request is still in flight, or your endpoint returns non-2xx.
+Put IDs in it, never a number.
+
+```html
+<button onclick="Tring.startCall('/crm/call?id=4821', { ticket: 'T-99' })">Call</button>
+```
+
 `agent_label` is optional and the only thing the agent sees for the call (empty →
 a generic "Incoming call"). Inbound calls / IVR transfers ring the same panel with
 Accept/Decline. See `examples/demo-portal/` for a runnable backend (`/agent/originate`).

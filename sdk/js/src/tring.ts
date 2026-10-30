@@ -22,11 +22,17 @@
 //
 // NOTE: backend click-to-call to a PSTN number is NOT yet wired on this plane (it
 // needs the FreeSWITCH PstnGateway). Today this surfaces IVR-transfer / web /
-// WhatsApp calls — all pion. The SDK still cannot ORIGINATE calls.
+// WhatsApp calls — all pion. The SDK still cannot ORIGINATE calls: Tring.startCall
+// only POSTs to the integrator's own backend, which originates via the API.
 
 import { Emitter } from "./events";
 import { RtcAgent, type RtcCall } from "./rtc";
 import type { Call, CallStatus, InitOpts, TringEvent } from "./types";
+
+// The most recently initialised agent, for the static Tring.startCall (the agent.js
+// widget owns its instance, so integrators can't reach it any other way).
+let current: Tring | null = null;
+let calling = false;
 
 export class Tring extends Emitter<TringEvent> {
   private readonly agent: RtcAgent;
@@ -34,11 +40,47 @@ export class Tring extends Emitter<TringEvent> {
   private ringing: Call | null = null; // the not-yet-accepted inbound call, if any
   /** The backend's Away/Break flag for this agent; false = Away (won't be rung). */
   available = true;
+  private online = false;
 
   static async init(opts: InitOpts): Promise<Tring> {
     const t = new Tring(opts);
     await t.connect();
+    current = t;
     return t;
+  }
+
+  /**
+   * Click-to-call from your CRM's own button:
+   *
+   *   Tring.startCall('/crm/call?id=abc', { ticket: 'T-99' })
+   *
+   * POSTs to `url` — YOUR backend endpoint, which looks up the number and
+   * originates via POST /v1/calls — with same-origin cookies, an X-CSRF-Token
+   * header from <meta name="csrf-token"> when present, and `data` as a JSON
+   * body. Pass IDs, never a number. Rejects when the agent isn't connected (the
+   * call couldn't ring them), while another Tring.startCall is still in flight, or
+   * when your endpoint returns a non-2xx status; resolves with its Response.
+   */
+  static async startCall(url: string, data?: Record<string, unknown>): Promise<Response> {
+    if (!current?.online) throw new Error("Tring.startCall: agent is not connected");
+    if (calling) throw new Error("Tring.startCall: a call request is already in flight");
+    calling = true;
+    try {
+      const headers: Record<string, string> = {};
+      const csrf = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content;
+      if (csrf) headers["X-CSRF-Token"] = csrf;
+      if (data) headers["Content-Type"] = "application/json";
+      const res = await fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers,
+        body: data ? JSON.stringify(data) : undefined,
+      });
+      if (!res.ok) throw new Error(`Tring.startCall: ${url} returned ${res.status}`);
+      return res;
+    } finally {
+      calling = false;
+    }
   }
 
   private constructor(private readonly opts: InitOpts) {
@@ -63,14 +105,21 @@ export class Tring extends Emitter<TringEvent> {
       // The gateway sends `availability` right after `ready` only when Away, so
       // each (re)connect starts from available.
       this.available = true;
+      this.online = true;
       this.emit({ type: "registered" });
     });
     this.agent.on("availability", ({ available }) => {
       this.available = available;
       this.emit({ type: "availability", available });
     });
-    this.agent.on("reconnecting", () => this.emit({ type: "reconnecting", attempt: 0 }));
-    this.agent.on("offline", () => this.emit({ type: "unregistered" }));
+    this.agent.on("reconnecting", () => {
+      this.online = false;
+      this.emit({ type: "reconnecting", attempt: 0 });
+    });
+    this.agent.on("offline", () => {
+      this.online = false;
+      this.emit({ type: "unregistered" });
+    });
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
     this.agent.on("incoming", ({ from }) => this.handleIncoming(from));
     // The server withdrew an unanswered ring (round-robin/sequential advanced to
@@ -93,6 +142,7 @@ export class Tring extends Emitter<TringEvent> {
   }
 
   async disconnect(): Promise<void> {
+    if (current === this) current = null;
     this.agent.goOffline();
   }
 
