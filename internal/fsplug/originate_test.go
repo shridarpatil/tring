@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ func TestOriginateAnswered(t *testing.T) {
 	fsClient, _ := sipgo.NewClient(ua)
 	ds := sipgo.NewDialogServerCache(fsClient, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15090}})
 	gotTrunk := make(chan string, 1)
+	gotOffer := make(chan string, 1)
 	fsSrv.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
 		sess, err := ds.ReadInvite(req, tx)
 		if err != nil {
@@ -53,8 +55,9 @@ func TestOriginateAnswered(t *testing.T) {
 		if h := req.GetHeader("X-Tring-Trunk"); h != nil {
 			gotTrunk <- h.Value()
 		}
+		gotOffer <- string(req.Body())
 		// answer with an Opus SDP pointing at a throwaway port
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16000, 111, 101))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16000, 111, 101, 0))
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadAck(req, tx) })
 	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadBye(req, tx) })
@@ -81,6 +84,10 @@ func TestOriginateAnswered(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("FS never saw the INVITE / X-Tring-Trunk")
+	}
+	// The carrier leg is G.711, so FS should run this Opus leg at 8 kHz.
+	if offer := <-gotOffer; !strings.Contains(offer, "maxplaybackrate=8000;sprop-maxcapturerate=8000") {
+		t.Errorf("offer doesn't cap Opus at the carrier's 8 kHz:\n%s", offer)
 	}
 	select {
 	case st := <-states:
@@ -176,7 +183,7 @@ func TestOriginateTeardownOnCarrierBye(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16001, 111, 101))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16001, 111, 101, 0))
 		sessCh <- sess
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
@@ -250,7 +257,7 @@ func TestHangupOutboundSendsBye(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16002, 111, 101))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16002, 111, 101, 0))
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadAck(req, tx) })
 	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
@@ -322,7 +329,7 @@ func TestHangupOutboundRacesCarrierBye(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16003, 111, 101))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16003, 111, 101, 0))
 		sessCh <- sess
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {

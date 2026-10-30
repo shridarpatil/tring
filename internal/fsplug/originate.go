@@ -13,10 +13,16 @@ import (
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
+// carrierRate is the outbound carrier leg's audio rate: FreeSWITCH's
+// tring_outbound_trunk (dialplan/default.xml) bridges to the trunk with G.711
+// only.
+const carrierRate = 8000
+
 // buildOffer is the outbound SDP offer. Structurally identical to buildAnswer
-// (Opus-only + telephone-event forces FS to transcode toward the carrier).
+// (Opus-only + telephone-event forces FS to transcode toward the carrier), at
+// the carrier's 8 kHz.
 func buildOffer(localIP string, localPort int, opusPT, dtmfPT uint8) []byte {
-	return buildAnswer(localIP, localPort, opusPT, dtmfPT)
+	return buildAnswer(localIP, localPort, opusPT, dtmfPT, carrierRate)
 }
 
 // splitHostPort splits an "ip:port" address, defaulting to port 5060 if no

@@ -139,9 +139,13 @@ jobs:
 
       # Boot just the bits the FS integration test needs. Bringing up `api`
       # here too would force a rebuild of an image per CI run; we don't need
-      # it for the ESL-level test.
+      # it for the ESL-level test. FreeSWITCH is built from this commit's
+      # freeswitch/ (cheap: config COPYs on the base image) rather than pulled,
+      # so the fsplug test runs against the dialplan under review. Built on its
+      # own: `up --build` would also rebuild api, which freeswitch depends on.
       - name: Boot FreeSWITCH + Postgres
         run: |
+          docker compose build freeswitch
           docker compose up -d freeswitch postgres
           # FreeSWITCH takes ~10s to load modules; the healthcheck is the
           # source of truth.
@@ -180,7 +184,7 @@ jobs:
         env:
           TRING_INTEGRATION_FS_ADDR: 127.0.0.1:8021
           TRING_INTEGRATION_FS_PASSWORD: ClueCon
-        run: go test -tags=integration -count=1 -timeout=120s -v ./internal/freeswitch/... ./internal/eslcdr/...
+        run: go test -tags=integration -count=1 -timeout=120s -v ./internal/freeswitch/... ./internal/eslcdr/... ./internal/fsplug/...
 
       - name: Dump FS logs on failure
         if: failure()
