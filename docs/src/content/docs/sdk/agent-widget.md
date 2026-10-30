@@ -131,10 +131,10 @@ POST /v1/calls
 Authorization: Bearer <tenant API key>
 Content-Type: application/json
 
-{ "agent_id": "<agent UUID>", "to": "<number>", "agent_label": "Ticket #4821" }
+{ "agent_id": "<agent UUID or sip_username>", "to": "<number>", "agent_label": "Ticket #4821" }
 ```
 
-The agent's call then rings their widget, and the panel shows only `agent_label`.
+The widget answers the call by itself (the agent clicked to call) and the panel shows only `agent_label`. Tring then dials the customer; the agent hears hold music until they pick up.
 
 ### Call buttons
 
@@ -160,10 +160,6 @@ Tring.startCall(`/crm/call?id=${encodeURIComponent(id)}`).catch((e) => showToast
 Pass only IDs, never a phone number: query strings show up in access and proxy logs, and anything the browser sends can be read in devtools. Your endpoint must check that the signed-in agent may call that ID, since the agent can change it.
 
 See [Calls API](/tring/api-reference/calls/) and [Outbound calls & masking](/tring/features/outbound-calls/).
-
-:::caution
-On the WebRTC media plane, backend click-to-call to a **phone number** isn't fully wired yet, according to the SDK source. Today the widget mainly receives IVR transfers, web visitors, and WhatsApp calls. Test outbound calling on your deployment before relying on it.
-:::
 
 ## Events
 

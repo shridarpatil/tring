@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -10,6 +11,10 @@ import (
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/trunkselect"
 )
+
+// errInternal marks a server-side failure (DB, I/O) rather than a problem with
+// the caller's input.
+var errInternal = errors.New("internal error")
 
 // trunk is the bare info originate needs about an outbound number — the
 // allocated DID, the FreeSWITCH gateway to dial through, and the

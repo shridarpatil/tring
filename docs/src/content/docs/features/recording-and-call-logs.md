@@ -19,7 +19,7 @@ curl -sS -X PATCH https://api.example.com/v1/tenants/me \
 How it works:
 
 - The setting is read when a call **starts**; changing it does not affect calls in progress.
-- Capture begins when an **agent answers** (or the number dialed by an IVR transfer answers, or, for [`POST /v1/calls/connect`](/tring/api-reference/calls/#post-v1callsconnect), the client answers). The IVR, ringing and queue time are not recorded, so a call nobody answered has no recording. Calls placed with `POST /v1/calls` are not recorded.
+- Capture begins when an **agent answers** (or the number dialed by an IVR transfer answers, or, for [`POST /v1/calls`](/tring/api-reference/calls/#post-v1calls) and [`POST /v1/calls/connect`](/tring/api-reference/calls/#post-v1callsconnect), the customer answers). The IVR, ringing and queue time are not recorded, so a call nobody answered has no recording.
 - Each leg is captured as-is (Opus, no re-encoding) during the call. At hangup the legs are merged into **one stereo file: agent on the left channel, customer on the right**. If a call was transferred between agents, every agent leg is placed on the left channel at the moment it joined.
 - The file's **format** and **sample rate** are tenant settings: **Settings → Recording** in the console, or `recording_format` and `recording_sample_rate` (Hz) on `PATCH /v1/tenants/me`. Both are read when a call starts.
 

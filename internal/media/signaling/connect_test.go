@@ -80,10 +80,11 @@ func (o *connectOriginator) HangupOutbound(pid room.ParticipantID) error {
 
 // connectCallLog records the connect call's CDR calls in order.
 type connectCallLog struct {
-	mu     sync.Mutex
-	id     uuid.UUID
-	events []string
-	end    chan string // "failed:<cause>" / "ended:<cause>"
+	mu      sync.Mutex
+	id      uuid.UUID
+	events  []string
+	settled bool
+	end     chan string // "failed:<cause>" / "ended:<cause>"
 }
 
 func newConnectCallLog() *connectCallLog {
@@ -123,11 +124,23 @@ func (c *connectCallLog) RingAgent(string, string)                          {}
 func (c *connectCallLog) RingStop(string)                                   {}
 func (c *connectCallLog) Transferred(string, string, string)                {}
 func (c *connectCallLog) Journey(string, []ivr.Step)                        {}
-func (c *connectCallLog) Failed(_, cause string) {
-	c.add("failed:" + cause)
-	c.end <- "failed:" + cause
+
+// Failed/Ended: the first settlement wins, like callcdr's.
+func (c *connectCallLog) Failed(_, cause string) { c.settle("failed:" + cause) }
+func (c *connectCallLog) Ended(_, cause string)  { c.settle("ended:" + cause) }
+
+func (c *connectCallLog) settle(e string) {
+	c.mu.Lock()
+	first := !c.settled
+	if first {
+		c.settled = true
+		c.events = append(c.events, e)
+	}
+	c.mu.Unlock()
+	if first {
+		c.end <- e
+	}
 }
-func (c *connectCallLog) Ended(_, cause string) { c.add("ended:" + cause); c.end <- "ended:" + cause }
 
 func newConnectServer(t *testing.T, o *connectOriginator, cl CallLog) *Server {
 	t.Helper()
