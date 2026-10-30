@@ -163,25 +163,3 @@ func TestSelectTrunksInactiveExcluded(t *testing.T) {
 		t.Errorf("got %+v, want only airtel (jio is inactive)", trunks)
 	}
 }
-
-// TestCheckCallerID: an explicit caller_id must be one of the tenant's active
-// numbers (inbound mask numbers included); empty means "use the trunk's DID".
-func TestCheckCallerID(t *testing.T) {
-	f := dbtest.Setup(t)
-	ctx := context.Background()
-	if _, err := f.DB.Pool.Exec(ctx, `
-		INSERT INTO numbers (tenant_id, e164, type, active) VALUES ($1, '02200000123', 'inbound', true)
-	`, f.TenantID); err != nil {
-		t.Fatalf("insert number: %v", err)
-	}
-	s := newServerFor(f)
-	if err := s.checkCallerID(ctx, f.TenantID, ""); err != nil {
-		t.Errorf("empty caller_id: %v, want nil", err)
-	}
-	if err := s.checkCallerID(ctx, f.TenantID, "02200000123"); err != nil {
-		t.Errorf("owned caller_id: %v, want nil", err)
-	}
-	if err := s.checkCallerID(ctx, f.TenantID, "02299999999"); err == nil {
-		t.Error("unowned caller_id accepted")
-	}
-}

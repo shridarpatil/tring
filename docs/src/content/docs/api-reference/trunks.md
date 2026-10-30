@@ -111,15 +111,17 @@ How `status` is worked out:
 
 ### `provider_type`
 
-`provider_type` decides how destination numbers are normalised before dialing on this trunk (the first-choice trunk's type is used for the whole call):
+`provider_type` describes how destination numbers should be normalised before dialing on this trunk:
 
 | Value | Normalisation |
 |---|---|
 | `airtel`, `jio`, `tata` | Indian mobile numbers only. Accepts `+91…`, `91…`, `0…` and bare 10-digit forms, with spaces or dashes. Normalises to `+91XXXXXXXXXX`. Anything else is rejected with `400`. |
 | `generic` (default), `loopback`, or any other value | No normalisation. The trimmed input must be a bare number (optional leading `+`, 3 to 15 digits) and is dialed as is. |
 
+The media gateway dials every outbound call today (`POST /v1/calls`, `POST /v1/calls/connect`, an IVR transfer to a number), and it always applies the Indian rules whatever the trunk's `provider_type`. Until that changes, only Indian mobile numbers can be dialed.
+
 :::danger
-With `generic` the only check is that the destination is a bare number; any number in any country is accepted. Whatever reaches `POST /v1/calls` gets dialed on your trunk and billed to you. Never pass a number an end user typed straight through: validate it and check it against an allow-list in your backend first. This is how toll fraud happens.
+With `generic` the only check is that the destination is a bare number; any number in any country is accepted. Whatever reaches your trunk gets dialed and billed to you. Never pass a number an end user typed straight through: validate it and check it against an allow-list in your backend first. This is how toll fraud happens.
 :::
 
 ### POST /v1/trunks

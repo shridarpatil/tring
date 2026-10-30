@@ -181,25 +181,15 @@ type controlClaims struct {
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /control/connect", s.handleControlConnect)
+	mux.HandleFunc("POST /control/call", s.handleControlCall)
 	return mux
 }
 
 // handleControlConnect is POST /control/connect {agent_number, client_number}
 // → 201 {call_id}. The tenant comes from the token.
 func (s *Server) handleControlConnect(w http.ResponseWriter, r *http.Request) {
-	var c controlClaims
-	raw := bearer(r)
-	if raw == "" {
-		controlError(w, http.StatusUnauthorized, "missing token")
-		return
-	}
-	if _, err := jwt.ParseWithClaims(raw, &c, hmacKey(s.cfg.JWTSecret),
-		jwt.WithIssuer(jwtIssuer),
-		jwt.WithAudience(controlAudience),
-		jwt.WithValidMethods([]string{"HS256"}),
-		jwt.WithExpirationRequired(),
-	); err != nil {
-		controlError(w, http.StatusUnauthorized, "invalid token")
+	tenant, ok := s.controlTenant(w, r)
+	if !ok {
 		return
 	}
 	var req struct {
@@ -210,13 +200,66 @@ func (s *Server) handleControlConnect(w http.ResponseWriter, r *http.Request) {
 		controlError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	callID, err := s.Connect(r.Context(), c.TenantID, req.AgentNumber, req.ClientNumber)
+	callID, err := s.Connect(r.Context(), tenant, req.AgentNumber, req.ClientNumber)
+	s.controlPlaced(w, tenant, callID, err)
+}
+
+// handleControlCall is POST /control/call {agent_sip, to, agent_label?,
+// caller_id?} → 201 {call_id}: click-to-call to a web agent (clicktocall.go).
+func (s *Server) handleControlCall(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := s.controlTenant(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		AgentSIP   string `json:"agent_sip"`
+		To         string `json:"to"`
+		AgentLabel string `json:"agent_label"`
+		CallerID   string `json:"caller_id"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.AgentSIP == "" {
+		controlError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	callID, err := s.Call(r.Context(), tenant, CallRequest{
+		AgentSIP: req.AgentSIP, To: req.To, Label: req.AgentLabel, CallerID: req.CallerID,
+	})
+	s.controlPlaced(w, tenant, callID, err)
+}
+
+// controlTenant authenticates a control request by the API's token and returns
+// its tenant, or answers 401.
+func (s *Server) controlTenant(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	var c controlClaims
+	raw := bearer(r)
+	if raw == "" {
+		controlError(w, http.StatusUnauthorized, "missing token")
+		return uuid.Nil, false
+	}
+	if _, err := jwt.ParseWithClaims(raw, &c, hmacKey(s.cfg.JWTSecret),
+		jwt.WithIssuer(jwtIssuer),
+		jwt.WithAudience(controlAudience),
+		jwt.WithValidMethods([]string{"HS256"}),
+		jwt.WithExpirationRequired(),
+	); err != nil {
+		controlError(w, http.StatusUnauthorized, "invalid token")
+		return uuid.Nil, false
+	}
+	return c.TenantID, true
+}
+
+// controlPlaced answers a call-placing control request: 201 {call_id}, or the
+// status for why the call wasn't placed.
+func (s *Server) controlPlaced(w http.ResponseWriter, tenant, callID uuid.UUID, err error) {
 	switch {
-	case errors.Is(err, errDialInvalidNumber):
+	case errors.Is(err, errDialInvalidNumber), errors.Is(err, errDialCallerID):
 		controlError(w, http.StatusBadRequest, err.Error())
 		return
 	case errors.Is(err, errDialNoTrunk):
 		controlError(w, http.StatusUnprocessableEntity, "no outbound trunk")
+		return
+	case errors.Is(err, errAgentOffline), errors.Is(err, errAgentBusy):
+		controlError(w, http.StatusConflict, err.Error())
 		return
 	case errors.Is(err, errDialUnavailable):
 		controlError(w, http.StatusServiceUnavailable, "outbound calling not available")
@@ -225,7 +268,7 @@ func (s *Server) handleControlConnect(w http.ResponseWriter, r *http.Request) {
 		controlError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	case err != nil:
-		s.log.Error("connect: call not placed", "tenant", c.TenantID, "err", err)
+		s.log.Error("control: call not placed", "tenant", tenant, "err", err)
 		controlError(w, http.StatusInternalServerError, "call not placed")
 		return
 	}

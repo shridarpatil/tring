@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -18,12 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/shridarpatil/tring/internal/agentleg"
 	"github.com/shridarpatil/tring/internal/callrow"
-	"github.com/shridarpatil/tring/internal/dial"
-	"github.com/shridarpatil/tring/internal/eslcdr"
-	"github.com/shridarpatil/tring/internal/freeswitch"
-	"github.com/shridarpatil/tring/internal/provider"
 )
 
 // Call is a call-log row; the shared definition lives in callrow so the
@@ -31,8 +25,10 @@ import (
 type Call = callrow.Call
 
 type createCallRequest struct {
-	AgentID uuid.UUID `json:"agent_id"`
-	To      string    `json:"to"`
+	// AgentID is the agent's UUID or sip_username (as GET /v1/agents/{id}/token
+	// accepts), so a CRM can pass its own user id.
+	AgentID string `json:"agent_id"`
+	To      string `json:"to"`
 	// AgentLabel is the non-PII string shown to the agent for this call (e.g. a
 	// ticket/account ref). The agent NEVER receives the dialed number — the
 	// backend holds it. Optional; empty ⇒ the agent sees a generic "Incoming call".
@@ -46,7 +42,10 @@ type createCallRequest struct {
 // handleCreateCall is the originate surface. The CRM's backend calls this with
 // its tenant API key, choosing the agent + destination — the agent's browser
 // never sees the dialed number (the SDK cannot originate; see ADR-001). The
-// agent leg auto-answers (the agent already clicked to call).
+// media gateway places the call (signaling/clicktocall.go): it rings the
+// agent's widget, which auto-answers (the agent already clicked to call), then
+// dials `to` into the same room, so the call is recorded and supervisable like
+// any other. The response is the call row, still ringing.
 func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	var req createCallRequest
@@ -54,194 +53,27 @@ func (s *Server) handleCreateCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.AgentID == uuid.Nil || req.To == "" {
+	if req.AgentID == "" || req.To == "" {
 		writeError(w, http.StatusBadRequest, "agent_id and to are required")
 		return
 	}
-	c, code, err := s.originateForAgent(r.Context(), t, req.AgentID, req.To, req.AgentLabel, req.CallerID)
-	if err != nil {
-		s.writeCallError(w, r, code, err)
+	_, sip, err := s.resolveAgentRef(r.Context(), t.ID, req.AgentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "agent not found")
 		return
 	}
-	writeJSON(w, http.StatusCreated, c)
-}
-
-// agentALeg builds the FreeSWITCH dial string for an agent's own call leg via
-// the shared agentleg helper. AutoAnswer is set because this is the backend
-// click-to-call path — the gateway auto-answers the agent's browser. Attribute
-// stays off (the API already knows which agent it dialed); the orchestrator's
-// inbound-transfer path sets Attribute instead. Both share one definition so
-// the leg is identical however the call arrived.
-func (s *Server) agentALeg(sipUsername, sipDomain, tenantID, label string) string {
-	return agentleg.Build(agentleg.Options{
-		Transport:  s.agentTransport,
-		Gateway:    s.agentGateway,
-		SIP:        sipUsername,
-		Domain:     sipDomain,
-		TenantID:   tenantID,
-		Label:      label,
-		AutoAnswer: true,
-		JitterMsec: s.agentJitter,
+	if err != nil {
+		s.writeServerError(w, r, http.StatusInternalServerError, "internal error", err)
+		return
+	}
+	callID, code, msg := s.gatewayPlace(r.Context(), t.ID, "/control/call", map[string]string{
+		"agent_sip": sip, "to": req.To, "agent_label": req.AgentLabel, "caller_id": req.CallerID,
 	})
-}
-
-// errInternal marks an error from the originate path that is a server-side
-// failure (DB, I/O) rather than a problem with the caller's input. statusFor
-// maps it to 500; writeCallError then keeps its detail out of the response.
-var errInternal = errors.New("internal error")
-
-// statusFor is 500 for an errInternal-wrapped error, else 400.
-func statusFor(err error) int {
-	if errors.Is(err, errInternal) {
-		return http.StatusInternalServerError
+	if code != 0 {
+		writeError(w, code, msg)
+		return
 	}
-	return http.StatusBadRequest
-}
-
-// writeCallError answers a failed originate. 4xx errors describe the caller's
-// input (bad destination, unowned caller_id, unknown agent) and are returned
-// as-is; 5xx/502 carry pgx errors or FreeSWITCH replies, so the client gets a
-// generic message and the detail is logged.
-func (s *Server) writeCallError(w http.ResponseWriter, r *http.Request, code int, err error) {
-	switch {
-	case code == http.StatusBadGateway:
-		s.writeServerError(w, r, code, "originate failed", err)
-	case code >= 500:
-		s.writeServerError(w, r, code, "internal error", err)
-	default:
-		writeError(w, code, err.Error())
-	}
-}
-
-// originateForAgent is the shared originate path used by both the tenant-
-// scoped and JWT-scoped handlers. Returns (call, http_status_on_error, err).
-func (s *Server) originateForAgent(
-	ctx context.Context,
-	t *Tenant,
-	agentID uuid.UUID,
-	to string,
-	agentLabel string,
-	callerID string,
-) (Call, int, error) {
-	if err := s.checkCallerID(ctx, t.ID, callerID); err != nil {
-		return Call{}, statusFor(err), err
-	}
-
-	var sipUsername string
-	err := s.db.Pool.QueryRow(ctx, s.q.GetAgentSipUsername,
-		agentID, t.ID,
-	).Scan(&sipUsername)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Call{}, http.StatusNotFound, errors.New("agent not found")
-	}
-	if err != nil {
-		return Call{}, http.StatusInternalServerError, errors.New("agent lookup failed")
-	}
-
-	// Pick the trunk(s) to use based on the tenant's outbound strategy.
-	// May return zero trunks (dev: fall back to loopback) or many
-	// (failover: pipe-join in priority order).
-	trunks, err := s.selectTrunks(ctx, t)
-	if err != nil {
-		return Call{}, statusFor(err), err
-	}
-
-	// Normalize using the primary trunk's provider_type. All trunks for
-	// a tenant target the same country today; when cross-country trunks
-	// land in Phase 2, this becomes a per-trunk loop.
-	primaryProvider := provider.For("loopback")
-	if len(trunks) > 0 {
-		primaryProvider = provider.For(trunks[0].ProviderType)
-	}
-	normalized, err := primaryProvider.NormalizeE164(to)
-	if err != nil {
-		return Call{}, http.StatusBadRequest, fmt.Errorf("invalid destination %q: %w", to, err)
-	}
-	to = normalized
-
-	fsUUID := uuid.New()
-
-	sipDomain := t.SipDomain
-	if sipDomain == "" {
-		_ = s.db.Pool.QueryRow(ctx, s.q.GetTenantSipDomain, t.ID).Scan(&sipDomain)
-	}
-	aLeg := s.agentALeg(sipUsername, sipDomain, t.ID.String(), agentLabel)
-
-	// Build BLegs. Each entry presents that trunk's own DID as caller-ID
-	// via per-leg `[var=val]` prefix, so a roll-over from Airtel→Jio
-	// doesn't try to present Airtel's DID over the Jio trunk (which
-	// would fail caller-ID-validation at Jio's side).
-	bLegs := make([]string, 0, max(1, len(trunks)))
-	primaryDID := ""
-	if len(trunks) == 0 {
-		bLegs = append(bLegs, provider.For("loopback").DialString(to))
-	} else {
-		primaryDID = trunks[0].E164
-		if callerID != "" {
-			primaryDID = callerID
-		}
-		for _, tr := range trunks {
-			dial := fmt.Sprintf("sofia/gateway/%s/%s", tr.Gateway, to)
-			cid := tr.E164
-			if callerID != "" {
-				cid = callerID // explicit override applies on every trunk leg
-			}
-			bLegs = append(bLegs,
-				fmt.Sprintf("[effective_caller_id_number=%s]%s", cid, dial),
-			)
-		}
-	}
-
-	// If there are 2+ B-legs, set `continue_on_fail` per tenant config so
-	// FS rolls to the next trunk only on the causes the operator opted in
-	// for. Single-quote-wrapped so the commas inside don't terminate the
-	// `{}` vars block.
-	// TrackVar lets eslcdr pick this call's events out of every channel's.
-	originateVars := map[string]string{eslcdr.TrackVar: "true"}
-	if len(bLegs) > 1 && len(t.FailoverCauses) > 0 {
-		originateVars["continue_on_fail"] = "'" + strings.Join(t.FailoverCauses, ",") + "'"
-	}
-
-	// from_number for the CDR is the primary DID (the one we expected
-	// the call to come from). If failover kicked in and we actually
-	// used a secondary, the orchestrator will (Phase 3) record which
-	// trunk-leg was answered.
-	outboundE164 := primaryDID
-
-	// Row first, then originate (see OriginateRequest.JobUUID). No pion room
-	// for the ESL/FreeSWITCH outbound path — room_id stays NULL (nothing for
-	// a supervisor to join on this leg).
-	jobUUID := uuid.NewString()
-	var c Call
-	err = s.db.Pool.QueryRow(ctx, s.q.CreateCallOutbound,
-		t.ID, outboundE164, to, agentID, fsUUID.String(), jobUUID, "").
-		Scan(&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.AgentID, &c.LegID, &c.StartedAt, &c.Source)
-	if err != nil {
-		return Call{}, http.StatusInternalServerError, fmt.Errorf("insert call: %w", err)
-	}
-
-	_, err = s.fs.Originate(ctx, freeswitch.OriginateRequest{
-		ALeg:     aLeg,
-		BLegs:    bLegs,
-		UUID:     fsUUID.String(),
-		CallerID: primaryDID,
-		Vars:     originateVars,
-		JobUUID:  jobUUID,
-	})
-	if err != nil {
-		s.failOriginate(ctx, jobUUID)
-		return Call{}, http.StatusBadGateway, fmt.Errorf("originate failed: %w", err)
-	}
-
-	return c, 0, nil
-}
-
-// failOriginate marks a call row failed when FreeSWITCH never accepted its
-// originate, so it doesn't sit in "ringing" forever.
-func (s *Server) failOriginate(ctx context.Context, jobUUID string) {
-	if _, err := s.db.Pool.Exec(ctx, s.q.FailCallByJob, "ORIGINATE_FAILED", jobUUID); err != nil {
-		s.log.Error("mark originate failed", "job_uuid", jobUUID, "err", err)
-	}
+	s.writePlacedCall(w, r, t.ID, callID)
 }
 
 type connectCallRequest struct {
@@ -270,12 +102,17 @@ func (s *Server) handleConnectCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent_number and client_number are required")
 		return
 	}
-	callID, code, msg := s.gatewayConnect(r.Context(), t.ID, req)
+	callID, code, msg := s.gatewayPlace(r.Context(), t.ID, "/control/connect", req)
 	if code != 0 {
 		writeError(w, code, msg)
 		return
 	}
-	c, err := scanCall(s.db.Pool.QueryRow(r.Context(), s.q.GetCall, callID, t.ID))
+	s.writePlacedCall(w, r, t.ID, callID)
+}
+
+// writePlacedCall answers 201 with the call row the gateway just opened.
+func (s *Server) writePlacedCall(w http.ResponseWriter, r *http.Request, tenantID, callID uuid.UUID) {
+	c, err := scanCall(s.db.Pool.QueryRow(r.Context(), s.q.GetCall, callID, tenantID))
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "internal error", err)
 		return
@@ -283,26 +120,27 @@ func (s *Server) handleConnectCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, c)
 }
 
-// gatewayConnect asks the media gateway to place a connect call and returns
-// its call id, or the status + message to answer with. The gateway's own 4xx
-// (bad number, no trunk) pass through; anything else is a 502.
-func (s *Server) gatewayConnect(ctx context.Context, tenantID uuid.UUID, req connectCallRequest) (uuid.UUID, int, string) {
+// gatewayPlace asks the media gateway to place a call (POST path on its control
+// listener) and returns its call id, or the status + message to answer with.
+// The gateway's own 4xx (bad number, no trunk, agent offline) pass through;
+// anything else is a 502.
+func (s *Server) gatewayPlace(ctx context.Context, tenantID uuid.UUID, path string, req any) (uuid.UUID, int, string) {
 	tok, err := s.issueControlToken(tenantID)
 	if err != nil {
-		s.log.Error("connect: sign control token", "err", err)
+		s.log.Error("place call: sign control token", "err", err)
 		return uuid.Nil, http.StatusInternalServerError, "internal error"
 	}
 	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayControlURL+"/control/connect", bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayControlURL+path, bytes.NewReader(body))
 	if err != nil {
-		s.log.Error("connect: build gateway request", "err", err)
+		s.log.Error("place call: build gateway request", "err", err)
 		return uuid.Nil, http.StatusInternalServerError, "internal error"
 	}
 	hreq.Header.Set("Authorization", "Bearer "+tok)
 	hreq.Header.Set("Content-Type", "application/json")
 	resp, err := s.gatewayHTTP.Do(hreq)
 	if err != nil {
-		s.log.Error("connect: gateway unreachable", "url", s.gatewayControlURL, "err", err)
+		s.log.Error("place call: gateway unreachable", "url", s.gatewayControlURL, "err", err)
 		return uuid.Nil, http.StatusBadGateway, "media gateway unavailable"
 	}
 	defer resp.Body.Close()
@@ -317,7 +155,7 @@ func (s *Server) gatewayConnect(ctx context.Context, tenantID uuid.UUID, req con
 	case resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != http.StatusUnauthorized:
 		return uuid.Nil, resp.StatusCode, out.Error
 	default:
-		s.log.Error("connect: gateway refused", "status", resp.StatusCode, "error", out.Error)
+		s.log.Error("place call: gateway refused", "path", path, "status", resp.StatusCode, "error", out.Error)
 		return uuid.Nil, http.StatusBadGateway, "call not placed"
 	}
 }
@@ -581,23 +419,4 @@ func callSearch(q string) (idPrefix, digits string) {
 		idPrefix = q
 	}
 	return idPrefix, strings.TrimLeft(b.String(), "0")
-}
-
-// checkCallerID accepts an empty caller ID (use the trunk's DID) or one of the
-// tenant's active numbers, so a tenant can only present numbers it holds.
-func (s *Server) checkCallerID(ctx context.Context, tenant uuid.UUID, callerID string) error {
-	if callerID == "" {
-		return nil
-	}
-	if !dial.IsNumber(callerID) {
-		return fmt.Errorf("caller_id %q is not a valid number", callerID)
-	}
-	var owned bool
-	if err := s.db.Pool.QueryRow(ctx, s.q.TenantOwnsNumber, tenant, callerID).Scan(&owned); err != nil {
-		return fmt.Errorf("check caller_id: %w: %w", errInternal, err)
-	}
-	if !owned {
-		return fmt.Errorf("caller_id %q is not one of this tenant's numbers", callerID)
-	}
-	return nil
 }

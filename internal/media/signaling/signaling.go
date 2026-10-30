@@ -498,8 +498,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// recording leg. princ.sip is available here (unlike in routeEvent, which fires
 	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
 	// caller's own join.
+	// A click-to-call is answered by the customer instead (clicktocall.go).
 	agentCallLeg := flowID == "" && !princ.isVisitor
-	if agentCallLeg && s.cfg.Calls != nil {
+	if agentCallLeg && s.cfg.Calls != nil && !s.outboundPending(roomID) {
 		if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
 		}
@@ -729,7 +730,11 @@ func (s *Server) routeEvent(e room.Event) {
 			s.hangupPstnIfAbandoned(e.Room)
 			s.hangupOutboundIfAbandoned(e.Room)
 			s.closeSupervisors(e.Room) // end any supervisor sessions with the call
-			if s.cfg.Calls != nil {
+			if s.cfg.Calls != nil && s.outboundPending(e.Room) {
+				// The agent hung up a click-to-call before the customer answered.
+				s.endCause(e.Room)
+				s.cfg.Calls.Failed(string(e.Room), "agent_hangup")
+			} else if s.cfg.Calls != nil {
 				s.cfg.Calls.Ended(string(e.Room), s.endCause(e.Room))
 			}
 		} else if s.resumeHandoffIfAgentLeft(e.Room, e.Participant) {

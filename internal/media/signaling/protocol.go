@@ -35,7 +35,7 @@ const (
 	msgPeerJoined     = "peer-joined"     // {participant_id, name}
 	msgPeerState      = "peer-state"      // {participant_id, state}
 	msgPeerLeft       = "peer-left"       // {participant_id}
-	msgIncoming       = "incoming"        // s→agent: a call is ringing — {room, from}
+	msgIncoming       = "incoming"        // s→agent: a call is ringing — {room, from, auto}
 	msgCancelRing     = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
 	msgReady          = "ready"           // s→agent: presence registered
 	msgAvailability   = "availability"    // s→agent: backend Away/Break toggle — {available}; sent after ready and on every change
@@ -77,8 +77,11 @@ type msg struct {
 	State       string      `json:"state,omitempty"`
 	ICEServers  []ICEServer `json:"ice_servers,omitempty"`
 
-	// incoming (s→agent): who's calling (the IVR transfer label)
+	// incoming (s→agent): who's calling (the IVR transfer label), and whether the
+	// agent's own click placed the call so the widget answers it without asking
+	// (clicktocall.go)
 	From string `json:"from,omitempty"`
+	Auto bool   `json:"auto,omitempty"`
 
 	// transfer (agent → server): the re-route target — a team or one agent
 	ToTeam string `json:"to_team,omitempty"`

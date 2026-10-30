@@ -45,7 +45,8 @@ already clicked) and the panel shows your `agent_label`.
 ```
 agent clicks a customer row  →  your backend  →  POST /v1/calls
                                  (tenant API key)   { agent_id, to: "<number>", agent_label: "Ticket #4821" }
-                              →  FreeSWITCH rings the agent's leg → panel appears, label only
+                              →  the gateway rings the agent's widget (auto-answers, label only),
+                                 then dials the customer into the same call
 ```
 
 ```js

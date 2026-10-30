@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
@@ -37,53 +35,15 @@ func TestWriteServerErrorHidesDetail(t *testing.T) {
 	}
 }
 
-// Originate errors: 4xx stay descriptive (they are about the caller's input),
-// 5xx/502 are generic (they carry pgx errors / FreeSWITCH replies).
-func TestWriteCallError(t *testing.T) {
-	s := &Server{log: slog.New(slog.DiscardHandler)}
-	cases := []struct {
-		code     int
-		err      error
-		wantBody string
-		leak     string
-	}{
-		{http.StatusBadRequest, errors.New(`caller_id "123" is not one of this tenant's numbers`), "is not one of this tenant's numbers", ""},
-		{http.StatusNotFound, errors.New("agent not found"), "agent not found", ""},
-		{http.StatusBadGateway, errors.New("originate failed: -ERR NORMAL_TEMPORARY_FAILURE sofia/gateway/t_1234"), "originate failed", "sofia/gateway"},
-		{http.StatusInternalServerError, errors.New("insert call: ERROR: relation \"calls\" (SQLSTATE 42P01)"), "internal error", "SQLSTATE"},
-	}
-	for _, c := range cases {
-		w := httptest.NewRecorder()
-		s.writeCallError(w, httptest.NewRequest(http.MethodPost, "/v1/calls", nil), c.code, c.err)
-		if w.Code != c.code {
-			t.Errorf("code = %d, want %d", w.Code, c.code)
-		}
-		body := w.Body.String()
-		if !strings.Contains(body, c.wantBody) {
-			t.Errorf("%d: body %s, want %q", c.code, body, c.wantBody)
-		}
-		if c.leak != "" && strings.Contains(body, c.leak) {
-			t.Errorf("%d: body %s leaks %q", c.code, body, c.leak)
-		}
-	}
-}
-
-// A DB failure while validating caller_id or picking trunks is a server
-// error (500), not a 400 carrying the pgx error text.
-func TestOriginateDBFailureIsInternal(t *testing.T) {
+// A DB failure while picking trunks is a server error, not a caller error
+// carrying the pgx error text.
+func TestSelectTrunksDBFailureIsInternal(t *testing.T) {
 	f := dbtest.Setup(t)
 	s := newServerFor(f)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // every query now fails with a non-user error
 
-	if err := s.checkCallerID(ctx, f.TenantID, "02200000123"); !errors.Is(err, errInternal) {
-		t.Errorf("checkCallerID on DB failure = %v, want errInternal", err)
-	}
 	if _, err := s.selectTrunks(ctx, &Tenant{ID: f.TenantID}); !errors.Is(err, errInternal) {
 		t.Errorf("selectTrunks on DB failure = %v, want errInternal", err)
-	}
-	_, code, _ := s.originateForAgent(ctx, &Tenant{ID: f.TenantID}, uuid.New(), "+919800000000", "", "02200000123")
-	if code != http.StatusInternalServerError {
-		t.Errorf("originateForAgent code = %d, want 500", code)
 	}
 }
