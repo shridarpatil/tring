@@ -20,10 +20,10 @@
 // caller's room over WebRTC. Call control (hold/resume/transfer) is issued on the
 // call socket and actuated by the orchestrator — no Tring API call needed.
 //
-// NOTE: backend click-to-call to a PSTN number is NOT yet wired on this plane (it
-// needs the FreeSWITCH PstnGateway). Today this surfaces IVR-transfer / web /
-// WhatsApp calls — all pion. The SDK still cannot ORIGINATE calls: Tring.startCall
-// only POSTs to the integrator's own backend, which originates via the API.
+// A backend click-to-call (POST /v1/calls) rings the agent the same way, with
+// `auto` set: it answers itself, and the gateway then dials the customer into
+// the room. The SDK still cannot ORIGINATE calls: Tring.startCall only POSTs to
+// the integrator's own backend, which originates via the API.
 
 import { Emitter } from "./events";
 import { RtcAgent, type RtcCall } from "./rtc";
@@ -121,7 +121,7 @@ export class Tring extends Emitter<TringEvent> {
       this.emit({ type: "unregistered" });
     });
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
-    this.agent.on("incoming", ({ from }) => this.handleIncoming(from));
+    this.agent.on("incoming", ({ from, auto }) => this.handleIncoming(from, auto));
     // The server withdrew an unanswered ring (round-robin/sequential advanced to
     // the next agent, or someone else answered). End the ringing call so the UI
     // dismisses — it never connected.
@@ -147,15 +147,16 @@ export class Tring extends Emitter<TringEvent> {
   }
 
   // handleIncoming surfaces a ringing call. On accept the agent joins the room
-  // (RtcCall); call control delegates to that live call.
-  private handleIncoming(from?: string): void {
+  // (RtcCall); call control delegates to that live call. auto marks a backend
+  // click-to-call the agent placed: it's outbound and answers itself.
+  private handleIncoming(from?: string, auto?: boolean): void {
     const label = from || "";
     let rtc: RtcCall | null = null;
     let muted = false;
 
     const call: Call = {
       to: label,
-      direction: "inbound",
+      direction: auto ? "outbound" : "inbound",
       displayName: label || undefined,
       status: "ringing" as CallStatus,
       accept: async () => {
@@ -229,7 +230,7 @@ export class Tring extends Emitter<TringEvent> {
 
     this.ringing = call;
     this.emit({ type: "call:ringing", call });
-    if (this.autoAnswer) {
+    if (this.autoAnswer || auto) {
       void call.accept().catch((err) => this.emit({ type: "error", error: err as Error }));
     }
   }
