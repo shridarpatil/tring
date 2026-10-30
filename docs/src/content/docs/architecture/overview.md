@@ -54,7 +54,12 @@ Datastores: **Postgres** (the system of record — see §10), **Redis** (agent
 presence + single-use token jtis + cross-plane queue depth/reservations; a hard
 dependency when gateway auth is on), **FreeSWITCH** (PSTN trunk edge only —
 terminates outbound trunks, transcodes G.711↔Opus; never internet-exposed; not
-involved in web calls at all).
+involved in web calls at all). The Opus leg runs at the carrier leg's own rate
+(8 kHz for G.711, 16 kHz for G.722): the gateway's SIP plug caps it with
+`maxplaybackrate`, from the `X-Tring-Audio-Rate` header FreeSWITCH's public
+dialplan sets on inbound calls, and at 8 kHz on the outbound calls it places.
+Full band would carry nothing a phone line has, at about three times the CPU.
+WhatsApp calls stay full band.
 
 > The brain is **not** a separate process — it's a library (`internal/brain`)
 > the gateway calls in-process. There is no orchestrator and no brain↔edge
