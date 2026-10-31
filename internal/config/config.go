@@ -61,7 +61,7 @@ var defaults = map[string]any{
 	// (the API uses the tenant's max_call_seconds instead). Must outlive the
 	// longest call; 4h05m = 4h call + setup buffer.
 	"turn_ttl_seconds": 14700,
-	"api_addr": ":8085",
+	"api_addr":         ":8085",
 	// Comma-separated CIDRs of the reverse proxies in front of the API
 	// (e.g. "127.0.0.1/32,10.0.0.0/8"). Only X-Forwarded-For hops inside
 	// these ranges are trusted when resolving the client IP for the access
@@ -189,6 +189,9 @@ var defaults = map[string]any{
 	"fsplug_rtp_min":       12000,
 	"fsplug_rtp_max":       12100,
 	"fsplug_fs_sip":        "127.0.0.1:5060",
+	// fsplug_allow_cidrs: extra sources the plug accepts SIP from, beyond
+	// this host's own addresses. Set only when FreeSWITCH is on another host.
+	"fsplug_allow_cidrs": "",
 
 	// fs_addr is the loopback-only listener for the FreeSWITCH-facing /fs/*
 	// endpoints (mod_xml_curl). Kept off api_addr so a reverse proxy or an
