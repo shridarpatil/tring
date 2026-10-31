@@ -155,6 +155,7 @@ The SIP plug is a SIP endpoint inside the gateway. FreeSWITCH bridges inbound ca
 |---|---|---|
 | `TRING_FSPLUG_ENABLED` | `false` | Turns the SIP plug on. Needs the gateway's database connection to map dialed numbers to flows. |
 | `TRING_FSPLUG_SIP_LISTEN` | `:5090` | The plug's SIP bind address. Must not be `:5080` (FreeSWITCH's trunk profile). The port must equal `TRING_GATEWAY_SIP_PORT`. |
+| `TRING_FSPLUG_ALLOW_CIDRS` | *(empty)* | Extra IPs/CIDRs (comma-separated) the plug accepts SIP from. It always accepts this host's own addresses, which covers FreeSWITCH on the same host; anything else gets `403`. Set this only when FreeSWITCH runs on another host. Keep port 5090 closed in the firewall either way. |
 | `TRING_FSPLUG_SIP_ADVERTISE` | `127.0.0.1` | IP the plug advertises. Must equal `TRING_GATEWAY_ADVERT_IP`. |
 | `TRING_FSPLUG_RTP_MIN` / `TRING_FSPLUG_RTP_MAX` | `12000` / `12100` | UDP range for the FreeSWITCH-to-gateway audio leg (separate from the browser range). Open it on the host firewall. |
 | `TRING_GATEWAY_ADVERT_IP` | `127.0.0.1` | Read by FreeSWITCH: where it sends inbound carrier calls. Keep equal to `TRING_FSPLUG_SIP_ADVERTISE`. |

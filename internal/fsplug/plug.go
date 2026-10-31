@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -36,6 +37,11 @@ type Config struct {
 	OpusPT       uint8  // e.g. 111
 	DTMFPT       uint8  // e.g. 101
 	FSSIP        string // FreeSWITCH SIP addr for outbound INVITEs, e.g. "127.0.0.1:5060"
+
+	// AllowFrom lists extra source networks the plug takes INVITEs/BYEs
+	// from, on top of this host's own addresses (see New). Only needed when
+	// FreeSWITCH runs on another host.
+	AllowFrom []netip.Prefix
 }
 
 // call is one in-flight inbound dialog + its media.
@@ -72,6 +78,12 @@ type Plug struct {
 	contact sip.ContactHeader
 
 	onInbound func(room.InboundCall)
+
+	// allow is who may send us INVITEs/BYEs: FreeSWITCH, not the internet.
+	// The listener binds every interface (gateway is network_mode: host), and
+	// without this check anyone reaching the port could inject a call into
+	// any tenant's IVR with a forged caller ID, bypassing FS's carrier ACL.
+	allow []netip.Prefix
 
 	mu       sync.Mutex
 	calls    map[room.CallID]*call
@@ -112,8 +124,13 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 		return nil, fmt.Errorf("fsplug: invalid SIPListen port %q: %w", portStr, err)
 	}
 	contact := sip.ContactHeader{Address: sip.Uri{User: "tring", Host: cfg.SIPAdvertise, Port: port}}
+	allow, err := hostPrefixes()
+	if err != nil {
+		return nil, fmt.Errorf("fsplug: list host addresses: %w", err)
+	}
 	p := &Plug{
 		cfg: cfg, log: log, ua: ua, srv: srv, client: client,
+		allow:    append(allow, cfg.AllowFrom...),
 		ds:       sipgo.NewDialogServerCache(client, contact),
 		dc:       sipgo.NewDialogClientCache(client, contact),
 		contact:  contact,
@@ -128,6 +145,10 @@ func New(cfg Config, log *slog.Logger) (*Plug, error) {
 	// fall through to the client cache. Without this, an outbound call's
 	// carrier-hangup BYE is silently dropped and Leg.Done never fires.
 	srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		if !p.allowed(req.Source()) {
+			_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusForbidden, "Forbidden", nil))
+			return
+		}
 		if err := p.ds.ReadBye(req, tx); err != nil {
 			_ = p.dc.ReadBye(req, tx)
 		}
@@ -168,9 +189,66 @@ func (p *Plug) OnInbound(fn func(room.InboundCall)) {
 	p.mu.Unlock()
 }
 
+// hostPrefixes is every address on this host's interfaces, loopback
+// included. FreeSWITCH shares the gateway's host (both network_mode: host),
+// so its INVITEs come from one of these whichever profile IP it binds;
+// Linux drops packets that arrive from outside claiming a local source.
+func hostPrefixes() ([]netip.Prefix, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	var out []netip.Prefix
+	for _, a := range addrs {
+		ipn, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(ipn.IP); ok {
+			ip = ip.Unmap()
+			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
+		}
+	}
+	return out, nil
+}
+
+// allowed reports whether src ("ip:port", the packet's real source) may
+// send us dialog-creating or dialog-ending requests.
+func (p *Plug) allowed(src string) bool {
+	ap, err := netip.ParseAddrPort(src)
+	if err != nil {
+		return false
+	}
+	ip := ap.Addr().Unmap()
+	for _, pfx := range p.allow {
+		if pfx.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// maxCalls caps live inbound calls at the RTP port range: each answered call
+// holds one port, so past that Answer would fail anyway, and a flood of
+// never-answered INVITEs can't pile up goroutines and map entries.
+func (p *Plug) maxCalls() int { return p.cfg.RTPMax - p.cfg.RTPMin + 1 }
+
 // onInvite maps an incoming INVITE to an InboundCall notification. It does NOT
 // answer — the signaling server decides (Answer/Reject) after resolving the DID.
 func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
+	if !p.allowed(req.Source()) {
+		p.log.Warn("fsplug: INVITE from disallowed source, rejecting", "src", req.Source())
+		_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusForbidden, "Forbidden", nil))
+		return
+	}
+	p.mu.Lock()
+	full := len(p.calls) >= p.maxCalls()
+	p.mu.Unlock()
+	if full {
+		p.log.Warn("fsplug: at call capacity, rejecting INVITE", "max", p.maxCalls())
+		_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusServiceUnavailable, "Busy", nil))
+		return
+	}
 	sess, err := p.ds.ReadInvite(req, tx)
 	if err != nil {
 		p.log.Error("fsplug: ReadInvite failed", "err", err)

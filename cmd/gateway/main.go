@@ -238,6 +238,11 @@ func main() {
 		if didResolver == nil {
 			logger.Warn("fsplug enabled but DB/flowstore unavailable — inbound phone calls disabled")
 		} else {
+			fsAllow, aerr := safehttp.ParseCIDRs(strings.Split(k.String("fsplug_allow_cidrs"), ","))
+			if aerr != nil {
+				logger.Error("invalid fsplug_allow_cidrs", "err", aerr)
+				os.Exit(1)
+			}
 			plug, perr := fsplug.New(fsplug.Config{
 				SIPListen:    k.String("fsplug_sip_listen"),
 				SIPAdvertise: k.String("fsplug_sip_advertise"),
@@ -246,6 +251,7 @@ func main() {
 				OpusPT:       111,
 				DTMFPT:       101,
 				FSSIP:        k.String("fsplug_fs_sip"),
+				AllowFrom:    fsAllow,
 			}, logger)
 			if perr != nil {
 				logger.Error("fsplug init failed", "err", perr)
