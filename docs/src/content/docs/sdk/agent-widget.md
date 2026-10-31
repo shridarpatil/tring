@@ -9,7 +9,7 @@ The widget **cannot place calls**. It has no access to the Tring API for startin
 
 The widget renders:
 
-- a call panel, bottom-right. While a call rings, it shows **Accept** and **Decline**. During a call, it shows a timer and buttons for **Mute**, **Keypad** (DTMF), **Share screen**, **Hold**, **Transfer** and **Hang up**.
+- a call panel, bottom-right. While a call rings, it shows **Accept** and **Decline**. During a call, it shows a "Live call" timer, moving audio bars, and buttons for **Mute**, **Hold**, **Keypad** (DTMF), **Transfer**, **Share screen** and **End**. The minimize button (–) shrinks a connected call to a small pill with the timer, Mute, Expand and End.
 - a status badge, bottom-left: **Online**, **Away**, **Reconnecting…** or **Offline**
 - a ring tone for incoming calls, the caller's shared screen when they share it, and a "Supervising" or "Whisper" badge when a supervisor joins the call
 
@@ -68,7 +68,7 @@ The widget fetches with `credentials: "same-origin"`, so it sends cookies only i
    - **Accept** joins the call. The panel shows "Connecting…", then a timer once audio is flowing.
    - **Decline** rejects the call. Tring moves on to the next agent straight away instead of waiting for the ring timeout.
    - If another agent answers first, or the team's ring strategy moves to the next agent, the panel closes by itself.
-3. **Hang up** ends the call. The panel also closes when the other party hangs up or the IVR ends the call.
+3. **End** hangs up. The panel also closes when the other party hangs up or the IVR ends the call. After a connected call it shows "Call ended" with the call's length for 2 seconds, then closes.
 
 The widget always asks the agent to Accept or Decline. It doesn't answer calls automatically. To answer automatically, use the [JavaScript API](/tring/sdk/javascript-api/#tring) with `autoAnswer: true`.
 
@@ -79,11 +79,11 @@ The caller's label comes from your backend (for example `agent_label` on an outb
 | Button | What it does |
 |---|---|
 | Mute | Stops sending the agent's microphone. This only affects the agent's browser. |
-| Keypad | Opens a dialpad. Each digit goes to the call's IVR over the signaling socket. |
+| Keypad | Opens a dialpad in place of the audio bars. Each digit goes to the call's IVR over the signaling socket. |
 | Share screen | Shares the agent's screen or a window with the caller, after the browser's picker. Click again to stop. |
 | Hold / Resume | Hold plays the tenant's hold music to the caller and mutes the agent. Resume reverses both. The button updates immediately; there is no confirmation from the server. |
-| Transfer | Opens a list of online agents and teams. Choosing one starts a blind transfer, and the agent's own call ends when the target answers. |
-| Hang up | Ends the call. |
+| Transfer | Opens a list of online agents and teams. Choosing one starts a blind transfer, and the agent's own call ends when the target answers. Click again to close the list. |
+| End | Ends the call. |
 
 ### How hold and transfer work
 
@@ -327,9 +327,13 @@ The widget adds its CSS as `<style id="tring-styles">` in `<head>`, **unless an 
 | Selector | What it is |
 |---|---|
 | `#tring-call-panel` | The panel (fixed bottom-right, `z-index: 999999`). It's visible when it has the class `.tring-panel-visible`. |
-| `#tring-call-panel[data-state="…"]` | `idle`, `incoming`, `connecting`, `connected` or `error` |
+| `#tring-call-panel[data-state="…"]` | `idle`, `calling`, `incoming`, `connecting`, `connected`, `ended` or `error` |
+| `#tring-call-panel[data-stage="…"]` | What the middle area shows: `wave`, `ringing`, `hold`, `video`, `keypad`, `picker` or `none` |
+| `#tring-call-panel.tring-held`, `.tring-muted`, `.tring-min` | The call is on hold, the mic is muted, the panel is minimized |
+| `.tring-card`, `.tring-mini` | The full card, and the minimized pill |
 | `.tring-panel-to`, `.tring-panel-sub`, `.tring-panel-avatar` | Caller label, status/timer line, avatar |
-| `.tring-ctl` (with `.tring-accept`, `.tring-decline`, `.tring-mute`, `.tring-keypad`, `.tring-share`, `.tring-hold`, `.tring-transfer`, `.tring-hangup`) | Round control buttons. `.is-active` marks a toggled button. |
+| `.tring-panel-stage`, `.tring-wave`, `.tring-panel-video` | Middle area, audio bars, the caller's shared screen |
+| `.tring-ctl` (with `.tring-accept`, `.tring-decline`, `.tring-mute`, `.tring-keypad`, `.tring-share`, `.tring-hold`, `.tring-transfer`, `.tring-hangup`) | Control buttons. `.is-active` marks a toggled button. |
 | `.tring-panel-dialpad`, `.tring-dtmf`, `.tring-panel-dialed` | Dialpad, its keys, and the digits pressed so far |
 | `.tring-panel-picker`, `.tring-picker-item` | Transfer list |
 | `.tring-panel-supervisor` | Supervisor badge |
