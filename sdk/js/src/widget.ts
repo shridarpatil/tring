@@ -43,6 +43,19 @@ const ICON_USER = `<svg viewBox="0 0 24 24" width="34" height="34" fill="current
 const ICON_KEYPAD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="5" r="1.7"/><circle cx="12" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="12" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg>`;
 const ICON_TRANSFER = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 7l-1.4 1.4L17.2 11H8v2h9.2l-2.6 2.6L16 17l5-5-5-5zM4 5h7V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7v-2H4V5z"/></svg>`;
 const ICON_SCREEN = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v2H8v2h8v-2h-2v-2h6a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 12H4V6h16v10z"/></svg>`;
+const ICON_MINIMIZE = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>`;
+const ICON_EXPAND = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg>`;
+
+// Audio bars: the same bars and delays as the call card on the Tring website.
+// The lighter "alt" bars stand for the agent's mic and go flat while muted.
+const WAVE_HTML = (
+  [[0, ""], [0.15, ""], [0.3, ""], [0.45, "alt"], [0.6, "alt"], [0.75, ""], [0.9, ""], [0.55, "alt"], [0.2, ""], [0.7, ""]] as const
+)
+  .map(([d, c]) => `<span class="${c}" style="animation-delay:${d}s"></span>`)
+  .join("");
+
+// Header text for non-timer states; anything else is shown as given.
+const STATUS_TEXT: Record<string, string> = { calling: "Calling…" };
 
 // Transfer targets the agent can pick from (online agents by name + teams).
 interface TransferTargets {
@@ -275,33 +288,63 @@ function createPanel(control?: CallControl): Panel {
     (k) => `<button type="button" class="tring-dtmf" data-d="${k}">${k}</button>`,
   ).join("");
 
-  // Mobile-phone-style call card: avatar + caller + a sub-line that shows the
-  // status while ringing and a live MM:SS timer once connected.
+  // Call card: a status line (dot + state or live timer), the caller, a "stage"
+  // that shows ONE of audio bars / hold notice / the caller's shared screen /
+  // keypad / transfer picker (see updateStage), then the controls. Minimized
+  // during a connected call it collapses to the .tring-mini pill.
   root.innerHTML = `
-    <div class="tring-panel-row tring-panel-header">
-      <div class="tring-panel-avatar">${ICON_USER}</div>
-      <div class="tring-panel-to"></div>
-      <div class="tring-panel-sub"></div>
+    <div class="tring-mini">
+      <span class="tring-dot"></span>
+      <span class="tring-mini-name"></span>
+      <span class="tring-mini-time"></span>
+      <button type="button" class="tring-mini-btn tring-mini-mute" title="Mute" aria-label="Mute">${ICON_MIC}</button>
+      <button type="button" class="tring-mini-btn tring-expand" title="Expand" aria-label="Expand">${ICON_EXPAND}</button>
+      <button type="button" class="tring-mini-btn tring-mini-end" title="Hang up" aria-label="Hang up">${ICON_PHONE}</button>
     </div>
-    <div class="tring-panel-row tring-panel-supervisor"></div>
-    <div class="tring-panel-row tring-panel-video"><video class="tring-remote-video" autoplay playsinline></video></div>
-    <div class="tring-panel-row tring-panel-dialed"></div>
-    <div class="tring-panel-row tring-panel-picker"></div>
-    <div class="tring-panel-row tring-panel-dialpad">${dtmfButtonsHTML}</div>
-    <div class="tring-panel-row tring-panel-incoming">
-      <button type="button" class="tring-ctl tring-decline" title="Decline" aria-label="Decline">${ICON_PHONE}</button>
-      <button type="button" class="tring-ctl tring-accept" title="Accept" aria-label="Accept">${ICON_PHONE}</button>
-    </div>
-    <div class="tring-panel-row tring-panel-actions">
-      <button type="button" class="tring-ctl tring-mute" title="Mute" aria-label="Mute">${ICON_MIC}</button>
-      <button type="button" class="tring-ctl tring-keypad" title="Keypad" aria-label="Keypad">${ICON_KEYPAD}</button>
-      <button type="button" class="tring-ctl tring-share" title="Share screen" aria-label="Share screen">${ICON_SCREEN}</button>
-      <button type="button" class="tring-ctl tring-hold" title="Hold" aria-label="Hold">${ICON_HOLD}</button>
-      <button type="button" class="tring-ctl tring-transfer" title="Transfer" aria-label="Transfer">${ICON_TRANSFER}</button>
-      <button type="button" class="tring-ctl tring-hangup" title="Hang up" aria-label="Hang up">${ICON_PHONE}</button>
+    <div class="tring-card">
+      <div class="tring-panel-status">
+        <span class="tring-dot"></span>
+        <span class="tring-panel-sub"></span>
+        <button type="button" class="tring-minimize" title="Minimize" aria-label="Minimize">${ICON_MINIMIZE}</button>
+      </div>
+      <div class="tring-panel-header">
+        <div class="tring-panel-avatar"></div>
+        <div class="tring-panel-to"></div>
+      </div>
+      <div class="tring-panel-supervisor"></div>
+      <div class="tring-panel-stage">
+        <div class="tring-wave" aria-hidden="true">${WAVE_HTML}</div>
+        <div class="tring-stage-msg tring-msg-ringing" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="tring-stage-msg tring-msg-hold"><strong>Caller is on hold</strong><span>They hear hold music.</span></div>
+        <div class="tring-panel-video">
+          <video class="tring-remote-video" autoplay playsinline></video>
+          <div class="tring-video-bar"><span>Caller is sharing their screen</span><button type="button" class="tring-fullscreen">Full screen</button></div>
+        </div>
+        <div class="tring-panel-dialpad">
+          <div class="tring-panel-dialed"></div>
+          <div class="tring-dtmf-grid">${dtmfButtonsHTML}</div>
+        </div>
+        <div class="tring-panel-picker"></div>
+      </div>
+      <div class="tring-panel-incoming">
+        <button type="button" class="tring-ctl tring-decline">Decline</button>
+        <button type="button" class="tring-ctl tring-accept">Accept</button>
+      </div>
+      <div class="tring-panel-actions">
+        <button type="button" class="tring-ctl tring-mute" title="Mute" aria-label="Mute">${ICON_MIC}</button>
+        <button type="button" class="tring-ctl tring-hold" title="Hold" aria-label="Hold">${ICON_HOLD}</button>
+        <button type="button" class="tring-ctl tring-keypad" title="Keypad" aria-label="Keypad">${ICON_KEYPAD}</button>
+        <button type="button" class="tring-ctl tring-transfer" title="Transfer" aria-label="Transfer">${ICON_TRANSFER}</button>
+        <button type="button" class="tring-ctl tring-share" title="Share screen" aria-label="Share screen">${ICON_SCREEN}</button>
+        <button type="button" class="tring-ctl tring-hangup" title="Hang up" aria-label="Hang up">End</button>
+      </div>
     </div>
   `;
 
+  const avatarEl = root.querySelector<HTMLElement>(".tring-panel-avatar")!;
+  const miniNameEl = root.querySelector<HTMLElement>(".tring-mini-name")!;
+  const miniTimeEl = root.querySelector<HTMLElement>(".tring-mini-time")!;
+  const miniMuteBtn = root.querySelector<HTMLButtonElement>(".tring-mini-mute")!;
   const toEl = root.querySelector<HTMLElement>(".tring-panel-to")!;
   const subEl = root.querySelector<HTMLElement>(".tring-panel-sub")!;
   const supervisorEl = root.querySelector<HTMLElement>(".tring-panel-supervisor")!;
@@ -320,19 +363,57 @@ function createPanel(control?: CallControl): Panel {
 
   let held = false;
 
-  // Call-duration timer: ticks MM:SS into the sub-line once connected.
+  // setState is the only writer of data-state, so the stage always follows it.
+  function setState(state: string) {
+    root.setAttribute("data-state", state);
+    updateStage();
+  }
+  // The stage shows one thing at a time: an open keypad or transfer picker
+  // wins, then the caller's shared screen, then ringing dots, hold notice or
+  // the audio bars. "none" hides the stage.
+  function updateStage() {
+    const state = root.getAttribute("data-state");
+    const has = (c: string) => root.classList.contains(c);
+    let stage = "none";
+    if (has("tring-keypad-open")) stage = "keypad";
+    else if (has("tring-picker-open")) stage = "picker";
+    else if (has("tring-has-video")) stage = "video";
+    else if (state === "calling" || state === "connecting") stage = "ringing";
+    else if (state === "connected") stage = held ? "hold" : "wave";
+    root.setAttribute("data-stage", stage);
+  }
+
+  // Caller label in the card and the mini pill; the avatar shows its first
+  // letter, or a person icon when the label doesn't start with one.
+  function setCaller(label: string) {
+    toEl.textContent = label;
+    miniNameEl.textContent = label;
+    const first = label.trim().charAt(0);
+    if (/\p{L}/u.test(first)) avatarEl.textContent = first.toUpperCase();
+    else avatarEl.innerHTML = ICON_USER;
+  }
+
+  // Call-duration timer: ticks MM:SS into the status line once connected.
   let timerId: number | undefined;
   let startMs = 0;
   function fmt(s: number) {
     const m = Math.floor(s / 60);
     return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   }
+  function elapsed() {
+    return fmt(Math.floor((Date.now() - startMs) / 1000));
+  }
+  function renderTime() {
+    if (!timerId) return;
+    const t = elapsed();
+    subEl.textContent = `${held ? "On hold" : "Live call"} · ${t}`;
+    miniTimeEl.textContent = held ? "On hold" : t;
+  }
   function startTimer() {
     stopTimer();
     startMs = Date.now();
-    const tick = () => (subEl.textContent = fmt(Math.floor((Date.now() - startMs) / 1000)));
-    tick();
-    timerId = window.setInterval(tick, 1000);
+    timerId = window.setInterval(renderTime, 1000);
+    renderTime();
   }
   function stopTimer() {
     if (timerId) {
@@ -344,10 +425,11 @@ function createPanel(control?: CallControl): Panel {
   // Reset all controls to default — called whenever a fresh call appears, since
   // each is a new object starting un-muted, un-held, keypad closed.
   function resetControls() {
-    muteBtn.innerHTML = ICON_MIC;
-    muteBtn.title = "Mute";
-    muteBtn.classList.remove("is-active");
+    syncMute(false);
     held = false;
+    root.classList.remove("tring-held");
+    root.classList.remove("tring-min");
+    transferBtn.classList.remove("is-active");
     holdBtn.innerHTML = ICON_HOLD;
     holdBtn.title = "Hold";
     holdBtn.classList.remove("is-active");
@@ -366,11 +448,32 @@ function createPanel(control?: CallControl): Panel {
     dialed = "";
     supervisorEl.style.display = "none";
     supervisorEl.textContent = "";
+    updateStage();
+  }
+
+  // syncMute mirrors the mic state onto both mute buttons (card + mini pill)
+  // and flattens the agent's audio bars.
+  function syncMute(muted: boolean) {
+    for (const b of [muteBtn, miniMuteBtn]) {
+      b.innerHTML = muted ? ICON_MIC_OFF : ICON_MIC;
+      b.title = muted ? "Unmute" : "Mute";
+      b.setAttribute("aria-label", b.title);
+      b.classList.toggle("is-active", muted);
+    }
+    root.classList.toggle("tring-muted", muted);
   }
 
   const ringer = new Ringer();
   let active: Call | null = null;
   let dialed = "";
+  // After a connected call ends the card lingers on "Call ended · MM:SS".
+  let endTimer: number | undefined;
+  function cancelEndLinger() {
+    if (endTimer) {
+      clearTimeout(endTimer);
+      endTimer = undefined;
+    }
+  }
 
   hangupBtn.addEventListener("click", async () => {
     if (active) await active.hangup();
@@ -379,13 +482,21 @@ function createPanel(control?: CallControl): Panel {
     if (!active) return;
     const next = !active.muted;
     active.setMuted(next);
-    muteBtn.innerHTML = next ? ICON_MIC_OFF : ICON_MIC;
-    muteBtn.title = next ? "Unmute" : "Mute";
-    muteBtn.classList.toggle("is-active", next);
+    syncMute(next);
+  });
+  // The mini pill's buttons drive the same handlers as the card's.
+  miniMuteBtn.addEventListener("click", () => muteBtn.click());
+  root.querySelector(".tring-mini-end")!.addEventListener("click", () => hangupBtn.click());
+  root.querySelector(".tring-minimize")!.addEventListener("click", () => root.classList.add("tring-min"));
+  root.querySelector(".tring-expand")!.addEventListener("click", () => root.classList.remove("tring-min"));
+  root.querySelector(".tring-fullscreen")!.addEventListener("click", () => {
+    remoteVideo.requestFullscreen?.().catch(() => {});
   });
   keypadBtn.addEventListener("click", () => {
     const open = root.classList.toggle("tring-keypad-open");
     keypadBtn.classList.toggle("is-active", open);
+    if (open) closePicker();
+    updateStage();
   });
   // Screen share: toggle the agent's own screen to the caller. getDisplayMedia
   // must run in this click gesture; on cancel we just restore the button.
@@ -419,17 +530,32 @@ function createPanel(control?: CallControl): Panel {
     held = want;
     holdBtn.innerHTML = held ? ICON_RESUME : ICON_HOLD;
     holdBtn.title = held ? "Resume" : "Hold";
+    holdBtn.setAttribute("aria-label", holdBtn.title);
     holdBtn.classList.toggle("is-active", held);
+    root.classList.toggle("tring-held", held);
+    renderTime();
+    updateStage();
   });
   // Transfer: open a picker of online agents + teams (fetched live), pick one
   // to blind-transfer the caller. On success the original agent's leg ends.
+  // Clicking Transfer again closes it.
   function closePicker() {
     root.classList.remove("tring-picker-open");
+    transferBtn.classList.remove("is-active");
+    updateStage();
   }
   transferBtn.addEventListener("click", async () => {
     if (!active || !control) return;
+    if (root.classList.contains("tring-picker-open")) {
+      closePicker();
+      return;
+    }
+    root.classList.remove("tring-keypad-open");
+    keypadBtn.classList.remove("is-active");
     pickerEl.innerHTML = `<div class="tring-picker-title">Loading…</div>`;
     root.classList.add("tring-picker-open");
+    transferBtn.classList.add("is-active");
+    updateStage();
     const t = await control.targets();
     if (!t) {
       pickerEl.innerHTML = `<div class="tring-picker-title">Couldn't load targets</div><button class="tring-picker-cancel">Back</button>`;
@@ -471,7 +597,7 @@ function createPanel(control?: CallControl): Panel {
     // visible beat. Flip to a "connecting" state on the click itself so the
     // button never feels ignored; "connected" replaces it when media is up.
     subEl.textContent = "Connecting…";
-    root.setAttribute("data-state", "connecting");
+    setState("connecting");
     try {
       await active.accept();
     } catch {
@@ -502,40 +628,43 @@ function createPanel(control?: CallControl): Panel {
   return {
     root,
     show(call, status) {
+      cancelEndLinger();
       active = call;
       stopTimer();
       resetControls();
-      toEl.textContent = call.to;
-      subEl.textContent = status;
-      root.setAttribute("data-state", status);
+      setCaller(call.to);
+      subEl.textContent = STATUS_TEXT[status] ?? status;
+      setState(status);
       root.classList.add("tring-panel-visible");
     },
     showIncoming(call) {
+      cancelEndLinger();
       active = call;
       stopTimer();
       resetControls();
-      toEl.textContent = call.displayName || call.to || "Unknown caller";
+      setCaller(call.displayName || call.to || "Unknown caller");
       subEl.textContent = "Incoming call";
-      root.setAttribute("data-state", "incoming");
+      setState("incoming");
       root.classList.add("tring-panel-visible");
       ringer.start();
     },
     setActive(call, status) {
       active = call;
       ringer.stop();
-      root.setAttribute("data-state", status);
+      setState(status);
       // Connected → run the call timer; any other transition shows the text.
       if (status === "connected") startTimer();
-      else subEl.textContent = status;
+      else subEl.textContent = STATUS_TEXT[status] ?? status;
     },
     setStatus(state, text) {
       if (timerId && state === "connected") return; // don't clobber the timer
       subEl.textContent = text;
-      root.setAttribute("data-state", state);
+      setState(state);
     },
     setRemoteVideo(stream) {
       remoteVideo.srcObject = stream;
       root.classList.toggle("tring-has-video", stream !== null);
+      updateStage();
     },
     setSupervisor(present, mode, name) {
       if (!present) {
@@ -548,10 +677,24 @@ function createPanel(control?: CallControl): Panel {
     },
     hide() {
       ringer.stop();
+      // A call that was never connected (declined, missed, picked up
+      // elsewhere) closes at once, as before. A connected one shows
+      // "Call ended · MM:SS" for 2s first; controls are inert (active = null).
+      const spent = timerId ? elapsed() : "";
       stopTimer();
       active = null;
       resetControls();
-      root.classList.remove("tring-panel-visible");
+      cancelEndLinger();
+      if (!spent) {
+        root.classList.remove("tring-panel-visible");
+        return;
+      }
+      subEl.textContent = `Call ended · ${spent}`;
+      setState("ended");
+      endTimer = window.setTimeout(() => {
+        endTimer = undefined;
+        root.classList.remove("tring-panel-visible");
+      }, 2000);
     },
   };
 }
@@ -602,114 +745,202 @@ function injectStyles(): void {
   style.textContent = `
     #${PANEL_ID} {
       position: fixed; right: 1.5rem; bottom: 1.5rem;
-      width: 320px; padding: 1rem 1.25rem;
-      background: #111827; color: white; border-radius: 12px;
-      box-shadow: 0 10px 40px rgba(0,0,0,.35);
-      font: 14px/1.4 system-ui, sans-serif;
+      width: 360px; max-width: calc(100vw - 2rem); box-sizing: border-box;
+      color: #1f2420; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
       transform: translateY(180%); opacity: 0;
       transition: transform .2s ease, opacity .2s ease;
       z-index: 999999;
     }
+    #${PANEL_ID} * { box-sizing: border-box; }
     #${PANEL_ID}.tring-panel-visible {
       transform: translateY(0); opacity: 1;
     }
-    #${PANEL_ID} .tring-panel-row { margin-bottom: .5rem; }
-    #${PANEL_ID} .tring-panel-row:last-child { margin-bottom: 0; }
-    /* Remote screen-share — hidden until the other party shares a video track. */
-    #${PANEL_ID} .tring-panel-video { display: none; }
-    #${PANEL_ID}.tring-has-video .tring-panel-video { display: block; }
-    #${PANEL_ID} .tring-remote-video {
-      width: 100%; border-radius: 8px; background: #000;
-      max-height: 200px; object-fit: contain;
+    #${PANEL_ID} button { font: inherit; }
+    #${PANEL_ID} button:focus-visible { outline: 2px solid #0f5c46; outline-offset: 2px; }
+    #${PANEL_ID} .tring-card {
+      background: #fbfaf7; border: 1px solid #e4e0d5; border-radius: 22px;
+      box-shadow: 0 18px 40px rgba(31,36,32,.12), 0 2px 6px rgba(31,36,32,.06);
+      padding: 20px; display: flex; flex-direction: column; gap: 16px;
     }
-    /* Mobile-phone-style header: avatar, big caller, status/timer sub-line. */
-    #${PANEL_ID} .tring-panel-header {
-      display: flex; flex-direction: column; align-items: center;
-      gap: .15rem; text-align: center; padding: .25rem 0;
-    }
-    #${PANEL_ID} .tring-panel-avatar {
-      width: 56px; height: 56px; border-radius: 50%; margin-bottom: .35rem;
-      background: #374151; color: #9ca3af;
-      display: inline-flex; align-items: center; justify-content: center;
-    }
-    #${PANEL_ID} .tring-panel-to { font-weight: 600; font-size: 16px; }
+    /* Status line: dot + state text, or "Live call · MM:SS" once connected. */
+    #${PANEL_ID} .tring-panel-status { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+    #${PANEL_ID} .tring-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #9a9c95; }
+    #${PANEL_ID}[data-state="incoming"] .tring-dot,
+    #${PANEL_ID}[data-state="connected"] .tring-dot { background: #0f5c46; }
+    #${PANEL_ID}[data-state="calling"] .tring-dot,
+    #${PANEL_ID}[data-state="connecting"] .tring-dot,
+    #${PANEL_ID}.tring-held .tring-dot { background: #d98e04; }
+    #${PANEL_ID}[data-state="error"] .tring-dot { background: #c0392b; }
+    /* Connecting: pulse so the wait reads as "working", not "stuck". */
+    #${PANEL_ID}[data-state="connecting"] .tring-dot { animation: tring-pulse 1s ease-in-out infinite; }
     #${PANEL_ID} .tring-panel-sub {
-      color: #9ca3af; font-size: 13px; font-variant-numeric: tabular-nums;
+      flex: 1; min-width: 0; font-weight: 600; font-size: 15px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
+    #${PANEL_ID}.tring-held .tring-panel-sub { color: #8a4b00; }
+    #${PANEL_ID}[data-state="ended"] .tring-panel-sub { color: #5c6058; }
+    #${PANEL_ID}[data-state="error"] .tring-panel-sub { color: #a3271b; white-space: normal; }
+    #${PANEL_ID} .tring-minimize {
+      display: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px;
+      background: transparent; color: #5c6058; cursor: pointer;
+      align-items: center; justify-content: center;
+    }
+    #${PANEL_ID} .tring-minimize:hover { background: #ece9e0; }
+    #${PANEL_ID}[data-state="connected"] .tring-minimize { display: inline-flex; }
+    /* Caller: square avatar with the label's first letter, then the label. */
+    #${PANEL_ID} .tring-panel-header { display: flex; align-items: center; gap: 14px; }
+    #${PANEL_ID} .tring-panel-avatar {
+      width: 52px; height: 52px; border-radius: 14px; flex: none;
+      background: #0f5c46; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font: 600 24px/1 Georgia, "Times New Roman", serif;
+    }
+    #${PANEL_ID}[data-state="ended"] .tring-panel-avatar { background: #8e918a; }
+    #${PANEL_ID} .tring-panel-to { min-width: 0; font-weight: 600; font-size: 18px; overflow-wrap: anywhere; }
     /* Supervisor indicator — a console operator is monitoring/whispering/barging.
        Hidden by default; shown/hidden via panel.setSupervisor(). */
     #${PANEL_ID} .tring-panel-supervisor {
-      display: none; width: fit-content; margin: 0 auto;
-      background: #f59e0b; color: #111827;
+      display: none; width: fit-content;
+      background: #e3ede7; color: #0f5c46;
       font-size: 12px; font-weight: 600;
-      padding: .2rem .6rem; border-radius: 999px;
+      padding: .25rem .65rem; border-radius: 999px;
     }
-    #${PANEL_ID}[data-state="ringing"] .tring-panel-sub { color: #fbbf24; }
-    #${PANEL_ID}[data-state="incoming"] .tring-panel-sub,
-    #${PANEL_ID}[data-state="connected"] .tring-panel-sub { color: #34d399; }
-    /* Connecting: amber + pulse so the wait reads as "working", not "stuck". */
-    #${PANEL_ID}[data-state="connecting"] .tring-panel-sub {
-      color: #fbbf24; animation: tring-pulse 1s ease-in-out infinite;
+    /* Stage: one view at a time, picked by data-stage (see updateStage). */
+    #${PANEL_ID} .tring-panel-stage { background: #f6f3ea; border-radius: 14px; }
+    #${PANEL_ID}[data-stage="none"] .tring-panel-stage,
+    #${PANEL_ID} .tring-panel-stage > * { display: none; }
+    #${PANEL_ID}[data-stage="wave"] .tring-wave,
+    #${PANEL_ID}[data-stage="ringing"] .tring-msg-ringing,
+    #${PANEL_ID}[data-stage="hold"] .tring-msg-hold { display: flex; }
+    #${PANEL_ID}[data-stage="video"] .tring-panel-video,
+    #${PANEL_ID}[data-stage="keypad"] .tring-panel-dialpad,
+    #${PANEL_ID}[data-stage="picker"] .tring-panel-picker { display: block; }
+    #${PANEL_ID} .tring-wave { height: 76px; align-items: center; justify-content: center; gap: 3px; }
+    #${PANEL_ID} .tring-wave span {
+      width: 3px; height: 56px; border-radius: 3px; background: #0f5c46;
+      animation: tring-wave 1.1s ease-in-out infinite;
     }
-    #${PANEL_ID}[data-state="error"] .tring-panel-sub { color: #f87171; }
-    /* Accept/Decline shown only while an inbound call is ringing. */
-    #${PANEL_ID} .tring-panel-incoming { display: none; gap: 1.75rem; justify-content: center; }
-    #${PANEL_ID}[data-state="incoming"] .tring-panel-incoming { display: flex; }
-    #${PANEL_ID}[data-state="incoming"] .tring-panel-actions { display: none; }
-    #${PANEL_ID} .tring-panel-actions { display: flex; gap: .5rem; justify-content: center; flex-wrap: wrap; }
-    /* Round icon buttons for all call controls. */
-    #${PANEL_ID} .tring-ctl {
-      width: 44px; height: 44px; border-radius: 50%;
-      border: none; cursor: pointer; padding: 0;
-      display: inline-flex; align-items: center; justify-content: center;
-      background: #374151; color: #fff;
+    #${PANEL_ID} .tring-wave span.alt { background: #3f8a6f; }
+    #${PANEL_ID}.tring-muted .tring-wave span.alt { animation: none; transform: scaleY(.08); }
+    #${PANEL_ID} .tring-stage-msg {
+      height: 76px; padding: 0 12px; flex-direction: column; gap: 4px;
+      align-items: center; justify-content: center; text-align: center;
     }
-    #${PANEL_ID} .tring-ctl:hover { background: #4b5563; }
-    #${PANEL_ID} .tring-ctl:disabled { opacity: .5; cursor: default; }
-    #${PANEL_ID} .tring-ctl.is-active { background: #f59e0b; color: #111827; }
-    #${PANEL_ID} .tring-accept { background: #16a34a; }
-    #${PANEL_ID} .tring-accept:hover { background: #15803d; }
-    /* Decline + hang-up use the phone icon rotated to the "end call" angle. */
-    #${PANEL_ID} .tring-decline, #${PANEL_ID} .tring-hangup { background: #dc2626; }
-    #${PANEL_ID} .tring-decline:hover, #${PANEL_ID} .tring-hangup:hover { background: #b91c1c; }
-    #${PANEL_ID} .tring-decline svg, #${PANEL_ID} .tring-hangup svg { transform: rotate(135deg); }
-    /* Keypad (dialpad) hidden until the agent taps the keypad button. */
-    #${PANEL_ID} .tring-panel-dialpad {
-      display: none; grid-template-columns: repeat(3, 1fr); gap: .35rem;
+    #${PANEL_ID} .tring-msg-hold strong { font-size: 15px; color: #8a4b00; }
+    #${PANEL_ID} .tring-msg-hold span { font-size: 13px; color: #5c6058; }
+    #${PANEL_ID} .tring-msg-ringing { flex-direction: row; gap: 6px; }
+    #${PANEL_ID} .tring-msg-ringing i {
+      width: 7px; height: 7px; border-radius: 50%; background: #d98e04;
+      animation: tring-pulse 1.2s ease-in-out infinite;
     }
-    #${PANEL_ID}.tring-keypad-open .tring-panel-dialpad { display: grid; }
-    /* Transfer picker: a live list of agents + teams; replaces the controls. */
-    #${PANEL_ID} .tring-panel-picker { display: none; max-height: 220px; overflow-y: auto; }
-    #${PANEL_ID}.tring-picker-open .tring-panel-picker { display: block; }
-    #${PANEL_ID}.tring-picker-open .tring-panel-actions,
-    #${PANEL_ID}.tring-picker-open .tring-panel-dialpad { display: none; }
-    #${PANEL_ID} .tring-picker-title { font-size: 13px; color: #9ca3af; margin-bottom: .35rem; }
-    #${PANEL_ID} .tring-picker-sub { font-size: 11px; color: #6b7280; text-transform: uppercase; margin: .5rem 0 .25rem; }
-    #${PANEL_ID} .tring-picker-empty { font-size: 13px; color: #9ca3af; padding: .5rem 0; }
-    #${PANEL_ID} .tring-picker-item {
-      display: block; width: 100%; text-align: left;
-      background: #1f2937; color: #f9fafb; border: 1px solid #374151;
-      padding: .55rem .65rem; border-radius: 6px; margin-bottom: .35rem;
-      font: inherit; cursor: pointer;
+    #${PANEL_ID} .tring-msg-ringing i:nth-child(2) { animation-delay: .2s; }
+    #${PANEL_ID} .tring-msg-ringing i:nth-child(3) { animation-delay: .4s; }
+    /* The caller's shared screen (a web caller's video track). */
+    #${PANEL_ID} .tring-panel-video { padding: 8px; }
+    #${PANEL_ID} .tring-remote-video {
+      display: block; width: 100%; max-height: 200px;
+      border-radius: 10px; background: #1f2420; object-fit: contain;
     }
-    #${PANEL_ID} .tring-picker-item:hover { background: #374151; }
-    #${PANEL_ID} .tring-picker-cancel {
-      width: 100%; background: none; color: #9ca3af; border: 0;
-      padding: .4rem; font: inherit; cursor: pointer; text-decoration: underline;
+    #${PANEL_ID} .tring-video-bar {
+      display: flex; align-items: center; gap: 8px; padding: 8px 4px 0;
+      font-size: 13px; font-weight: 600;
     }
-    #${PANEL_ID} .tring-dtmf {
-      background: #1f2937; color: #f9fafb; border: 1px solid #374151;
-      padding: .55rem 0; border-radius: 6px;
-      font: 16px/1 system-ui, sans-serif; font-weight: 600;
-      cursor: pointer;
+    #${PANEL_ID} .tring-video-bar span { flex: 1; }
+    #${PANEL_ID} .tring-fullscreen {
+      height: 30px; padding: 0 10px; border: 1px solid #dcd8cc; border-radius: 8px;
+      background: #fbfaf7; color: #1f2420; font-size: 13px; font-weight: 600; cursor: pointer;
     }
-    #${PANEL_ID} .tring-dtmf:hover { background: #374151; }
-    #${PANEL_ID} .tring-dtmf:active { background: #4b5563; }
+    /* Keypad (dialpad), opened from the keypad button. */
+    #${PANEL_ID} .tring-panel-dialpad { padding: 12px; }
     /* Echoes the digits the user has pressed so far — handy for
        debugging "did I actually press 1 or did the touch miss?". */
     #${PANEL_ID} .tring-panel-dialed {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: #fbbf24; min-height: 1.2em; font-size: 13px;
+      min-height: 22px; margin-bottom: 10px; text-align: center;
+      font: 17px/22px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .2em;
+    }
+    #${PANEL_ID} .tring-dtmf-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    #${PANEL_ID} .tring-dtmf {
+      height: 44px; border: 0; border-radius: 10px;
+      background: #fbfaf7; color: #1f2420; cursor: pointer;
+      font: 18px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #${PANEL_ID} .tring-dtmf:hover { background: #fff; }
+    #${PANEL_ID} .tring-dtmf:active { background: #ece9e0; }
+    /* Transfer picker: a live list of agents + teams. */
+    #${PANEL_ID} .tring-panel-picker { padding: 12px; max-height: 240px; overflow-y: auto; }
+    #${PANEL_ID} .tring-picker-title,
+    #${PANEL_ID} .tring-picker-sub {
+      font-size: 12px; font-weight: 700; color: #5c6058;
+      letter-spacing: .05em; text-transform: uppercase; padding: 2px 4px 6px;
+    }
+    #${PANEL_ID} .tring-picker-sub { padding-top: 8px; }
+    #${PANEL_ID} .tring-picker-empty { font-size: 13px; color: #5c6058; padding: 4px 4px 8px; }
+    #${PANEL_ID} .tring-picker-item {
+      display: block; width: 100%; min-height: 42px; margin-bottom: 6px; padding: 0 12px;
+      border: 0; border-radius: 10px; background: #fbfaf7; color: #1f2420;
+      text-align: left; font-weight: 600; cursor: pointer;
+    }
+    #${PANEL_ID} .tring-picker-item:hover { background: #fff; }
+    #${PANEL_ID} .tring-picker-cancel {
+      width: 100%; padding: 6px; border: 0; background: none;
+      color: #5c6058; cursor: pointer; text-decoration: underline;
+    }
+    /* Controls. Accept/Decline only while an inbound call rings. */
+    #${PANEL_ID} .tring-panel-incoming { display: none; grid-template-columns: 1fr 1fr; gap: 8px; }
+    #${PANEL_ID}[data-state="incoming"] .tring-panel-incoming { display: grid; }
+    #${PANEL_ID} .tring-panel-actions { display: flex; gap: 6px; }
+    #${PANEL_ID}[data-state="incoming"] .tring-panel-actions,
+    #${PANEL_ID}[data-state="ended"] .tring-panel-actions { display: none; }
+    #${PANEL_ID} .tring-ctl {
+      flex: 1 1 0; min-width: 0; height: 52px; padding: 0;
+      border: 0; border-radius: 14px; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #ece9e0; color: #2b302b;
+    }
+    #${PANEL_ID} .tring-ctl svg { width: 20px; height: 20px; }
+    #${PANEL_ID} .tring-ctl:hover { background: #e3dfd3; }
+    #${PANEL_ID} .tring-ctl:disabled { opacity: .5; cursor: default; }
+    #${PANEL_ID} .tring-ctl.is-active { background: #0f5c46; color: #fff; }
+    #${PANEL_ID} .tring-hangup, #${PANEL_ID} .tring-accept, #${PANEL_ID} .tring-decline {
+      font-size: 16px; font-weight: 700;
+    }
+    #${PANEL_ID} .tring-hangup { flex: 1.8 1 0; background: #c0392b; color: #fff; }
+    #${PANEL_ID} .tring-hangup:hover { background: #a93226; }
+    #${PANEL_ID} .tring-accept { background: #0f5c46; color: #fff; }
+    #${PANEL_ID} .tring-accept:hover { background: #0b4736; }
+    #${PANEL_ID} .tring-decline { background: #f6e3e0; color: #a3271b; }
+    #${PANEL_ID} .tring-decline:hover { background: #f0d3ce; }
+    /* Minimized (connected calls only): the card collapses to a pill. */
+    #${PANEL_ID} .tring-mini {
+      display: none; align-items: center; gap: 10px; height: 56px; padding: 0 8px 0 18px;
+      background: #fbfaf7; border: 1px solid #e4e0d5; border-radius: 999px;
+      box-shadow: 0 12px 30px rgba(31,36,32,.12), 0 2px 6px rgba(31,36,32,.06);
+    }
+    #${PANEL_ID}.tring-min[data-state="connected"] { width: auto; }
+    #${PANEL_ID}.tring-min[data-state="connected"] .tring-mini { display: flex; }
+    #${PANEL_ID}.tring-min[data-state="connected"] .tring-card { display: none; }
+    #${PANEL_ID} .tring-mini-name {
+      max-width: 140px; font-weight: 600; font-size: 15px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #${PANEL_ID} .tring-mini-time {
+      flex: 1; white-space: nowrap; color: #5c6058;
+      font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    #${PANEL_ID} .tring-mini-btn {
+      width: 40px; height: 40px; flex: none; padding: 0; border: 0; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #ece9e0; color: #2b302b; cursor: pointer;
+    }
+    #${PANEL_ID} .tring-mini-btn svg { width: 18px; height: 18px; }
+    #${PANEL_ID} .tring-mini-btn.is-active { background: #0f5c46; color: #fff; }
+    #${PANEL_ID} .tring-mini-end { background: #c0392b; color: #fff; }
+    /* The phone icon rotated to the "end call" angle. */
+    #${PANEL_ID} .tring-mini-end svg { transform: rotate(135deg); }
+    @keyframes tring-wave { 0%,100% { transform: scaleY(.28); } 50% { transform: scaleY(1); } }
+    @media (prefers-reduced-motion: reduce) {
+      #${PANEL_ID} .tring-wave span, #${PANEL_ID} .tring-msg-ringing i, #${PANEL_ID} .tring-dot { animation: none; }
     }
     /* Always-visible connection badge (socket health only). */
     .tring-status-badge {
