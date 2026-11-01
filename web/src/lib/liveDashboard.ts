@@ -167,6 +167,16 @@ export function sortLiveCalls(cs: Call[]): Call[] {
   return [...waiting, ...cs.filter((c) => !isWaitingCall(c))];
 }
 
+export type CallFilter = "all" | "waiting" | "talking";
+
+// Apply the live-calls filter, always keeping keepId (the call being
+// supervised) so its Whisper/Barge/Stop controls stay reachable.
+export function filterLiveCalls(cs: Call[], f: CallFilter, keepId?: string): Call[] {
+  return cs.filter(
+    (c) => f === "all" || c.id === keepId || (f === "waiting" ? isWaitingCall(c) : c.status === "answered"),
+  );
+}
+
 export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "danger" | "warning" } | null {
   const sla = c.queue_sla_seconds ?? 0;
   if (!isWaitingCall(c) || sla <= 0) return null;
