@@ -33,16 +33,22 @@ type Queries struct {
 	GetAgentAvailability string `query:"get-agent-availability"` // gateway: Away badge on connect
 
 	// ---- api: teams (GetTeam + ListTeamAgentSips also used by orchestrator) ----
-	CreateTeam        string `query:"create-team"`
-	ListTeams         string `query:"list-teams"`
-	ListTeamNames     string `query:"list-team-names"`
-	GetTeam           string `query:"get-team"`
-	UpdateTeam        string `query:"update-team"`
-	DeleteTeam        string `query:"delete-team"`
-	ListTeamAgents    string `query:"list-team-agents"`
-	AddTeamAgent      string `query:"add-team-agent"`
-	RemoveTeamAgent   string `query:"remove-team-agent"`
-	ListTeamAgentSips string `query:"list-team-agent-sips"`
+	CreateTeam               string `query:"create-team"`
+	ListTeams                string `query:"list-teams"`
+	ListTeamNames            string `query:"list-team-names"`
+	GetTeam                  string `query:"get-team"`
+	UpdateTeam               string `query:"update-team"`
+	DeleteTeam               string `query:"delete-team"`
+	ListTeamAgents           string `query:"list-team-agents"`
+	AddTeamAgent             string `query:"add-team-agent"`
+	RemoveTeamAgent          string `query:"remove-team-agent"`
+	ListTeamAgentSips        string `query:"list-team-agent-sips"`
+	ListTeamLiveConfig       string `query:"list-team-live-config"`
+	ListTeamAgentStatus      string `query:"list-team-agent-status"`
+	InsertQueueStint         string `query:"insert-queue-stint"`
+	EndQueueStint            string `query:"end-queue-stint"`
+	ListOpenStints           string `query:"list-open-stints"`
+	CountBreachesTodayByTeam string `query:"count-breaches-today-by-team"`
 
 	// ---- api: numbers ----
 	CreateNumber             string `query:"create-number"`
@@ -70,6 +76,7 @@ type Queries struct {
 	CountActiveAgentCalls string `query:"count-active-agent-calls"`
 	StatsToday            string `query:"stats-today"`
 	StatsHourly           string `query:"stats-hourly"`
+	StatsQueueToday       string `query:"stats-queue-today"`
 
 	// ---- api: calls ----
 	GetAgentSipUsername     string `query:"get-agent-sip-username"`

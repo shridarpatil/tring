@@ -38,12 +38,12 @@ SELECT available_for_calls FROM agents WHERE tenant_id = $1 AND sip_username = $
 -- ===========================================================================
 
 -- name: create-team
-INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at;
+INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at;
 
 -- name: list-teams
-SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at
 FROM teams WHERE tenant_id = $1 ORDER BY name;
 
 -- name: list-team-names
@@ -51,14 +51,14 @@ FROM teams WHERE tenant_id = $1 ORDER BY name;
 SELECT name FROM teams WHERE tenant_id = $1 ORDER BY name;
 
 -- name: get-team
-SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at
 FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: get-team-moh
 -- A team's own queue settings for the gateway's transfer ring. The tenant's
 -- hold music (the effective-MOH fallback) is read and cached separately
 -- (get-tenant-audio), so each invalidates on its own write.
-SELECT strategy, ring_seconds, max_wait_seconds, moh_sound
+SELECT strategy, ring_seconds, max_wait_seconds, moh_sound, sla_seconds
 FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: update-team
@@ -67,9 +67,12 @@ UPDATE teams SET
     strategy         = COALESCE($3, strategy),
     ring_seconds     = COALESCE($4, ring_seconds),
     max_wait_seconds = COALESCE($5, max_wait_seconds),
-    moh_sound        = COALESCE($6, moh_sound)
+    moh_sound        = COALESCE($6, moh_sound),
+    min_live_agents  = COALESCE($7, min_live_agents),
+    sla_seconds      = COALESCE($8, sla_seconds),
+    hours            = COALESCE($9, hours)
 WHERE tenant_id = $1 AND name = $2
-RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at;
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at;
 
 -- name: delete-team
 DELETE FROM teams WHERE tenant_id = $1 AND name = $2;
@@ -99,6 +102,50 @@ SELECT a.sip_username, ta.position
 FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
 WHERE ta.tenant_id = $1 AND ta.team_name = $2 AND a.available_for_calls
 ORDER BY ta.position, a.sip_username;
+
+-- name: list-team-live-config
+-- Staffing / SLA / working-hours settings per team, for the live dashboard.
+SELECT name, min_live_agents, sla_seconds, hours
+FROM teams WHERE tenant_id = $1 ORDER BY name;
+
+-- name: list-team-agent-status
+-- Team membership (team name + agent SIP user) for the live dashboard's
+-- per-team live-agent count; presence is joined from Redis by the caller.
+SELECT ta.team_name, a.sip_username
+FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+WHERE ta.tenant_id = $1;
+
+-- name: insert-queue-stint
+-- A caller starts waiting in a team queue. sla_seconds is the team's SLA
+-- snapshotted now so later setting changes don't rewrite history.
+INSERT INTO queue_stints (tenant_id, call_id, team, sla_seconds)
+VALUES ($1, $2, $3, $4)
+RETURNING id;
+
+-- name: end-queue-stint
+-- Close a stint with its outcome (answered | abandoned | timeout | transferred).
+-- Idempotent: an already-ended stint is left untouched.
+UPDATE queue_stints SET ended_at = now(), outcome = $2
+WHERE id = $1 AND ended_at IS NULL;
+
+-- name: list-open-stints
+-- Callers currently waiting. The 4 h cap ignores stints orphaned by a crash
+-- that never got an end-queue-stint.
+SELECT team, enqueued_at
+FROM queue_stints
+WHERE tenant_id = $1 AND ended_at IS NULL AND enqueued_at > now() - interval '4 hours'
+ORDER BY enqueued_at;
+
+-- name: count-breaches-today-by-team
+-- SLA breaches since local midnight, open stints included. A breach is
+-- waiting longer than the snapshotted SLA, whatever the outcome.
+SELECT team, count(*)
+FROM queue_stints
+WHERE tenant_id = $1
+  AND enqueued_at >= date_trunc('day', now())
+  AND sla_seconds > 0
+  AND COALESCE(ended_at, now()) - enqueued_at > make_interval(secs => sla_seconds)
+GROUP BY team;
 
 -- ===========================================================================
 -- numbers
@@ -267,7 +314,7 @@ WHERE tenant_id = $1 AND started_at >= date_trunc('day', now());
 -- nothing to mismatch. (The previous handler truncated buckets in UTC and matched
 -- by unix epoch, which zeroed the whole chart on any fractional-offset session zone
 -- like IST +5:30, where local hour starts fall at :30 past the UTC hour.)
-SELECT g.hour, COALESCE(c.n, 0)
+SELECT g.hour, COALESCE(c.n, 0), COALESCE(b.n, 0)
 FROM generate_series(
        date_trunc('hour', now()) - interval '11 hours',
        date_trunc('hour', now()),
@@ -279,7 +326,28 @@ LEFT JOIN (
   WHERE tenant_id = $1 AND started_at >= date_trunc('hour', now()) - interval '11 hours'
   GROUP BY 1
 ) c ON c.hour = g.hour
+LEFT JOIN (
+  SELECT date_trunc('hour', enqueued_at) AS hour, count(*) AS n
+  FROM queue_stints
+  WHERE tenant_id = $1 AND enqueued_at >= date_trunc('hour', now()) - interval '11 hours'
+    AND sla_seconds > 0
+    AND EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)) > sla_seconds
+  GROUP BY 1
+) b ON b.hour = g.hour
 ORDER BY g.hour;
+
+-- name: stats-queue-today
+-- Today's SLA breaches and average queue wait from queue_stints (a stint is
+-- one caller's time in one team queue). Breach = sla_seconds > 0 and the stint
+-- (open ones measured to now) outlasted it, whatever the outcome. Avg wait is
+-- over answered stints only; 0 when none.
+SELECT
+  count(*) FILTER (WHERE sla_seconds > 0
+                     AND EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)) > sla_seconds),
+  COALESCE(avg(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)))
+             FILTER (WHERE outcome = 'answered'), 0)::float8
+FROM queue_stints
+WHERE tenant_id = $1 AND enqueued_at >= date_trunc('day', now());
 
 -- ===========================================================================
 -- calls
@@ -438,12 +506,21 @@ ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 -- In-progress calls for the cockpit "Live calls" panel: not yet ended, still
 -- ringing or connected. Oldest first so the longest-running call stays put at the
 -- top. Capped — active calls are naturally bounded, the LIMIT is just a backstop.
+-- The trailing team / enqueued_at / sla_seconds are the call's open queue stint
+-- (newest, within the same 4 h cap as list-open-stints), NULL when not queued.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
-       COALESCE(c.room_id, '')
+       COALESCE(c.room_id, ''),
+       qs.team, qs.enqueued_at, qs.sla_seconds
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
+LEFT JOIN LATERAL (
+    SELECT team, enqueued_at, sla_seconds FROM queue_stints
+    WHERE tenant_id = c.tenant_id AND call_id = c.id AND ended_at IS NULL
+      AND enqueued_at > now() - interval '4 hours'
+    ORDER BY enqueued_at DESC LIMIT 1
+) qs ON true
 WHERE c.tenant_id = $1 AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
 ORDER BY c.started_at ASC LIMIT 100;
 

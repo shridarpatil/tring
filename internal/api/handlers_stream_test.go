@@ -81,6 +81,36 @@ func TestDashboardStreamForwardsCallSupervised(t *testing.T) {
 	}
 }
 
+// queue.stint must be in the hub's forward allowlist (cmd/api/main.go) so the
+// dashboard sees a caller's wait start and end live.
+func TestDashboardStreamForwardsQueueStint(t *testing.T) {
+	hub := events.NewTestHub()
+	hub.Forward(events.TypeQueueStint)
+	srv := &Server{hub: hub, log: slog.Default()}
+
+	tenantID := uuid.New()
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest("GET", "/v1/stream/dashboard", nil)
+	r = r.WithContext(withTenantForTest(ctx, tenantID))
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		srv.handleDashboardStream(w, r)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	hub.DispatchForTest(tenantID.String(), events.Frame(events.TypeQueueStint, []byte(`{"call_id":"c1","team":"support","queued_at":null,"sla_seconds":0}`)))
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if body := w.Body.String(); !strings.Contains(body, "event: queue.stint") {
+		t.Fatalf("missing forwarded queue.stint event:\n%s", body)
+	}
+}
+
 // withTenantForTest injects a Tenant into the request context using the same key
 // tenantFromCtx reads.
 func withTenantForTest(ctx context.Context, id uuid.UUID) context.Context {

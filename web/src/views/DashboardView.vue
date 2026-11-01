@@ -2,16 +2,32 @@
 import { ref, computed } from "vue";
 import { usePoll } from "../composables/usePoll";
 import { useDashboardStream } from "../composables/useDashboardStream";
-import type { Call, Agent } from "../api/types";
-import { Panel, SignalDot, LevelMeter } from "../components/ui";
+import type { Call } from "../api/types";
+import { Panel, LevelMeter } from "../components/ui";
 import MiniBarChart from "../components/MiniBarChart.vue";
-import QueuePressureBar from "../components/QueuePressureBar.vue";
+import DashAlerts from "../components/dashboard/DashAlerts.vue";
+import TeamBoard from "../components/dashboard/TeamBoard.vue";
+import AgentBoard from "../components/dashboard/AgentBoard.vue";
+import {
+  abandonedPct,
+  agentsLiveRequired,
+  sharedSla,
+  breachingCount,
+  buildAlerts,
+  callSlaBadge,
+  filterLiveCalls,
+  fmtMMSS,
+  type CallFilter,
+  isWaitingCall,
+  longestWait,
+  sortLiveCalls,
+} from "../lib/liveDashboard";
 import { api } from "../api/client";
 import { SupervisorSession, type SuperviseMode } from "../lib/supervisor";
 import { errMessage } from "../lib/errors";
 import { toast } from "../lib/toast";
 
-// One SSE stream backs all four panels (live calls, agents, queues, stats).
+// One SSE stream backs every panel (live calls, agents, teams, stats).
 const { calls, agents, queues, stats, ready } = useDashboardStream();
 
 // Ticking clock: drives live call/agent durations between server updates. Durations
@@ -32,32 +48,25 @@ function callSeconds(c: Call): number {
 }
 
 // ── KPI derivations ───────────────────────────────────────────────────
-const availableAgents = computed(() => agents.value.filter((a) => a.status === "online").length);
+const teams = computed(() => queues.value.queues);
+const alerts = computed(() => buildAlerts(teams.value, now.value));
 const hasTalking = computed(() => calls.value.some((c) => c.status === "answered"));
-const queueMax = computed(() => Math.max(1, ...queues.value.queues.map((q) => q.waiting)));
+const waitingNow = computed(() => teams.value.reduce((n, t) => n + t.waiting_since.length, 0));
+const longestNow = computed(() => Math.max(0, ...teams.value.map((t) => longestWait(t, now.value))));
+const breachingNow = computed(() => teams.value.reduce((n, t) => n + breachingCount(t, now.value), 0));
+const staffing = computed(() => agentsLiveRequired(teams.value));
+const slaLimit = computed(() => sharedSla(teams.value));
+const abandonedShare = computed(() => abandonedPct(stats.value?.abandoned_today ?? 0, stats.value?.calls_today ?? 0));
 
-// An agent's current call (for the on-call timer on the agent board), matched
-// from the active-calls list by agent_id.
-const callByAgent = computed(() => {
-  const m = new Map<string, Call>();
-  for (const c of calls.value) if (c.agent_id) m.set(c.agent_id, c);
-  return m;
-});
-function agentStatusLabel(a: Agent): string {
-  if (a.status === "on_call") {
-    const c = a.id ? callByAgent.value.get(a.id) : undefined;
-    return c ? "on call · " + fmtDur(callSeconds(c)) : "on call";
-  }
-  if (a.status === "online") return "available";
-  if (a.status === "away") return "away";
-  return "offline";
-}
-// Sort the board: on-call first, then available, away, offline.
-const rank: Record<string, number> = { on_call: 0, online: 1, away: 2, offline: 3, unknown: 4 };
-const sortedAgents = computed(() =>
-  [...agents.value].sort((a, b) => (rank[a.status ?? "unknown"] ?? 4) - (rank[b.status ?? "unknown"] ?? 4)),
-);
-const onlineCount = computed(() => agents.value.filter((a) => a.status && a.status !== "offline").length);
+// ── live calls: waiting callers first, filterable ─────────────────────
+const callFilters: { key: CallFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "waiting", label: "Waiting" },
+  { key: "talking", label: "Talking" },
+];
+const callFilter = ref<CallFilter>("all");
+// The supervised call stays listed under any filter so its controls stay reachable.
+const shownCalls = computed(() => filterLiveCalls(sortLiveCalls(calls.value), callFilter.value, active.value?.callId));
 
 // ── live-call row presentation ────────────────────────────────────────
 function sourceIcon(c: Call): string {
@@ -135,19 +144,30 @@ usePoll(() => (now.value = Date.now()), 1000);
     <div v-if="!ready" class="text-lighter">Loading…</div>
 
     <template v-else>
+      <DashAlerts :alerts="alerts" :now-ms="now" />
+
       <!-- Trend strip: today so far -->
-      <div class="card trend-strip">
-        <div style="flex-shrink: 0">
-          <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
-          <div class="trend-label">Calls today</div>
-        </div>
-        <div style="flex-shrink: 0">
-          <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
-          <div class="trend-label">Answered</div>
-        </div>
-        <div style="flex-shrink: 0">
-          <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
-          <div class="trend-label">Avg talk</div>
+      <!-- hstack only adds wrapping: the chart drops to its own line on narrow screens -->
+      <div class="card trend-strip hstack">
+        <div class="row" style="flex: 0 0 15rem">
+          <div class="col-6">
+            <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
+            <small class="text-light">Calls today</small>
+          </div>
+          <div class="col-6">
+            <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
+            <small class="text-light">Answered</small>
+          </div>
+          <div class="col-6 mt-2">
+            <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
+            <small class="text-light">Avg talk</small>
+          </div>
+          <div class="col-6 mt-2">
+            <div class="trend-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
+              {{ stats?.sla_breaches_today ?? 0 }}
+            </div>
+            <small class="text-light">SLA breaches</small>
+          </div>
         </div>
         <div class="trend-divider"></div>
         <div style="flex: 1 1 auto; min-width: 0">
@@ -155,60 +175,96 @@ usePoll(() => (now.value = Date.now()), 1000);
         </div>
       </div>
 
-      <!-- KPI hero row. On-call + waiting aren't here — they already show in the
-           Live calls / Queues panels below; these surface outcomes instead. -->
-      <div class="grid grid-4">
-        <div class="card">
-          <div class="kpi-num" :style="{ color: (stats?.abandoned_today ?? 0) > 0 ? 'var(--warning)' : undefined }">
+      <!-- Headline numbers -->
+      <div class="row">
+        <div class="card col-2">
+          <div class="kpi-num">{{ queues.on_call }}</div>
+          <div><small class="text-light">On call</small></div>
+          <small class="text-lighter">{{ calls.length }} active incl. IVR/ringing</small>
+        </div>
+        <div class="card col-2">
+          <div class="kpi-num" :style="{ color: waitingNow > 0 ? 'var(--danger)' : undefined }">{{ waitingNow }}</div>
+          <div><small class="text-light">Waiting now</small></div>
+          <small v-if="waitingNow" class="text-lighter">longest <span style="color: var(--danger)">{{ fmtMMSS(longestNow) }}</span></small>
+          <small v-else class="text-lighter">no queue</small>
+        </div>
+        <div class="card col-2">
+          <div class="kpi-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
+            {{ stats?.sla_breaches_today ?? 0 }}
+          </div>
+          <div><small class="text-light">SLA breaches today</small></div>
+          <small v-if="breachingNow > 0"><strong style="color: var(--danger)">{{ breachingNow }} breaching now</strong></small>
+          <small v-else class="text-lighter">none breaching now</small>
+        </div>
+        <div class="card col-2">
+          <div class="kpi-num" :style="{ color: staffing.live < staffing.min ? 'var(--danger)' : undefined }">
+            {{ staffing.live }}<small class="text-lighter"> / {{ staffing.min }}</small>
+          </div>
+          <div><small class="text-light">Agents live / required</small></div>
+          <progress v-if="staffing.min > 0" :value="staffing.live" :max="staffing.min"></progress>
+          <template v-if="staffing.min > 0">
+            <small v-if="staffing.short > 0"><strong style="color: var(--danger)">{{ staffing.short }} team(s) short</strong></small>
+            <small v-else class="text-lighter">all teams staffed</small>
+          </template>
+        </div>
+        <div class="card col-2">
+          <div class="kpi-num">{{ fmtMMSS(stats?.avg_queue_wait_seconds ?? 0) }}</div>
+          <div><small class="text-light">Avg queue wait</small></div>
+          <small v-if="slaLimit" class="text-lighter">SLA limit {{ fmtMMSS(slaLimit) }}</small>
+        </div>
+        <div class="card col-2">
+          <div class="kpi-num" :style="{ color: (stats?.abandoned_today ?? 0) > 10 ? 'var(--warning)' : undefined }">
             {{ stats?.abandoned_today ?? 0 }}
           </div>
-          <div class="text-light" style="margin-top: 0.25rem">Abandoned today</div>
-        </div>
-
-        <div class="card">
-          <div class="kpi-num" :style="{ color: (stats?.failed_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
-            {{ stats?.failed_today ?? 0 }}
-          </div>
-          <div class="text-light" style="margin-top: 0.25rem">Failed today</div>
-        </div>
-
-        <div class="card">
-          <div class="kpi-num">
-            {{ availableAgents }}<span class="text-lighter" style="font-size: 1.125rem"> / {{ agents.length }}</span>
-          </div>
-          <div class="text-light" style="margin-top: 0.25rem">Agents available</div>
-        </div>
-
-        <div class="card">
-          <div class="kpi-num">{{ fmtDur(stats?.avg_wait_seconds ?? 0) }}</div>
-          <div class="text-light" style="margin-top: 0.25rem">Avg wait today</div>
+          <div><small class="text-light">Abandoned today</small></div>
+          <small v-if="abandonedShare" class="text-lighter">{{ abandonedShare }}% of calls</small>
         </div>
       </div>
 
-      <!-- Main row: live calls | queues + agents -->
+      <TeamBoard :teams="teams" :now-ms="now" />
+
+      <!-- Main row: live calls | agents -->
       <div class="dash-main">
         <Panel>
           <template #title>Live calls</template>
           <template #actions>
             <LevelMeter v-if="hasTalking" active />
-            <span class="text-light">{{ calls.length }} active</span>
+            <small class="text-light">{{ calls.length }} active</small>
           </template>
-          <div class="scroll-max" style="--max-h: 28rem">
-          <div v-if="!calls.length" class="list-empty">
-            No live calls
+          <div class="hstack gap-2 p-4">
+            <button
+              v-for="f in callFilters"
+              :key="f.key"
+              type="button"
+              class="small"
+              :class="{ outline: callFilter !== f.key }"
+              :aria-pressed="callFilter === f.key"
+              @click="callFilter = f.key"
+            >
+              {{ f.label }}
+            </button>
           </div>
-          <div v-for="c in calls" :key="c.id" class="live-call-row">
+          <div class="scroll-max" style="--max-h: 28rem">
+          <div v-if="!shownCalls.length" class="list-empty">
+            <small>No live calls</small>
+          </div>
+          <div v-for="c in shownCalls" :key="c.id" class="live-call-row">
             <span class="source-badge" aria-hidden="true">{{ sourceIcon(c) }}</span>
             <div style="flex: 1 1 auto; min-width: 0">
               <div class="truncate">
-                {{ callerLabel(c) }} → <span style="font-weight: 500">{{ destLabel(c) }}</span>
+                <small>{{ callerLabel(c) }} → <strong>{{ destLabel(c) }}</strong></small>
               </div>
-              <div class="text-lighter mono truncate">{{ c.to_number }}</div>
+              <div class="text-lighter mono truncate">
+                <small>{{ c.to_number }}<template v-if="isWaitingCall(c)"> · waiting in {{ c.queue_team }}</template></small>
+              </div>
+              <span v-if="callSlaBadge(c, now)" class="badge" :data-variant="callSlaBadge(c, now)!.variant">{{
+                callSlaBadge(c, now)!.text
+              }}</span>
             </div>
             <span class="badge" :data-variant="callBadge(c).cls" style="flex-shrink: 0">{{ callBadge(c).text }}</span>
-            <span class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
+            <small class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
               fmtDur(callSeconds(c))
-            }}</span>
+            }}</small>
             <!-- Supervisor controls: any call with a media room (web, phone,
                  WhatsApp; calls placed over ESL have none). Only ONE supervise
                  session is supported at a time (the `active` ref, not per-row state). -->
@@ -244,43 +300,7 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
         </Panel>
 
-        <div class="vstack">
-          <Panel>
-            <template #title>Queues by team</template>
-            <template #actions>
-              <span class="text-light">{{ queues.total }} waiting</span>
-            </template>
-            <div class="scroll-max" style="--max-h: 14rem">
-            <div v-if="!queues.queues.length" class="list-empty">
-              No teams
-            </div>
-            <QueuePressureBar
-              v-for="q in queues.queues"
-              :key="q.team"
-              :team="q.team"
-              :waiting="q.waiting"
-              :max="queueMax"
-            />
-            </div>
-          </Panel>
-
-          <Panel>
-            <template #title>Agents</template>
-            <template #actions>
-              <span class="text-light">{{ onlineCount }} online · {{ queues.on_call }} on call</span>
-            </template>
-            <div class="scroll-max" style="--max-h: 20rem">
-            <div v-if="!agents.length" class="list-empty">
-              No agents
-            </div>
-            <div v-for="a in sortedAgents" :key="a.id" class="agent-row">
-              <SignalDot :state="(a.status === 'unknown' ? 'offline' : a.status) ?? 'offline'" hide-label size="sm" />
-              <span class="truncate" style="flex: 1 1 auto">{{ a.display_name || a.sip_username }}</span>
-              <span class="text-light" style="font-variant-numeric: tabular-nums">{{ agentStatusLabel(a) }}</span>
-            </div>
-            </div>
-          </Panel>
-        </div>
+        <AgentBoard :agents="agents" :teams="teams" :calls="calls" :now-ms="now" />
       </div>
     </template>
   </div>

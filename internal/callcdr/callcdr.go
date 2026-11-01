@@ -53,6 +53,9 @@ type Log struct {
 
 	mu    sync.Mutex
 	calls map[string]*activeCall // by room id
+	// stintCalls maps an open queue stint to its call, captured at QueueEnter:
+	// the call usually ends (and leaves calls) before QueueLeave runs.
+	stintCalls map[uuid.UUID]uuid.UUID
 }
 
 type activeCall struct {
@@ -162,6 +165,8 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub e
 		log:    logger.With("component", "callcdr"),
 		events: pub,
 		calls:  map[string]*activeCall{},
+
+		stintCalls: map[uuid.UUID]uuid.UUID{},
 	}
 }
 

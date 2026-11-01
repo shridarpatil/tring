@@ -15,6 +15,7 @@ type TeamConfig struct {
 	Strategy    string // ring_all | round_robin | sequential | longest_wait
 	RingSeconds int    // per-attempt ring timeout
 	MaxWait     int    // total queue timeout (seconds)
+	SLASeconds  int    // max seconds a caller should wait in queue (0 = no SLA)
 	MOH         string // hold music: the team's own from LoadTeamConfig, resolved via EffectiveMOH
 }
 
@@ -24,7 +25,7 @@ type TeamConfig struct {
 func LoadTeamConfig(ctx context.Context, d *db.DB, q *queries.Queries, tenantID uuid.UUID, team string) (TeamConfig, error) {
 	cfg := TeamConfig{Name: team}
 	err := d.Pool.QueryRow(ctx, q.GetTeamMOH, tenantID, team).Scan(
-		&cfg.Strategy, &cfg.RingSeconds, &cfg.MaxWait, &cfg.MOH)
+		&cfg.Strategy, &cfg.RingSeconds, &cfg.MaxWait, &cfg.MOH, &cfg.SLASeconds)
 	return cfg, err
 }
 

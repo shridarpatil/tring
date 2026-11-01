@@ -21,6 +21,7 @@ const (
 	TypeQueueDepth      = "queue.depth"
 	TypeCallSupervised  = "call.supervised"
 	TypeCallTransferred = "call.transferred"
+	TypeQueueStint      = "queue.stint" // a caller entered (queued_at set) or left (null) a team queue
 
 	// Derived frame types produced by the api Hub (never published to Redis).
 	TypeStats    = "stats"

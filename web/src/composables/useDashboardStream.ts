@@ -87,6 +87,19 @@ function onEvent(type: string, data: unknown) {
       }
       break;
     }
+    case "queue.stint": {
+      // Enter carries queued_at; leave has it null (sla_seconds is 0 then, ignored).
+      const d = data as { call_id: string; team: string; queued_at: string | null; sla_seconds: number };
+      calls.value = calls.value.map((c) => {
+        if (c.id !== d.call_id) return c;
+        if (!d.queued_at) {
+          const { queue_team, queued_at, queue_sla_seconds, ...rest } = c;
+          return rest;
+        }
+        return { ...c, queue_team: d.team, queued_at: d.queued_at, queue_sla_seconds: d.sla_seconds };
+      });
+      break;
+    }
     case "agent.presence": {
       const d = data as { sip_username: string; status: Agent["status"] };
       agents.value = agents.value.map((a) =>
