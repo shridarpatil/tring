@@ -41,20 +41,32 @@ type HandoffWaiter interface {
 	AwaitHandoffEnd(ctx context.Context, roomID string) bool
 }
 
+// QueueStints records each caller's wait in a team queue (one stint per
+// routing.Router.Run) for SLA reporting; *callcdr.Log implements it.
+// QueueEnter returns the stint id, or uuid.Nil when it couldn't be recorded;
+// QueueLeave closes it with answered | timeout | transferred | abandoned.
+// Best-effort: neither may affect routing.
+type QueueStints interface {
+	QueueEnter(ctx context.Context, roomID, team string, slaSeconds int) uuid.UUID
+	QueueLeave(ctx context.Context, stintID uuid.UUID, roomID, team, outcome string)
+}
+
 // AgentRouter is the brain-owned implementation of ivrdrive.Agents: it sequences
 // team resolution → RouteConfig → routing.Router.Run, transport-agnostically.
 type AgentRouter struct {
 	teams  Teams
 	router *routing.Router
 	tport  RingTransport
+	stints QueueStints // nil = queue stints not recorded
 	log    *slog.Logger
 }
 
-func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, log *slog.Logger) *AgentRouter {
+// NewAgentRouter builds an AgentRouter. stints may be nil.
+func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, stints QueueStints, log *slog.Logger) *AgentRouter {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AgentRouter{teams: teams, router: router, tport: tport, log: log.With("component", "brain.route")}
+	return &AgentRouter{teams: teams, router: router, tport: tport, stints: stints, log: log.With("component", "brain.route")}
 }
 
 // Ring satisfies ivrdrive.Agents. roomID is the tenant-namespaced "<tenant>/<name>".
@@ -118,6 +130,7 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 
 	rc := routing.RouteConfig{TenantID: tenant}
 	var moh string // resolved team hold music, played to the caller while queued/ringing
+	var sla int    // resolved team SLA seconds, snapshotted on the stint
 	if !ringAll && t.Team != "" && a.teams != nil {
 		// TODO(plug): make per-plug when a 2nd plug lands
 		rc.Team, rc.Source = t.Team, queuekeys.SourceWeb
@@ -127,14 +140,36 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 				rc.RingSeconds = time.Duration(tc.RingSeconds) * time.Second
 				rc.MaxWait = time.Duration(tc.MaxWait) * time.Second
 				moh = tc.MOH
+				sla = tc.SLASeconds
 			}
 		}
 	}
 
 	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, sips, rc.Strategy, moh)
-	outcome, _, _ := a.router.Run(ctx, rc, candidates, eff)
+	var stint uuid.UUID
+	recordStint := rc.Team != "" && a.stints != nil
+	if recordStint {
+		stint = a.stints.QueueEnter(ctx, roomID, rc.Team, sla)
+	}
+	outcome, transferred, _ := a.router.Run(ctx, rc, candidates, eff)
+	if recordStint {
+		a.stints.QueueLeave(ctx, stint, roomID, rc.Team, stintOutcome(outcome, transferred))
+	}
 	if cleanup != nil {
 		cleanup()
 	}
 	return outcome
+}
+
+// stintOutcome maps a routing.Router.Run result to a queue stint outcome.
+func stintOutcome(outcome string, transferred bool) string {
+	switch {
+	case transferred:
+		return "transferred"
+	case outcome == routing.OutcomeCompleted:
+		return "answered"
+	case outcome == routing.OutcomeQueueTimeout:
+		return "timeout"
+	}
+	return "abandoned"
 }
