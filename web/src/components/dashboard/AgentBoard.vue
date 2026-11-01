@@ -95,7 +95,10 @@ function onCallLabel(a: Agent): string {
                   <small v-if="g.key === 'on_call'" class="text-light mono">{{ onCallLabel(a) }}</small>
                 </span>
               </td>
-              <td class="align-right"><small class="text-light">{{ teamsOf.get(a.sip_username)?.join(", ") || "—" }}</small></td>
+              <td class="align-right">
+                <span v-for="tm in teamsOf.get(a.sip_username) ?? []" :key="tm" class="badge" data-variant="secondary">{{ tm }}</span>
+                <small v-if="!teamsOf.get(a.sip_username)?.length" class="text-lighter">—</small>
+              </td>
             </tr>
             <tr v-if="g.total > g.shown.length">
               <td colspan="2">
