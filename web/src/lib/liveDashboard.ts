@@ -195,13 +195,15 @@ export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "
   return null;
 }
 
-// Agents live vs required, summed over teams that are open now and whose
-// staffing is known.
-export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: number } {
-  const open = ts.filter((t) => t.open && t.staffing_known);
+// Seats covered: over teams that are open now, staffing-known and have a
+// minimum, live counts at most min per team so a surplus in one team cannot
+// hide a gap in another. short = teams below their minimum.
+export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: number; short: number } {
+  const req = ts.filter((t) => t.open && t.staffing_known && t.min_live_agents > 0);
   return {
-    live: open.reduce((n, t) => n + t.live, 0),
-    min: open.reduce((n, t) => n + t.min_live_agents, 0),
+    live: req.reduce((n, t) => n + Math.min(t.live, t.min_live_agents), 0),
+    min: req.reduce((n, t) => n + t.min_live_agents, 0),
+    short: req.filter((t) => t.live < t.min_live_agents).length,
   };
 }
 

@@ -197,15 +197,25 @@ test("callSlaBadge", () => {
   assert.equal(callSlaBadge(call({ status: "answered", queue_sla_seconds: 60 }), NOW), null);
 });
 
-test("agentsLiveRequired sums open teams only", () => {
+test("agentsLiveRequired counts seats covered per team", () => {
   assert.deepEqual(
     agentsLiveRequired([
-      team({ live: 5, min_live_agents: 10 }),
-      team({ live: 2, min_live_agents: 2 }),
+      team({ live: 80, min_live_agents: 50 }),
+      team({ live: 20, min_live_agents: 50 }),
+    ]),
+    { live: 70, min: 100, short: 1 },
+  );
+});
+
+test("agentsLiveRequired ignores min-0, closed and unknown-staffing teams", () => {
+  assert.deepEqual(
+    agentsLiveRequired([
+      team({ live: 5, min_live_agents: 0 }),
       team({ open: false, live: 1, min_live_agents: 4 }),
       team({ staffing_known: false, live: 0, min_live_agents: 6 }),
+      team({ live: 2, min_live_agents: 2 }),
     ]),
-    { live: 7, min: 12 },
+    { live: 2, min: 2, short: 0 },
   );
 });
 
