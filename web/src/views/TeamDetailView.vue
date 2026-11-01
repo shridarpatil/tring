@@ -214,7 +214,7 @@ watch(() => route.params.name, load, { immediate: true });
           <div class="grid grid-3">
             <Select v-model="form.strategy" label="Strategy" :options="strategyOptions" />
             <TextField v-model.number="form.ring_seconds" type="number" label="Ring secs" />
-            <TextField v-model.number="form.max_wait_seconds" type="number" label="Max wait secs" />
+            <TextField v-model.number="form.max_wait_seconds" type="number" label="Max wait before removing caller (secs)" />
           </div>
           <p class="text-lighter hint">{{ strategyHint }}</p>
           <div>
@@ -240,10 +240,10 @@ watch(() => route.params.name, load, { immediate: true });
             />
             <TextField
               v-model="slaText"
-              label="SLA, max time in queue"
+              label="SLA (minutes:seconds)"
               placeholder="5:00"
               :error="slaParsed === null ? 'Use mm:ss, for example 5:00' : undefined"
-              hint="A caller waiting longer than this counts as an SLA breach. 0:00 turns the SLA off."
+              hint="A caller waiting in the queue longer than this counts as an SLA breach. They keep waiting; nothing is cut off. 0:00 turns the SLA off."
             />
           </div>
           <div role="alert" data-variant="warning" v-if="slaPastMaxWait">
