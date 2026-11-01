@@ -90,26 +90,28 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
     <div v-if="!sorted.length" class="text-lighter">No teams</div>
 
     <div v-else-if="view === 'cards'" class="row">
-      <div v-for="t in sorted" :key="t.team" class="card col-4" :class="{ 'text-lighter': compact(t) }">
+      <div v-for="t in sorted" :key="t.team" class="card col-3" :class="{ 'text-lighter': compact(t) }">
         <div class="vstack gap-2">
           <div class="hstack justify-between">
-            <strong>{{ t.team }}</strong>
             <span class="hstack gap-1">
-              <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
+              <strong>{{ t.team }}</strong>
               <RouterLink :to="settingsLink(t)" class="button ghost small" :aria-label="`${t.team} settings`" title="Settings"
                 >⚙</RouterLink
               >
             </span>
+            <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
           </div>
-          <small class="text-light">{{ hoursSummary(t.hours) }}<template v-if="!compact(t)"> · SLA {{ slaLabel(t) }}</template></small>
+          <small class="text-light"
+            >{{ hoursSummary(t.hours) }}<template v-if="!compact(t)"> · <span>SLA&nbsp;{{ slaLabel(t) }}</span></template></small
+          >
 
           <template v-if="!compact(t)">
-            <span v-if="!t.staffing_known" class="text-lighter">staffing unknown</span>
+            <small v-if="!t.staffing_known" class="text-lighter">staffing unknown</small>
             <template v-else>
               <div class="hstack justify-between">
                 <span class="hstack gap-2">
-                  <h2>{{ t.live }}</h2>
-                  <span class="text-light">{{ t.min_live_agents > 0 ? `of ${t.min_live_agents} min live` : "live" }}</span>
+                  <h3>{{ t.live }}</h3>
+                  <small class="text-light">{{ t.min_live_agents > 0 ? `of ${t.min_live_agents} min live` : "live" }}</small>
                 </span>
                 <span v-if="isUnderstaffed(t)" class="badge" data-variant="danger">{{ staffedPct(t) }}% staffed</span>
               </div>
@@ -124,27 +126,27 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
               ></progress>
 
-              <span class="hstack gap-4">
+              <small class="hstack gap-4">
                 <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
                 <SignalDot state="online" size="sm" :label="`${t.available} available`" />
                 <SignalDot v-if="t.away > 0" state="away" size="sm" :label="`${t.away} away`" />
-              </span>
+              </small>
             </template>
 
-            <hr />
+            <div class="hstack mt-2"><hr class="w-100" /></div>
 
-            <div class="hstack justify-between">
+            <div class="hstack justify-between gap-2">
               <div class="vstack gap-1">
-                <strong>{{ t.waiting_since.length }}</strong>
+                <small><strong>{{ t.waiting_since.length }}</strong></small>
                 <small class="text-light">waiting</small>
               </div>
-              <div class="vstack gap-1">
+              <div class="vstack gap-1" :title="`SLA ${slaLabel(t)}`">
                 <span><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></span>
-                <small class="text-light">longest · SLA {{ slaLabel(t) }}</small>
+                <small class="text-light">longest</small>
               </div>
-              <div class="vstack gap-1">
-                <strong>{{ t.breaches_today }}</strong>
-                <small class="text-light">SLA breaches today</small>
+              <div class="vstack gap-1" title="SLA breaches today">
+                <small><strong>{{ t.breaches_today }}</strong></small>
+                <small class="text-light">breaches</small>
               </div>
             </div>
           </template>
@@ -176,11 +178,11 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             <td><span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span></td>
             <td><small>{{ hoursSummary(t.hours) }}</small></td>
             <template v-if="!compact(t)">
-              <td class="mono">{{ slaLabel(t) }}</td>
-              <td v-if="!t.staffing_known" colspan="4" class="text-lighter">staffing unknown</td>
+              <td class="mono"><small>{{ slaLabel(t) }}</small></td>
+              <td v-if="!t.staffing_known" colspan="4" class="text-lighter"><small>staffing unknown</small></td>
               <td v-if="t.staffing_known">
                 <div class="vstack gap-1">
-                  <span class="mono">{{ t.live }}<template v-if="t.min_live_agents > 0"> / {{ t.min_live_agents }}</template></span>
+                  <small class="mono">{{ t.live }}<template v-if="t.min_live_agents > 0"> / {{ t.min_live_agents }}</template></small>
                   <progress
                     v-if="t.min_live_agents > 0"
                     :value="t.live"
@@ -190,13 +192,13 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 </div>
               </td>
               <template v-if="t.staffing_known">
-                <td class="mono">{{ t.on_call }}</td>
-                <td class="mono">{{ t.available }}</td>
-                <td class="mono">{{ t.away }}</td>
+                <td class="mono"><small>{{ t.on_call }}</small></td>
+                <td class="mono"><small>{{ t.available }}</small></td>
+                <td class="mono"><small>{{ t.away }}</small></td>
               </template>
-              <td class="mono">{{ t.waiting_since.length }}</td>
+              <td class="mono"><small>{{ t.waiting_since.length }}</small></td>
               <td><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></td>
-              <td class="mono">{{ t.breaches_today }}</td>
+              <td class="mono"><small>{{ t.breaches_today }}</small></td>
             </template>
             <td v-else colspan="8"></td>
             <td>
