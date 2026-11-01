@@ -13,7 +13,7 @@ function sync(el: HTMLElement, active: boolean): void {
     return;
   }
   if (current || typeof el.animate !== "function") return;
-  running.set(el, el.animate([{ opacity: 1 }, { opacity: 0.45 }, { opacity: 1 }], { duration: 1600, iterations: Infinity, easing: "ease-in-out" }));
+  running.set(el, el.animate([{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }], { duration: 1600, iterations: Infinity, easing: "ease-in-out" }));
 }
 
 export const vPulse: Directive<HTMLElement, boolean> = {

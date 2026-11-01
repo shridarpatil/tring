@@ -146,7 +146,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
 
             <div class="hstack justify-between gap-2">
               <div class="vstack gap-1">
-                <small v-pulse="t.waiting_since.length > 0"><strong>{{ t.waiting_since.length }}</strong></small>
+                <span v-if="t.waiting_since.length" v-pulse="true" class="badge" data-variant="danger">{{ t.waiting_since.length }}</span><small v-else><strong>0</strong></small>
                 <small class="text-light">waiting</small>
               </div>
               <div class="vstack gap-1" :title="`SLA ${slaLabel(t)}`">
@@ -208,7 +208,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <td class="mono"><small>{{ t.available }}</small></td>
                 <td class="mono"><small>{{ t.away }}</small></td>
               </template>
-              <td class="mono"><small v-pulse="t.waiting_since.length > 0">{{ t.waiting_since.length }}</small></td>
+              <td class="mono"><span v-if="t.waiting_since.length" v-pulse="true" class="badge" data-variant="danger">{{ t.waiting_since.length }}</span><small v-else>0</small></td>
               <td><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></td>
               <td class="mono"><small>{{ t.breaches_today }}</small></td>
             </template>
