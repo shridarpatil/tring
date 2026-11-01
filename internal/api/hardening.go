@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 // maxRequestBodyBytes caps every request body on the public router. The JSON
@@ -98,6 +100,16 @@ func adminHeaders(csp string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// staticCompress gzips the embedded console and widget files for clients that
+// accept it (minified JS/CSS shrink ~3x). Static files only: never the JSON
+// API, where compressing secret-bearing responses invites BREACH-style attacks.
+func staticCompress(next http.Handler) http.Handler {
+	return middleware.Compress(5,
+		"text/html", "text/css", "text/javascript", "application/javascript",
+		"application/json", "image/svg+xml",
+	)(next)
 }
 
 // sdkHandler serves the embedded widget bundles. Directories 404 rather than
