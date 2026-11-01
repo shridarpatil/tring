@@ -210,6 +210,26 @@ export function staffedPct(t: QueueDepth): number | null {
   return t.min_live_agents > 0 ? Math.round((t.live / t.min_live_agents) * 100) : null;
 }
 
+export interface StaffSegment {
+  kind: "on_call" | "available" | "missing" | "away";
+  count: number;
+  pct: number;
+}
+
+// Segments of the staffing bar, left to right; zero-count kinds omitted.
+// Total = max(min, live) + away. Empty when the team has no minimum.
+export function staffingSegments(t: QueueDepth): StaffSegment[] {
+  if (t.min_live_agents <= 0) return [];
+  const total = Math.max(t.min_live_agents, t.live) + t.away;
+  const parts: [StaffSegment["kind"], number][] = [
+    ["on_call", t.on_call],
+    ["available", t.available],
+    ["missing", Math.max(0, t.min_live_agents - t.live)],
+    ["away", t.away],
+  ];
+  return parts.filter(([, n]) => n > 0).map(([kind, count]) => ({ kind, count, pct: (count / total) * 100 }));
+}
+
 // SIP username -> the teams that agent belongs to, sorted.
 export function agentTeams(ts: QueueDepth[]): Map<string, string[]> {
   const m = new Map<string, string[]>();
