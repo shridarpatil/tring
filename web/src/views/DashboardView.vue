@@ -9,7 +9,9 @@ import DashAlerts from "../components/dashboard/DashAlerts.vue";
 import TeamBoard from "../components/dashboard/TeamBoard.vue";
 import AgentBoard from "../components/dashboard/AgentBoard.vue";
 import {
+  abandonedPct,
   agentsLiveRequired,
+  sharedSla,
   breachingCount,
   buildAlerts,
   callSlaBadge,
@@ -53,6 +55,8 @@ const waitingNow = computed(() => teams.value.reduce((n, t) => n + t.waiting_sin
 const longestNow = computed(() => Math.max(0, ...teams.value.map((t) => longestWait(t, now.value))));
 const breachingNow = computed(() => teams.value.reduce((n, t) => n + breachingCount(t, now.value), 0));
 const staffing = computed(() => agentsLiveRequired(teams.value));
+const slaLimit = computed(() => sharedSla(teams.value));
+const abandonedShare = computed(() => abandonedPct(stats.value?.abandoned_today ?? 0, stats.value?.calls_today ?? 0));
 
 // ── live calls: waiting callers first, filterable ─────────────────────
 const callFilters: { key: CallFilter; label: string }[] = [
@@ -145,23 +149,25 @@ usePoll(() => (now.value = Date.now()), 1000);
       <!-- Trend strip: today so far -->
       <!-- hstack only adds wrapping: the chart drops to its own line on narrow screens -->
       <div class="card trend-strip hstack">
-        <div style="flex-shrink: 0">
-          <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
-          <div class="trend-label">Calls today</div>
-        </div>
-        <div style="flex-shrink: 0">
-          <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
-          <div class="trend-label">Answered</div>
-        </div>
-        <div style="flex-shrink: 0">
-          <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
-          <div class="trend-label">Avg talk</div>
-        </div>
-        <div style="flex-shrink: 0">
-          <div class="trend-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
-            {{ stats?.sla_breaches_today ?? 0 }}
+        <div class="row" style="flex: 0 0 15rem">
+          <div class="col-6">
+            <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
+            <small class="text-light">Calls today</small>
           </div>
-          <div class="trend-label">SLA breaches</div>
+          <div class="col-6">
+            <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
+            <small class="text-light">Answered</small>
+          </div>
+          <div class="col-6 mt-2">
+            <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
+            <small class="text-light">Avg talk</small>
+          </div>
+          <div class="col-6 mt-2">
+            <div class="trend-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
+              {{ stats?.sla_breaches_today ?? 0 }}
+            </div>
+            <small class="text-light">SLA breaches</small>
+          </div>
         </div>
         <div class="trend-divider"></div>
         <div style="flex: 1 1 auto; min-width: 0">
@@ -173,33 +179,41 @@ usePoll(() => (now.value = Date.now()), 1000);
       <div class="row">
         <div class="card col-2">
           <div class="kpi-num">{{ queues.on_call }}</div>
-          <div class="text-light">On call</div>
+          <div><small class="text-light">On call</small></div>
+          <small class="text-lighter">{{ calls.length }} active incl. IVR/ringing</small>
         </div>
         <div class="card col-2">
-          <div class="kpi-num" :style="{ color: waitingNow > 0 ? 'var(--warning)' : undefined }">{{ waitingNow }}</div>
-          <div class="text-light">Waiting now<template v-if="waitingNow"> · longest {{ fmtMMSS(longestNow) }}</template></div>
+          <div class="kpi-num" :style="{ color: waitingNow > 0 ? 'var(--danger)' : undefined }">{{ waitingNow }}</div>
+          <div><small class="text-light">Waiting now</small></div>
+          <small v-if="waitingNow" class="text-lighter">longest <span style="color: var(--danger)">{{ fmtMMSS(longestNow) }}</span></small>
+          <small v-else class="text-lighter">no queue</small>
         </div>
         <div class="card col-2">
           <div class="kpi-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
             {{ stats?.sla_breaches_today ?? 0 }}
           </div>
-          <div class="text-light">SLA breaches today · {{ breachingNow }} now</div>
+          <div><small class="text-light">SLA breaches today</small></div>
+          <small v-if="breachingNow > 0"><strong style="color: var(--danger)">{{ breachingNow }} breaching now</strong></small>
+          <small v-else class="text-lighter">none breaching now</small>
         </div>
         <div class="card col-2">
           <div class="kpi-num" :style="{ color: staffing.live < staffing.min ? 'var(--danger)' : undefined }">
             {{ staffing.live }}<span class="text-lighter" style="font-size: 1.125rem"> / {{ staffing.min }}</span>
           </div>
-          <div class="text-light">Agents live / required</div>
+          <div><small class="text-light">Agents live / required</small></div>
+          <progress v-if="staffing.min > 0" :value="staffing.live" :max="staffing.min"></progress>
         </div>
         <div class="card col-2">
           <div class="kpi-num">{{ fmtMMSS(stats?.avg_queue_wait_seconds ?? 0) }}</div>
-          <div class="text-light">Avg queue wait</div>
+          <div><small class="text-light">Avg queue wait</small></div>
+          <small v-if="slaLimit" class="text-lighter">SLA limit {{ fmtMMSS(slaLimit) }}</small>
         </div>
         <div class="card col-2">
-          <div class="kpi-num" :style="{ color: (stats?.abandoned_today ?? 0) > 0 ? 'var(--warning)' : undefined }">
+          <div class="kpi-num" :style="{ color: (stats?.abandoned_today ?? 0) > 10 ? 'var(--warning)' : undefined }">
             {{ stats?.abandoned_today ?? 0 }}
           </div>
-          <div class="text-light">Abandoned today</div>
+          <div><small class="text-light">Abandoned today</small></div>
+          <small v-if="abandonedShare" class="text-lighter">{{ abandonedShare }}% of calls</small>
         </div>
       </div>
 

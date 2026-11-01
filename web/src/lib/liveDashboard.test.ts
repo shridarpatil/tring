@@ -22,6 +22,8 @@ import {
   sortTeams,
   teamState,
   waitTone,
+  sharedSla,
+  abandonedPct,
 } from "./liveDashboard.ts";
 import type { Call, QueueDepth } from "../api/types";
 
@@ -273,4 +275,18 @@ test("unknown staffing is never understaffed", () => {
   assert.equal(isUnderstaffed(t), false);
   assert.deepEqual(buildAlerts([t], NOW), []);
   assert.equal(belowMinCount([t]), 0);
+});
+
+test("sharedSla: one common limit, else null", () => {
+  const t = (sla: number) => ({ sla_seconds: sla }) as QueueDepth;
+  assert.equal(sharedSla([t(300), t(300), t(0)]), 300);
+  assert.equal(sharedSla([t(300), t(120)]), null);
+  assert.equal(sharedSla([t(0)]), null);
+  assert.equal(sharedSla([]), null);
+});
+
+test("abandonedPct: one decimal, null without calls", () => {
+  assert.equal(abandonedPct(23, 406), "5.7");
+  assert.equal(abandonedPct(0, 10), "0.0");
+  assert.equal(abandonedPct(3, 0), null);
 });

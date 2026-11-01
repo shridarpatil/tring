@@ -14,12 +14,13 @@ const max = computed(() => Math.max(1, ...props.buckets.map((b) => b.count)));
 // always visible; zero stays zero.
 function barHeight(count: number): number {
   if (count === 0) return 0;
-  return Math.max(4, Math.round((count / max.value) * 56));
+  return Math.max(4, Math.round((count / max.value) * 110));
 }
 
 // The breached share of a bar, in px (never taller than the bar).
 function breachHeight(b: StatsHourBucket): number {
-  if (!b.breaches || !b.count) return 0;
+  if (!b.breaches) return 0;
+  if (!b.count) return 3; // breaches with no counted calls still show a sliver
   const h = barHeight(b.count);
   return Math.min(h, Math.max(2, Math.round((h * b.breaches) / b.count)));
 }
@@ -35,14 +36,17 @@ function hourLabel(iso: string): string {
 
 <template>
   <div>
-    <div class="mbc-title">Calls / hour · last 12h · red = waited past SLA</div>
-    <div class="mbc-row">
+    <div class="hstack justify-between">
+      <small class="text-lighter">Calls / hour · last 12h</small>
+      <small class="hstack gap-1"><span style="width: 0.625rem; height: 0.625rem; border-radius: 2px; background: var(--danger)"></span>calls that waited past SLA</small>
+    </div>
+    <div class="mbc-row mt-2">
       <div v-for="(b, i) in buckets" :key="b.hour" class="mbc-col">
-        <span class="mbc-count" :class="{ hot: i === buckets.length - 1 }">{{ b.count }}<template v-if="b.breaches > 0"> · {{ b.breaches }}</template></span>
+        <span class="mbc-count" :class="{ hot: i === buckets.length - 1 }">{{ b.count }}<template v-if="b.breaches > 0"> <strong style="color: var(--danger)">·{{ b.breaches }}</strong></template></span>
         <div
           class="mbc-bar"
           :class="{ hot: i === buckets.length - 1 }"
-          :style="{ height: barHeight(b.count) - breachHeight(b) + 'px' }"
+          :style="{ height: Math.max(0, barHeight(b.count) - breachHeight(b)) + 'px' }"
         ></div>
         <div
           v-if="breachHeight(b) > 0"
@@ -59,7 +63,7 @@ function hourLabel(iso: string): string {
 .mbc-row { display: flex; align-items: flex-end; gap: 0.375rem; }
 .mbc-col { flex: 1; display: flex; flex-direction: column; align-items: center; }
 .mbc-count {
-  font-size: 10px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   margin-bottom: 0.125rem;
   color: var(--muted-foreground);
@@ -71,6 +75,6 @@ function hourLabel(iso: string): string {
   background: color-mix(in srgb, var(--primary) 80%, transparent);
 }
 .mbc-bar.hot { background: var(--color-live); }
-.mbc-hr { font-size: 9.5px; margin-top: 0.25rem; white-space: nowrap; color: var(--faint-foreground); }
+.mbc-hr { font-size: 11px; margin-top: 0.25rem; white-space: nowrap; color: var(--faint-foreground); }
 .mbc-hr.hot { color: var(--color-live); font-weight: 600; }
 </style>
