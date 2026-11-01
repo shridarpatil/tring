@@ -8,6 +8,9 @@ import {
   teamView,
   agentsLiveRequired,
   alertCopy,
+  alertKey,
+  visibleAlerts,
+  SNOOZE_MS,
   buildAlerts,
   callSlaBadge,
   filterLiveCalls,
@@ -298,4 +301,20 @@ test("staffingSegments: over-staffed has no missing segment", () => {
 
 test("staffingSegments: no minimum gives no segments", () => {
   assert.deepEqual(staffingSegments({ min_live_agents: 0, live: 3, on_call: 1, available: 2, away: 1 } as QueueDepth), []);
+});
+
+test("visibleAlerts: snoozed alert hidden until expiry, then shown", () => {
+  const a = { team: "sales", kind: "sla" } as DashAlert;
+  const snoozed = { [alertKey(a)]: 1000 + SNOOZE_MS };
+  assert.deepEqual(visibleAlerts([a], snoozed, 1000), []);
+  assert.deepEqual(visibleAlerts([a], snoozed, 1000 + SNOOZE_MS - 1), []);
+  assert.deepEqual(visibleAlerts([a], snoozed, 1000 + SNOOZE_MS), [a]);
+});
+
+test("visibleAlerts: other teams and kinds are unaffected", () => {
+  const sla = { team: "sales", kind: "sla" } as DashAlert;
+  const under = { team: "sales", kind: "understaffed" } as DashAlert;
+  const other = { team: "support", kind: "sla" } as DashAlert;
+  const snoozed = { [alertKey(sla)]: 5000 };
+  assert.deepEqual(visibleAlerts([sla, under, other], snoozed, 1000), [under, other]);
 });
