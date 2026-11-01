@@ -4,6 +4,7 @@ import {
   agentTeams,
   belowMinCount,
   staffedPct,
+  staffingSegments,
   teamView,
   agentsLiveRequired,
   alertCopy,
@@ -275,4 +276,26 @@ test("abandonedPct: one decimal, null without calls", () => {
   assert.equal(abandonedPct(23, 406), "5.7");
   assert.equal(abandonedPct(0, 10), "0.0");
   assert.equal(abandonedPct(3, 0), null);
+});
+
+test("staffingSegments: Support-like team with a gap and away agents", () => {
+  const segs = staffingSegments({ min_live_agents: 10, live: 5, on_call: 4, available: 1, away: 2 } as QueueDepth);
+  assert.deepEqual(
+    segs.map((g) => [g.kind, g.count]),
+    [["on_call", 4], ["available", 1], ["missing", 5], ["away", 2]],
+  );
+  assert.ok(Math.abs(segs[0].pct - (4 / 12) * 100) < 1e-9);
+  assert.ok(Math.abs(segs[2].pct - (5 / 12) * 100) < 1e-9);
+  assert.ok(Math.abs(segs.reduce((a, g) => a + g.pct, 0) - 100) < 1e-9);
+});
+
+test("staffingSegments: over-staffed has no missing segment", () => {
+  const segs = staffingSegments({ min_live_agents: 2, live: 3, on_call: 1, available: 2, away: 0 } as QueueDepth);
+  assert.deepEqual(segs.map((g) => g.kind), ["on_call", "available"]);
+  assert.ok(Math.abs(segs[0].pct - 100 / 3) < 1e-9);
+  assert.ok(Math.abs(segs.reduce((a, g) => a + g.pct, 0) - 100) < 1e-9);
+});
+
+test("staffingSegments: no minimum gives no segments", () => {
+  assert.deepEqual(staffingSegments({ min_live_agents: 0, live: 3, on_call: 1, available: 2, away: 1 } as QueueDepth), []);
 });

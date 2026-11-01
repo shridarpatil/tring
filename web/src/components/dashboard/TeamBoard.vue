@@ -11,6 +11,8 @@ import {
   longestWait,
   sortTeams,
   staffedPct,
+  staffingSegments,
+  type StaffSegment,
   teamBadge,
   teamView,
   todayHours,
@@ -57,7 +59,14 @@ const badge = (t: QueueDepth) => teamBadge(t, props.nowMs);
 const longest = (t: QueueDepth) => longestWait(t, props.nowMs);
 const longestVariant = (t: QueueDepth) => waitTone(longest(t), t.sla_seconds) || "secondary";
 const slaLabel = (t: QueueDepth) => (t.sla_seconds > 0 ? fmtMMSS(t.sla_seconds) : "none");
-const barMax = (t: QueueDepth) => Math.max(t.min_live_agents, t.live);
+const SEG_STYLE: Record<StaffSegment["kind"], { bg: string; opacity?: number; title: (n: number) => string }> = {
+  on_call: { bg: "var(--color-oncall)", title: (n) => `${n} on call` },
+  available: { bg: "var(--color-online)", title: (n) => `${n} available` },
+  missing: { bg: "var(--border)", title: (n) => `${n} missing to minimum` },
+  away: { bg: "var(--color-away)", opacity: 0.5, title: (n) => `${n} away` },
+};
+const segStyle = (g: StaffSegment) =>
+  `width: ${g.pct}%; background: ${SEG_STYLE[g.kind].bg};` + (SEG_STYLE[g.kind].opacity ? ` opacity: ${SEG_STYLE[g.kind].opacity}` : "");
 const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team } });
 </script>
 
@@ -115,12 +124,15 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <span v-if="isUnderstaffed(t)" class="badge" data-variant="danger">{{ staffedPct(t) }}% staffed</span>
               </div>
 
-              <progress
+              <div
                 v-if="t.min_live_agents > 0"
-                :value="t.live"
-                :max="barMax(t)"
+                class="flex"
+                style="height: 8px; border-radius: 4px; overflow: hidden; background: var(--border)"
+                role="img"
                 :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
-              ></progress>
+              >
+                <div v-for="g in staffingSegments(t)" :key="g.kind" :style="segStyle(g)" :title="SEG_STYLE[g.kind].title(g.count)"></div>
+              </div>
 
               <small class="hstack gap-4">
                 <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
@@ -179,12 +191,15 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
               <td v-if="t.staffing_known">
                 <div class="vstack gap-1">
                   <small class="mono">{{ t.live }}<template v-if="t.min_live_agents > 0"> / {{ t.min_live_agents }}</template></small>
-                  <progress
+                  <div
                     v-if="t.min_live_agents > 0"
-                    :value="t.live"
-                    :max="barMax(t)"
+                    class="flex"
+                    style="height: 8px; border-radius: 4px; overflow: hidden; background: var(--border)"
+                    role="img"
                     :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
-                  ></progress>
+                  >
+                    <div v-for="g in staffingSegments(t)" :key="g.kind" :style="segStyle(g)" :title="SEG_STYLE[g.kind].title(g.count)"></div>
+                  </div>
                 </div>
               </td>
               <template v-if="t.staffing_known">
