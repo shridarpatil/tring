@@ -2,6 +2,7 @@
 // TeamBoard — per-team staffing, waits and SLA, worst first. Auto shows cards
 // for up to CARDS_MAX_TEAMS teams and a table beyond that; Cards/Rows force one.
 import { computed, ref, watch } from "vue";
+import { vPulse } from "../../lib/pulse";
 import { RouterLink } from "vue-router";
 import type { QueueDepth } from "../../api/types";
 import {
@@ -57,7 +58,11 @@ const compact = (t: QueueDepth) => !t.open && t.waiting_since.length === 0;
 const hours = (t: QueueDepth) => todayHours(t.hours, new Date(props.nowMs));
 const badge = (t: QueueDepth) => teamBadge(t, props.nowMs);
 const longest = (t: QueueDepth) => longestWait(t, props.nowMs);
-const longestVariant = (t: QueueDepth) => waitTone(longest(t), t.sla_seconds) || "secondary";
+// Longest wait colour: amber from 80% of the SLA, red past it (theme tokens, like the KPI numbers).
+const longestStyle = (t: QueueDepth) => {
+  const tone = waitTone(longest(t), t.sla_seconds);
+  return tone ? { color: `var(--${tone})` } : undefined;
+};
 const slaLabel = (t: QueueDepth) => (t.sla_seconds > 0 ? fmtMMSS(t.sla_seconds) : "none");
 const SEG_STYLE: Record<StaffSegment["kind"], { bg: string; opacity?: number; title: (n: number) => string }> = {
   on_call: { bg: "var(--color-oncall)", title: (n) => `${n} on call` },
@@ -71,7 +76,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
 </script>
 
 <template>
-  <Panel pad>
+  <Panel>
     <template #title>
       <span class="hstack gap-2">
         Teams
@@ -95,70 +100,58 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
       </span>
     </template>
 
-    <div v-if="!sorted.length" class="text-lighter"><small>No teams</small></div>
+    <div v-if="!sorted.length" class="text-lighter p-4"><small>No teams</small></div>
 
-    <div v-else-if="view === 'cards'" class="row">
-      <div v-for="t in sorted" :key="t.team" class="card col-3" :class="{ 'text-lighter': compact(t) }">
-        <div class="vstack gap-2">
-          <div class="hstack justify-between">
-            <span class="hstack gap-1">
-              <strong>{{ t.team }}</strong>
-              <RouterLink :to="settingsLink(t)" class="button ghost small" :aria-label="`${t.team} settings`" title="Settings"
-                >⚙</RouterLink
-              >
-            </span>
-            <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
-          </div>
-          <small class="text-light"
-            >{{ hours(t) }}<template v-if="!compact(t)"> · <span>SLA&nbsp;{{ slaLabel(t) }}</span></template></small
-          >
+    <div v-else-if="view === 'cards'" class="row teams">
+      <div v-for="t in sorted" :key="t.team" class="card vstack team col-3" :class="{ 'text-lighter': compact(t) }">
+        <div class="hstack gap-2">
+          <strong class="name">{{ t.team }}</strong>
+          <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
+          <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings">⚙</RouterLink>
+        </div>
+        <div class="sub text-lighter">{{ hours(t) }}<template v-if="!compact(t)"> · SLA&nbsp;{{ slaLabel(t) }}</template></div>
 
-          <template v-if="!compact(t)">
-            <small v-if="!t.staffing_known" class="text-lighter">staffing unknown</small>
-            <template v-else>
-              <div class="hstack justify-between">
-                <span class="hstack gap-2">
-                  <h3>{{ t.live }}</h3>
-                  <small class="text-light">{{ t.min_live_agents > 0 ? `of ${t.min_live_agents} min live` : "live" }}</small>
-                </span>
-                <span v-if="isUnderstaffed(t)" class="badge" data-variant="danger">{{ staffedPct(t) }}% staffed</span>
-              </div>
+        <template v-if="!compact(t)">
+          <div v-if="!t.staffing_known" class="k text-lighter">staffing unknown</div>
+          <template v-else>
+            <div class="staff">
+              <span class="big" :style="isUnderstaffed(t) ? { color: 'var(--danger)' } : undefined">{{ t.live }}</span>
+              <span class="text-light">{{ t.min_live_agents > 0 ? `of ${t.min_live_agents} min live` : "live" }}</span>
+              <span v-if="isUnderstaffed(t)" class="k text-light" style="margin-left: auto">{{ staffedPct(t) }}% staffed</span>
+            </div>
 
-              <div
-                v-if="t.min_live_agents > 0"
-                class="flex"
-                style="height: 8px; border-radius: 4px; overflow: hidden; background: var(--border)"
-                role="img"
-                :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
-              >
-                <div v-for="g in staffingSegments(t)" :key="g.kind" :style="segStyle(g)" :title="SEG_STYLE[g.kind].title(g.count)"></div>
-              </div>
+            <div
+              v-if="t.min_live_agents > 0"
+              class="flex"
+              style="height: 8px; border-radius: 4px; overflow: hidden; background: var(--border)"
+              role="img"
+              :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
+            >
+              <div v-for="g in staffingSegments(t)" :key="g.kind" :style="segStyle(g)" :title="SEG_STYLE[g.kind].title(g.count)"></div>
+            </div>
 
-              <small class="hstack gap-2">
-                <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
-                <SignalDot state="online" size="sm" :label="`${t.available} available`" />
-                <SignalDot state="away" size="sm" :label="`${t.away} away`" />
-              </small>
-            </template>
-
-            <div class="hstack mt-2"><hr class="w-100" /></div>
-
-            <div class="hstack justify-between gap-2">
-              <div class="vstack gap-1">
-                <small><strong>{{ t.waiting_since.length }}</strong></small>
-                <small class="text-light">waiting</small>
-              </div>
-              <div class="vstack gap-1" :title="`SLA ${slaLabel(t)}`">
-                <span><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></span>
-                <small class="text-light">longest</small>
-              </div>
-              <div class="vstack gap-1" title="SLA breaches today">
-                <small><strong>{{ t.breaches_today }}</strong></small>
-                <small class="text-light">breaches</small>
-              </div>
+            <div class="hstack">
+              <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
+              <SignalDot state="online" size="sm" :label="`${t.available} available`" />
+              <SignalDot state="away" size="sm" :label="`${t.away} away`" />
             </div>
           </template>
-        </div>
+
+          <div class="team-stats">
+            <div>
+              <div><strong v-pulse="t.waiting_since.length > 0" :style="t.waiting_since.length ? { color: 'var(--danger)' } : undefined">{{ t.waiting_since.length }}</strong></div>
+              <div class="k text-light">waiting</div>
+            </div>
+            <div>
+              <div><strong class="mono" :style="longestStyle(t)">{{ fmtMMSS(longest(t)) }}</strong></div>
+              <div class="k text-light">longest · SLA {{ slaLabel(t) }}</div>
+            </div>
+            <div>
+              <div><strong :style="t.breaches_today ? { color: 'var(--danger)' } : undefined">{{ t.breaches_today }}</strong></div>
+              <div class="k text-light">SLA breaches today</div>
+            </div>
+          </div>
+        </template>
       </div>
     </div>
 
@@ -207,8 +200,8 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <td class="mono"><small>{{ t.available }}</small></td>
                 <td class="mono"><small>{{ t.away }}</small></td>
               </template>
-              <td class="mono"><small>{{ t.waiting_since.length }}</small></td>
-              <td><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></td>
+              <td class="mono"><small v-pulse="t.waiting_since.length > 0" :style="t.waiting_since.length ? { color: 'var(--danger)' } : undefined">{{ t.waiting_since.length }}</small></td>
+              <td><small class="mono" :style="longestStyle(t)">{{ fmtMMSS(longest(t)) }}</small></td>
               <td class="mono"><small>{{ t.breaches_today }}</small></td>
             </template>
             <td v-else colspan="8"></td>
@@ -223,3 +216,16 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
     </div>
   </Panel>
 </template>
+
+<style scoped>
+/* Only the sizes the live-dashboard mock needs that Oat has no class for. */
+.teams { --grid-gap: 12px; padding: 12px; }
+.team { padding: 14px; gap: 10px; font-size: 14px; line-height: 1.45; }
+.name { flex: 1; font-size: 15px; }
+.team .badge { padding: 1px 8px; font-weight: 400; }
+.sub { margin-top: -6px; }
+.sub, .k { font-size: 12px; }
+.staff { display: flex; align-items: baseline; gap: 6px; }
+.big { font-size: 24px; font-weight: 600; }
+.team-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding-top: 10px; border-top: 1px solid var(--border); }
+</style>

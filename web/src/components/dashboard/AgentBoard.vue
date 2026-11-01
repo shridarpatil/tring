@@ -64,52 +64,97 @@ function onCallLabel(a: Agent): string {
 </script>
 
 <template>
-  <Panel pad>
+  <Panel class="agent-board">
     <template #title>Agents</template>
     <template #actions>
-      <small class="text-light">{{ liveCount }} live · {{ awayCount }} away</small>
+      <span class="ab-sum">{{ liveCount }} live · {{ awayCount }} away</span>
     </template>
-    <div class="vstack">
-      <!-- One row: the search takes 2/3, the team filter 1/3 (Oat grid). -->
-      <div class="row">
-        <input v-model="search" class="col-8" type="search" placeholder="Search agents" aria-label="Search agents" />
-        <select v-model="team" class="col-4" aria-label="Filter by team">
-          <option value="">All teams</option>
-          <option v-for="t in teamNames" :key="t" :value="t">{{ t }}</option>
-        </select>
-      </div>
-      <div v-if="!groups.length" class="text-lighter"><small>No agents</small></div>
-      <table v-else>
-        <template v-for="g in groups" :key="g.key">
-          <thead>
-            <tr>
-              <th colspan="2">{{ g.label }} · {{ g.total }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in g.shown" :key="a.id">
-              <td>
-                <span class="hstack gap-2">
-                  <SignalDot :state="g.key" hide-label size="sm" />
-                  <small>{{ a.display_name || a.sip_username }}</small>
-                  <small v-if="g.key === 'on_call'" class="text-light mono">{{ onCallLabel(a) }}</small>
-                </span>
-              </td>
-              <td class="align-right">
-                <span v-if="teamsOf.get(a.sip_username)?.length" class="hstack gap-1 justify-end">
-                  <span v-for="tm in teamsOf.get(a.sip_username)" :key="tm" class="badge" data-variant="secondary">{{ tm }}</span>
-                </span>
-                <small v-if="!teamsOf.get(a.sip_username)?.length" class="text-lighter">—</small>
-              </td>
-            </tr>
-            <tr v-if="g.total > g.shown.length">
-              <td colspan="2">
-                <button type="button" class="ghost small" @click="expanded[g.key] = true">Show all {{ g.total }}</button>
-              </td>
-            </tr>
-          </tbody>
-        </template>
-      </table>
+    <div class="agent-tools">
+      <input v-model="search" type="search" placeholder="Search agents…" aria-label="Search agents" />
+      <select v-model="team" aria-label="Filter by team">
+        <option value="">All teams</option>
+        <option v-for="t in teamNames" :key="t" :value="t">{{ t }}</option>
+      </select>
+    </div>
+    <div class="ab-scroll">
+      <div v-if="!groups.length" class="ab-empty">No agents</div>
+      <template v-for="g in groups" :key="g.key">
+        <div class="grp">{{ g.label }} · {{ g.total }}</div>
+        <div v-for="a in g.shown" :key="a.id" class="agent">
+          <SignalDot :state="g.key" hide-label size="sm" />
+          <span class="ab-name">
+            {{ a.display_name || a.sip_username }}
+            <span v-if="g.key === 'on_call'" class="ab-meta mono">{{ onCallLabel(a) }}</span>
+          </span>
+          <span class="ab-team">{{ teamsOf.get(a.sip_username)?.join(", ") || "—" }}</span>
+        </div>
+        <button v-if="g.total > g.shown.length" type="button" class="more" @click="expanded[g.key] = true">
+          Show all {{ g.total }}
+        </button>
+      </template>
     </div>
   </Panel>
 </template>
+
+<style scoped>
+/* Sizes follow the live-dashboard mock; colours are theme tokens. */
+.agent-board :deep(.panel-head) { height: auto; padding: 12px 16px; }
+.agent-board :deep(.panel-title) { font-size: 14px; font-weight: 600; line-height: 1.45; }
+.ab-sum { font-size: 13px; line-height: 1.45; color: var(--muted-foreground); }
+.agent-tools { display: flex; gap: 8px; padding: 8px 16px; font-size: 14px; line-height: 1.45; border-bottom: 1px solid var(--border); }
+.agent-tools input,
+.agent-tools select {
+  font: inherit;
+  line-height: 1.45;
+  height: auto;
+  width: auto;
+  margin: 0;
+  color: inherit;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-medium);
+  padding: 4px 8px;
+}
+.agent-tools input { flex: 1; min-width: 0; }
+.ab-scroll { max-height: 360px; overflow: auto; }
+.ab-empty { padding: 16px; font-size: 12px; color: var(--faint-foreground); }
+.grp {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  padding: 8px 16px 4px;
+  background: var(--secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-size: 14px;
+  line-height: 1.45;
+  border-bottom: 1px solid var(--border);
+}
+.agent:last-child { border-bottom: 0; }
+.ab-name { flex: 1; min-width: 0; }
+.ab-meta { margin-left: 6px; font-size: 12px; color: var(--muted-foreground); }
+.ab-team { font-size: 12px; color: var(--muted-foreground); text-align: right; }
+.more {
+  display: block;
+  width: 100%;
+  margin: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--primary);
+  padding: 6px 16px;
+  text-align: left;
+  cursor: pointer;
+}
+.more:hover { background: var(--secondary); }
+</style>
