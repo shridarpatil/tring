@@ -91,11 +91,11 @@ function onCallLabel(a: Agent): string {
               <td>
                 <span class="hstack gap-2">
                   <SignalDot :state="g.key" hide-label size="sm" />
-                  <span>{{ a.display_name || a.sip_username }}</span>
+                  <small>{{ a.display_name || a.sip_username }}</small>
                   <small v-if="g.key === 'on_call'" class="text-light mono">{{ onCallLabel(a) }}</small>
                 </span>
               </td>
-              <td class="align-right text-light">{{ teamsOf.get(a.sip_username)?.join(", ") || "—" }}</td>
+              <td class="align-right"><small class="text-light">{{ teamsOf.get(a.sip_username)?.join(", ") || "—" }}</small></td>
             </tr>
             <tr v-if="g.total > g.shown.length">
               <td colspan="2">
