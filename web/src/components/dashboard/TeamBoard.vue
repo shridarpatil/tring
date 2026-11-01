@@ -9,8 +9,6 @@ import {
   fmtMMSS,
   isUnderstaffed,
   longestWait,
-  seatStates,
-  showSeats,
   sortTeams,
   staffedPct,
   teamBadge,
@@ -117,11 +115,8 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <span v-if="isUnderstaffed(t)" class="badge" data-variant="danger">{{ staffedPct(t) }}% staffed</span>
               </div>
 
-              <span v-if="showSeats(t)" class="hstack gap-1" :aria-label="`${t.team} seats`">
-                <SignalDot v-for="(s, i) in seatStates(t)" :key="i" :state="s" hide-label size="sm" />
-              </span>
               <progress
-                v-else-if="t.min_live_agents > 0"
+                v-if="t.min_live_agents > 0"
                 :value="t.live"
                 :max="barMax(t)"
                 :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
