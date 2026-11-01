@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -28,17 +29,18 @@ type queueDepth struct {
 	// team's settings; the staffing counts from agent presence; WaitingSince and
 	// BreachesToday from queue_stints. WaitingSince holds timestamps, not ages,
 	// so an unchanged queue renders identical bytes (see events.Hub.Every).
-	Open          bool        `json:"open"`
-	MinLive       int         `json:"min_live_agents"`
-	SLASeconds    int         `json:"sla_seconds"`
-	Members       int         `json:"members"`
-	Live          int         `json:"live"` // on_call + available
-	OnCall        int         `json:"on_call"`
-	Available     int         `json:"available"`
-	Away          int         `json:"away"`
-	WaitingSince  []time.Time `json:"waiting_since"` // open stints, oldest first, never null
-	BreachesToday int         `json:"breaches_today"`
-	BelowMinSince *time.Time  `json:"below_min_since,omitempty"`
+	Open          bool            `json:"open"`
+	MinLive       int             `json:"min_live_agents"`
+	SLASeconds    int             `json:"sla_seconds"`
+	Members       int             `json:"members"`
+	Live          int             `json:"live"` // on_call + available
+	OnCall        int             `json:"on_call"`
+	Available     int             `json:"available"`
+	Away          int             `json:"away"`
+	WaitingSince  []time.Time     `json:"waiting_since"` // open stints, oldest first, never null
+	BreachesToday int             `json:"breaches_today"`
+	BelowMinSince *time.Time      `json:"below_min_since,omitempty"`
+	Hours         json.RawMessage `json:"hours"` // the team's working-hours schedule, [] when always open
 }
 
 type queuesResponse struct {
@@ -70,6 +72,10 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 			return queuesResponse{}, err
 		}
 		q.WaitingSince = []time.Time{}
+		q.Hours = h
+		if len(bytes.TrimSpace(h)) == 0 || string(h) == "null" {
+			q.Hours = json.RawMessage("[]")
+		}
 		hours[q.Team] = h
 		out.Queues = append(out.Queues, q)
 	}
