@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/shridarpatil/tring/internal/flowstore"
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 // ---- Teams --------------------------------------------------------------
@@ -39,7 +40,12 @@ type Team struct {
 	RingSeconds    int       `json:"ring_seconds"`
 	MaxWaitSeconds int       `json:"max_wait_seconds"`
 	MohSound       string    `json:"moh_sound"`
-	CreatedAt      time.Time `json:"created_at"`
+	// MinLiveAgents / SLASeconds of 0 mean no staffing alert / no SLA. Hours
+	// uses the IVR Timing node shape; [] means always open.
+	MinLiveAgents int             `json:"min_live_agents"`
+	SLASeconds    int             `json:"sla_seconds"`
+	Hours         json.RawMessage `json:"hours"`
+	CreatedAt     time.Time       `json:"created_at"`
 	// Members is populated only on the single-team GET, not the list.
 	Members []TeamMember `json:"members,omitempty"`
 }
@@ -53,11 +59,14 @@ type TeamMember struct {
 }
 
 type createTeamRequest struct {
-	Name           string `json:"name"`
-	Strategy       string `json:"strategy"`
-	RingSeconds    int    `json:"ring_seconds"`
-	MaxWaitSeconds int    `json:"max_wait_seconds"`
-	MohSound       string `json:"moh_sound"`
+	Name           string          `json:"name"`
+	Strategy       string          `json:"strategy"`
+	RingSeconds    int             `json:"ring_seconds"`
+	MaxWaitSeconds int             `json:"max_wait_seconds"`
+	MohSound       string          `json:"moh_sound"`
+	MinLiveAgents  int             `json:"min_live_agents"`
+	SLASeconds     int             `json:"sla_seconds"`
+	Hours          json.RawMessage `json:"hours"`
 }
 
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
@@ -89,10 +98,21 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		req.MohSound = "local_stream://moh"
 	}
 
+	if msg := validateLiveSettings(&req.MinLiveAgents, &req.SLASeconds, req.Hours); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	hours := req.Hours
+	if len(hours) == 0 || string(hours) == "null" {
+		hours = json.RawMessage("[]")
+	}
+
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateTeam,
-		t.ID, req.Name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound).Scan(
-		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound, &tm.CreatedAt)
+		t.ID, req.Name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
+		req.MinLiveAgents, req.SLASeconds, []byte(hours)).Scan(
+		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
 	if isUniqueViolation(err) {
 		writeError(w, http.StatusConflict, "a team with this name already exists")
 		return
@@ -116,7 +136,8 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 	teams := []Team{}
 	for rows.Next() {
 		var tm Team
-		if err := rows.Scan(&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound, &tm.CreatedAt); err != nil {
+		if err := rows.Scan(&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
+			&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
@@ -142,10 +163,13 @@ func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchTeamRequest struct {
-	Strategy       *string `json:"strategy"`
-	RingSeconds    *int    `json:"ring_seconds"`
-	MaxWaitSeconds *int    `json:"max_wait_seconds"`
-	MohSound       *string `json:"moh_sound"`
+	Strategy       *string         `json:"strategy"`
+	RingSeconds    *int            `json:"ring_seconds"`
+	MaxWaitSeconds *int            `json:"max_wait_seconds"`
+	MohSound       *string         `json:"moh_sound"`
+	MinLiveAgents  *int            `json:"min_live_agents"`
+	SLASeconds     *int            `json:"sla_seconds"`
+	Hours          json.RawMessage `json:"hours"` // nil = unchanged
 }
 
 func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
@@ -160,10 +184,21 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "strategy must be ring_all|round_robin|sequential|longest_wait")
 		return
 	}
+	if msg := validateLiveSettings(req.MinLiveAgents, req.SLASeconds, req.Hours); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	// A nil []byte binds as NULL, so COALESCE keeps the stored hours.
+	var hours []byte
+	if len(req.Hours) > 0 && string(req.Hours) != "null" {
+		hours = req.Hours
+	}
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTeam,
-		t.ID, name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound).Scan(
-		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound, &tm.CreatedAt)
+		t.ID, name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
+		req.MinLiveAgents, req.SLASeconds, hours).Scan(
+		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
@@ -174,6 +209,22 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 	}
 	s.invalidateTeam(r.Context(), t.ID, name)
 	writeJSON(w, http.StatusOK, tm)
+}
+
+// validateLiveSettings checks the staffing/SLA/hours inputs shared by create
+// and patch (nil pointers / empty hours = not supplied). Returns a 400 message
+// or "".
+func validateLiveSettings(minLive, sla *int, hours json.RawMessage) string {
+	if minLive != nil && *minLive < 0 {
+		return "min_live_agents must be >= 0"
+	}
+	if sla != nil && *sla < 0 {
+		return "sla_seconds must be >= 0"
+	}
+	if err := ivr.ValidateSchedule(hours); err != nil {
+		return "hours: " + err.Error()
+	}
+	return ""
 }
 
 // invalidateTeam drops the gateway's cached queue settings for a team so an
@@ -271,7 +322,8 @@ func (s *Server) handleRemoveTeamAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) loadTeam(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, name string) (Team, bool) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTeam, tenantID, name).Scan(
-		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound, &tm.CreatedAt)
+		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return Team{}, false
