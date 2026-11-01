@@ -38,12 +38,12 @@ SELECT available_for_calls FROM agents WHERE tenant_id = $1 AND sip_username = $
 -- ===========================================================================
 
 -- name: create-team
-INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at;
+INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at;
 
 -- name: list-teams
-SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at
 FROM teams WHERE tenant_id = $1 ORDER BY name;
 
 -- name: list-team-names
@@ -51,14 +51,14 @@ FROM teams WHERE tenant_id = $1 ORDER BY name;
 SELECT name FROM teams WHERE tenant_id = $1 ORDER BY name;
 
 -- name: get-team
-SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at
 FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: get-team-moh
 -- A team's own queue settings for the gateway's transfer ring. The tenant's
 -- hold music (the effective-MOH fallback) is read and cached separately
 -- (get-tenant-audio), so each invalidates on its own write.
-SELECT strategy, ring_seconds, max_wait_seconds, moh_sound
+SELECT strategy, ring_seconds, max_wait_seconds, moh_sound, sla_seconds
 FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: update-team
@@ -67,9 +67,12 @@ UPDATE teams SET
     strategy         = COALESCE($3, strategy),
     ring_seconds     = COALESCE($4, ring_seconds),
     max_wait_seconds = COALESCE($5, max_wait_seconds),
-    moh_sound        = COALESCE($6, moh_sound)
+    moh_sound        = COALESCE($6, moh_sound),
+    min_live_agents  = COALESCE($7, min_live_agents),
+    sla_seconds      = COALESCE($8, sla_seconds),
+    hours            = COALESCE($9, hours)
 WHERE tenant_id = $1 AND name = $2
-RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, created_at;
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at;
 
 -- name: delete-team
 DELETE FROM teams WHERE tenant_id = $1 AND name = $2;
