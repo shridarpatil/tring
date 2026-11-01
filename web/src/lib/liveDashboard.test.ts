@@ -1,14 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  agentsLiveRequired,
+  alertCopy,
   buildAlerts,
+  callSlaBadge,
+  hoursSummary,
+  sortLiveCalls,
+  teamBadge,
   fmtMMSS,
   parseMMSS,
   sortTeams,
   teamState,
   waitTone,
 } from "./liveDashboard.ts";
-import type { QueueDepth } from "../api/types";
+import type { Call, QueueDepth } from "../api/types";
 
 const NOW = Date.parse("2026-11-01T10:00:00Z");
 const ago = (secs: number) => new Date(NOW - secs * 1000).toISOString();
@@ -102,4 +108,92 @@ test("parseMMSS / fmtMMSS round trip", () => {
   assert.equal(fmtMMSS(300), "5:00");
   assert.equal(fmtMMSS(65), "1:05");
   assert.equal(parseMMSS(fmtMMSS(754)), 754);
+});
+
+test("hoursSummary groups consecutive days with the same hours", () => {
+  const wk = (d: string, enabled: boolean, s?: string, e?: string) => ({ day: d, enabled, start_time: s, end_time: e });
+  assert.equal(hoursSummary([]), "Always open");
+  assert.equal(
+    hoursSummary([
+      wk("monday", true, "09:00", "17:00"),
+      wk("tuesday", true, "09:00", "17:00"),
+      wk("wednesday", true, "09:00", "17:00"),
+      wk("thursday", true, "09:00", "17:00"),
+      wk("friday", true, "09:00", "17:00"),
+      wk("saturday", false),
+      wk("sunday", true, "00:00", "23:59"),
+    ]),
+    "Mon–Fri 9:00–17:00 · Sun 0:00–23:59",
+  );
+  assert.equal(hoursSummary([wk("monday", true), wk("tuesday", true, "10:30", "18:00")]), "Mon all day · Tue 10:30–18:00");
+  assert.equal(hoursSummary([wk("monday", false)]), "Closed all week");
+});
+
+test("teamBadge", () => {
+  assert.deepEqual(teamBadge(team({ min_live_agents: 10, live: 5 }), NOW), { text: "Understaffed −5", variant: "danger" });
+  assert.deepEqual(teamBadge(team({ sla_seconds: 60, waiting_since: [ago(90)] }), NOW), { text: "SLA breach", variant: "danger" });
+  assert.deepEqual(teamBadge(team({ sla_seconds: 100, waiting_since: [ago(90)] }), NOW), { text: "At risk", variant: "warning" });
+  assert.deepEqual(teamBadge(team({}), NOW), { text: "OK", variant: "success" });
+  assert.deepEqual(teamBadge(team({ open: false }), NOW), { text: "Closed", variant: "secondary" });
+});
+
+test("alertCopy understaffed", () => {
+  const [a] = buildAlerts(
+    [team({ team: "Support", min_live_agents: 10, live: 5, away: 2, sla_seconds: 300, waiting_since: [ago(400), ago(30)], below_min_since: ago(725) })],
+    NOW,
+  );
+  assert.deepEqual(alertCopy(a), {
+    strong: "Support is understaffed",
+    rest: ": 5 of 10 agents live (−5) · 2 waiting, 1 past 5:00 SLA, longest 6:40 · 2 on Away",
+    sub: "below minimum for 12 min",
+  });
+  const [b] = buildAlerts([team({ team: "Sales", min_live_agents: 2, live: 1 })], NOW);
+  assert.deepEqual(alertCopy(b), {
+    strong: "Sales is understaffed",
+    rest: ": 1 of 2 agents live (−1) · 0 waiting, longest 0:00",
+    sub: null,
+  });
+});
+
+test("alertCopy sla", () => {
+  const [a] = buildAlerts([team({ team: "Sales", min_live_agents: 2, live: 2, sla_seconds: 120, waiting_since: [ago(130)] })], NOW);
+  assert.deepEqual(alertCopy(a), {
+    strong: "Sales: 1 caller past the 2:00 SLA",
+    rest: ", longest waiting 2:10 · 2 of 2 agents live",
+    sub: null,
+  });
+  const [b] = buildAlerts([team({ team: "KYC", sla_seconds: 60, waiting_since: [ago(200), ago(90)] })], NOW);
+  assert.equal(alertCopy(b).strong, "KYC: 2 callers past the 1:00 SLA");
+  assert.equal(alertCopy(b).rest, ", longest waiting 3:20");
+});
+
+function call(over: Partial<Call>): Call {
+  return { id: "c", direction: "inbound", status: "ringing", from_number: "", to_number: "", leg_id: "", started_at: ago(10), ...over };
+}
+
+test("sortLiveCalls puts waiting callers first, longest first", () => {
+  const talk = call({ id: "talk", status: "answered", queued_at: ago(500) });
+  const ivr = call({ id: "ivr" });
+  const w1 = call({ id: "w1", queued_at: ago(30) });
+  const w2 = call({ id: "w2", queued_at: ago(300) });
+  assert.deepEqual(sortLiveCalls([talk, ivr, w1, w2]).map((c) => c.id), ["w2", "w1", "talk", "ivr"]);
+});
+
+test("callSlaBadge", () => {
+  assert.equal(callSlaBadge(call({ queued_at: ago(100), queue_sla_seconds: 300 }), NOW), null);
+  assert.deepEqual(callSlaBadge(call({ queued_at: ago(250), queue_sla_seconds: 300 }), NOW), { text: "0:50 to SLA", variant: "warning" });
+  assert.deepEqual(callSlaBadge(call({ queued_at: ago(301), queue_sla_seconds: 300 }), NOW), { text: "SLA breached", variant: "danger" });
+  assert.equal(callSlaBadge(call({ queued_at: ago(999) }), NOW), null);
+  assert.equal(callSlaBadge(call({ status: "answered", queued_at: ago(999), queue_sla_seconds: 60 }), NOW), null);
+});
+
+test("agentsLiveRequired sums open teams only", () => {
+  assert.deepEqual(
+    agentsLiveRequired([
+      team({ live: 5, min_live_agents: 10 }),
+      team({ live: 2, min_live_agents: 2 }),
+      team({ open: false, live: 1, min_live_agents: 4 }),
+    ]),
+    { live: 7, min: 12 },
+  );
 });

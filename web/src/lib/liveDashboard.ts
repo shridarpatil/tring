@@ -1,4 +1,4 @@
-import type { QueueDepth } from "../api/types";
+import type { Call, QueueDepth, TeamDay } from "../api/types";
 
 export const NEAR_SLA = 0.8; // warn once the longest wait passes this share of the SLA
 export const CARDS_MAX_TEAMS = 6;
@@ -98,4 +98,90 @@ export function parseMMSS(s: string): number | null {
   if (m) return Number(m[1]) * 60 + Number(m[2]);
   m = /^(\d+)$/.exec(v);
   return m ? Number(m[1]) : null;
+}
+
+export type BadgeVariant = "danger" | "warning" | "success" | "secondary";
+
+export function teamBadge(t: QueueDepth, nowMs: number): { text: string; variant: BadgeVariant } {
+  switch (teamState(t, nowMs)) {
+    case "crit":
+      return isUnderstaffed(t)
+        ? { text: `Understaffed −${deficit(t)}`, variant: "danger" }
+        : { text: "SLA breach", variant: "danger" };
+    case "warn":
+      return { text: "At risk", variant: "warning" };
+    case "closed":
+      return { text: "Closed", variant: "secondary" };
+    default:
+      return { text: "OK", variant: "success" };
+  }
+}
+
+// Alert text: a bold lead, the rest of the line, and an optional second line.
+export function alertCopy(a: DashAlert): { strong: string; rest: string; sub: string | null } {
+  if (a.kind === "understaffed") {
+    let rest = `: ${a.live} of ${a.min} agents live (−${a.min - a.live}) · ${a.waiting} waiting`;
+    if (a.breaching > 0) rest += `, ${a.breaching} past ${fmtMMSS(a.slaSeconds)} SLA`;
+    rest += `, longest ${fmtMMSS(a.longestSecs)}`;
+    if (a.away > 0) rest += ` · ${a.away} on Away`;
+    const sub = a.belowSinceSecs !== null ? `below minimum for ${Math.floor(a.belowSinceSecs / 60)} min` : null;
+    return { strong: `${a.team} is understaffed`, rest, sub };
+  }
+  const callers = a.breaching === 1 ? "caller" : "callers";
+  let rest = `, longest waiting ${fmtMMSS(a.longestSecs)}`;
+  if (a.min > 0) rest += ` · ${a.live} of ${a.min} agents live`;
+  return { strong: `${a.team}: ${a.breaching} ${callers} past the ${fmtMMSS(a.slaSeconds)} SLA`, rest, sub: null };
+}
+
+const DAY_ABBR: Record<string, string> = {
+  monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun",
+};
+const hm = (v: string) => v.replace(/^0(\d)/, "$1"); // "09:00" -> "9:00"
+
+// "Mon–Fri 9:00–17:00 · Sun 0:00–23:59"; consecutive days with the same hours
+// collapse into a range. Empty schedule = always open.
+export function hoursSummary(days: TeamDay[]): string {
+  if (!days.length) return "Always open";
+  const groups: { from: string; to: string; hours: string }[] = [];
+  let prevIdx = -2;
+  days.forEach((d, i) => {
+    if (!d.enabled) return;
+    const hours = d.start_time && d.end_time ? `${hm(d.start_time)}–${hm(d.end_time)}` : "all day";
+    const name = DAY_ABBR[d.day.toLowerCase()] ?? d.day;
+    const last = groups[groups.length - 1];
+    if (last && prevIdx === i - 1 && last.hours === hours) last.to = name;
+    else groups.push({ from: name, to: name, hours });
+    prevIdx = i;
+  });
+  if (!groups.length) return "Closed all week";
+  return groups.map((g) => `${g.from === g.to ? g.from : `${g.from}–${g.to}`} ${g.hours}`).join(" · ");
+}
+
+export function isWaitingCall(c: Call): boolean {
+  return !!c.queued_at && c.status !== "answered";
+}
+
+// Waiting callers first, longest wait first; everything else keeps its order.
+export function sortLiveCalls(cs: Call[]): Call[] {
+  const waiting = cs.filter(isWaitingCall).sort((a, b) => Date.parse(a.queued_at!) - Date.parse(b.queued_at!));
+  return [...waiting, ...cs.filter((c) => !isWaitingCall(c))];
+}
+
+export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "danger" | "warning" } | null {
+  const sla = c.queue_sla_seconds ?? 0;
+  if (!isWaitingCall(c) || sla <= 0) return null;
+  const secs = waitSecs(c.queued_at!, nowMs);
+  const tone = waitTone(secs, sla);
+  if (tone === "danger") return { text: "SLA breached", variant: "danger" };
+  if (tone === "warning") return { text: `${fmtMMSS(sla - secs)} to SLA`, variant: "warning" };
+  return null;
+}
+
+// Agents live vs required, summed over teams that are open now.
+export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: number } {
+  const open = ts.filter((t) => t.open);
+  return {
+    live: open.reduce((n, t) => n + t.live, 0),
+    min: open.reduce((n, t) => n + t.min_live_agents, 0),
+  };
 }
