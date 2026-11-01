@@ -8,6 +8,7 @@ import {
   teamView,
   agentsLiveRequired,
   alertCopy,
+  fmtSince,
   alertKey,
   visibleAlerts,
   SNOOZE_MS,
@@ -162,7 +163,7 @@ test("alertCopy understaffed", () => {
   const [b] = buildAlerts([team({ team: "Sales", min_live_agents: 2, live: 1 })], NOW);
   assert.deepEqual(alertCopy(b), {
     strong: "Sales is understaffed",
-    rest: ": 1 of 2 agents live (−1) · 0 waiting, longest 0:00",
+    rest: ": 1 of 2 agents live (−1) · 0 waiting",
     sub: null,
   });
 });
@@ -343,4 +344,11 @@ test("visibleAlerts: other teams and kinds are unaffected", () => {
   const other = { team: "support", kind: "sla" } as DashAlert;
   const snoozed = { [alertKey(sla)]: 5000 };
   assert.deepEqual(visibleAlerts([sla, under, other], snoozed, 1000), [under, other]);
+});
+
+test("fmtSince wording", () => {
+  assert.equal(fmtSince(30), "under a minute");
+  assert.equal(fmtSince(14 * 60 + 5), "14 min");
+  assert.equal(fmtSince(80 * 60), "1h 20m");
+  assert.equal(fmtSince(480 * 60), "8h");
 });
