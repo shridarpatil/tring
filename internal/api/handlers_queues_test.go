@@ -109,6 +109,9 @@ func TestQueuesSnapshotClosedTeam(t *testing.T) {
 	if c.MinLive != 2 || c.Live != 0 {
 		t.Fatalf("min/live = %d/%d, want 2/0", c.MinLive, c.Live)
 	}
+	if !strings.Contains(string(c.Hours), tomorrow) {
+		t.Fatalf("hours = %s, want the team's schedule", c.Hours)
+	}
 	if c.BelowMinSince != nil {
 		t.Fatalf("closed team below_min_since = %v, want absent", c.BelowMinSince)
 	}
@@ -135,6 +138,9 @@ func TestQueuesSnapshotUnconfigured(t *testing.T) {
 	raw, _ := json.Marshal(q)
 	if !strings.Contains(string(raw), `"waiting_since":[]`) {
 		t.Fatalf("waiting_since must be [] not null: %s", raw)
+	}
+	if !strings.Contains(string(raw), `"hours":[]`) {
+		t.Fatalf("hours must be [] not null: %s", raw)
 	}
 	if strings.Contains(string(raw), "below_min_since") {
 		t.Fatalf("below_min_since must be omitted: %s", raw)
