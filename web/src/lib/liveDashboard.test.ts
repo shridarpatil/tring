@@ -125,6 +125,11 @@ test("parseMMSS / fmtMMSS round trip", () => {
   assert.equal(fmtMMSS(300), "5:00");
   assert.equal(fmtMMSS(65), "1:05");
   assert.equal(parseMMSS(fmtMMSS(754)), 754);
+  assert.equal(fmtMMSS(6185), "1:43:05");
+  assert.equal(fmtMMSS(3600), "1:00:00");
+  assert.equal(fmtMMSS(3599), "59:59");
+  assert.equal(parseMMSS("1:30:00"), 5400);
+  assert.equal(parseMMSS(fmtMMSS(6185)), 6185);
 });
 
 test("todayHours shows only today's timing", () => {
