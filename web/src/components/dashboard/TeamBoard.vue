@@ -123,7 +123,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             <div
               v-if="t.min_live_agents > 0"
               class="flex"
-              style="height: 14px; border-radius: 4px; overflow: hidden; background: var(--border)"
+              style="height: 8px; border-radius: 4px; overflow: hidden; background: var(--border)"
               role="img"
               :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
             >
