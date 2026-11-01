@@ -7,7 +7,6 @@ import type { QueueDepth } from "../../api/types";
 import {
   belowMinCount,
   fmtMMSS,
-  hoursSummary,
   isUnderstaffed,
   longestWait,
   seatStates,
@@ -16,6 +15,7 @@ import {
   staffedPct,
   teamBadge,
   teamView,
+  todayHours,
   waitTone,
   type TeamViewMode,
 } from "../../lib/liveDashboard";
@@ -54,6 +54,7 @@ const below = computed(() => belowMinCount(props.teams));
 
 // A closed team nobody is waiting on shows only its badge and hours.
 const compact = (t: QueueDepth) => !t.open && t.waiting_since.length === 0;
+const hours = (t: QueueDepth) => todayHours(t.hours, new Date(props.nowMs));
 const badge = (t: QueueDepth) => teamBadge(t, props.nowMs);
 const longest = (t: QueueDepth) => longestWait(t, props.nowMs);
 const longestVariant = (t: QueueDepth) => waitTone(longest(t), t.sla_seconds) || "secondary";
@@ -102,7 +103,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
           </div>
           <small class="text-light"
-            >{{ hoursSummary(t.hours) }}<template v-if="!compact(t)"> · <span>SLA&nbsp;{{ slaLabel(t) }}</span></template></small
+            >{{ hours(t) }}<template v-if="!compact(t)"> · <span>SLA&nbsp;{{ slaLabel(t) }}</span></template></small
           >
 
           <template v-if="!compact(t)">
@@ -176,7 +177,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
           <tr v-for="t in sorted" :key="t.team" :class="{ 'text-lighter': compact(t) }">
             <td><strong>{{ t.team }}</strong></td>
             <td><span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span></td>
-            <td><small>{{ hoursSummary(t.hours) }}</small></td>
+            <td><small>{{ hours(t) }}</small></td>
             <template v-if="!compact(t)">
               <td class="mono"><small>{{ slaLabel(t) }}</small></td>
               <td v-if="!t.staffing_known" colspan="4" class="text-lighter"><small>staffing unknown</small></td>
