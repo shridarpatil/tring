@@ -279,7 +279,14 @@ func New(cfg Config) *Server {
 		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
 	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, cfg.Events, s.log)
-	s.agentRouter = brain.NewAgentRouter(cfg.Teams, s.router, s, s.log)
+	// Queue stints come from the call log when it records them (*callcdr.Log).
+	// A nil Calls leaves stints as an untyped nil; (*callcdr.Log) methods are
+	// nil-receiver safe for the typed-nil case.
+	var stints brain.QueueStints
+	if qs, ok := cfg.Calls.(brain.QueueStints); ok {
+		stints = qs
+	}
+	s.agentRouter = brain.NewAgentRouter(cfg.Teams, s.router, s, stints, s.log)
 	s.rooms = room.NewManager(room.Options{Grace: cfg.Grace, Emitter: s.routeEvent})
 	return s
 }

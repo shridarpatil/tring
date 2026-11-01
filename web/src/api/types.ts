@@ -61,6 +61,14 @@ export type TeamStrategy = "ring_all" | "round_robin" | "sequential" | "longest_
 
 // A team is a tenant-scoped group of agents the IVR transfer node rings as a
 // unit. Identified by name (no id). Also its own queue when all members busy.
+// One weekday of a team's working hours (same shape as the IVR Timing node).
+export interface TeamDay {
+  day: string;
+  enabled: boolean;
+  start_time?: string;
+  end_time?: string;
+}
+
 export interface Team {
   tenant_id: string;
   name: string;
@@ -68,6 +76,9 @@ export interface Team {
   ring_seconds: number;
   max_wait_seconds: number;
   moh_sound: string;
+  min_live_agents: number; // 0 = no staffing alert
+  sla_seconds: number; // 0 = no SLA
+  hours: TeamDay[]; // [] = always open
   created_at: string;
   members?: TeamMember[]; // populated only on the single-team GET
 }
@@ -84,6 +95,20 @@ export interface TeamMember {
 export interface QueueDepth {
   team: string;
   waiting: number;
+  open: boolean; // inside the team's working hours
+  min_live_agents: number;
+  sla_seconds: number;
+  hours: TeamDay[];
+  members: number;
+  agents: string[]; // member SIP usernames, sorted
+  staffing_known: boolean; // false when presence couldn't be read: counts unreliable
+  live: number; // on_call + available
+  on_call: number;
+  available: number;
+  away: number;
+  waiting_since: string[]; // ISO enqueue times of callers waiting, oldest first
+  breaches_today: number;
+  below_min_since?: string; // ISO; set while open and live < min_live_agents
 }
 export interface Queues {
   total: number; // callers waiting across all team queues
@@ -96,6 +121,7 @@ export interface Queues {
 export interface StatsHourBucket {
   hour: string; // ISO start-of-hour (UTC); render the label in local time
   count: number;
+  breaches: number; // calls that waited past their team's SLA
 }
 export interface StatsOverview {
   calls_today: number;
@@ -104,6 +130,8 @@ export interface StatsOverview {
   failed_today: number; // calls that errored before connecting
   avg_wait_seconds: number; // time-to-answer (start→connect) of answered calls
   avg_talk_seconds: number;
+  sla_breaches_today: number;
+  avg_queue_wait_seconds: number; // time spent in team queues
   hourly: StatsHourBucket[]; // always 12 buckets, oldest→newest
 }
 
@@ -156,6 +184,10 @@ export interface Call {
   // caller is in the IVR, "ringing" while an agent/team is being rung. Absent on
   // rows rebuilt from a reconnect snapshot.
   phase?: 'ivr' | 'ringing';
+  // Set while the caller waits in a team queue (queue.stint events).
+  queue_team?: string;
+  queued_at?: string;
+  queue_sla_seconds?: number;
   ring_target?: string; // agent/team being rung, shown as the destination during "ringing"
   leg_id: string;
   started_at: string;

@@ -163,3 +163,71 @@ func TestOnHandlerCalled(t *testing.T) {
 		t.Fatalf("handler got (%q, %q)", gotTenant, gotData)
 	}
 }
+
+// The periodic recheck pushes a frame only when it differs from the last one
+// sent for that tenant, and never builds for a tenant nobody is watching.
+func TestHubEverySkipsUnchanged(t *testing.T) {
+	h := NewTestHub()
+	outputs := []string{"A", "A", "B"}
+	var built []string
+	h.Every(time.Hour, TypeQueues, func(_ context.Context, tenant string) ([]byte, error) {
+		built = append(built, tenant)
+		v := outputs[0]
+		outputs = outputs[1:]
+		return []byte(v), nil
+	})
+	sub := h.Subscribe("t1")
+
+	for i := 0; i < 3; i++ {
+		h.tickForTest(TypeQueues)
+	}
+
+	var got []string
+	for len(sub.Frames()) > 0 {
+		got = append(got, string(<-sub.Frames()))
+	}
+	want := []string{string(Frame(TypeQueues, []byte("A"))), string(Frame(TypeQueues, []byte("B")))}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("frames = %q, want %q", got, want)
+	}
+	for _, tenant := range built {
+		if tenant != "t1" {
+			t.Fatalf("built for unwatched tenant %q", tenant)
+		}
+	}
+	if len(built) != 3 {
+		t.Fatalf("built %d times, want 3", len(built))
+	}
+}
+
+// A tenant's remembered derived frames go when its last subscriber does, both
+// on Unsubscribe and when the slow-subscriber drop empties the tenant.
+func TestLastPrunedWithLastSubscriber(t *testing.T) {
+	h := NewTestHub()
+	h.Every(time.Hour, TypeQueues, func(_ context.Context, _ string) ([]byte, error) { return []byte("A"), nil })
+	lastKeys := func() int {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.last)
+	}
+
+	sub := h.Subscribe("t1")
+	h.tickForTest(TypeQueues)
+	if lastKeys() != 1 {
+		t.Fatalf("last = %d entries, want 1", lastKeys())
+	}
+	h.Unsubscribe(sub)
+	if n := lastKeys(); n != 0 {
+		t.Fatalf("after unsubscribe last = %d entries, want 0", n)
+	}
+
+	h.Forward(TypeCallEnded)
+	sub = h.Subscribe("t1")
+	h.tickForTest(TypeQueues)
+	for i := 0; i < subBuffer+1; i++ {
+		h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+	}
+	if n := lastKeys(); n != 0 {
+		t.Fatalf("after drop last = %d entries, want 0", n)
+	}
+}

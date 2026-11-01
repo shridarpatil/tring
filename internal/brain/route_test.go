@@ -11,11 +11,18 @@ import (
 	"github.com/shridarpatil/tring/internal/routing"
 )
 
-type fakeTeams struct{ sips []string }
+type fakeTeams struct {
+	sips    []string
+	maxWait int // seconds; 0 → 30
+}
 
 func (f fakeTeams) TeamSIPs(context.Context, uuid.UUID, string) ([]string, error) { return f.sips, nil }
 func (f fakeTeams) TeamConfig(context.Context, uuid.UUID, string) (routing.TeamConfig, bool, error) {
-	return routing.TeamConfig{Strategy: "ring_all", RingSeconds: 5, MaxWait: 30}, true, nil
+	mw := f.maxWait
+	if mw == 0 {
+		mw = 30
+	}
+	return routing.TeamConfig{Strategy: "ring_all", RingSeconds: 5, MaxWait: mw, SLASeconds: 300}, true, nil
 }
 
 // answerEffects answers on the first Ring.
@@ -26,8 +33,8 @@ func (e *answerEffects) Ring(_ context.Context, ordered []string, _ time.Duratio
 	return routing.RingOutcome{Answered: true}, nil
 }
 func (e *answerEffects) Hold(context.Context, time.Duration, func() bool) {}
-func (e *answerEffects) Answered() (bool, string)                          { return false, "" }
-func (e *answerEffects) CallerAlive(context.Context) bool                  { return true }
+func (e *answerEffects) Answered() (bool, string)                         { return false, "" }
+func (e *answerEffects) CallerAlive(context.Context) bool                 { return true }
 
 type fakeTransport struct{ eff *answerEffects }
 
@@ -52,7 +59,7 @@ func newRouter(tport RingTransport) *AgentRouter {
 	return NewAgentRouter(
 		fakeTeams{sips: []string{"alice", "bob"}},
 		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil),
-		tport, nil,
+		tport, nil, nil,
 	)
 }
 
@@ -106,7 +113,7 @@ func TestRingNoHandoffSkipsHandoffWait(t *testing.T) {
 // A target with no resolvable candidates is "no_answer".
 func TestRingNoHandoffNoCandidates(t *testing.T) {
 	tp := &fakeTransport{eff: &answerEffects{}}
-	r := NewAgentRouter(fakeTeams{sips: nil}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil)
+	r := NewAgentRouter(fakeTeams{sips: nil}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil, nil)
 	got, _ := r.RingNoHandoff(context.Background(), "11111111-1111-1111-1111-111111111111/room", ivrdrive.Target{Team: "sales"})
 	if got != "no_answer" {
 		t.Fatalf("outcome = %q, want no_answer", got)
@@ -120,7 +127,7 @@ func TestAgentRouterRoutesTeamTransfer(t *testing.T) {
 		fakeTeams{sips: []string{"alice", "bob"}},
 		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil),
 		&fakeTransport{eff: eff},
-		nil,
+		nil, nil,
 	)
 	out, err := ar.Ring(context.Background(), tenant.String()+"/call", ivrdrive.Target{Team: "sales", Label: "Caller"})
 	if err != nil {
@@ -145,5 +152,114 @@ func TestAgentRouterCallsAnswered(t *testing.T) {
 	}
 	if !answered {
 		t.Fatal("Answered was not called before the handoff wait")
+	}
+}
+
+// fakeStints records QueueEnter/QueueLeave calls; enterID is what QueueEnter returns.
+type fakeStints struct {
+	enterID uuid.UUID
+	enters  []stintCall
+	leaves  []stintCall
+}
+
+type stintCall struct {
+	id                  uuid.UUID
+	room, team, outcome string
+	sla                 int
+}
+
+func (f *fakeStints) QueueEnter(_ context.Context, roomID, team string, slaSeconds int) uuid.UUID {
+	f.enters = append(f.enters, stintCall{room: roomID, team: team, sla: slaSeconds})
+	return f.enterID
+}
+
+func (f *fakeStints) QueueLeave(_ context.Context, stintID uuid.UUID, roomID, team, outcome string) {
+	f.leaves = append(f.leaves, stintCall{id: stintID, room: roomID, team: team, outcome: outcome})
+}
+
+// noAnswerEffects never answers; Hold sleeps out the window (bounded by ctx).
+type noAnswerEffects struct{}
+
+func (noAnswerEffects) Ring(context.Context, []string, time.Duration) (routing.RingOutcome, error) {
+	return routing.RingOutcome{}, nil
+}
+func (noAnswerEffects) Hold(ctx context.Context, d time.Duration, _ func() bool) {
+	select {
+	case <-time.After(d):
+	case <-ctx.Done():
+	}
+}
+func (noAnswerEffects) Answered() (bool, string)         { return false, "" }
+func (noAnswerEffects) CallerAlive(context.Context) bool { return true }
+
+type effTransport struct{ eff routing.Effects }
+
+func (f effTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, sips []string, _, _ string) (func(context.Context) []string, routing.Effects, func()) {
+	return func(context.Context) []string { return sips }, f.eff, func() {}
+}
+
+func newStintRouter(teams fakeTeams, tport RingTransport, stints QueueStints) *AgentRouter {
+	return NewAgentRouter(teams,
+		routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil),
+		tport, stints, nil)
+}
+
+// An answered team transfer records one stint: enter with the team's SLA, leave "answered".
+func TestAgentRouterRecordsTeamStint(t *testing.T) {
+	st := &fakeStints{enterID: uuid.New()}
+	room := uuid.New().String() + "/call"
+	ar := newStintRouter(fakeTeams{sips: []string{"alice"}}, &fakeTransport{eff: &answerEffects{}}, st)
+	if out, _ := ar.RingNoHandoff(context.Background(), room, ivrdrive.Target{Team: "support"}); out != "completed" {
+		t.Fatalf("outcome = %q, want completed", out)
+	}
+	if len(st.enters) != 1 || st.enters[0] != (stintCall{room: room, team: "support", sla: 300}) {
+		t.Fatalf("enters = %+v", st.enters)
+	}
+	if len(st.leaves) != 1 || st.leaves[0] != (stintCall{id: st.enterID, room: room, team: "support", outcome: "answered"}) {
+		t.Fatalf("leaves = %+v", st.leaves)
+	}
+}
+
+// No answer within max wait closes the stint as "timeout".
+func TestAgentRouterStintTimeout(t *testing.T) {
+	st := &fakeStints{enterID: uuid.New()}
+	ar := newStintRouter(fakeTeams{sips: []string{"alice"}, maxWait: 1}, effTransport{eff: noAnswerEffects{}}, st)
+	if out, _ := ar.RingNoHandoff(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{Team: "support"}); out != "no_answer" {
+		t.Fatalf("outcome = %q, want no_answer", out)
+	}
+	if len(st.leaves) != 1 || st.leaves[0].outcome != "timeout" {
+		t.Fatalf("leaves = %+v, want one timeout", st.leaves)
+	}
+}
+
+// A single-agent target is not a queue: no stint.
+func TestAgentRouterNoStintForAgentTarget(t *testing.T) {
+	st := &fakeStints{enterID: uuid.New()}
+	ar := newStintRouter(fakeTeams{}, &fakeTransport{eff: &answerEffects{}}, st)
+	if out, _ := ar.RingNoHandoff(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{AgentSIP: "a1"}); out != "completed" {
+		t.Fatalf("outcome = %q, want completed", out)
+	}
+	if len(st.enters) != 0 || len(st.leaves) != 0 {
+		t.Fatalf("enters = %+v leaves = %+v, want none", st.enters, st.leaves)
+	}
+}
+
+// Without a stint recorder a team transfer routes as before.
+func TestAgentRouterNilStints(t *testing.T) {
+	ar := newStintRouter(fakeTeams{sips: []string{"alice"}}, &fakeTransport{eff: &answerEffects{}}, nil)
+	if out, _ := ar.RingNoHandoff(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{Team: "support"}); out != "completed" {
+		t.Fatalf("outcome = %q, want completed", out)
+	}
+}
+
+// A failed enter (uuid.Nil) doesn't change routing; leave still runs with uuid.Nil.
+func TestAgentRouterStintWhenEnterFails(t *testing.T) {
+	st := &fakeStints{enterID: uuid.Nil}
+	ar := newStintRouter(fakeTeams{sips: []string{"alice"}}, &fakeTransport{eff: &answerEffects{}}, st)
+	if out, _ := ar.RingNoHandoff(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{Team: "support"}); out != "completed" {
+		t.Fatalf("outcome = %q, want completed", out)
+	}
+	if len(st.leaves) != 1 || st.leaves[0].id != uuid.Nil || st.leaves[0].outcome != "answered" {
+		t.Fatalf("leaves = %+v, want one answered with uuid.Nil", st.leaves)
 	}
 }
