@@ -13,7 +13,7 @@ const max = computed(() => Math.max(1, ...props.buckets.map((b) => b.count)));
 // always visible; zero stays zero.
 function barHeight(count: number): number {
   if (count === 0) return 0;
-  return Math.max(4, Math.round((count / max.value) * 110));
+  return Math.max(4, Math.round((count / max.value) * 72));
 }
 
 // "9AM" / "12PM" — local hour, no minutes, no leading zero.
@@ -28,7 +28,7 @@ function hourLabel(iso: string): string {
 <template>
   <div>
     <small class="text-lighter">Calls / hour · last 12h</small>
-    <div class="mbc-row mt-2">
+    <div class="mbc-row">
       <div v-for="(b, i) in buckets" :key="b.hour" class="mbc-col">
         <span class="mbc-count" :class="{ hot: i === buckets.length - 1 }">{{ b.count }}</span>
         <div
