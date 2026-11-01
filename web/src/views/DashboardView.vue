@@ -149,24 +149,28 @@ usePoll(() => (now.value = Date.now()), 1000);
       <!-- Trend strip: today so far -->
       <!-- hstack only adds wrapping: the chart drops to its own line on narrow screens -->
       <div class="card trend-strip hstack">
-        <div class="row" style="flex: 0 0 15rem">
-          <div class="col-6">
-            <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
-            <small class="text-light">Calls today</small>
-          </div>
-          <div class="col-6">
-            <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
-            <small class="text-light">Answered</small>
-          </div>
-          <div class="col-6 mt-2">
-            <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
-            <small class="text-light">Avg talk</small>
-          </div>
-          <div class="col-6 mt-2">
-            <div class="trend-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
-              {{ stats?.sla_breaches_today ?? 0 }}
+        <div class="vstack gap-2" style="flex: 0 0 15rem">
+          <div class="hstack">
+            <div style="flex: 1">
+              <div class="trend-num">{{ stats?.calls_today ?? 0 }}</div>
+              <small class="text-light">Calls today</small>
             </div>
-            <small class="text-light">SLA breaches</small>
+            <div style="flex: 1">
+              <div class="trend-num" style="color: var(--success)">{{ stats?.answered_pct ?? 0 }}%</div>
+              <small class="text-light">Answered</small>
+            </div>
+          </div>
+          <div class="hstack">
+            <div style="flex: 1">
+              <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
+              <small class="text-light">Avg talk</small>
+            </div>
+            <div style="flex: 1">
+              <div class="trend-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
+                {{ stats?.sla_breaches_today ?? 0 }}
+              </div>
+              <small class="text-light">SLA breaches</small>
+            </div>
           </div>
         </div>
         <div class="trend-divider"></div>
