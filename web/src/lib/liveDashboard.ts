@@ -130,13 +130,22 @@ export function teamBadge(t: QueueDepth, nowMs: number): { text: string; variant
 }
 
 // Alert text: a bold lead, the rest of the line, and an optional second line.
+// "for how long" wording: "under a minute", "14 min", "1h 20m", "8h".
+export function fmtSince(secs: number): string {
+  const m = Math.floor(Math.max(0, secs) / 60);
+  if (m < 1) return "under a minute";
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), rem = m % 60;
+  return rem ? `${h}h ${rem}m` : `${h}h`;
+}
+
 export function alertCopy(a: DashAlert): { strong: string; rest: string; sub: string | null } {
   if (a.kind === "understaffed") {
     let rest = `: ${a.live} of ${a.min} agents live (−${a.min - a.live}) · ${a.waiting} waiting`;
     if (a.breaching > 0) rest += `, ${a.breaching} past ${fmtMMSS(a.slaSeconds)} SLA`;
-    rest += `, longest ${fmtMMSS(a.longestSecs)}`;
+    if (a.waiting > 0) rest += `, longest ${fmtMMSS(a.longestSecs)}`;
     if (a.away > 0) rest += ` · ${a.away} on Away`;
-    const sub = a.belowSinceSecs !== null ? `below minimum for ${Math.floor(a.belowSinceSecs / 60)} min` : null;
+    const sub = a.belowSinceSecs !== null ? `below minimum for ${fmtSince(a.belowSinceSecs)}` : null;
     return { strong: `${a.team} is understaffed`, rest, sub };
   }
   const callers = a.breaching === 1 ? "caller" : "callers";
@@ -183,6 +192,25 @@ export function filterLiveCalls(cs: Call[], f: CallFilter, keepId?: string): Cal
   return cs.filter(
     (c) => f === "all" || c.id === keepId || (f === "waiting" ? isWaitingCall(c) : c.status === "answered"),
   );
+}
+
+// Live-call status badge. A queued caller reads "waiting" (even while the queue
+// rings an agent). Otherwise: an active ring first, so a transfer re-ring on an
+// answered call reads "ringing" until the new agent picks up; then talking
+// (answered); then in IVR (caller in the menu, nobody being rung yet).
+export function liveCallBadge(c: Call): { text: string; variant: string } {
+  if (isWaitingCall(c)) return { text: "waiting", variant: "danger" };
+  if (c.phase === "ringing") return { text: "ringing", variant: "accent" };
+  if (c.status === "answered") return { text: "talking", variant: "live" };
+  if (c.phase === "ivr") return { text: "in IVR", variant: "secondary" };
+  return { text: "ringing", variant: "accent" };
+}
+
+// The Time column: wait so far for a queued caller, talk time once answered,
+// otherwise time since the call started.
+export function liveCallSecs(c: Call, nowMs: number): number {
+  if (isWaitingCall(c)) return waitSecs(c.queued_at!, nowMs);
+  return Math.max(0, (nowMs - Date.parse(c.answered_at ?? c.started_at)) / 1000);
 }
 
 export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "danger" | "warning" } | null {

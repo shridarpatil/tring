@@ -8,11 +8,14 @@ import {
   teamView,
   agentsLiveRequired,
   alertCopy,
+  fmtSince,
   alertKey,
   visibleAlerts,
   SNOOZE_MS,
   buildAlerts,
   callSlaBadge,
+  liveCallBadge,
+  liveCallSecs,
   filterLiveCalls,
   todayHours,
   isUnderstaffed,
@@ -160,7 +163,7 @@ test("alertCopy understaffed", () => {
   const [b] = buildAlerts([team({ team: "Sales", min_live_agents: 2, live: 1 })], NOW);
   assert.deepEqual(alertCopy(b), {
     strong: "Sales is understaffed",
-    rest: ": 1 of 2 agents live (−1) · 0 waiting, longest 0:00",
+    rest: ": 1 of 2 agents live (−1) · 0 waiting",
     sub: null,
   });
 });
@@ -195,6 +198,20 @@ test("callSlaBadge", () => {
   assert.deepEqual(callSlaBadge(call({ queued_at: ago(301), queue_sla_seconds: 300 }), NOW), { text: "SLA breached", variant: "danger" });
   assert.equal(callSlaBadge(call({ queued_at: ago(999) }), NOW), null);
   assert.equal(callSlaBadge(call({ status: "answered", queue_sla_seconds: 60 }), NOW), null);
+});
+
+test("liveCallBadge", () => {
+  assert.deepEqual(liveCallBadge(call({ queued_at: ago(5), phase: "ringing" })), { text: "waiting", variant: "danger" });
+  assert.deepEqual(liveCallBadge(call({ status: "answered", phase: "ringing" })), { text: "ringing", variant: "accent" });
+  assert.deepEqual(liveCallBadge(call({ status: "answered" })), { text: "talking", variant: "live" });
+  assert.deepEqual(liveCallBadge(call({ phase: "ivr" })), { text: "in IVR", variant: "secondary" });
+  assert.deepEqual(liveCallBadge(call({})), { text: "ringing", variant: "accent" });
+});
+
+test("liveCallSecs", () => {
+  assert.equal(liveCallSecs(call({ started_at: ago(400), queued_at: ago(90) }), NOW), 90);
+  assert.equal(liveCallSecs(call({ status: "answered", started_at: ago(400), answered_at: ago(60) }), NOW), 60);
+  assert.equal(liveCallSecs(call({ started_at: ago(400) }), NOW), 400);
 });
 
 test("agentsLiveRequired counts seats covered per team", () => {
@@ -327,4 +344,11 @@ test("visibleAlerts: other teams and kinds are unaffected", () => {
   const other = { team: "support", kind: "sla" } as DashAlert;
   const snoozed = { [alertKey(sla)]: 5000 };
   assert.deepEqual(visibleAlerts([sla, under, other], snoozed, 1000), [under, other]);
+});
+
+test("fmtSince wording", () => {
+  assert.equal(fmtSince(30), "under a minute");
+  assert.equal(fmtSince(14 * 60 + 5), "14 min");
+  assert.equal(fmtSince(80 * 60), "1h 20m");
+  assert.equal(fmtSince(480 * 60), "8h");
 });
