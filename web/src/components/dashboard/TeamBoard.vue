@@ -148,7 +148,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             </div>
             <div>
               <div><strong :style="t.breaches_today ? { color: 'var(--danger)' } : undefined">{{ t.breaches_today }}</strong></div>
-              <div class="k text-light">SLA breaches today</div>
+              <div class="k text-light">SLA breaches</div>
             </div>
           </div>
         </template>
@@ -169,7 +169,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             <th>Away</th>
             <th>Waiting</th>
             <th>Longest</th>
-            <th>Breaches today</th>
+            <th>SLA breaches</th>
             <th></th>
           </tr>
         </thead>

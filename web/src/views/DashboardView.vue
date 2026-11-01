@@ -170,7 +170,7 @@ usePoll(() => (now.value = Date.now()), 1000);
           <div class="kpi-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
             {{ stats?.sla_breaches_today ?? 0 }}
           </div>
-          <small class="text-light">SLA breaches today</small>
+          <small class="text-light">SLA breaches</small>
                       <small v-if="breachingNow > 0"><strong style="color: var(--danger)">{{ breachingNow }} breaching now</strong></small>
             <small v-else class="text-lighter">none breaching now</small>
 
