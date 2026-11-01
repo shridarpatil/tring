@@ -18,7 +18,8 @@ import {
   filterLiveCalls,
   fmtMMSS,
   type CallFilter,
-  isWaitingCall,
+  liveCallBadge,
+  liveCallSecs,
   longestWait,
   sortLiveCalls,
 } from "../lib/liveDashboard";
@@ -40,11 +41,6 @@ function fmtDur(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const m = Math.floor(s / 60);
   return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
-}
-// Talk time once answered; otherwise time spent ringing.
-function callSeconds(c: Call): number {
-  const base = c.answered_at ?? c.started_at;
-  return (now.value - new Date(base).getTime()) / 1000;
 }
 
 // ── KPI derivations ───────────────────────────────────────────────────
@@ -69,32 +65,9 @@ const callFilter = ref<CallFilter>("all");
 const shownCalls = computed(() => filterLiveCalls(sortLiveCalls(calls.value), callFilter.value, active.value?.callId));
 
 // ── live-call row presentation ────────────────────────────────────────
-function sourceIcon(c: Call): string {
-  if (c.source === "web") return "🌐";
-  if (c.source === "whatsapp") return "💬";
-  return "☎";
-}
 function callerLabel(c: Call): string {
   if (c.source === "web") return "Web visitor";
   return c.from_number || "Unknown";
-}
-function destLabel(c: Call): string {
-  // A ring in progress (including a transfer re-ring on an answered call) shows who
-  // it's ringing (ring_target); otherwise the answering agent, then the flow/number.
-  if (c.phase === "ringing" && c.ring_target) return c.ring_target;
-  return c.agent_name || c.ring_target || c.to_number || "—";
-}
-
-// Live-call status badge. Pre-terminal states the operator cares about: ringing
-// (an agent is being rung — destLabel shows who), talking (answered), and in IVR
-// (caller in the menu, nobody being rung yet). An active ring is checked first so a
-// transfer re-ring on an in-progress call reads "ringing" until the new agent picks
-// up, rather than staying "talking" on the agent who handed it off.
-function callBadge(c: Call): { text: string; cls: string } {
-  if (c.phase === "ringing") return { text: "ringing", cls: "accent" };
-  if (c.status === "answered") return { text: "talking", cls: "live" };
-  if (c.phase === "ivr") return { text: "in IVR", cls: "secondary" };
-  return { text: "ringing", cls: "accent" };
 }
 
 // ── supervisor (Listen/Whisper/Barge) ─────────────────────────────────
@@ -238,75 +211,100 @@ usePoll(() => (now.value = Date.now()), 1000);
         <Panel>
           <template #title>Live calls</template>
           <template #actions>
-            <LevelMeter v-if="hasTalking" active />
-            <small class="text-light">{{ calls.length }} active</small>
-          </template>
-          <div class="hstack gap-2 p-4">
-            <button
-              v-for="f in callFilters"
-              :key="f.key"
-              type="button"
-              class="small"
-              :class="{ outline: callFilter !== f.key }"
-              :aria-pressed="callFilter === f.key"
-              @click="callFilter = f.key"
-            >
-              {{ f.label }}
-            </button>
-          </div>
-          <div class="scroll-max" style="--max-h: 28rem">
-          <div v-if="!shownCalls.length" class="list-empty">
-            <small>No live calls</small>
-          </div>
-          <div v-for="c in shownCalls" :key="c.id" class="live-call-row">
-            <span class="source-badge" aria-hidden="true">{{ sourceIcon(c) }}</span>
-            <div style="flex: 1 1 auto; min-width: 0">
-              <div class="truncate">
-                <small>{{ callerLabel(c) }} → <strong>{{ destLabel(c) }}</strong></small>
-              </div>
-              <div class="text-lighter mono truncate">
-                <small>{{ c.to_number }}<template v-if="isWaitingCall(c)"> · waiting in {{ c.queue_team }}</template></small>
-              </div>
-              <span v-if="callSlaBadge(c, now)" class="badge" :data-variant="callSlaBadge(c, now)!.variant">{{
-                callSlaBadge(c, now)!.text
-              }}</span>
-            </div>
-            <span class="badge" :data-variant="callBadge(c).cls" style="flex-shrink: 0">{{ callBadge(c).text }}</span>
-            <small class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
-              fmtDur(callSeconds(c))
-            }}</small>
-            <!-- Supervisor controls: any call with a media room (web, phone,
-                 WhatsApp; calls placed over ESL have none). Only ONE supervise
-                 session is supported at a time (the `active` ref, not per-row state). -->
-            <div v-if="c.room_id" style="flex-shrink: 0; display: flex; align-items: center; gap: 0.25rem">
-              <span v-if="c.supervised && active?.callId !== c.id" class="text-lighter" :title="'Supervised by ' + c.supervised"
-                >🎧 {{ c.supervised }}</span
-              >
-              <button
-                v-if="active?.callId !== c.id"
-                type="button"
-                class="dash-pill"
-                @click="startSupervise(c)"
-              >
-                Listen
-              </button>
-              <template v-else>
+            <span class="hstack gap-2">
+              <LevelMeter v-if="hasTalking" active />
+              <span class="hstack gap-1" role="group" aria-label="Filter live calls">
                 <button
-                  v-for="m in (['monitor', 'whisper', 'barge'] as const)"
-                  :key="m"
+                  v-for="f in callFilters"
+                  :key="f.key"
                   type="button"
-                  class="dash-pill"
-                  :class="{ 'dash-pill-active': active.mode === m }"
-                  @click="setMode(m)"
+                  class="small"
+                  :class="{ outline: callFilter !== f.key }"
+                  :aria-pressed="callFilter === f.key"
+                  @click="callFilter = f.key"
                 >
-                  {{ m }}
+                  {{ f.label }}
                 </button>
-                <button type="button" class="dash-pill dash-pill-danger" @click="stopSupervise()">
-                  Stop
-                </button>
-              </template>
-            </div>
-          </div>
+              </span>
+            </span>
+          </template>
+          <div class="scroll-max" style="--max-h: 28rem">
+            <table>
+              <thead>
+                <tr>
+                  <th>Caller</th>
+                  <th>Team</th>
+                  <th>Agent</th>
+                  <th>Status</th>
+                  <th>Time</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!shownCalls.length">
+                  <td colspan="6" class="list-empty"><small>No calls</small></td>
+                </tr>
+                <tr v-for="c in shownCalls" :key="c.id">
+                  <td class="mono"><small>{{ callerLabel(c) }}</small></td>
+                  <td>
+                    <small v-if="c.queue_team">{{ c.queue_team }}</small>
+                    <small v-else class="text-lighter">—</small>
+                  </td>
+                  <td>
+                    <small v-if="c.agent_name">{{ c.agent_name }}</small>
+                    <small v-else class="text-lighter">—</small>
+                  </td>
+                  <td>
+                    <span class="hstack gap-1">
+                      <span class="badge" :data-variant="liveCallBadge(c).variant">{{ liveCallBadge(c).text }}</span>
+                      <span v-if="callSlaBadge(c, now)" class="badge" :data-variant="callSlaBadge(c, now)!.variant">{{
+                        callSlaBadge(c, now)!.text
+                      }}</span>
+                    </span>
+                  </td>
+                  <td>
+                    <small
+                      class="mono"
+                      :style="callSlaBadge(c, now) ? { color: `var(--${callSlaBadge(c, now)!.variant})` } : undefined"
+                      >{{ fmtMMSS(liveCallSecs(c, now)) }}</small
+                    >
+                  </td>
+                  <td class="align-right">
+                    <!-- Supervisor controls: any call with a media room (web, phone,
+                         WhatsApp; calls placed over ESL have none). Only ONE supervise
+                         session is supported at a time (the `active` ref, not per-row state). -->
+                    <span v-if="c.room_id" class="hstack gap-1 justify-end">
+                      <span v-if="c.supervised && active?.callId !== c.id" class="text-lighter" :title="'Supervised by ' + c.supervised"
+                        >🎧 {{ c.supervised }}</span
+                      >
+                      <button
+                        v-if="active?.callId !== c.id"
+                        type="button"
+                        class="dash-pill"
+                        @click="startSupervise(c)"
+                      >
+                        Listen
+                      </button>
+                      <template v-else>
+                        <button
+                          v-for="m in (['monitor', 'whisper', 'barge'] as const)"
+                          :key="m"
+                          type="button"
+                          class="dash-pill"
+                          :class="{ 'dash-pill-active': active.mode === m }"
+                          @click="setMode(m)"
+                        >
+                          {{ m }}
+                        </button>
+                        <button type="button" class="dash-pill dash-pill-danger" @click="stopSupervise()">
+                          Stop
+                        </button>
+                      </template>
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </Panel>
 
@@ -333,27 +331,6 @@ usePoll(() => (now.value = Date.now()), 1000);
 
 .scroll-max { max-height: var(--max-h); overflow-y: auto; }
 .list-empty { padding: 2rem 1.25rem; text-align: center; color: var(--faint-foreground); }
-
-.live-call-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1.25rem;
-  border-bottom: 1px solid var(--border);
-}
-.live-call-row:last-child { border-bottom: none; }
-
-.source-badge {
-  flex-shrink: 0;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: var(--radius-medium);
-  background: var(--secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--text-8);
-}
 
 .agent-row {
   display: flex;

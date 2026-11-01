@@ -185,6 +185,25 @@ export function filterLiveCalls(cs: Call[], f: CallFilter, keepId?: string): Cal
   );
 }
 
+// Live-call status badge. A queued caller reads "waiting" (even while the queue
+// rings an agent). Otherwise: an active ring first, so a transfer re-ring on an
+// answered call reads "ringing" until the new agent picks up; then talking
+// (answered); then in IVR (caller in the menu, nobody being rung yet).
+export function liveCallBadge(c: Call): { text: string; variant: string } {
+  if (isWaitingCall(c)) return { text: "waiting", variant: "danger" };
+  if (c.phase === "ringing") return { text: "ringing", variant: "accent" };
+  if (c.status === "answered") return { text: "talking", variant: "live" };
+  if (c.phase === "ivr") return { text: "in IVR", variant: "secondary" };
+  return { text: "ringing", variant: "accent" };
+}
+
+// The Time column: wait so far for a queued caller, talk time once answered,
+// otherwise time since the call started.
+export function liveCallSecs(c: Call, nowMs: number): number {
+  if (isWaitingCall(c)) return waitSecs(c.queued_at!, nowMs);
+  return Math.max(0, (nowMs - Date.parse(c.answered_at ?? c.started_at)) / 1000);
+}
+
 export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "danger" | "warning" } | null {
   const sla = c.queue_sla_seconds ?? 0;
   if (!isWaitingCall(c) || sla <= 0) return null;
