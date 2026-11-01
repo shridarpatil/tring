@@ -13,6 +13,8 @@ import {
   SNOOZE_MS,
   buildAlerts,
   callSlaBadge,
+  liveCallBadge,
+  liveCallSecs,
   filterLiveCalls,
   todayHours,
   isUnderstaffed,
@@ -195,6 +197,20 @@ test("callSlaBadge", () => {
   assert.deepEqual(callSlaBadge(call({ queued_at: ago(301), queue_sla_seconds: 300 }), NOW), { text: "SLA breached", variant: "danger" });
   assert.equal(callSlaBadge(call({ queued_at: ago(999) }), NOW), null);
   assert.equal(callSlaBadge(call({ status: "answered", queue_sla_seconds: 60 }), NOW), null);
+});
+
+test("liveCallBadge", () => {
+  assert.deepEqual(liveCallBadge(call({ queued_at: ago(5), phase: "ringing" })), { text: "waiting", variant: "danger" });
+  assert.deepEqual(liveCallBadge(call({ status: "answered", phase: "ringing" })), { text: "ringing", variant: "accent" });
+  assert.deepEqual(liveCallBadge(call({ status: "answered" })), { text: "talking", variant: "live" });
+  assert.deepEqual(liveCallBadge(call({ phase: "ivr" })), { text: "in IVR", variant: "secondary" });
+  assert.deepEqual(liveCallBadge(call({})), { text: "ringing", variant: "accent" });
+});
+
+test("liveCallSecs", () => {
+  assert.equal(liveCallSecs(call({ started_at: ago(400), queued_at: ago(90) }), NOW), 90);
+  assert.equal(liveCallSecs(call({ status: "answered", started_at: ago(400), answered_at: ago(60) }), NOW), 60);
+  assert.equal(liveCallSecs(call({ started_at: ago(400) }), NOW), 400);
 });
 
 test("agentsLiveRequired counts seats covered per team", () => {
