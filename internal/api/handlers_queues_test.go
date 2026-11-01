@@ -139,11 +139,43 @@ func TestQueuesSnapshotUnconfigured(t *testing.T) {
 	if !strings.Contains(string(raw), `"waiting_since":[]`) {
 		t.Fatalf("waiting_since must be [] not null: %s", raw)
 	}
+	if !strings.Contains(string(raw), `"agents":[]`) {
+		t.Fatalf("agents must be [] not null: %s", raw)
+	}
 	if !strings.Contains(string(raw), `"hours":[]`) {
 		t.Fatalf("hours must be [] not null: %s", raw)
 	}
 	if strings.Contains(string(raw), "below_min_since") {
 		t.Fatalf("below_min_since must be omitted: %s", raw)
+	}
+}
+
+func TestQueuesSnapshotAgents(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	ctx := context.Background()
+	seedTeam(t, f, "support", 0, 0, "[]")
+	for _, sip := range []string{"zoe", "amy", "max"} {
+		var id uuid.UUID
+		if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO agents (tenant_id, sip_username, sip_password)
+			VALUES ($1, $2, 'pw') RETURNING id`, f.TenantID, sip).Scan(&id); err != nil {
+			t.Fatalf("seed agent: %v", err)
+		}
+		if sip == "max" {
+			continue // not a member
+		}
+		if _, err := f.DB.Pool.Exec(ctx, `INSERT INTO team_agents (tenant_id, team_name, agent_id) VALUES ($1, 'support', $2)`,
+			f.TenantID, id); err != nil {
+			t.Fatalf("seed member: %v", err)
+		}
+	}
+
+	out, err := s.queuesSnapshot(ctx, &Tenant{ID: f.TenantID}, nil)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if got := queueFor(t, out, "support").Agents; strings.Join(got, ",") != "amy,zoe" {
+		t.Fatalf("agents = %v, want [amy zoe]", got)
 	}
 }
 

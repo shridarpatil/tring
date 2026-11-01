@@ -195,3 +195,45 @@ export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: numbe
     min: open.reduce((n, t) => n + t.min_live_agents, 0),
   };
 }
+
+export type SeatState = "on_call" | "online" | "offline" | "away";
+export const SEATS_MAX = 24; // above this a team shows a meter instead of seat dots
+
+// One dot per seat: on call, available, empty seats up to the minimum, then Away.
+export function seatStates(t: QueueDepth): SeatState[] {
+  const n = (k: number, s: SeatState): SeatState[] => Array(Math.max(0, k)).fill(s);
+  return [
+    ...n(t.on_call, "on_call"),
+    ...n(t.available, "online"),
+    ...n(t.min_live_agents - t.live, "offline"),
+    ...n(t.away, "away"),
+  ];
+}
+
+export function showSeats(t: QueueDepth): boolean {
+  return t.min_live_agents <= SEATS_MAX && t.members <= SEATS_MAX;
+}
+
+// Live agents as a share of the minimum; null when the team has no minimum.
+export function staffedPct(t: QueueDepth): number | null {
+  return t.min_live_agents > 0 ? Math.round((t.live / t.min_live_agents) * 100) : null;
+}
+
+// SIP username -> the teams that agent belongs to, sorted.
+export function agentTeams(ts: QueueDepth[]): Map<string, string[]> {
+  const m = new Map<string, string[]>();
+  for (const t of ts) for (const sip of t.agents) m.set(sip, [...(m.get(sip) ?? []), t.team]);
+  for (const l of m.values()) l.sort((a, b) => a.localeCompare(b));
+  return m;
+}
+
+export function belowMinCount(ts: QueueDepth[]): number {
+  return ts.filter(isUnderstaffed).length;
+}
+
+export type TeamViewMode = "auto" | "cards" | "rows";
+
+export function teamView(mode: TeamViewMode, teamCount: number): "cards" | "rows" {
+  if (mode !== "auto") return mode;
+  return teamCount <= CARDS_MAX_TEAMS ? "cards" : "rows";
+}

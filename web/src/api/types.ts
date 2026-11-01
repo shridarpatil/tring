@@ -100,6 +100,7 @@ export interface QueueDepth {
   sla_seconds: number;
   hours: TeamDay[];
   members: number;
+  agents: string[]; // member SIP usernames, sorted
   live: number; // on_call + available
   on_call: number;
   available: number;
