@@ -313,7 +313,7 @@ func (s *Server) activeCallsList(ctx context.Context, tenantID uuid.UUID) ([]Cal
 	defer rows.Close()
 	out := []Call{}
 	for rows.Next() {
-		c, err := scanCall(rows)
+		c, err := callrow.ScanActive(rows)
 		if err != nil {
 			return nil, err
 		}

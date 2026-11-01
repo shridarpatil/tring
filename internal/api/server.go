@@ -176,6 +176,10 @@ type Server struct {
 	// state. See internal/brain/sim_session.go.
 	simManager *brain.SimManager
 
+	// belowMin: since when each team has been open with fewer live agents than
+	// its minimum (the dashboard's staffing alert). See staffing.go.
+	belowMin belowMinTracker
+
 	hub    *events.Hub
 	events *events.Publisher
 

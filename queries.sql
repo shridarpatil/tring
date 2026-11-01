@@ -485,12 +485,21 @@ ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 -- In-progress calls for the cockpit "Live calls" panel: not yet ended, still
 -- ringing or connected. Oldest first so the longest-running call stays put at the
 -- top. Capped — active calls are naturally bounded, the LIMIT is just a backstop.
+-- The trailing team / enqueued_at / sla_seconds are the call's open queue stint
+-- (newest, within the same 4 h cap as list-open-stints), NULL when not queued.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
-       COALESCE(c.room_id, '')
+       COALESCE(c.room_id, ''),
+       qs.team, qs.enqueued_at, qs.sla_seconds
 FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
+LEFT JOIN LATERAL (
+    SELECT team, enqueued_at, sla_seconds FROM queue_stints
+    WHERE tenant_id = c.tenant_id AND call_id = c.id AND ended_at IS NULL
+      AND enqueued_at > now() - interval '4 hours'
+    ORDER BY enqueued_at DESC LIMIT 1
+) qs ON true
 WHERE c.tenant_id = $1 AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
 ORDER BY c.started_at ASC LIMIT 100;
 

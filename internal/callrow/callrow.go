@@ -46,25 +46,42 @@ type Call struct {
 	// lets the dashboard match a call.supervised event to its row. Empty for
 	// FreeSWITCH-only calls.
 	RoomID string `json:"room_id,omitempty"`
+	// QueueTeam / QueuedAt / QueueSLASeconds describe the team queue the call
+	// is waiting in right now. Only list-active-calls fills them (ScanActive).
+	QueueTeam       *string    `json:"queue_team,omitempty"`
+	QueuedAt        *time.Time `json:"queued_at,omitempty"`
+	QueueSLASeconds *int       `json:"queue_sla_seconds,omitempty"`
 }
 
 // Scan reads one row in the get-call / list-calls column order.
 func Scan(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	var c Call
+	return c, scan(scanner, &c)
+}
+
+// ScanActive reads a list-active-calls row: the Scan columns followed by the
+// call's open queue stint (team, enqueued_at, sla_seconds), NULL when none.
+func ScanActive(scanner interface{ Scan(...interface{}) error }) (Call, error) {
+	var c Call
+	return c, scan(scanner, &c, &c.QueueTeam, &c.QueuedAt, &c.QueueSLASeconds)
+}
+
+func scan(scanner interface{ Scan(...interface{}) error }, c *Call, extra ...interface{}) error {
 	// Scan the jsonb ivr_path into a plain []byte, then hand it to the
 	// RawMessage field — pgx returns jsonb as raw bytes and we pass them
 	// through to the client unchanged.
 	var ivrPath []byte
-	err := scanner.Scan(
+	dest := append([]interface{}{
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
 		&c.AgentID, &c.LegID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
 		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef, &c.Source,
 		&c.RoomID,
-	)
+	}, extra...)
+	err := scanner.Scan(dest...)
 	if len(ivrPath) > 0 {
 		c.IVRPath = ivrPath
 	}
-	return c, err
+	return err
 }
 
 // RecordingCacheKey is the Redis key for a tenant's recording settings
