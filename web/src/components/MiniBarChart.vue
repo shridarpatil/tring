@@ -4,7 +4,8 @@ import type { StatsHourBucket } from "../api/types";
 
 // Labelled calls-per-hour mini bar chart for the dashboard trend strip. Each bar
 // carries its count above and its hour below; the last bar (current hour) is
-// highlighted in the live-amber signal colour.
+// highlighted in the live-amber signal colour. Calls that waited past their
+// team's SLA show as a red segment at the foot of the bar.
 const props = defineProps<{ buckets: StatsHourBucket[] }>();
 
 const max = computed(() => Math.max(1, ...props.buckets.map((b) => b.count)));
@@ -14,6 +15,13 @@ const max = computed(() => Math.max(1, ...props.buckets.map((b) => b.count)));
 function barHeight(count: number): number {
   if (count === 0) return 0;
   return Math.max(4, Math.round((count / max.value) * 56));
+}
+
+// The breached share of a bar, in px (never taller than the bar).
+function breachHeight(b: StatsHourBucket): number {
+  if (!b.breaches || !b.count) return 0;
+  const h = barHeight(b.count);
+  return Math.min(h, Math.max(2, Math.round((h * b.breaches) / b.count)));
 }
 
 // "9AM" / "12PM" — local hour, no minutes, no leading zero.
@@ -27,14 +35,18 @@ function hourLabel(iso: string): string {
 
 <template>
   <div>
-    <div class="mbc-title">Calls / hour · last 12h</div>
+    <div class="mbc-title">Calls / hour · last 12h · red = waited past SLA</div>
     <div class="mbc-row">
       <div v-for="(b, i) in buckets" :key="b.hour" class="mbc-col">
-        <span class="mbc-count" :class="{ hot: i === buckets.length - 1 }">{{ b.count }}</span>
+        <span class="mbc-count" :class="{ hot: i === buckets.length - 1 }">{{ b.count }}<template v-if="b.breaches > 0"> · {{ b.breaches }}</template></span>
         <div
           class="mbc-bar"
           :class="{ hot: i === buckets.length - 1 }"
-          :style="{ height: barHeight(b.count) + 'px' }"
+          :style="{ height: barHeight(b.count) - breachHeight(b) + 'px' }"
+        ></div>
+        <div
+          v-if="breachHeight(b) > 0"
+          :style="{ width: '100%', height: breachHeight(b) + 'px', background: 'var(--danger)' }"
         ></div>
         <span class="mbc-hr" :class="{ hot: i === buckets.length - 1 }">{{ hourLabel(b.hour) }}</span>
       </div>

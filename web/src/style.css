@@ -1,6 +1,6 @@
 /* Oat is the console's UI library. We import only the components the console
    uses (tree-shaken from the full oat.min.css) — dropping accordion, avatar,
-   dropdown, progress, skeleton, sidebar, grid, and Oat's tooltip/toast
+   dropdown, skeleton, sidebar, and Oat's tooltip/toast
    (we use Vue implementations for those). Oat's dialog styles the native
    <dialog> used by ConfirmDialog. oat-theme.css then re-points Oat's
    variables onto the Operator palette (colours only — no utility framework). */
@@ -13,6 +13,8 @@
 @import "@knadh/oat/css/dialog.css";
 @import "@knadh/oat/css/form.css";
 @import "@knadh/oat/css/table.css";
+@import "@knadh/oat/css/grid.css";
+@import "@knadh/oat/css/progress.css";
 @import "@knadh/oat/css/tabs.css";
 @import "@knadh/oat/css/alert.css";
 @import "@knadh/oat/css/spinner.css";
