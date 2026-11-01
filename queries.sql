@@ -100,6 +100,50 @@ FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
 WHERE ta.tenant_id = $1 AND ta.team_name = $2 AND a.available_for_calls
 ORDER BY ta.position, a.sip_username;
 
+-- name: list-team-live-config
+-- Staffing / SLA / working-hours settings per team, for the live dashboard.
+SELECT name, min_live_agents, sla_seconds, hours
+FROM teams WHERE tenant_id = $1 ORDER BY name;
+
+-- name: list-team-agent-status
+-- Team membership (team name + agent SIP user) for the live dashboard's
+-- per-team live-agent count; presence is joined from Redis by the caller.
+SELECT ta.team_name, a.sip_username
+FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+WHERE ta.tenant_id = $1;
+
+-- name: insert-queue-stint
+-- A caller starts waiting in a team queue. sla_seconds is the team's SLA
+-- snapshotted now so later setting changes don't rewrite history.
+INSERT INTO queue_stints (tenant_id, call_id, team, sla_seconds)
+VALUES ($1, $2, $3, $4)
+RETURNING id;
+
+-- name: end-queue-stint
+-- Close a stint with its outcome (answered | abandoned | timeout | transferred).
+-- Idempotent: an already-ended stint is left untouched.
+UPDATE queue_stints SET ended_at = now(), outcome = $2
+WHERE id = $1 AND ended_at IS NULL;
+
+-- name: list-open-stints
+-- Callers currently waiting. The 4 h cap ignores stints orphaned by a crash
+-- that never got an end-queue-stint.
+SELECT team, enqueued_at
+FROM queue_stints
+WHERE tenant_id = $1 AND ended_at IS NULL AND enqueued_at > now() - interval '4 hours'
+ORDER BY enqueued_at;
+
+-- name: count-breaches-today-by-team
+-- SLA breaches since local midnight, open stints included. A breach is
+-- waiting longer than the snapshotted SLA, whatever the outcome.
+SELECT team, count(*)
+FROM queue_stints
+WHERE tenant_id = $1
+  AND enqueued_at >= date_trunc('day', now())
+  AND sla_seconds > 0
+  AND COALESCE(ended_at, now()) - enqueued_at > make_interval(secs => sla_seconds)
+GROUP BY team;
+
 -- ===========================================================================
 -- numbers
 -- ===========================================================================
