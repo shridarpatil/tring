@@ -134,7 +134,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <div v-for="g in staffingSegments(t)" :key="g.kind" :style="segStyle(g)" :title="SEG_STYLE[g.kind].title(g.count)"></div>
               </div>
 
-              <small class="hstack gap-4">
+              <small class="hstack gap-2">
                 <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
                 <SignalDot state="online" size="sm" :label="`${t.available} available`" />
                 <SignalDot state="away" size="sm" :label="`${t.away} away`" />
