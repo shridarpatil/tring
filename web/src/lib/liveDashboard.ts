@@ -223,18 +223,6 @@ export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "
   return null;
 }
 
-// Seats covered: over teams that are open now, staffing-known and have a
-// minimum, live counts at most min per team so a surplus in one team cannot
-// hide a gap in another. short = teams below their minimum.
-export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: number; short: number } {
-  const req = ts.filter((t) => t.open && t.staffing_known && t.min_live_agents > 0);
-  return {
-    live: req.reduce((n, t) => n + Math.min(t.live, t.min_live_agents), 0),
-    min: req.reduce((n, t) => n + t.min_live_agents, 0),
-    short: req.filter((t) => t.live < t.min_live_agents).length,
-  };
-}
-
 // The SLA limit when every team with one configured shares it; null otherwise.
 export function sharedSla(ts: QueueDepth[]): number | null {
   const set = new Set(ts.filter((t) => t.sla_seconds > 0).map((t) => t.sla_seconds));

@@ -6,7 +6,6 @@ import {
   staffedPct,
   staffingSegments,
   teamView,
-  agentsLiveRequired,
   alertCopy,
   fmtSince,
   alertKey,
@@ -212,28 +211,6 @@ test("liveCallSecs", () => {
   assert.equal(liveCallSecs(call({ started_at: ago(400), queued_at: ago(90) }), NOW), 90);
   assert.equal(liveCallSecs(call({ status: "answered", started_at: ago(400), answered_at: ago(60) }), NOW), 60);
   assert.equal(liveCallSecs(call({ started_at: ago(400) }), NOW), 400);
-});
-
-test("agentsLiveRequired counts seats covered per team", () => {
-  assert.deepEqual(
-    agentsLiveRequired([
-      team({ live: 80, min_live_agents: 50 }),
-      team({ live: 20, min_live_agents: 50 }),
-    ]),
-    { live: 70, min: 100, short: 1 },
-  );
-});
-
-test("agentsLiveRequired ignores min-0, closed and unknown-staffing teams", () => {
-  assert.deepEqual(
-    agentsLiveRequired([
-      team({ live: 5, min_live_agents: 0 }),
-      team({ open: false, live: 1, min_live_agents: 4 }),
-      team({ staffing_known: false, live: 0, min_live_agents: 6 }),
-      team({ live: 2, min_live_agents: 2 }),
-    ]),
-    { live: 2, min: 2, short: 0 },
-  );
 });
 
 test("filterLiveCalls keeps the supervised call whatever the filter", () => {
