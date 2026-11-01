@@ -66,6 +66,8 @@ function callerLabel(c: Call): string {
 // dashboard (a single `active` ref, not one per row).
 const active = ref<{ callId: string; mode: SuperviseMode; session: SupervisorSession } | null>(null);
 
+const SUPERVISE_LABELS: Record<SuperviseMode, string> = { monitor: "Monitor", whisper: "Whisper", barge: "Barge" };
+
 async function startSupervise(c: Call): Promise<void> {
   // Switching targets mid-session must hang up the previous one — otherwise
   // its WebSocket/PeerConnection stay open and, in whisper/barge, the
@@ -247,7 +249,7 @@ usePoll(() => (now.value = Date.now()), 1000);
                       <button
                         v-if="active?.callId !== c.id"
                         type="button"
-                        class="dash-pill"
+                        class="small outline"
                         @click="startSupervise(c)"
                       >
                         Listen
@@ -257,13 +259,14 @@ usePoll(() => (now.value = Date.now()), 1000);
                           v-for="m in (['monitor', 'whisper', 'barge'] as const)"
                           :key="m"
                           type="button"
-                          class="dash-pill"
-                          :class="{ 'dash-pill-active': active.mode === m }"
+                          class="small"
+                          :class="{ outline: active.mode !== m }"
+                          :aria-pressed="active.mode === m"
                           @click="setMode(m)"
                         >
-                          {{ m }}
+                          {{ SUPERVISE_LABELS[m] }}
                         </button>
-                        <button type="button" class="dash-pill dash-pill-danger" @click="stopSupervise()">
+                        <button type="button" class="small outline" data-variant="danger" @click="stopSupervise()">
                           Stop
                         </button>
                       </template>
@@ -325,22 +328,4 @@ usePoll(() => (now.value = Date.now()), 1000);
 }
 .agent-row:last-child { border-bottom: none; }
 
-.dash-pill {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.45;
-  padding: 4px 10px;
-  border-radius: var(--radius-medium);
-  background: var(--card);
-  text-transform: capitalize;
-  transition: background-color var(--transition-fast);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  color: inherit;
-  font-family: inherit;
-  font-weight: 400;
-}
-.dash-pill:hover { background: var(--secondary); }
-.dash-pill-active { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
-.dash-pill-danger { background: var(--color-danger-soft); color: var(--danger); }
 </style>
