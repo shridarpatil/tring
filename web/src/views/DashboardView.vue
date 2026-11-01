@@ -213,11 +213,13 @@ usePoll(() => (now.value = Date.now()), 1000);
           <template #actions>
             <span class="hstack gap-2">
               <LevelMeter v-if="hasTalking" active />
-              <span class="lc-seg" role="group" aria-label="Filter live calls">
+              <span class="hstack gap-1" role="group" aria-label="Filter live calls">
                 <button
                   v-for="f in callFilters"
                   :key="f.key"
                   type="button"
+                  class="small"
+                  :class="{ outline: callFilter !== f.key }"
                   :aria-pressed="callFilter === f.key"
                   @click="callFilter = f.key"
                 >
@@ -329,21 +331,6 @@ usePoll(() => (now.value = Date.now()), 1000);
 /* Live calls panel: sizes follow the live-dashboard mock. */
 .live-calls-panel :deep(.panel-head) { height: auto; padding: 12px 16px; }
 .live-calls-panel :deep(.panel-title) { font-size: 14px; font-weight: 600; line-height: 1.45; }
-.lc-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-medium); overflow: hidden; }
-.lc-seg button {
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.45;
-  padding: 4px 10px;
-  color: inherit;
-  background: var(--card);
-  cursor: pointer;
-}
-.lc-seg button:hover { background: var(--secondary); }
-.lc-seg button[aria-pressed="true"] { background: var(--secondary); font-weight: 600; }
 .live-calls th {
   font-size: 12px;
   font-weight: 500;
