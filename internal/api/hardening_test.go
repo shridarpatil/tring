@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -208,5 +209,40 @@ func TestSDKHandlerNoDirectoryListing(t *testing.T) {
 		if rec.Code != want {
 			t.Errorf("GET %s = %d, want %d", path, rec.Code, want)
 		}
+	}
+}
+
+// Static console/widget files are gzipped for clients that accept it and left
+// alone for clients that don't; the decompressed body is the original file.
+func TestStaticCompress(t *testing.T) {
+	js := strings.Repeat("console.log('tring');\n", 200)
+	fsys := fstest.MapFS{"app.js": {Data: []byte(js)}, "app.css": {Data: []byte(strings.Repeat("a{b:c}", 200))}}
+	h := staticCompress(http.StripPrefix("/sdk/", sdkHandler(fsys)))
+
+	for _, name := range []string{"app.js", "app.css"} {
+		req := httptest.NewRequest("GET", "/sdk/"+name, nil)
+		req.Header.Set("Accept-Encoding", "gzip, br")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if got := rec.Header().Get("Content-Encoding"); got != "gzip" {
+			t.Fatalf("%s: Content-Encoding = %q, want gzip", name, got)
+		}
+		if !strings.Contains(rec.Header().Get("Vary"), "Accept-Encoding") {
+			t.Errorf("%s: missing Vary: Accept-Encoding", name)
+		}
+		zr, err := gzip.NewReader(rec.Body)
+		if err != nil {
+			t.Fatalf("%s: not gzip: %v", name, err)
+		}
+		body, _ := io.ReadAll(zr)
+		if string(body) != string(fsys[name].Data) {
+			t.Errorf("%s: decompressed body differs from the file", name)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/sdk/app.js", nil))
+	if rec.Header().Get("Content-Encoding") != "" || rec.Body.String() != js {
+		t.Errorf("no Accept-Encoding: got encoding %q, want the plain file", rec.Header().Get("Content-Encoding"))
 	}
 }
