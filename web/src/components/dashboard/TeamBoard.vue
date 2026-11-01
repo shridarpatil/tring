@@ -58,7 +58,7 @@ const badge = (t: QueueDepth) => teamBadge(t, props.nowMs);
 const longest = (t: QueueDepth) => longestWait(t, props.nowMs);
 const longestVariant = (t: QueueDepth) => waitTone(longest(t), t.sla_seconds) || "secondary";
 const slaLabel = (t: QueueDepth) => (t.sla_seconds > 0 ? fmtMMSS(t.sla_seconds) : "none");
-const meterMax = (t: QueueDepth) => Math.max(t.min_live_agents, t.live);
+const barMax = (t: QueueDepth) => Math.max(t.min_live_agents, t.live);
 const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team } });
 </script>
 
@@ -117,16 +117,12 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
               <span v-if="showSeats(t)" class="hstack gap-1" :aria-label="`${t.team} seats`">
                 <SignalDot v-for="(s, i) in seatStates(t)" :key="i" :state="s" hide-label size="sm" />
               </span>
-              <meter
+              <progress
                 v-else-if="t.min_live_agents > 0"
-                min="0"
-                :max="meterMax(t)"
                 :value="t.live"
-                :low="t.min_live_agents"
-                :high="t.min_live_agents"
-                :optimum="meterMax(t)"
+                :max="barMax(t)"
                 :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
-              ></meter>
+              ></progress>
 
               <span class="hstack gap-4">
                 <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
@@ -185,16 +181,12 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
               <td v-if="t.staffing_known">
                 <div class="vstack gap-1">
                   <span class="mono">{{ t.live }}<template v-if="t.min_live_agents > 0"> / {{ t.min_live_agents }}</template></span>
-                  <meter
+                  <progress
                     v-if="t.min_live_agents > 0"
-                    min="0"
-                    :max="meterMax(t)"
                     :value="t.live"
-                    :low="t.min_live_agents"
-                    :high="t.min_live_agents"
-                    :optimum="meterMax(t)"
+                    :max="barMax(t)"
                     :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
-                  ></meter>
+                  ></progress>
                 </div>
               </td>
               <template v-if="t.staffing_known">

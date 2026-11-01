@@ -201,7 +201,7 @@ export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: numbe
 }
 
 export type SeatState = "on_call" | "online" | "offline" | "away";
-export const SEATS_MAX = 24; // above this a team shows a meter instead of seat dots
+export const SEATS_MAX = 24; // above this a team shows a progress bar instead of seat dots
 
 // One dot per seat: on call, available, empty seats up to the minimum, then Away.
 export function seatStates(t: QueueDepth): SeatState[] {
