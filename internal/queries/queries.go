@@ -76,6 +76,7 @@ type Queries struct {
 	CountActiveAgentCalls string `query:"count-active-agent-calls"`
 	StatsToday            string `query:"stats-today"`
 	StatsHourly           string `query:"stats-hourly"`
+	StatsQueueToday       string `query:"stats-queue-today"`
 
 	// ---- api: calls ----
 	GetAgentSipUsername     string `query:"get-agent-sip-username"`

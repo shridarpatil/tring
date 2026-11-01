@@ -314,7 +314,7 @@ WHERE tenant_id = $1 AND started_at >= date_trunc('day', now());
 -- nothing to mismatch. (The previous handler truncated buckets in UTC and matched
 -- by unix epoch, which zeroed the whole chart on any fractional-offset session zone
 -- like IST +5:30, where local hour starts fall at :30 past the UTC hour.)
-SELECT g.hour, COALESCE(c.n, 0)
+SELECT g.hour, COALESCE(c.n, 0), COALESCE(b.n, 0)
 FROM generate_series(
        date_trunc('hour', now()) - interval '11 hours',
        date_trunc('hour', now()),
@@ -326,7 +326,28 @@ LEFT JOIN (
   WHERE tenant_id = $1 AND started_at >= date_trunc('hour', now()) - interval '11 hours'
   GROUP BY 1
 ) c ON c.hour = g.hour
+LEFT JOIN (
+  SELECT date_trunc('hour', enqueued_at) AS hour, count(*) AS n
+  FROM queue_stints
+  WHERE tenant_id = $1 AND enqueued_at >= date_trunc('hour', now()) - interval '11 hours'
+    AND sla_seconds > 0
+    AND EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)) > sla_seconds
+  GROUP BY 1
+) b ON b.hour = g.hour
 ORDER BY g.hour;
+
+-- name: stats-queue-today
+-- Today's SLA breaches and average queue wait from queue_stints (a stint is
+-- one caller's time in one team queue). Breach = sla_seconds > 0 and the stint
+-- (open ones measured to now) outlasted it, whatever the outcome. Avg wait is
+-- over answered stints only; 0 when none.
+SELECT
+  count(*) FILTER (WHERE sla_seconds > 0
+                     AND EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)) > sla_seconds),
+  COALESCE(avg(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)))
+             FILTER (WHERE outcome = 'answered'), 0)::float8
+FROM queue_stints
+WHERE tenant_id = $1 AND enqueued_at >= date_trunc('day', now());
 
 -- ===========================================================================
 -- calls

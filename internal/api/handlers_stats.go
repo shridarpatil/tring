@@ -16,8 +16,9 @@ import (
 // Read-only, tenant-scoped; cheap enough to poll alongside the other panels.
 
 type statsHourBucket struct {
-	Hour  time.Time `json:"hour"`  // start of the hour, in the DB session timezone
-	Count int       `json:"count"`
+	Hour     time.Time `json:"hour"` // start of the hour, in the DB session timezone
+	Count    int       `json:"count"`
+	Breaches int       `json:"breaches"` // queue stints enqueued this hour that outlasted their SLA
 }
 
 type statsOverview struct {
@@ -28,6 +29,9 @@ type statsOverview struct {
 	AvgWaitSeconds int               `json:"avg_wait_seconds"` // time-to-answer (start→connect) of answered calls
 	AvgTalkSeconds int               `json:"avg_talk_seconds"` // average answer→end time of answered calls
 	Hourly         []statsHourBucket `json:"hourly"`           // always 12 buckets, oldest→newest
+
+	SLABreachesToday    int `json:"sla_breaches_today"`     // queue stints today that outlasted their team SLA
+	AvgQueueWaitSeconds int `json:"avg_queue_wait_seconds"` // average time in queue of answered stints today
 }
 
 // statsOverview computes the dashboard "today so far" aggregates. The endpoint
@@ -55,6 +59,11 @@ func (s *Server) statsOverview(ctx context.Context, tenantID uuid.UUID) (statsOv
 	if total > 0 {
 		out.AnsweredPct = int(math.Round(float64(answered) / float64(total) * 100))
 	}
+	var avgQueue float64
+	if err := s.db.Pool.QueryRow(ctx, s.q.StatsQueueToday, tenantID).Scan(&out.SLABreachesToday, &avgQueue); err != nil {
+		return statsOverview{}, err
+	}
+	out.AvgQueueWaitSeconds = int(math.Round(avgQueue))
 	rows, err := s.db.Pool.Query(ctx, s.q.StatsHourly, tenantID)
 	if err != nil {
 		return statsOverview{}, err
@@ -62,7 +71,7 @@ func (s *Server) statsOverview(ctx context.Context, tenantID uuid.UUID) (statsOv
 	defer rows.Close()
 	for rows.Next() {
 		var b statsHourBucket
-		if err := rows.Scan(&b.Hour, &b.Count); err != nil {
+		if err := rows.Scan(&b.Hour, &b.Count, &b.Breaches); err != nil {
 			return statsOverview{}, err
 		}
 		out.Hourly = append(out.Hourly, b)
