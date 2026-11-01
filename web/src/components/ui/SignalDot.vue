@@ -2,10 +2,10 @@
 import { computed } from "vue";
 
 // Signature component: live presence/call state as a first-class signal.
-// on_call / ringing pulse a radiating ring (disabled under reduced-motion).
+// on_call / ringing / waiting pulse a radiating ring (disabled under reduced-motion).
 const props = withDefaults(
   defineProps<{
-    state?: "online" | "on_call" | "away" | "offline" | "ringing";
+    state?: "online" | "on_call" | "away" | "offline" | "ringing" | "waiting";
     label?: string;
     hideLabel?: boolean;
     size?: "sm" | "md";
@@ -21,10 +21,11 @@ const colorVar = computed(
       away: "var(--color-away)",
       offline: "var(--color-offline)",
       ringing: "var(--primary)",
+      waiting: "var(--danger)",
     })[props.state],
 );
 
-const pulse = computed(() => props.state === "on_call" || props.state === "ringing");
+const pulse = computed(() => props.state === "on_call" || props.state === "ringing" || props.state === "waiting");
 
 const defaultText = computed(
   () =>
@@ -34,6 +35,7 @@ const defaultText = computed(
       away: "Away",
       offline: "Offline",
       ringing: "Ringing",
+      waiting: "Waiting",
     })[props.state],
 );
 const text = computed(() => props.label ?? defaultText.value);
