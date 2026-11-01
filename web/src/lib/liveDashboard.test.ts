@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  agentTeams,
+  belowMinCount,
+  seatStates,
+  showSeats,
+  staffedPct,
+  teamView,
   agentsLiveRequired,
   alertCopy,
   buildAlerts,
@@ -35,6 +41,7 @@ function team(over: Partial<QueueDepth>): QueueDepth {
     waiting_since: [],
     breaches_today: 0,
     hours: [],
+    agents: [],
     ...over,
   };
 }
@@ -207,4 +214,50 @@ test("filterLiveCalls keeps the supervised call whatever the filter", () => {
   assert.deepEqual(filterLiveCalls([w, talk, ivr], "waiting", "talk").map((c) => c.id), ["w", "talk"]);
   assert.deepEqual(filterLiveCalls([w, talk, ivr], "talking", "ivr").map((c) => c.id), ["talk", "ivr"]);
   assert.deepEqual(filterLiveCalls([w, talk, ivr], "all").map((c) => c.id), ["w", "talk", "ivr"]);
+});
+
+test("seatStates: on call, available, empty seats, away", () => {
+  const t = team({ min_live_agents: 6, live: 3, on_call: 2, available: 1, away: 2 });
+  assert.deepEqual(seatStates(t), ["on_call", "on_call", "online", "offline", "offline", "offline", "away", "away"]);
+  assert.deepEqual(seatStates(team({ min_live_agents: 1, live: 2, on_call: 1, available: 1 })), ["on_call", "online"]);
+});
+
+test("showSeats only for small teams", () => {
+  assert.equal(showSeats(team({ min_live_agents: 10, members: 12 })), true);
+  assert.equal(showSeats(team({ min_live_agents: 25, members: 12 })), false);
+  assert.equal(showSeats(team({ min_live_agents: 2, members: 120 })), false);
+});
+
+test("staffedPct", () => {
+  assert.equal(staffedPct(team({ min_live_agents: 10, live: 5 })), 50);
+  assert.equal(staffedPct(team({ min_live_agents: 3, live: 2 })), 67);
+  assert.equal(staffedPct(team({ min_live_agents: 0, live: 2 })), null);
+});
+
+test("agentTeams maps sip to sorted team names", () => {
+  const m = agentTeams([
+    team({ team: "Sales", agents: ["amy", "bob"] }),
+    team({ team: "Billing", agents: ["amy"] }),
+  ]);
+  assert.deepEqual(m.get("amy"), ["Billing", "Sales"]);
+  assert.deepEqual(m.get("bob"), ["Sales"]);
+  assert.equal(m.get("zed"), undefined);
+});
+
+test("belowMinCount counts open understaffed teams", () => {
+  assert.equal(
+    belowMinCount([
+      team({ min_live_agents: 2, live: 1 }),
+      team({ min_live_agents: 2, live: 2 }),
+      team({ open: false, min_live_agents: 2, live: 0 }),
+    ]),
+    1,
+  );
+});
+
+test("teamView: auto switches at CARDS_MAX_TEAMS, others force", () => {
+  assert.equal(teamView("auto", 6), "cards");
+  assert.equal(teamView("auto", 7), "rows");
+  assert.equal(teamView("cards", 10), "cards");
+  assert.equal(teamView("rows", 1), "rows");
 });

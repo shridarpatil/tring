@@ -47,7 +47,6 @@ function callSeconds(c: Call): number {
 
 // ── KPI derivations ───────────────────────────────────────────────────
 const teams = computed(() => queues.value.queues);
-const teamNames = computed(() => teams.value.map((t) => t.team).sort((a, b) => a.localeCompare(b)));
 const alerts = computed(() => buildAlerts(teams.value, now.value));
 const hasTalking = computed(() => calls.value.some((c) => c.status === "answered"));
 const waitingNow = computed(() => teams.value.reduce((n, t) => n + t.waiting_since.length, 0));
@@ -283,7 +282,7 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
         </Panel>
 
-        <AgentBoard :agents="agents" :teams="teamNames" :calls="calls" :now-ms="now" />
+        <AgentBoard :agents="agents" :teams="teams" :calls="calls" :now-ms="now" />
       </div>
     </template>
   </div>

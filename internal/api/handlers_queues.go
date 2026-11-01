@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -33,7 +34,8 @@ type queueDepth struct {
 	MinLive       int             `json:"min_live_agents"`
 	SLASeconds    int             `json:"sla_seconds"`
 	Members       int             `json:"members"`
-	Live          int             `json:"live"` // on_call + available
+	Agents        []string        `json:"agents"` // member SIP usernames, sorted, never null
+	Live          int             `json:"live"`   // on_call + available
 	OnCall        int             `json:"on_call"`
 	Available     int             `json:"available"`
 	Away          int             `json:"away"`
@@ -72,6 +74,7 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 			return queuesResponse{}, err
 		}
 		q.WaitingSince = []time.Time{}
+		q.Agents = []string{}
 		q.Hours = h
 		if len(bytes.TrimSpace(h)) == 0 || string(h) == "null" {
 			q.Hours = json.RawMessage("[]")
@@ -83,7 +86,7 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 		return queuesResponse{}, err
 	}
 
-	staff, err := s.teamStaff(ctx, t.ID, agents)
+	staff, members, err := s.teamStaff(ctx, t.ID, agents)
 	if err != nil {
 		return queuesResponse{}, err
 	}
@@ -108,6 +111,9 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 
 		c := staff[q.Team]
 		q.Members, q.Live, q.OnCall, q.Available, q.Away = c.Members, c.Live, c.OnCall, c.Available, c.Away
+		if m := members[q.Team]; m != nil {
+			q.Agents = m
+		}
 		if w := waiting[q.Team]; w != nil {
 			q.WaitingSince = w
 		}
@@ -119,29 +125,37 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 	return out, nil
 }
 
-// teamStaff counts each team's members by their agentsList status.
-func (s *Server) teamStaff(ctx context.Context, tenantID uuid.UUID, agents []Agent) (map[string]staffCounts, error) {
+// teamStaff counts each team's members by their agentsList status, and lists
+// each team's member SIP usernames (sorted) for the dashboard's agent board.
+func (s *Server) teamStaff(ctx context.Context, tenantID uuid.UUID, agents []Agent) (map[string]staffCounts, map[string][]string, error) {
 	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamAgentStatus, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	var members [][2]string
 	for rows.Next() {
 		var m [2]string
 		if err := rows.Scan(&m[0], &m[1]); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		members = append(members, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	sips := map[string][]string{}
+	for _, m := range members {
+		sips[m[0]] = append(sips[m[0]], m[1])
+	}
+	for _, l := range sips {
+		sort.Strings(l)
 	}
 	status := make(map[string]string, len(agents))
 	for _, a := range agents {
 		status[a.SipUsername] = a.Status
 	}
-	return teamStaffing(members, status), nil
+	return teamStaffing(members, status), sips, nil
 }
 
 // openStints returns each team's waiting callers' enqueue times, oldest first.
