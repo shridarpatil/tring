@@ -12,7 +12,7 @@ import {
   buildAlerts,
   callSlaBadge,
   filterLiveCalls,
-  hoursSummary,
+  todayHours,
   isUnderstaffed,
   isWaitingCall,
   sortLiveCalls,
@@ -121,23 +121,18 @@ test("parseMMSS / fmtMMSS round trip", () => {
   assert.equal(parseMMSS(fmtMMSS(754)), 754);
 });
 
-test("hoursSummary groups consecutive days with the same hours", () => {
+test("todayHours shows only today's timing", () => {
   const wk = (d: string, enabled: boolean, s?: string, e?: string) => ({ day: d, enabled, start_time: s, end_time: e });
-  assert.equal(hoursSummary([]), "Always open");
-  assert.equal(
-    hoursSummary([
-      wk("monday", true, "09:00", "17:00"),
-      wk("tuesday", true, "09:00", "17:00"),
-      wk("wednesday", true, "09:00", "17:00"),
-      wk("thursday", true, "09:00", "17:00"),
-      wk("friday", true, "09:00", "17:00"),
-      wk("saturday", false),
-      wk("sunday", true, "00:00", "23:59"),
-    ]),
-    "Mon–Fri 9:00–17:00 · Sun 0:00–23:59",
-  );
-  assert.equal(hoursSummary([wk("monday", true), wk("tuesday", true, "10:30", "18:00")]), "Mon all day · Tue 10:30–18:00");
-  assert.equal(hoursSummary([wk("monday", false)]), "Closed all week");
+  const mon = new Date(2026, 10, 2, 12); // Monday
+  const sun = new Date(2026, 10, 1, 12); // Sunday
+  assert.equal(todayHours([], mon), "Always open");
+  assert.equal(todayHours([wk("tuesday", true, "09:00", "17:00")], mon), "Closed today");
+  assert.equal(todayHours([wk("monday", false, "09:00", "17:00")], mon), "Closed today");
+  assert.equal(todayHours([wk("Monday", true, "10:30", "18:00")], mon), "Today 10:30–18:00");
+  assert.equal(todayHours([wk("monday", true, "09:00", "17:00")], mon), "Today 9:00–17:00");
+  assert.equal(todayHours([wk("sunday", true, "00:00", "23:59")], sun), "Today 0:00–23:59");
+  assert.equal(todayHours([wk("monday", true)], mon), "Open all day");
+  assert.equal(todayHours([wk("monday", true, "9am", "")], mon), "Open all day");
 });
 
 test("teamBadge", () => {

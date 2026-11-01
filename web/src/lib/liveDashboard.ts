@@ -134,28 +134,22 @@ export function alertCopy(a: DashAlert): { strong: string; rest: string; sub: st
   return { strong: `${a.team}: ${a.breaching} ${callers} past the ${fmtMMSS(a.slaSeconds)} SLA`, rest, sub: null };
 }
 
-const DAY_ABBR: Record<string, string> = {
-  monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun",
-};
+const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const HHMM = /^\d{1,2}:\d{2}$/;
 const hm = (v: string) => v.replace(/^0(\d)/, "$1"); // "09:00" -> "9:00"
 
-// "Mon–Fri 9:00–17:00 · Sun 0:00–23:59"; consecutive days with the same hours
-// collapse into a range. Empty schedule = always open.
-export function hoursSummary(days: TeamDay[]): string {
-  if (!days.length) return "Always open";
-  const groups: { from: string; to: string; hours: string }[] = [];
-  let prevIdx = -2;
-  days.forEach((d, i) => {
-    if (!d.enabled) return;
-    const hours = d.start_time && d.end_time ? `${hm(d.start_time)}–${hm(d.end_time)}` : "all day";
-    const name = DAY_ABBR[d.day.toLowerCase()] ?? d.day;
-    const last = groups[groups.length - 1];
-    if (last && prevIdx === i - 1 && last.hours === hours) last.to = name;
-    else groups.push({ from: name, to: name, hours });
-    prevIdx = i;
-  });
-  if (!groups.length) return "Closed all week";
-  return groups.map((g) => `${g.from === g.to ? g.from : `${g.from}–${g.to}`} ${g.hours}`).join(" · ");
+// Today's timing only, mirroring the server's timing evaluation: no schedule =
+// always open; today missing or disabled = closed; enabled without valid
+// times = open all day.
+export function todayHours(hours: TeamDay[], now: Date): string {
+  if (!hours.length) return "Always open";
+  const name = DAY_NAMES[now.getDay()];
+  const d = hours.find((h) => h.day.toLowerCase() === name);
+  if (!d || !d.enabled) return "Closed today";
+  if (d.start_time && d.end_time && HHMM.test(d.start_time) && HHMM.test(d.end_time)) {
+    return `Today ${hm(d.start_time)}–${hm(d.end_time)}`;
+  }
+  return "Open all day";
 }
 
 // queued_at is set while the caller has an open queue stint (the leave event
