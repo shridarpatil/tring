@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import {
   agentTeams,
   belowMinCount,
-  seatStates,
-  showSeats,
   staffedPct,
   teamView,
   agentsLiveRequired,
@@ -215,18 +213,6 @@ test("filterLiveCalls keeps the supervised call whatever the filter", () => {
   assert.deepEqual(filterLiveCalls([w, talk, ivr], "waiting", "talk").map((c) => c.id), ["w", "talk"]);
   assert.deepEqual(filterLiveCalls([w, talk, ivr], "talking", "ivr").map((c) => c.id), ["talk", "ivr"]);
   assert.deepEqual(filterLiveCalls([w, talk, ivr], "all").map((c) => c.id), ["w", "talk", "ivr"]);
-});
-
-test("seatStates: on call, available, empty seats, away", () => {
-  const t = team({ min_live_agents: 6, live: 3, on_call: 2, available: 1, away: 2 });
-  assert.deepEqual(seatStates(t), ["on_call", "on_call", "online", "offline", "offline", "offline", "away", "away"]);
-  assert.deepEqual(seatStates(team({ min_live_agents: 1, live: 2, on_call: 1, available: 1 })), ["on_call", "online"]);
-});
-
-test("showSeats only for small teams", () => {
-  assert.equal(showSeats(team({ min_live_agents: 10, members: 12 })), true);
-  assert.equal(showSeats(team({ min_live_agents: 25, members: 12 })), false);
-  assert.equal(showSeats(team({ min_live_agents: 2, members: 120 })), false);
 });
 
 test("staffedPct", () => {

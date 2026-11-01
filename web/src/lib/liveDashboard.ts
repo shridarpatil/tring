@@ -205,24 +205,6 @@ export function abandonedPct(abandoned: number, calls: number): string | null {
   return calls > 0 ? ((abandoned / calls) * 100).toFixed(1) : null;
 }
 
-export type SeatState = "on_call" | "online" | "offline" | "away";
-export const SEATS_MAX = 24; // above this a team shows a progress bar instead of seat dots
-
-// One dot per seat: on call, available, empty seats up to the minimum, then Away.
-export function seatStates(t: QueueDepth): SeatState[] {
-  const n = (k: number, s: SeatState): SeatState[] => Array(Math.max(0, k)).fill(s);
-  return [
-    ...n(t.on_call, "on_call"),
-    ...n(t.available, "online"),
-    ...n(t.min_live_agents - t.live, "offline"),
-    ...n(t.away, "away"),
-  ];
-}
-
-export function showSeats(t: QueueDepth): boolean {
-  return t.min_live_agents <= SEATS_MAX && t.members <= SEATS_MAX;
-}
-
 // Live agents as a share of the minimum; null when the team has no minimum.
 export function staffedPct(t: QueueDepth): number | null {
   return t.min_live_agents > 0 ? Math.round((t.live / t.min_live_agents) * 100) : null;
