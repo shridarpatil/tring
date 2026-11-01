@@ -208,18 +208,16 @@ usePoll(() => (now.value = Date.now()), 1000);
 
       <!-- Main row: live calls | agents -->
       <div class="dash-main">
-        <Panel>
+        <Panel class="live-calls-panel">
           <template #title>Live calls</template>
           <template #actions>
             <span class="hstack gap-2">
               <LevelMeter v-if="hasTalking" active />
-              <span class="hstack gap-1" role="group" aria-label="Filter live calls">
+              <span class="lc-seg" role="group" aria-label="Filter live calls">
                 <button
                   v-for="f in callFilters"
                   :key="f.key"
                   type="button"
-                  class="small"
-                  :class="{ outline: callFilter !== f.key }"
                   :aria-pressed="callFilter === f.key"
                   @click="callFilter = f.key"
                 >
@@ -228,8 +226,8 @@ usePoll(() => (now.value = Date.now()), 1000);
               </span>
             </span>
           </template>
-          <div class="scroll-max" style="--max-h: 28rem">
-            <table>
+          <div class="scroll-max" style="--max-h: 440px">
+            <table class="live-calls">
               <thead>
                 <tr>
                   <th>Caller</th>
@@ -245,14 +243,14 @@ usePoll(() => (now.value = Date.now()), 1000);
                   <td colspan="6" class="list-empty"><small>No calls</small></td>
                 </tr>
                 <tr v-for="c in shownCalls" :key="c.id">
-                  <td class="mono"><small>{{ callerLabel(c) }}</small></td>
+                  <td class="mono">{{ callerLabel(c) }}</td>
                   <td>
-                    <small v-if="c.queue_team">{{ c.queue_team }}</small>
-                    <small v-else class="text-lighter">—</small>
+                    <template v-if="c.queue_team">{{ c.queue_team }}</template>
+                    <span v-else class="text-lighter">—</span>
                   </td>
                   <td>
-                    <small v-if="c.agent_name">{{ c.agent_name }}</small>
-                    <small v-else class="text-lighter">—</small>
+                    <template v-if="c.agent_name">{{ c.agent_name }}</template>
+                    <span v-else class="text-lighter">—</span>
                   </td>
                   <td>
                     <span class="hstack gap-1">
@@ -262,11 +260,10 @@ usePoll(() => (now.value = Date.now()), 1000);
                       }}</span>
                     </span>
                   </td>
-                  <td>
-                    <small
-                      class="mono"
+                  <td class="mono">
+                    <span
                       :style="callSlaBadge(c, now) ? { color: `var(--${callSlaBadge(c, now)!.variant})` } : undefined"
-                      >{{ fmtMMSS(liveCallSecs(c, now)) }}</small
+                      >{{ fmtMMSS(liveCallSecs(c, now)) }}</span
                     >
                   </td>
                   <td class="align-right">
@@ -329,6 +326,37 @@ usePoll(() => (now.value = Date.now()), 1000);
   .dash-main { grid-template-columns: 1fr; }
 }
 
+/* Live calls panel: sizes follow the live-dashboard mock. */
+.live-calls-panel :deep(.panel-head) { height: auto; padding: 12px 16px; }
+.live-calls-panel :deep(.panel-title) { font-size: 14px; font-weight: 600; line-height: 1.45; }
+.lc-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-medium); overflow: hidden; }
+.lc-seg button {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 4px 10px;
+  color: inherit;
+  background: var(--card);
+  cursor: pointer;
+}
+.lc-seg button:hover { background: var(--secondary); }
+.lc-seg button[aria-pressed="true"] { background: var(--secondary); font-weight: 600; }
+.live-calls th {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  text-align: left;
+  white-space: nowrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.live-calls td { font-size: 14px; line-height: 1.45; padding: 9px 16px; vertical-align: middle; }
+.live-calls .badge { font-size: 12px; font-weight: 400; line-height: 1.45; padding: 1px 8px; border-radius: 999px; }
+
 .scroll-max { max-height: var(--max-h); overflow-y: auto; }
 .list-empty { padding: 2rem 1.25rem; text-align: center; color: var(--faint-foreground); }
 
@@ -343,18 +371,21 @@ usePoll(() => (now.value = Date.now()), 1000);
 .agent-row:last-child { border-bottom: none; }
 
 .dash-pill {
-  font-size: var(--text-8);
-  padding: 0.125rem 0.5rem;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 4px 10px;
   border-radius: var(--radius-medium);
-  background: var(--secondary);
+  background: var(--card);
   text-transform: capitalize;
   transition: background-color var(--transition-fast);
-  border: none;
+  border: 1px solid var(--border);
   cursor: pointer;
   color: inherit;
   font-family: inherit;
+  font-weight: 400;
 }
-.dash-pill:hover { background: var(--card); }
-.dash-pill-active { background: var(--primary); color: var(--primary-foreground); }
+.dash-pill:hover { background: var(--secondary); }
+.dash-pill-active { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
 .dash-pill-danger { background: var(--color-danger-soft); color: var(--danger); }
 </style>
