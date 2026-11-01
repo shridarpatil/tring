@@ -9,6 +9,8 @@ import { toast } from "../lib/toast";
 import type { Agent, Team, TeamMember } from "../api/types";
 import { Button, Badge, IconButton, Panel, Select, TextField } from "../components/ui";
 import AudioPicker from "../components/AudioPicker.vue";
+import ScheduleEditor from "../components/ScheduleEditor.vue";
+import { fmtMMSS, parseMMSS } from "../lib/liveDashboard";
 import { confirmDialog } from "../lib/confirm";
 import { strategies, strategyOptions } from "../lib/teams";
 
@@ -24,7 +26,31 @@ const notFound = ref(false);
 // Editable copy of the settings; "dirty" compares it against the saved team.
 // The built-in stream sentinel and "" both mean "use the tenant hold music".
 const BUILTIN_MOH = "local_stream://moh";
-const form = ref({ strategy: "ring_all", ring_seconds: 20, max_wait_seconds: 120, moh_sound: "" });
+const form = ref<ReturnType<typeof formFrom>>({
+  strategy: "ring_all",
+  ring_seconds: 20,
+  max_wait_seconds: 120,
+  moh_sound: "",
+  min_live_agents: 0,
+  sla_seconds: 0,
+  hours: [],
+});
+// SLA is edited as mm:ss text and parsed into form.sla_seconds; null = invalid.
+const slaText = ref("0:00");
+const slaParsed = computed(() => parseMMSS(slaText.value));
+watch(slaParsed, (v) => {
+  if (v !== null) form.value.sla_seconds = v;
+});
+// A stale text box would otherwise hide a reload or a save; resync from the form.
+watch(
+  () => form.value.sla_seconds,
+  (v) => {
+    if (slaParsed.value !== v) slaText.value = fmtMMSS(v);
+  },
+);
+// 0 max wait means the server's 2-minute default.
+const effectiveMaxWait = computed(() => form.value.max_wait_seconds || 120);
+const slaPastMaxWait = computed(() => form.value.sla_seconds > 0 && form.value.sla_seconds >= effectiveMaxWait.value);
 const saving = ref(false);
 
 function formFrom(t: Team) {
@@ -33,6 +59,9 @@ function formFrom(t: Team) {
     ring_seconds: t.ring_seconds,
     max_wait_seconds: t.max_wait_seconds,
     moh_sound: t.moh_sound === BUILTIN_MOH ? "" : t.moh_sound,
+    min_live_agents: t.min_live_agents,
+    sla_seconds: t.sla_seconds,
+    hours: t.hours ?? [],
   };
 }
 
@@ -187,6 +216,41 @@ watch(() => route.params.name, load, { immediate: true });
           </div>
           <div class="hstack" style="justify-content: flex-end">
             <Button type="submit" :disabled="!dirty" :loading="saving">Save settings</Button>
+          </div>
+        </form>
+      </Panel>
+
+      <Panel pad>
+        <template #title>Live dashboard</template>
+        <form class="vstack" @submit.prevent="saveSettings">
+          <div class="grid grid-2">
+            <TextField
+              v-model.number="form.min_live_agents"
+              type="number"
+              label="Minimum agents online"
+              hint="The dashboard alerts when fewer agents than this are live while the team is open. 0 turns the alert off."
+            />
+            <TextField
+              v-model="slaText"
+              label="SLA, max time in queue"
+              placeholder="5:00"
+              :error="slaParsed === null ? 'Use mm:ss, for example 5:00' : undefined"
+              hint="A caller waiting longer than this counts as an SLA breach. 0:00 turns the SLA off."
+            />
+          </div>
+          <div role="alert" data-variant="warning" v-if="slaPastMaxWait">
+            Callers are removed from the queue after max wait ({{ fmtMMSS(effectiveMaxWait) }}), so they can never pass
+            this SLA. Raise max wait.
+          </div>
+          <div>
+            <div class="field-label">Working hours</div>
+            <p class="text-lighter hint mb-2">
+              Staffing alerts only fire while the team is open. The SLA applies to waiting callers even when closed.
+            </p>
+            <ScheduleEditor v-model="form.hours" />
+          </div>
+          <div class="hstack" style="justify-content: flex-end">
+            <Button type="submit" :disabled="!dirty || slaParsed === null" :loading="saving">Save settings</Button>
           </div>
         </form>
       </Panel>

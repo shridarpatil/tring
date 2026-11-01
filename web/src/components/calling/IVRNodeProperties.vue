@@ -6,6 +6,7 @@ import { computed, ref, watch } from "vue";
 import { Trash2, Volume2, Grid3X3, Hash, Globe, Users, ExternalLink, Clock, PhoneOff, Plus, X } from "lucide-vue-next";
 import type { IVRNodeType, Flow, Agent, Team, Webhook } from "../../api/types";
 import AudioPicker from "../AudioPicker.vue";
+import ScheduleEditor from "../ScheduleEditor.vue";
 
 interface VueFlowNode {
   id: string;
@@ -456,21 +457,7 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
       <!-- ── TIMING ────────────────────────────────────────────── -->
       <template v-if="node.type === 'timing'">
         <div class="fl" style="margin-bottom: 0.25rem">Business hours</div>
-        <div
-          v-for="(s, idx) in (config.schedule || []) as Array<{day:string,enabled:boolean,start_time:string,end_time:string}>"
-          :key="s.day"
-          class="g-timing"
-        >
-          <span class="day-name">{{ s.day }}</span>
-          <input v-model="s.start_time" type="time" :disabled="!s.enabled" />
-          <input v-model="s.end_time" type="time" :disabled="!s.enabled" />
-          <input
-            v-model="s.enabled"
-            type="checkbox"
-            :data-idx="idx"
-            @change="config = { ...config, schedule: [...(config.schedule || [])] }"
-          />
-        </div>
+        <ScheduleEditor v-model="config.schedule" />
       </template>
 
       <!-- ── NOTIFY WEBHOOK (every node) ──────────────────────── -->
@@ -610,7 +597,4 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
 .warn-note { font-size: 11px; color: var(--warning); }
 .g-http { display: grid; grid-template-columns: 80px 1fr; gap: 0.5rem; }
 .g-http > select, .g-http > input { margin-top: 0; }
-.g-timing { display: grid; grid-template-columns: 80px 1fr 1fr auto; gap: 0.5rem; align-items: center; }
-.g-timing > input { margin-top: 0; }
-.day-name { font-size: var(--text-8); font-weight: 500; text-transform: capitalize; }
 </style>
