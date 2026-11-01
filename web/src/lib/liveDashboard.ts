@@ -33,8 +33,9 @@ export function breachingCount(t: QueueDepth, nowMs: number): number {
   return t.waiting_since.filter((s) => waitSecs(s, nowMs) > t.sla_seconds).length;
 }
 
+// Unknown staffing (presence unreadable) never counts as understaffed.
 export function isUnderstaffed(t: QueueDepth): boolean {
-  return t.open && t.min_live_agents > 0 && t.live < t.min_live_agents;
+  return t.staffing_known && t.open && t.min_live_agents > 0 && t.live < t.min_live_agents;
 }
 
 export function teamState(t: QueueDepth, nowMs: number): TeamState {
@@ -157,8 +158,10 @@ export function hoursSummary(days: TeamDay[]): string {
   return groups.map((g) => `${g.from === g.to ? g.from : `${g.from}–${g.to}`} ${g.hours}`).join(" · ");
 }
 
+// queued_at is set while the caller has an open queue stint (the leave event
+// clears it). It can be an answered call: a blind transfer back into a queue.
 export function isWaitingCall(c: Call): boolean {
-  return !!c.queued_at && c.status !== "answered";
+  return !!c.queued_at;
 }
 
 // Waiting callers first, longest wait first; everything else keeps its order.
@@ -187,9 +190,10 @@ export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "
   return null;
 }
 
-// Agents live vs required, summed over teams that are open now.
+// Agents live vs required, summed over teams that are open now and whose
+// staffing is known.
 export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: number } {
-  const open = ts.filter((t) => t.open);
+  const open = ts.filter((t) => t.open && t.staffing_known);
   return {
     live: open.reduce((n, t) => n + t.live, 0),
     min: open.reduce((n, t) => n + t.min_live_agents, 0),

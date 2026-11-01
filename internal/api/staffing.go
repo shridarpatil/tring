@@ -7,11 +7,15 @@ import (
 
 // staffCounts is one team's members split by live state for the dashboard.
 // Live = OnCall + Available: an agent on a call counts live even while Away.
-type staffCounts struct{ Members, Live, OnCall, Available, Away int }
+// Unknown is set when any member's presence couldn't be read.
+type staffCounts struct {
+	Members, Live, OnCall, Available, Away int
+	Unknown                                bool
+}
 
 // teamStaffing counts each team's members ({team, sip} pairs) by their
-// agentsList status (sip → on_call | online | away | ...). Any other status,
-// or none, counts only as a member.
+// agentsList status (sip → on_call | online | away | unknown | ...). Any other
+// status, or none, counts only as a member; "unknown" marks the team Unknown.
 func teamStaffing(members [][2]string, status map[string]string) map[string]staffCounts {
 	out := map[string]staffCounts{}
 	for _, m := range members {
@@ -26,6 +30,8 @@ func teamStaffing(members [][2]string, status map[string]string) map[string]staf
 			c.Available++
 		case "away":
 			c.Away++
+		case "unknown":
+			c.Unknown = true
 		}
 		out[m[0]] = c
 	}

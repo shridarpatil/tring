@@ -48,6 +48,13 @@ watch(
     if (slaParsed.value !== v) slaText.value = fmtMMSS(v);
   },
 );
+// A cleared number box gives "" through v-model.number; block save rather than
+// send it (0 is the explicit "no alert" value).
+const minInvalid = computed(() => {
+  const v = form.value.min_live_agents as unknown;
+  return typeof v !== "number" || !Number.isInteger(v) || v < 0;
+});
+const formInvalid = computed(() => slaParsed.value === null || minInvalid.value);
 // 0 max wait means the server's 2-minute default.
 const effectiveMaxWait = computed(() => form.value.max_wait_seconds || 120);
 const slaPastMaxWait = computed(() => form.value.sla_seconds > 0 && form.value.sla_seconds >= effectiveMaxWait.value);
@@ -101,7 +108,7 @@ async function load() {
 }
 
 async function saveSettings() {
-  if (!team.value) return;
+  if (!team.value || formInvalid.value) return;
   saving.value = true;
   try {
     const updated = await api.patch<Team>(teamPath.value, form.value);
@@ -215,7 +222,7 @@ watch(() => route.params.name, load, { immediate: true });
             <AudioPicker v-model="form.moh_sound" default-label="Default (tenant hold music)" />
           </div>
           <div class="hstack" style="justify-content: flex-end">
-            <Button type="submit" :disabled="!dirty" :loading="saving">Save settings</Button>
+            <Button type="submit" :disabled="!dirty || formInvalid" :loading="saving">Save settings</Button>
           </div>
         </form>
       </Panel>
@@ -228,6 +235,7 @@ watch(() => route.params.name, load, { immediate: true });
               v-model.number="form.min_live_agents"
               type="number"
               label="Minimum agents online"
+              :error="minInvalid ? 'Enter a whole number; 0 turns the alert off' : undefined"
               hint="The dashboard alerts when fewer agents than this are live while the team is open. 0 turns the alert off."
             />
             <TextField
@@ -250,7 +258,7 @@ watch(() => route.params.name, load, { immediate: true });
             <ScheduleEditor v-model="form.hours" />
           </div>
           <div class="hstack" style="justify-content: flex-end">
-            <Button type="submit" :disabled="!dirty || slaParsed === null" :loading="saving">Save settings</Button>
+            <Button type="submit" :disabled="!dirty || formInvalid" :loading="saving">Save settings</Button>
           </div>
         </form>
       </Panel>

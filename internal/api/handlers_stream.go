@@ -36,12 +36,13 @@ func (s *Server) buildDashboardSnapshot(ctx context.Context, t *Tenant) dashboar
 	} else {
 		s.log.Warn("snapshot: calls", "err", err)
 	}
-	if a, err := s.agentsList(ctx, t); err == nil {
-		snap.Agents = a
+	agents, err := s.agentsList(ctx, t) // nil on error: staffing reads unknown
+	if err == nil {
+		snap.Agents = agents
 	} else {
 		s.log.Warn("snapshot: agents", "err", err)
 	}
-	if q, err := s.queuesSnapshot(ctx, t, snap.Agents); err == nil {
+	if q, err := s.queuesSnapshot(ctx, t, agents); err == nil {
 		snap.Queues = q
 	} else {
 		s.log.Warn("snapshot: queues", "err", err)
@@ -141,7 +142,7 @@ func (s *Server) QueuesData(ctx context.Context, tenantID string) ([]byte, error
 	}
 	agents, err := s.agentsList(ctx, t)
 	if err != nil {
-		s.log.Warn("queues recompute: agents", "err", err) // staffing reads 0
+		s.log.Warn("queues recompute: agents", "err", err) // staffing reads unknown
 	}
 	q, err := s.queuesSnapshot(ctx, t, agents)
 	if err != nil {

@@ -44,8 +44,22 @@ func seedTeam(t *testing.T, f *dbtest.Fixture, name string, minLive, sla int, ho
 	}
 }
 
+// skipNearMidnight skips a test that seeds rows up to 15 minutes back and
+// counts them as "today": just after midnight they'd fall on yesterday.
+func skipNearMidnight(t *testing.T, f *dbtest.Fixture) {
+	t.Helper()
+	var since time.Duration
+	if err := f.DB.Pool.QueryRow(context.Background(), `SELECT now() - date_trunc('day', now())`).Scan(&since); err != nil {
+		t.Fatalf("time since midnight: %v", err)
+	}
+	if since < 20*time.Minute {
+		t.Skipf("within 20 minutes after midnight (%v); today-bucketed seeds would straddle days", since)
+	}
+}
+
 func TestQueuesSnapshotStints(t *testing.T) {
 	f := dbtest.Setup(t)
+	skipNearMidnight(t, f)
 	s := newTestServer(f)
 	seedTeam(t, f, "support", 0, 300, "[]")
 	seedStint(t, f, nil, "support", 300, 400*time.Second, false) // waiting, past SLA
@@ -98,7 +112,7 @@ func TestQueuesSnapshotClosedTeam(t *testing.T) {
 	seedTeam(t, f, "closed", 2, 0, hours)
 	seedTeam(t, f, "open", 2, 0, "[]")
 
-	out, err := s.queuesSnapshot(context.Background(), &Tenant{ID: f.TenantID}, nil)
+	out, err := s.queuesSnapshot(context.Background(), &Tenant{ID: f.TenantID}, []Agent{})
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -176,6 +190,34 @@ func TestQueuesSnapshotAgents(t *testing.T) {
 	}
 	if got := queueFor(t, out, "support").Agents; strings.Join(got, ",") != "amy,zoe" {
 		t.Fatalf("agents = %v, want [amy zoe]", got)
+	}
+}
+
+// With no agent list (agentsList failed) staffing is unknown: no below-minimum
+// clock and no below_min_since, so the dashboard doesn't cry understaffed.
+func TestQueuesSnapshotStaffingUnknown(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	seedTeam(t, f, "support", 2, 0, "[]")
+
+	out, err := s.queuesSnapshot(context.Background(), &Tenant{ID: f.TenantID}, nil)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	q := queueFor(t, out, "support")
+	if q.StaffingKnown || q.BelowMinSince != nil {
+		t.Fatalf("support = %+v, want staffing unknown and no below_min_since", q)
+	}
+	if len(s.belowMin.since) != 0 {
+		t.Fatalf("below-min tracker touched: %v", s.belowMin.since)
+	}
+
+	out, err = s.queuesSnapshot(context.Background(), &Tenant{ID: f.TenantID}, []Agent{})
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if q := queueFor(t, out, "support"); !q.StaffingKnown || q.BelowMinSince == nil {
+		t.Fatalf("support = %+v, want staffing known and below minimum", q)
 	}
 }
 

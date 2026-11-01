@@ -7,6 +7,10 @@
 --
 -- Regenerate after adding a migration (against a DB migrated to HEAD):
 --   PGPASSWORD=tring_dev pg_dump -h localhost -p 5434 -U tring -d tring_test \
+--     --schema-only --no-owner --no-privileges | (strip the SET/\restrict preamble)
+
+--
+--
 
 --
 -- Name: pgcrypto; Type: EXTENSION; Schema: -; Owner: -

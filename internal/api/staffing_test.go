@@ -44,3 +44,16 @@ func TestQueuesSnapshotStaffing(t *testing.T) {
 		t.Fatalf("sales = %+v, want %+v", got["sales"], want)
 	}
 }
+
+// A member whose presence couldn't be read ("unknown", FS registration lookup
+// failed) makes the team's staffing unknown.
+func TestTeamStaffingUnknown(t *testing.T) {
+	members := [][2]string{{"support", "a"}, {"support", "b"}, {"sales", "c"}}
+	got := teamStaffing(members, map[string]string{"a": "online", "b": "unknown", "c": "online"})
+	if !got["support"].Unknown {
+		t.Fatalf("support = %+v, want Unknown", got["support"])
+	}
+	if got["sales"].Unknown {
+		t.Fatalf("sales = %+v, want known", got["sales"])
+	}
+}

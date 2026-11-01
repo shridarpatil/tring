@@ -216,8 +216,10 @@ func main() {
 		events.TypeAgentPresence, events.TypeAgentStatus, events.TypeCallSupervised, events.TypeCallTransferred,
 		events.TypeQueueStint,
 	)
+	// Stats carries SLA breaches (today + the hourly red segment), which move
+	// on queue.stint as well as on the call lifecycle.
 	hub.Recompute(
-		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded},
+		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded, events.TypeQueueStint},
 		events.TypeStats, 1500*time.Millisecond, apiSrv.StatsData,
 	)
 	// Queues carries on_call (answered calls with an agent), which changes on the
@@ -236,6 +238,9 @@ func main() {
 	// (Support opens at 9:00 and nobody calls): recheck once a minute and push
 	// only when the frame changed.
 	hub.Every(60*time.Second, events.TypeQueues, apiSrv.QueuesData)
+	// A waiting caller crosses the SLA with no event; recheck stats the same way
+	// so "SLA breaches today" keeps up with the team cards.
+	hub.Every(60*time.Second, events.TypeStats, apiSrv.StatsData)
 	go hub.Run(ctx)
 
 	// Status of the calls the API places through FreeSWITCH (POST /v1/calls):

@@ -54,6 +54,7 @@ func TestStatsTodayAvgTalk(t *testing.T) {
 // Avg queue wait covers answered stints only.
 func TestStatsQueueBreaches(t *testing.T) {
 	f := dbtest.Setup(t)
+	skipNearMidnight(t, f)
 	ctx := context.Background()
 	s := newTestServer(f)
 
