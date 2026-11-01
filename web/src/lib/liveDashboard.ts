@@ -98,15 +98,19 @@ export function waitTone(secs: number, slaSeconds: number): Tone {
   return "";
 }
 
+// Durations: "4:27" under an hour, "1:43:05" from an hour up.
 export function fmtMMSS(secs: number): string {
   const s = Math.max(0, Math.round(secs));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
-// "5:00" -> 300, "300" -> 300; anything else (including "1:5") -> null.
+// "5:00" -> 300, "1:30:00" -> 5400, "300" -> 300; anything else (including "1:5") -> null.
 export function parseMMSS(s: string): number | null {
   const v = s.trim();
-  let m = /^(\d+):([0-5]\d)$/.exec(v);
+  let m = /^(\d+):([0-5]\d):([0-5]\d)$/.exec(v);
+  if (m) return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  m = /^(\d+):([0-5]\d)$/.exec(v);
   if (m) return Number(m[1]) * 60 + Number(m[2]);
   m = /^(\d+)$/.exec(v);
   return m ? Number(m[1]) : null;
@@ -221,18 +225,6 @@ export function callSlaBadge(c: Call, nowMs: number): { text: string; variant: "
   if (tone === "danger") return { text: "SLA breached", variant: "danger" };
   if (tone === "warning") return { text: `${fmtMMSS(sla - secs)} to SLA`, variant: "warning" };
   return null;
-}
-
-// Seats covered: over teams that are open now, staffing-known and have a
-// minimum, live counts at most min per team so a surplus in one team cannot
-// hide a gap in another. short = teams below their minimum.
-export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: number; short: number } {
-  const req = ts.filter((t) => t.open && t.staffing_known && t.min_live_agents > 0);
-  return {
-    live: req.reduce((n, t) => n + Math.min(t.live, t.min_live_agents), 0),
-    min: req.reduce((n, t) => n + t.min_live_agents, 0),
-    short: req.filter((t) => t.live < t.min_live_agents).length,
-  };
 }
 
 // The SLA limit when every team with one configured shares it; null otherwise.
