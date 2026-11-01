@@ -10,7 +10,6 @@ import TeamBoard from "../components/dashboard/TeamBoard.vue";
 import AgentBoard from "../components/dashboard/AgentBoard.vue";
 import {
   abandonedPct,
-  agentsLiveRequired,
   sharedSla,
   breachingCount,
   buildAlerts,
@@ -36,13 +35,6 @@ const { calls, agents, queues, stats, ready } = useDashboardStream();
 // AND stay exactly correct — no drift, no waiting on the server to see them move.
 const now = ref(Date.now());
 
-// ── live durations ────────────────────────────────────────────────────
-function fmtDur(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const m = Math.floor(s / 60);
-  return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
-}
-
 // ── KPI derivations ───────────────────────────────────────────────────
 const teams = computed(() => queues.value.queues);
 const alerts = computed(() => buildAlerts(teams.value, now.value));
@@ -50,7 +42,6 @@ const hasTalking = computed(() => calls.value.some((c) => c.status === "answered
 const waitingNow = computed(() => teams.value.reduce((n, t) => n + t.waiting_since.length, 0));
 const longestNow = computed(() => Math.max(0, ...teams.value.map((t) => longestWait(t, now.value))));
 const breachingNow = computed(() => teams.value.reduce((n, t) => n + breachingCount(t, now.value), 0));
-const staffing = computed(() => agentsLiveRequired(teams.value));
 const slaLimit = computed(() => sharedSla(teams.value));
 const abandonedShare = computed(() => abandonedPct(stats.value?.abandoned_today ?? 0, stats.value?.calls_today ?? 0));
 
@@ -74,6 +65,8 @@ function callerLabel(c: Call): string {
 // v1 simplification: only ONE supervise session at a time across the whole
 // dashboard (a single `active` ref, not one per row).
 const active = ref<{ callId: string; mode: SuperviseMode; session: SupervisorSession } | null>(null);
+
+const SUPERVISE_LABELS: Record<SuperviseMode, string> = { monitor: "Monitor", whisper: "Whisper", barge: "Barge" };
 
 async function startSupervise(c: Call): Promise<void> {
   // Switching targets mid-session must hang up the previous one — otherwise
@@ -135,14 +128,14 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
           <div class="hstack">
             <div style="flex: 1">
-              <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
+              <div class="trend-num">{{ fmtMMSS(stats?.avg_talk_seconds ?? 0) }}</div>
               <small class="text-light">Avg talk</small>
             </div>
             <div style="flex: 1">
-              <div class="trend-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
-                {{ stats?.sla_breaches_today ?? 0 }}
+              <div class="trend-num" :style="{ color: (stats?.abandoned_today ?? 0) > 0 ? 'var(--warning)' : undefined }">
+                {{ stats?.abandoned_today ?? 0 }}
               </div>
-              <small class="text-light">SLA breaches</small>
+              <small class="text-light">Abandoned<template v-if="(stats?.abandoned_today ?? 0) > 0 && abandonedShare"> · {{ abandonedShare }}%</template></small>
             </div>
           </div>
         </div>
@@ -154,53 +147,30 @@ usePoll(() => (now.value = Date.now()), 1000);
 
       <!-- Headline numbers -->
       <div class="row">
-        <div class="card p-4 col-2 vstack gap-1">
+        <div class="card p-4 col-3 vstack gap-1">
           <div class="kpi-num">{{ queues.on_call }}</div>
           <small class="text-light">On call</small>
           <small class="text-lighter">{{ calls.length }} incl. IVR/ringing</small>
         </div>
-        <div class="card p-4 col-2 vstack gap-1">
+        <div class="card p-4 col-3 vstack gap-1">
           <div class="kpi-num" :style="{ color: waitingNow > 0 ? 'var(--danger)' : undefined }">{{ waitingNow }}</div>
           <small class="text-light">Waiting now</small>
-                      <small v-if="waitingNow" class="text-lighter">longest <span style="color: var(--danger)">{{ fmtMMSS(longestNow) }}</span></small>
-            <small v-else class="text-lighter">no queue</small>
-
+          <small v-if="waitingNow" class="text-lighter">longest <span style="color: var(--danger)">{{ fmtMMSS(longestNow) }}</span></small>
+          <small v-else class="text-lighter">no queue</small>
         </div>
-        <div class="card p-4 col-2 vstack gap-1">
+        <div class="card p-4 col-3 vstack gap-1">
           <div class="kpi-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
             {{ stats?.sla_breaches_today ?? 0 }}
           </div>
-          <small class="text-light">SLA breaches today</small>
-                      <small v-if="breachingNow > 0"><strong style="color: var(--danger)">{{ breachingNow }} breaching now</strong></small>
-            <small v-else class="text-lighter">none breaching now</small>
-
+          <small class="text-light">SLA breaches</small>
+          <small v-if="breachingNow > 0"><strong style="color: var(--danger)">{{ breachingNow }} breaching now</strong></small>
+          <small v-else class="text-lighter">none breaching now</small>
         </div>
-        <div class="card p-4 col-2 vstack gap-1">
-          <div class="kpi-num" :style="{ color: staffing.live < staffing.min ? 'var(--danger)' : undefined }">
-            {{ staffing.live }}<small class="text-lighter"> / {{ staffing.min }}</small>
-          </div>
-          <small class="text-light">
-            Seats
-            <template v-if="staffing.min > 0">
-              <template v-if="staffing.short > 0">· <span style="color: var(--danger)">{{ staffing.short }} short</span></template>
-              <span v-else class="text-lighter">· all staffed</span>
-            </template>
-          </small>
-          <progress :value="staffing.live" :max="staffing.min || 1"></progress>
-        </div>
-        <div class="card p-4 col-2 vstack gap-1">
+        <div class="card p-4 col-3 vstack gap-1">
           <div class="kpi-num">{{ fmtMMSS(stats?.avg_queue_wait_seconds ?? 0) }}</div>
           <small class="text-light">Avg queue wait</small>
-                      <small v-if="slaLimit" class="text-lighter">SLA limit {{ fmtMMSS(slaLimit) }}</small>
-            <small v-else class="text-lighter">no SLA limit</small>
-
-        </div>
-        <div class="card p-4 col-2 vstack gap-1">
-          <div class="kpi-num" :style="{ color: (stats?.abandoned_today ?? 0) > 10 ? 'var(--warning)' : undefined }">
-            {{ stats?.abandoned_today ?? 0 }}
-          </div>
-          <small class="text-light">Abandoned today</small>
-          <small class="text-lighter">{{ abandonedShare || 0 }}% of calls</small>
+          <small v-if="slaLimit" class="text-lighter">SLA limit {{ fmtMMSS(slaLimit) }}</small>
+          <small v-else class="text-lighter">no SLA limit</small>
         </div>
       </div>
 
@@ -279,7 +249,7 @@ usePoll(() => (now.value = Date.now()), 1000);
                       <button
                         v-if="active?.callId !== c.id"
                         type="button"
-                        class="dash-pill"
+                        class="small outline"
                         @click="startSupervise(c)"
                       >
                         Listen
@@ -289,13 +259,14 @@ usePoll(() => (now.value = Date.now()), 1000);
                           v-for="m in (['monitor', 'whisper', 'barge'] as const)"
                           :key="m"
                           type="button"
-                          class="dash-pill"
-                          :class="{ 'dash-pill-active': active.mode === m }"
+                          class="small"
+                          :class="{ outline: active.mode !== m }"
+                          :aria-pressed="active.mode === m"
                           @click="setMode(m)"
                         >
-                          {{ m }}
+                          {{ SUPERVISE_LABELS[m] }}
                         </button>
-                        <button type="button" class="dash-pill dash-pill-danger" @click="stopSupervise()">
+                        <button type="button" class="small outline" data-variant="danger" @click="stopSupervise()">
                           Stop
                         </button>
                       </template>
@@ -357,22 +328,4 @@ usePoll(() => (now.value = Date.now()), 1000);
 }
 .agent-row:last-child { border-bottom: none; }
 
-.dash-pill {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.45;
-  padding: 4px 10px;
-  border-radius: var(--radius-medium);
-  background: var(--card);
-  text-transform: capitalize;
-  transition: background-color var(--transition-fast);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  color: inherit;
-  font-family: inherit;
-  font-weight: 400;
-}
-.dash-pill:hover { background: var(--secondary); }
-.dash-pill-active { background: var(--primary); border-color: var(--primary); color: var(--primary-foreground); }
-.dash-pill-danger { background: var(--color-danger-soft); color: var(--danger); }
 </style>

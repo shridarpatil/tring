@@ -6,7 +6,6 @@ import {
   staffedPct,
   staffingSegments,
   teamView,
-  agentsLiveRequired,
   alertCopy,
   fmtSince,
   alertKey,
@@ -126,6 +125,11 @@ test("parseMMSS / fmtMMSS round trip", () => {
   assert.equal(fmtMMSS(300), "5:00");
   assert.equal(fmtMMSS(65), "1:05");
   assert.equal(parseMMSS(fmtMMSS(754)), 754);
+  assert.equal(fmtMMSS(6185), "1:43:05");
+  assert.equal(fmtMMSS(3600), "1:00:00");
+  assert.equal(fmtMMSS(3599), "59:59");
+  assert.equal(parseMMSS("1:30:00"), 5400);
+  assert.equal(parseMMSS(fmtMMSS(6185)), 6185);
 });
 
 test("todayHours shows only today's timing", () => {
@@ -212,28 +216,6 @@ test("liveCallSecs", () => {
   assert.equal(liveCallSecs(call({ started_at: ago(400), queued_at: ago(90) }), NOW), 90);
   assert.equal(liveCallSecs(call({ status: "answered", started_at: ago(400), answered_at: ago(60) }), NOW), 60);
   assert.equal(liveCallSecs(call({ started_at: ago(400) }), NOW), 400);
-});
-
-test("agentsLiveRequired counts seats covered per team", () => {
-  assert.deepEqual(
-    agentsLiveRequired([
-      team({ live: 80, min_live_agents: 50 }),
-      team({ live: 20, min_live_agents: 50 }),
-    ]),
-    { live: 70, min: 100, short: 1 },
-  );
-});
-
-test("agentsLiveRequired ignores min-0, closed and unknown-staffing teams", () => {
-  assert.deepEqual(
-    agentsLiveRequired([
-      team({ live: 5, min_live_agents: 0 }),
-      team({ open: false, live: 1, min_live_agents: 4 }),
-      team({ staffing_known: false, live: 0, min_live_agents: 6 }),
-      team({ live: 2, min_live_agents: 2 }),
-    ]),
-    { live: 2, min: 2, short: 0 },
-  );
 });
 
 test("filterLiveCalls keeps the supervised call whatever the filter", () => {
