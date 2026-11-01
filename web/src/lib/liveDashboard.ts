@@ -194,6 +194,17 @@ export function agentsLiveRequired(ts: QueueDepth[]): { live: number; min: numbe
   };
 }
 
+// The SLA limit when every team with one configured shares it; null otherwise.
+export function sharedSla(ts: QueueDepth[]): number | null {
+  const set = new Set(ts.filter((t) => t.sla_seconds > 0).map((t) => t.sla_seconds));
+  return set.size === 1 ? [...set][0] : null;
+}
+
+// Abandoned share of today's calls, one decimal ("5.6"); null when there were no calls.
+export function abandonedPct(abandoned: number, calls: number): string | null {
+  return calls > 0 ? ((abandoned / calls) * 100).toFixed(1) : null;
+}
+
 export type SeatState = "on_call" | "online" | "offline" | "away";
 export const SEATS_MAX = 24; // above this a team shows a progress bar instead of seat dots
 
