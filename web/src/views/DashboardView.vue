@@ -13,7 +13,9 @@ import {
   breachingCount,
   buildAlerts,
   callSlaBadge,
+  filterLiveCalls,
   fmtMMSS,
+  type CallFilter,
   isWaitingCall,
   longestWait,
   sortLiveCalls,
@@ -54,20 +56,14 @@ const breachingNow = computed(() => teams.value.reduce((n, t) => n + breachingCo
 const staffing = computed(() => agentsLiveRequired(teams.value));
 
 // ── live calls: waiting callers first, filterable ─────────────────────
-type CallFilter = "all" | "waiting" | "talking";
 const callFilters: { key: CallFilter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "waiting", label: "Waiting" },
   { key: "talking", label: "Talking" },
 ];
 const callFilter = ref<CallFilter>("all");
-const shownCalls = computed(() =>
-  sortLiveCalls(calls.value).filter(
-    (c) =>
-      callFilter.value === "all" ||
-      (callFilter.value === "waiting" ? isWaitingCall(c) : c.status === "answered"),
-  ),
-);
+// The supervised call stays listed under any filter so its controls stay reachable.
+const shownCalls = computed(() => filterLiveCalls(sortLiveCalls(calls.value), callFilter.value, active.value?.callId));
 
 // ── live-call row presentation ────────────────────────────────────────
 function sourceIcon(c: Call): string {
@@ -287,7 +283,7 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
         </Panel>
 
-        <AgentBoard :agents="agents" :teams="teamNames" />
+        <AgentBoard :agents="agents" :teams="teamNames" :calls="calls" :now-ms="now" />
       </div>
     </template>
   </div>

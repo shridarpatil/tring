@@ -1,14 +1,15 @@
 <script setup lang="ts">
 // AgentBoard — agents grouped by live state, with a name search and a team
-// filter. Each group shows its first 8 until "Show all N" is pressed.
+// filter. Each group shows its first 8 until "Show all N" is pressed. An on-call
+// agent's row ticks its call time (from the live calls + the page clock).
 import { computed, reactive, ref, watch } from "vue";
-import type { Agent, Team } from "../../api/types";
+import type { Agent, Call, Team } from "../../api/types";
 import { api } from "../../api/client";
 import { errMessage } from "../../lib/errors";
 import { toast } from "../../lib/toast";
 import { Panel, SignalDot } from "../ui";
 
-const props = defineProps<{ agents: Agent[]; teams: string[] }>();
+const props = defineProps<{ agents: Agent[]; teams: string[]; calls: Call[]; nowMs: number }>();
 
 const PER_GROUP = 8;
 const GROUPS = [
@@ -55,6 +56,20 @@ const groups = computed(() =>
     return { ...g, total: all.length, shown: expanded[g.key] ? all : all.slice(0, PER_GROUP) };
   }).filter((g) => g.total > 0),
 );
+// An agent's current call, matched from the live calls by agent_id.
+const callByAgent = computed(() => {
+  const m = new Map<string, Call>();
+  for (const c of props.calls) if (c.agent_id) m.set(c.agent_id, c);
+  return m;
+});
+// "on call · 03:12": talk time once answered, else time since the call started.
+function onCallLabel(a: Agent): string {
+  const c = callByAgent.value.get(a.id);
+  if (!c) return "on call";
+  const s = Math.max(0, Math.floor((props.nowMs - Date.parse(c.answered_at ?? c.started_at)) / 1000));
+  return `on call · ${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
 const liveCount = computed(() => props.agents.filter((a) => groupOf(a) !== "offline").length);
 </script>
 
@@ -79,6 +94,7 @@ const liveCount = computed(() => props.agents.filter((a) => groupOf(a) !== "offl
           <SignalDot :state="g.key" hide-label size="sm" />
           <span class="truncate">{{ a.display_name || a.sip_username }}</span>
           <small class="text-lighter mono">{{ a.sip_username }}</small>
+          <small v-if="g.key === 'on_call'" class="text-light mono">{{ onCallLabel(a) }}</small>
         </div>
         <div v-if="g.total > g.shown.length">
           <button type="button" class="ghost" @click="expanded[g.key] = true">Show all {{ g.total }}</button>

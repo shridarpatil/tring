@@ -5,6 +5,7 @@ import {
   alertCopy,
   buildAlerts,
   callSlaBadge,
+  filterLiveCalls,
   hoursSummary,
   sortLiveCalls,
   teamBadge,
@@ -196,4 +197,14 @@ test("agentsLiveRequired sums open teams only", () => {
     ]),
     { live: 7, min: 12 },
   );
+});
+
+test("filterLiveCalls keeps the supervised call whatever the filter", () => {
+  const talk = call({ id: "talk", status: "answered" });
+  const w = call({ id: "w", queued_at: ago(30) });
+  const ivr = call({ id: "ivr" });
+  assert.deepEqual(filterLiveCalls([w, talk, ivr], "waiting").map((c) => c.id), ["w"]);
+  assert.deepEqual(filterLiveCalls([w, talk, ivr], "waiting", "talk").map((c) => c.id), ["w", "talk"]);
+  assert.deepEqual(filterLiveCalls([w, talk, ivr], "talking", "ivr").map((c) => c.id), ["talk", "ivr"]);
+  assert.deepEqual(filterLiveCalls([w, talk, ivr], "all").map((c) => c.id), ["w", "talk", "ivr"]);
 });
