@@ -102,6 +102,32 @@ func TestQueueEnterLeave(t *testing.T) {
 	}
 }
 
+// A caller who hangs up ends the call before the routing loop leaves the
+// queue; the leave event still carries the call id from the enter.
+func TestQueueLeaveAfterCallEnded(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	sink := &stintSink{}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, sink)
+	roomID := fx.TenantID.String() + "/pstn-hangup"
+	l.Started(ctx, fx.TenantID, roomID, "+919800000001", "Support", "phone", "", "caller-pid")
+	callID := l.CallID(roomID)
+
+	id := l.QueueEnter(ctx, roomID, "support", 60)
+	l.Ended(roomID, "caller_hangup")
+	if l.CallID(roomID) != uuid.Nil {
+		t.Fatal("call still live after Ended")
+	}
+	l.QueueLeave(ctx, id, roomID, "support", "abandoned")
+
+	if len(sink.got) != 2 || sink.got[1]["call_id"] != callID.String() {
+		t.Fatalf("events = %v, want leave with call_id %s", sink.got, callID)
+	}
+	if r := readStint(t, fx, id); r.outcome == nil || *r.outcome != "abandoned" {
+		t.Fatalf("stint = %+v", r)
+	}
+}
+
 // A room with no live call still records the stint, with call_id NULL.
 func TestQueueEnterUnknownRoom(t *testing.T) {
 	fx := dbtest.Setup(t)

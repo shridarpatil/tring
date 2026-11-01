@@ -48,14 +48,21 @@ func (l *Log) QueueEnter(ctx context.Context, roomID, team string, slaSeconds in
 		l.log.Warn("cdr: queue stint insert failed", "room", roomID, "team", team, "err", err)
 		return uuid.Nil
 	}
+	if callID != uuid.Nil {
+		l.mu.Lock()
+		l.stintCalls[id] = callID
+		l.mu.Unlock()
+	}
 	now := time.Now()
 	l.publishStint(ctx, tenant, queueStintEvent{CallID: callIDString(callID), Team: team, QueuedAt: &now, SLASeconds: slaSeconds})
 	return id
 }
 
 // QueueLeave closes stintID with outcome (answered | abandoned | timeout |
-// transferred) and publishes queue.stint with queued_at null. Closing is
-// idempotent. A uuid.Nil stint (QueueEnter failed) skips the SQL but still
+// transferred) and publishes queue.stint with queued_at null, carrying the
+// call id captured at QueueEnter (the call has usually ended by now, e.g. a
+// caller who hung up). Closing is idempotent. A uuid.Nil stint (QueueEnter
+// failed) skips the SQL and falls back to the room's live call, but still
 // publishes, so the dashboard clears the waiting caller. A nil Log is a no-op.
 func (l *Log) QueueLeave(ctx context.Context, stintID uuid.UUID, roomID, team, outcome string) {
 	if l == nil {
@@ -73,7 +80,14 @@ func (l *Log) QueueLeave(ctx context.Context, stintID uuid.UUID, roomID, team, o
 			l.log.Warn("cdr: queue stint end failed", "stint", stintID, "err", err)
 		}
 	}
-	l.publishStint(ctx, tenant, queueStintEvent{CallID: callIDString(l.CallID(roomID)), Team: team})
+	l.mu.Lock()
+	callID, ok := l.stintCalls[stintID]
+	delete(l.stintCalls, stintID)
+	l.mu.Unlock()
+	if !ok {
+		callID = l.CallID(roomID)
+	}
+	l.publishStint(ctx, tenant, queueStintEvent{CallID: callIDString(callID), Team: team})
 }
 
 func (l *Log) publishStint(ctx context.Context, tenant uuid.UUID, ev queueStintEvent) {
