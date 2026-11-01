@@ -96,7 +96,9 @@ function onCallLabel(a: Agent): string {
                 </span>
               </td>
               <td class="align-right">
-                <span v-for="tm in teamsOf.get(a.sip_username) ?? []" :key="tm" class="badge" data-variant="secondary">{{ tm }}</span>
+                <span v-if="teamsOf.get(a.sip_username)?.length" class="hstack gap-1 justify-end">
+                  <span v-for="tm in teamsOf.get(a.sip_username)" :key="tm" class="badge" data-variant="secondary">{{ tm }}</span>
+                </span>
                 <small v-if="!teamsOf.get(a.sip_username)?.length" class="text-lighter">—</small>
               </td>
             </tr>
