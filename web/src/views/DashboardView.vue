@@ -35,13 +35,6 @@ const { calls, agents, queues, stats, ready } = useDashboardStream();
 // AND stay exactly correct — no drift, no waiting on the server to see them move.
 const now = ref(Date.now());
 
-// ── live durations ────────────────────────────────────────────────────
-function fmtDur(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const m = Math.floor(s / 60);
-  return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
-}
-
 // ── KPI derivations ───────────────────────────────────────────────────
 const teams = computed(() => queues.value.queues);
 const alerts = computed(() => buildAlerts(teams.value, now.value));
@@ -133,7 +126,7 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
           <div class="hstack">
             <div style="flex: 1">
-              <div class="trend-num">{{ fmtDur(stats?.avg_talk_seconds ?? 0) }}</div>
+              <div class="trend-num">{{ fmtMMSS(stats?.avg_talk_seconds ?? 0) }}</div>
               <small class="text-light">Avg talk</small>
             </div>
             <div style="flex: 1">

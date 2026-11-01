@@ -4,7 +4,7 @@
 // agent's row ticks its call time (from the live calls + the page clock).
 import { computed, reactive, ref } from "vue";
 import type { Agent, Call, QueueDepth } from "../../api/types";
-import { agentTeams } from "../../lib/liveDashboard";
+import { agentTeams, fmtMMSS } from "../../lib/liveDashboard";
 import { Panel, SignalDot } from "../ui";
 
 // teams carries each team's member SIP usernames (queues[].agents).
@@ -54,12 +54,12 @@ const callByAgent = computed(() => {
   for (const c of props.calls) if (c.agent_id) m.set(c.agent_id, c);
   return m;
 });
-// "on call · 03:12": talk time once answered, else time since the call started.
+// "on call · 3:12": talk time once answered, else time since the call started.
 function onCallLabel(a: Agent): string {
   const c = callByAgent.value.get(a.id);
   if (!c) return "on call";
   const s = Math.max(0, Math.floor((props.nowMs - Date.parse(c.answered_at ?? c.started_at)) / 1000));
-  return `on call · ${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  return `on call · ${fmtMMSS(s)}`;
 }
 </script>
 
