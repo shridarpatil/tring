@@ -214,6 +214,7 @@ func main() {
 	hub.Forward(
 		events.TypeCallRinging, events.TypeCallRouting, events.TypeCallAnswered, events.TypeCallEnded,
 		events.TypeAgentPresence, events.TypeAgentStatus, events.TypeCallSupervised, events.TypeCallTransferred,
+		events.TypeQueueStint,
 	)
 	hub.Recompute(
 		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded},
@@ -222,11 +223,19 @@ func main() {
 	// Queues carries on_call (answered calls with an agent), which changes on the
 	// call lifecycle — so call.* must trigger this recompute too, not just
 	// queue.depth. Without the call.* triggers, on_call goes stale after a call
-	// ends (nothing recomputes it until the next queueing activity).
+	// ends (nothing recomputes it until the next queueing activity). It also
+	// carries each team's live staffing (agent.*) and waits/breaches (queue.stint).
 	hub.Recompute(
-		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded, events.TypeQueueDepth},
+		[]string{
+			events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded, events.TypeQueueDepth,
+			events.TypeAgentPresence, events.TypeAgentStatus, events.TypeQueueStint,
+		},
 		events.TypeQueues, 800*time.Millisecond, apiSrv.QueuesData,
 	)
+	// Team open/closed and below-minimum change with the clock, not an event
+	// (Support opens at 9:00 and nobody calls): recheck once a minute and push
+	// only when the frame changed.
+	hub.Every(60*time.Second, events.TypeQueues, apiSrv.QueuesData)
 	go hub.Run(ctx)
 
 	// Status of the calls the API places through FreeSWITCH (POST /v1/calls):
