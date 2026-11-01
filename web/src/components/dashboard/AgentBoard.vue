@@ -67,7 +67,7 @@ function onCallLabel(a: Agent): string {
   <Panel pad>
     <template #title>Agents</template>
     <template #actions>
-      <span class="text-light">{{ liveCount }} live · {{ awayCount }} away</span>
+      <small class="text-light">{{ liveCount }} live · {{ awayCount }} away</small>
     </template>
     <div class="vstack">
       <!-- One row: the search takes 2/3, the team filter 1/3 (Oat grid). -->
@@ -78,7 +78,7 @@ function onCallLabel(a: Agent): string {
           <option v-for="t in teamNames" :key="t" :value="t">{{ t }}</option>
         </select>
       </div>
-      <div v-if="!groups.length" class="text-lighter">No agents</div>
+      <div v-if="!groups.length" class="text-lighter"><small>No agents</small></div>
       <table v-else>
         <template v-for="g in groups" :key="g.key">
           <thead>

@@ -198,7 +198,7 @@ usePoll(() => (now.value = Date.now()), 1000);
         </div>
         <div class="card col-2">
           <div class="kpi-num" :style="{ color: staffing.live < staffing.min ? 'var(--danger)' : undefined }">
-            {{ staffing.live }}<span class="text-lighter" style="font-size: 1.125rem"> / {{ staffing.min }}</span>
+            {{ staffing.live }}<small class="text-lighter"> / {{ staffing.min }}</small>
           </div>
           <div><small class="text-light">Agents live / required</small></div>
           <progress v-if="staffing.min > 0" :value="staffing.live" :max="staffing.min"></progress>
@@ -225,7 +225,7 @@ usePoll(() => (now.value = Date.now()), 1000);
           <template #title>Live calls</template>
           <template #actions>
             <LevelMeter v-if="hasTalking" active />
-            <span class="text-light">{{ calls.length }} active</span>
+            <small class="text-light">{{ calls.length }} active</small>
           </template>
           <div class="hstack gap-2 p-4">
             <button
@@ -242,25 +242,25 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
           <div class="scroll-max" style="--max-h: 28rem">
           <div v-if="!shownCalls.length" class="list-empty">
-            No live calls
+            <small>No live calls</small>
           </div>
           <div v-for="c in shownCalls" :key="c.id" class="live-call-row">
             <span class="source-badge" aria-hidden="true">{{ sourceIcon(c) }}</span>
             <div style="flex: 1 1 auto; min-width: 0">
               <div class="truncate">
-                {{ callerLabel(c) }} → <span style="font-weight: 500">{{ destLabel(c) }}</span>
+                <small>{{ callerLabel(c) }} → <strong>{{ destLabel(c) }}</strong></small>
               </div>
               <div class="text-lighter mono truncate">
-                {{ c.to_number }}<template v-if="isWaitingCall(c)"> · waiting in {{ c.queue_team }}</template>
+                <small>{{ c.to_number }}<template v-if="isWaitingCall(c)"> · waiting in {{ c.queue_team }}</template></small>
               </div>
               <span v-if="callSlaBadge(c, now)" class="badge" :data-variant="callSlaBadge(c, now)!.variant">{{
                 callSlaBadge(c, now)!.text
               }}</span>
             </div>
             <span class="badge" :data-variant="callBadge(c).cls" style="flex-shrink: 0">{{ callBadge(c).text }}</span>
-            <span class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
+            <small class="mono text-light" style="flex-shrink: 0; width: 3rem; text-align: right">{{
               fmtDur(callSeconds(c))
-            }}</span>
+            }}</small>
             <!-- Supervisor controls: any call with a media room (web, phone,
                  WhatsApp; calls placed over ESL have none). Only ONE supervise
                  session is supported at a time (the `active` ref, not per-row state). -->
