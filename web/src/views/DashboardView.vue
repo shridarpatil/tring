@@ -202,6 +202,10 @@ usePoll(() => (now.value = Date.now()), 1000);
           </div>
           <div><small class="text-light">Agents live / required</small></div>
           <progress v-if="staffing.min > 0" :value="staffing.live" :max="staffing.min"></progress>
+          <template v-if="staffing.min > 0">
+            <small v-if="staffing.short > 0"><strong style="color: var(--danger)">{{ staffing.short }} team(s) short</strong></small>
+            <small v-else class="text-lighter">all teams staffed</small>
+          </template>
         </div>
         <div class="card col-2">
           <div class="kpi-num">{{ fmtMMSS(stats?.avg_queue_wait_seconds ?? 0) }}</div>
