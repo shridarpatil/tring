@@ -58,6 +58,17 @@ export function sortTeams(ts: QueueDepth[], nowMs: number): QueueDepth[] {
   );
 }
 
+export const SNOOZE_MS = 15 * 60 * 1000;
+
+export function alertKey(a: DashAlert): string {
+  return `${a.team}|${a.kind}`;
+}
+
+// Drops alerts the supervisor snoozed; a snooze lapses once nowMs reaches its until.
+export function visibleAlerts(alerts: DashAlert[], snoozed: Record<string, number>, nowMs: number): DashAlert[] {
+  return alerts.filter((a) => !((snoozed[alertKey(a)] ?? 0) > nowMs));
+}
+
 // Understaffed teams first (biggest deficit first; their breaching callers ride
 // along), then teams that only have callers past their SLA.
 export function buildAlerts(ts: QueueDepth[], nowMs: number): DashAlert[] {

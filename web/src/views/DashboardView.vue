@@ -144,7 +144,7 @@ usePoll(() => (now.value = Date.now()), 1000);
     <div v-if="!ready" class="text-lighter">Loading…</div>
 
     <template v-else>
-      <DashAlerts :alerts="alerts" />
+      <DashAlerts :alerts="alerts" :now-ms="now" />
 
       <!-- Trend strip: today so far -->
       <!-- hstack only adds wrapping: the chart drops to its own line on narrow screens -->
