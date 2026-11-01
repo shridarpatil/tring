@@ -58,7 +58,11 @@ const compact = (t: QueueDepth) => !t.open && t.waiting_since.length === 0;
 const hours = (t: QueueDepth) => todayHours(t.hours, new Date(props.nowMs));
 const badge = (t: QueueDepth) => teamBadge(t, props.nowMs);
 const longest = (t: QueueDepth) => longestWait(t, props.nowMs);
-const longestVariant = (t: QueueDepth) => waitTone(longest(t), t.sla_seconds) || "secondary";
+// Longest wait colour: amber from 80% of the SLA, red past it (theme tokens, like the KPI numbers).
+const longestStyle = (t: QueueDepth) => {
+  const tone = waitTone(longest(t), t.sla_seconds);
+  return tone ? { color: `var(--${tone})` } : undefined;
+};
 const slaLabel = (t: QueueDepth) => (t.sla_seconds > 0 ? fmtMMSS(t.sla_seconds) : "none");
 const SEG_STYLE: Record<StaffSegment["kind"], { bg: string; opacity?: number; title: (n: number) => string }> = {
   on_call: { bg: "var(--color-oncall)", title: (n) => `${n} on call` },
@@ -150,7 +154,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <small class="text-light">waiting</small>
               </div>
               <div class="vstack gap-1" :title="`SLA ${slaLabel(t)}`">
-                <span><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></span>
+                <small class="mono" :style="longestStyle(t)"><strong>{{ fmtMMSS(longest(t)) }}</strong></small>
                 <small class="text-light">longest</small>
               </div>
               <div class="vstack gap-1" title="SLA breaches today">
@@ -209,7 +213,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <td class="mono"><small>{{ t.away }}</small></td>
               </template>
               <td class="mono"><small v-pulse="t.waiting_since.length > 0" :style="t.waiting_since.length ? { color: 'var(--danger)' } : undefined">{{ t.waiting_since.length }}</small></td>
-              <td><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></td>
+              <td><small class="mono" :style="longestStyle(t)">{{ fmtMMSS(longest(t)) }}</small></td>
               <td class="mono"><small>{{ t.breaches_today }}</small></td>
             </template>
             <td v-else colspan="8"></td>
