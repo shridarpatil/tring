@@ -13,6 +13,8 @@ import {
   callSlaBadge,
   filterLiveCalls,
   hoursSummary,
+  isUnderstaffed,
+  isWaitingCall,
   sortLiveCalls,
   teamBadge,
   fmtMMSS,
@@ -42,6 +44,7 @@ function team(over: Partial<QueueDepth>): QueueDepth {
     breaches_today: 0,
     hours: [],
     agents: [],
+    staffing_known: true,
     ...over,
   };
 }
@@ -180,7 +183,7 @@ function call(over: Partial<Call>): Call {
 }
 
 test("sortLiveCalls puts waiting callers first, longest first", () => {
-  const talk = call({ id: "talk", status: "answered", queued_at: ago(500) });
+  const talk = call({ id: "talk", status: "answered" });
   const ivr = call({ id: "ivr" });
   const w1 = call({ id: "w1", queued_at: ago(30) });
   const w2 = call({ id: "w2", queued_at: ago(300) });
@@ -192,7 +195,7 @@ test("callSlaBadge", () => {
   assert.deepEqual(callSlaBadge(call({ queued_at: ago(250), queue_sla_seconds: 300 }), NOW), { text: "0:50 to SLA", variant: "warning" });
   assert.deepEqual(callSlaBadge(call({ queued_at: ago(301), queue_sla_seconds: 300 }), NOW), { text: "SLA breached", variant: "danger" });
   assert.equal(callSlaBadge(call({ queued_at: ago(999) }), NOW), null);
-  assert.equal(callSlaBadge(call({ status: "answered", queued_at: ago(999), queue_sla_seconds: 60 }), NOW), null);
+  assert.equal(callSlaBadge(call({ status: "answered", queue_sla_seconds: 60 }), NOW), null);
 });
 
 test("agentsLiveRequired sums open teams only", () => {
@@ -201,6 +204,7 @@ test("agentsLiveRequired sums open teams only", () => {
       team({ live: 5, min_live_agents: 10 }),
       team({ live: 2, min_live_agents: 2 }),
       team({ open: false, live: 1, min_live_agents: 4 }),
+      team({ staffing_known: false, live: 0, min_live_agents: 6 }),
     ]),
     { live: 7, min: 12 },
   );
@@ -260,4 +264,18 @@ test("teamView: auto switches at CARDS_MAX_TEAMS, others force", () => {
   assert.equal(teamView("auto", 7), "rows");
   assert.equal(teamView("cards", 10), "cards");
   assert.equal(teamView("rows", 1), "rows");
+});
+
+test("a call blind-transferred into a queue is waiting even though it was answered", () => {
+  const c = call({ status: "answered", queued_at: ago(400), queue_team: "Support", queue_sla_seconds: 300 });
+  assert.equal(isWaitingCall(c), true);
+  assert.deepEqual(callSlaBadge(c, NOW), { text: "SLA breached", variant: "danger" });
+  assert.deepEqual(sortLiveCalls([call({ id: "x" }), { ...c, id: "t" }]).map((x) => x.id), ["t", "x"]);
+});
+
+test("unknown staffing is never understaffed", () => {
+  const t = team({ min_live_agents: 10, live: 0, staffing_known: false });
+  assert.equal(isUnderstaffed(t), false);
+  assert.deepEqual(buildAlerts([t], NOW), []);
+  assert.equal(belowMinCount([t]), 0);
 });

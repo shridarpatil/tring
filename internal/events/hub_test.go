@@ -199,3 +199,35 @@ func TestHubEverySkipsUnchanged(t *testing.T) {
 		t.Fatalf("built %d times, want 3", len(built))
 	}
 }
+
+// A tenant's remembered derived frames go when its last subscriber does, both
+// on Unsubscribe and when the slow-subscriber drop empties the tenant.
+func TestLastPrunedWithLastSubscriber(t *testing.T) {
+	h := NewTestHub()
+	h.Every(time.Hour, TypeQueues, func(_ context.Context, _ string) ([]byte, error) { return []byte("A"), nil })
+	lastKeys := func() int {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.last)
+	}
+
+	sub := h.Subscribe("t1")
+	h.tickForTest(TypeQueues)
+	if lastKeys() != 1 {
+		t.Fatalf("last = %d entries, want 1", lastKeys())
+	}
+	h.Unsubscribe(sub)
+	if n := lastKeys(); n != 0 {
+		t.Fatalf("after unsubscribe last = %d entries, want 0", n)
+	}
+
+	h.Forward(TypeCallEnded)
+	sub = h.Subscribe("t1")
+	h.tickForTest(TypeQueues)
+	for i := 0; i < subBuffer+1; i++ {
+		h.handle("t1", Event{Type: TypeCallEnded, Data: json.RawMessage(`{}`)})
+	}
+	if n := lastKeys(); n != 0 {
+		t.Fatalf("after drop last = %d entries, want 0", n)
+	}
+}

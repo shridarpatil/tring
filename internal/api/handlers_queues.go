@@ -34,8 +34,9 @@ type queueDepth struct {
 	MinLive       int             `json:"min_live_agents"`
 	SLASeconds    int             `json:"sla_seconds"`
 	Members       int             `json:"members"`
-	Agents        []string        `json:"agents"` // member SIP usernames, sorted, never null
-	Live          int             `json:"live"`   // on_call + available
+	StaffingKnown bool            `json:"staffing_known"` // false: presence unreadable, counts unreliable
+	Agents        []string        `json:"agents"`         // member SIP usernames, sorted, never null
+	Live          int             `json:"live"`           // on_call + available
 	OnCall        int             `json:"on_call"`
 	Available     int             `json:"available"`
 	Away          int             `json:"away"`
@@ -53,7 +54,8 @@ type queuesResponse struct {
 
 // queuesSnapshot builds each team's live state: per-source (phone+web) queue
 // depth from Redis, staffing from agents (agentsList output, passed in because
-// the dashboard snapshot already has it), and waits/breaches from queue_stints.
+// the dashboard snapshot already has it; nil when it failed, which marks
+// staffing unknown), and waits/breaches from queue_stints.
 // The endpoint and the SSE recompute share it.
 func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) (queuesResponse, error) {
 	now := time.Now()
@@ -111,6 +113,7 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 
 		c := staff[q.Team]
 		q.Members, q.Live, q.OnCall, q.Available, q.Away = c.Members, c.Live, c.OnCall, c.Available, c.Away
+		q.StaffingKnown = agents != nil && !c.Unknown
 		if m := members[q.Team]; m != nil {
 			q.Agents = m
 		}
@@ -119,8 +122,12 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 		}
 		q.BreachesToday = breaches[q.Team]
 		q.Open = ivr.ScheduleOpen(hours[q.Team], now)
-		below := q.Open && q.MinLive > 0 && q.Live < q.MinLive
-		q.BelowMinSince = s.belowMin.observe(t.ID.String()+"|"+q.Team, below, now)
+		// Unknown staffing leaves the below-minimum clock untouched: no alert
+		// from a presence outage, and no reset of a real one either.
+		if q.StaffingKnown {
+			below := q.Open && q.MinLive > 0 && q.Live < q.MinLive
+			q.BelowMinSince = s.belowMin.observe(t.ID.String()+"|"+q.Team, below, now)
+		}
 	}
 	return out, nil
 }
@@ -200,7 +207,7 @@ func (s *Server) handleListQueues(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	agents, err := s.agentsList(r.Context(), t)
 	if err != nil {
-		s.log.Warn("queues: agents", "err", err) // staffing reads 0; depths still serve
+		s.log.Warn("queues: agents", "err", err) // staffing reads unknown; depths still serve
 	}
 	out, err := s.queuesSnapshot(r.Context(), t, agents)
 	if err != nil {

@@ -134,6 +134,8 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 			switch {
 			case regErr != nil:
 				agents[i].Status = "unknown"
+			case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)] && !agents[i].AvailableForCalls:
+				agents[i].Status = "away" // registered but unavailable, as in gateway mode
 			case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)]:
 				agents[i].Status = "online"
 			default:

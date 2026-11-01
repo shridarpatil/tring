@@ -138,6 +138,7 @@ func (h *Hub) Unsubscribe(sub *Subscriber) {
 			close(sub.ch)
 			if len(set) == 0 {
 				delete(h.subs, sub.tenant)
+				h.forgetLocked(sub.tenant)
 			}
 		}
 	}
@@ -160,6 +161,18 @@ func (h *Hub) dispatch(tenant string, frame []byte) {
 	}
 	if len(h.subs[tenant]) == 0 {
 		delete(h.subs, tenant)
+		h.forgetLocked(tenant)
+	}
+}
+
+// forgetLocked drops a tenant's remembered derived frames once nobody watches
+// it, so last doesn't grow with every tenant ever seen. Caller holds h.mu.
+func (h *Hub) forgetLocked(tenant string) {
+	prefix := tenant + "|"
+	for k := range h.last {
+		if strings.HasPrefix(k, prefix) {
+			delete(h.last, k)
+		}
 	}
 }
 

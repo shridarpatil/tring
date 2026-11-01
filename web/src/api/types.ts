@@ -101,6 +101,7 @@ export interface QueueDepth {
   hours: TeamDay[];
   members: number;
   agents: string[]; // member SIP usernames, sorted
+  staffing_known: boolean; // false when presence couldn't be read: counts unreliable
   live: number; // on_call + available
   on_call: number;
   available: number;

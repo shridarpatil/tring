@@ -104,33 +104,36 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
           <small class="text-light">{{ hoursSummary(t.hours) }}<template v-if="!compact(t)"> · SLA {{ slaLabel(t) }}</template></small>
 
           <template v-if="!compact(t)">
-            <div class="hstack justify-between">
-              <span class="hstack gap-2">
-                <h2>{{ t.live }}</h2>
-                <span class="text-light">{{ t.min_live_agents > 0 ? `of ${t.min_live_agents} min live` : "live" }}</span>
+            <span v-if="!t.staffing_known" class="text-lighter">staffing unknown</span>
+            <template v-else>
+              <div class="hstack justify-between">
+                <span class="hstack gap-2">
+                  <h2>{{ t.live }}</h2>
+                  <span class="text-light">{{ t.min_live_agents > 0 ? `of ${t.min_live_agents} min live` : "live" }}</span>
+                </span>
+                <span v-if="isUnderstaffed(t)" class="badge" data-variant="danger">{{ staffedPct(t) }}% staffed</span>
+              </div>
+
+              <span v-if="showSeats(t)" class="hstack gap-1" :aria-label="`${t.team} seats`">
+                <SignalDot v-for="(s, i) in seatStates(t)" :key="i" :state="s" hide-label size="sm" />
               </span>
-              <span v-if="isUnderstaffed(t)" class="badge" data-variant="danger">{{ staffedPct(t) }}% staffed</span>
-            </div>
+              <meter
+                v-else-if="t.min_live_agents > 0"
+                min="0"
+                :max="meterMax(t)"
+                :value="t.live"
+                :low="t.min_live_agents"
+                :high="t.min_live_agents"
+                :optimum="meterMax(t)"
+                :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
+              ></meter>
 
-            <span v-if="showSeats(t)" class="hstack gap-1" :aria-label="`${t.team} seats`">
-              <SignalDot v-for="(s, i) in seatStates(t)" :key="i" :state="s" hide-label size="sm" />
-            </span>
-            <meter
-              v-else-if="t.min_live_agents > 0"
-              min="0"
-              :max="meterMax(t)"
-              :value="t.live"
-              :low="t.min_live_agents"
-              :high="t.min_live_agents"
-              :optimum="meterMax(t)"
-              :aria-label="`${t.team}: ${t.live} of ${t.min_live_agents} agents live`"
-            ></meter>
-
-            <span class="hstack gap-4">
-              <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
-              <SignalDot state="online" size="sm" :label="`${t.available} available`" />
-              <SignalDot v-if="t.away > 0" state="away" size="sm" :label="`${t.away} away`" />
-            </span>
+              <span class="hstack gap-4">
+                <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
+                <SignalDot state="online" size="sm" :label="`${t.available} available`" />
+                <SignalDot v-if="t.away > 0" state="away" size="sm" :label="`${t.away} away`" />
+              </span>
+            </template>
 
             <hr />
 
@@ -178,7 +181,8 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             <td><small>{{ hoursSummary(t.hours) }}</small></td>
             <template v-if="!compact(t)">
               <td class="mono">{{ slaLabel(t) }}</td>
-              <td>
+              <td v-if="!t.staffing_known" colspan="4" class="text-lighter">staffing unknown</td>
+              <td v-if="t.staffing_known">
                 <div class="vstack gap-1">
                   <span class="mono">{{ t.live }}<template v-if="t.min_live_agents > 0"> / {{ t.min_live_agents }}</template></span>
                   <meter
@@ -193,9 +197,11 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                   ></meter>
                 </div>
               </td>
-              <td class="mono">{{ t.on_call }}</td>
-              <td class="mono">{{ t.available }}</td>
-              <td class="mono">{{ t.away }}</td>
+              <template v-if="t.staffing_known">
+                <td class="mono">{{ t.on_call }}</td>
+                <td class="mono">{{ t.available }}</td>
+                <td class="mono">{{ t.away }}</td>
+              </template>
               <td class="mono">{{ t.waiting_since.length }}</td>
               <td><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></td>
               <td class="mono">{{ t.breaches_today }}</td>
