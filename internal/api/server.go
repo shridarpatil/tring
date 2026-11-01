@@ -515,7 +515,7 @@ func (s *Server) Router() http.Handler {
 	// to revalidate every time — it still gets a cheap 304 when unchanged,
 	// but picks up a new bundle the instant we ship one.
 	if wFS, ok := widget.FS(); ok {
-		sdk := http.StripPrefix("/sdk/", sdkHandler(wFS))
+		sdk := staticCompress(http.StripPrefix("/sdk/", sdkHandler(wFS)))
 		r.Get("/sdk/*", func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache")
 			sdk.ServeHTTP(w, req)
@@ -526,7 +526,7 @@ func (s *Server) Router() http.Handler {
 	// actually built — backend-only deployments get a UI-less binary
 	// automatically (no flag needed, just don't run `npm run build`).
 	if uiFS, ok := webui.FS(); ok {
-		admin := r.With(adminHeaders(adminCSP(s.gatewayPublicURL)))
+		admin := r.With(adminHeaders(adminCSP(s.gatewayPublicURL)), staticCompress)
 		fileServer := http.FileServer(http.FS(uiFS))
 		// Strip "/admin" prefix so requests for /admin/assets/foo.js
 		// resolve to "assets/foo.js" within the embedded FS.
