@@ -76,7 +76,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
       <span class="hstack gap-2">
         Teams
         <span v-if="below > 0" class="badge" data-variant="danger">{{ below }} below minimum</span>
-        <span class="text-light">{{ sorted.length }} teams</span>
+        <small class="text-light">{{ sorted.length }} teams</small>
       </span>
     </template>
     <template #actions>
@@ -95,7 +95,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
       </span>
     </template>
 
-    <div v-if="!sorted.length" class="text-lighter">No teams</div>
+    <div v-if="!sorted.length" class="text-lighter"><small>No teams</small></div>
 
     <div v-else-if="view === 'cards'" class="row">
       <div v-for="t in sorted" :key="t.team" class="card col-3" :class="{ 'text-lighter': compact(t) }">
@@ -137,7 +137,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
               <small class="hstack gap-4">
                 <SignalDot state="on_call" size="sm" :label="`${t.on_call} on call`" />
                 <SignalDot state="online" size="sm" :label="`${t.available} available`" />
-                <SignalDot v-if="t.away > 0" state="away" size="sm" :label="`${t.away} away`" />
+                <SignalDot state="away" size="sm" :label="`${t.away} away`" />
               </small>
             </template>
 
