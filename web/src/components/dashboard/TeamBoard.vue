@@ -2,6 +2,7 @@
 // TeamBoard — per-team staffing, waits and SLA, worst first. Auto shows cards
 // for up to CARDS_MAX_TEAMS teams and a table beyond that; Cards/Rows force one.
 import { computed, ref, watch } from "vue";
+import { vPulse } from "../../lib/pulse";
 import { RouterLink } from "vue-router";
 import type { QueueDepth } from "../../api/types";
 import {
@@ -145,7 +146,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
 
             <div class="hstack justify-between gap-2">
               <div class="vstack gap-1">
-                <span class="hstack gap-1"><SignalDot v-if="t.waiting_since.length" state="waiting" size="sm" hide-label /><small><strong>{{ t.waiting_since.length }}</strong></small></span>
+                <small v-pulse="t.waiting_since.length > 0"><strong>{{ t.waiting_since.length }}</strong></small>
                 <small class="text-light">waiting</small>
               </div>
               <div class="vstack gap-1" :title="`SLA ${slaLabel(t)}`">
@@ -207,7 +208,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
                 <td class="mono"><small>{{ t.available }}</small></td>
                 <td class="mono"><small>{{ t.away }}</small></td>
               </template>
-              <td class="mono"><span class="hstack gap-1"><SignalDot v-if="t.waiting_since.length" state="waiting" size="sm" hide-label /><small>{{ t.waiting_since.length }}</small></span></td>
+              <td class="mono"><small v-pulse="t.waiting_since.length > 0">{{ t.waiting_since.length }}</small></td>
               <td><span class="badge mono" :data-variant="longestVariant(t)">{{ fmtMMSS(longest(t)) }}</span></td>
               <td class="mono"><small>{{ t.breaches_today }}</small></td>
             </template>
