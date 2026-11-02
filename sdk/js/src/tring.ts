@@ -176,7 +176,9 @@ export class Tring extends Emitter<TringEvent> {
           throw err;
         }
         if (!rtc) return;
-        rtc.on("connected", () => {
+        // A click-to-call leg (auto) answers itself while the customer still
+        // rings, so its call starts when the gateway says the customer answered.
+        rtc.on(auto ? "answered" : "connected", () => {
           call.status = "connected";
           this.emit({ type: "call:answered", call });
         });

@@ -45,6 +45,7 @@ const (
 	msgTransferFailed = "transfer-failed" // s→agent: transfer rejected — {reason}; agent keeps the call
 	msgSupervisor     = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
 	msgRinging        = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
+	msgAnswered       = "answered"        // s→agent: the click-to-call customer picked up
 )
 
 // msg is the single envelope for every /rtc message.

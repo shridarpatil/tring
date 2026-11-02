@@ -252,3 +252,39 @@ func TestMediaSessionRestampsOpusOntoTheOpusClock(t *testing.T) {
 		m.Close()
 	}
 }
+
+// The carrier's ringback reaches an outbound leg's socket before anyone reads
+// it (the room attaches the leg on answer). discardQueued drops that backlog so
+// the room starts on live audio, not seconds of stale ringing played late.
+func TestMediaSessionDiscardQueued(t *testing.T) {
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	fs := dialUDP(t, m.localPort())
+	defer fs.Close()
+
+	send := func(seq uint16) {
+		pkt := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: seq, Timestamp: uint32(seq) * 960, SSRC: 1}, Payload: []byte{0xfc}}
+		raw, _ := pkt.Marshal()
+		fs.Write(raw)
+	}
+	for seq := uint16(1); seq <= 50; seq++ { // ~1 s of early media
+		send(seq)
+	}
+	deadline := time.Now().Add(time.Second)
+	for len(m.in) < 50 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	m.discardQueued()
+	send(100) // live audio after answer
+
+	got, err := m.ReadRTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SequenceNumber != 100 {
+		t.Fatalf("first packet after answer is seq %d, want the live 100", got.SequenceNumber)
+	}
+}
