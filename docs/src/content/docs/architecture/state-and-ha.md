@@ -66,7 +66,6 @@ State falls into three classes. The design hinges on classifying each correctly.
 | Agent presence (online/on_call) | Redis (TTL keys) | ✅ already Redis |
 | Single-use token jti | Redis `SetNX` | ✅ already Redis |
 | Queue depth | Redis (orchestrator writes) | ✅ ephemeral, fine |
-| Masking pool (DID ↔ party map) | **orchestrator in-memory** | ❌ wipes on restart (schema `masking_sessions` exists, unused) |
 | CDR "in progress" (which calls are live) | gateway `callcdr` in-memory + `calls.status='answered'` | ⚠️ row is durable but no liveness link |
 | on_call counter, pending rings | gateway in-memory | ❌ (derivable; acceptable) |
 
@@ -106,10 +105,6 @@ matches the existing reality (gateway/orchestrator already bind per-FreeSWITCH).
 It's the standard shape for stateful real-time systems.
 
 ### P3 — Externalize Class-B state.
-- **Masking pool → mirror to Postgres** (`masking_sessions`, schema already
-  provisioned). In-memory stays the hot path; Postgres is the recovery store —
-  load on orchestrator boot. *(This is the one Class-B gap with real call-routing
-  impact.)*
 - **CDR liveness** → a restarted/peer node, and a reconciliation sweep, must be
   able to tell a live call from an orphaned row (see P5).
 - Presence, jti, queue depth: already external. Keep.
@@ -150,7 +145,6 @@ eventually correct even after an ungraceful crash.
 
 | Item | Where | Effort |
 |---|---|---|
-| Masking pool ↔ Postgres mirror + boot reload | `internal/masking`, `masking_sessions` table | M |
 | Per-call liveness heartbeat (node writes, sweeper reads) | gateway `callcdr` + orchestrator runner → Redis | M |
 | Reconciliation sweeper | new job in `cmd/api` (system of record) | S |
 | Graceful drain (SIGTERM → readiness false → drain → shed) | `cmd/gateway`, `cmd/orchestrator` main + signaling/runner | M |
@@ -172,8 +166,7 @@ eventually correct even after an ungraceful crash.
 ## 8. Phasing
 
 1. **Correctness first (single cell):** liveness heartbeat + reconciliation
-   sweeper (P5) + masking durability (P3). Closes the "stuck CDR / lost masking"
-   gaps with zero scaling work. *This is the high-value, low-cost start.*
+   sweeper (P5). Closes the "stuck CDR" gap with zero scaling work. *This is the high-value, low-cost start.*
 2. **Operability:** graceful drain + readiness probes (P4). Makes deploys
    non-disruptive on a single cell.
 3. **Scale-out:** cell-pinned mints + edge router (P2, P6). Only when one cell's

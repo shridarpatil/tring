@@ -154,23 +154,3 @@ func TestResolveDIDIgnoresForeignFlowAndPrefersFirstRegistrant(t *testing.T) {
 		t.Fatalf("resolve = (%s, %q), want first registrant (%s, %q)", tenant, flowID, f.TenantID, ownFlow)
 	}
 }
-
-// select-outbound-trunks must not pick up another tenant's trunk even if a
-// number row points at it.
-func TestSelectTrunksIgnoresForeignTrunk(t *testing.T) {
-	f := dbtest.Setup(t)
-	_, foreign, _ := otherTenant(t, f)
-	if _, err := f.DB.Pool.Exec(context.Background(), `
-		INSERT INTO numbers (tenant_id, e164, type, trunk_id, priority, active)
-		VALUES ($1, '+919800000007', 'outbound', $2, 100, true)
-	`, f.TenantID, foreign); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	s := newServerFor(f)
-	trunks, _ := s.selectTrunks(context.Background(), &Tenant{ID: f.TenantID, OutboundStrategy: "failover"})
-	for _, tr := range trunks {
-		if tr.E164 == "+919800000007" {
-			t.Fatalf("selected a number routed through another tenant's trunk: %+v", tr)
-		}
-	}
-}

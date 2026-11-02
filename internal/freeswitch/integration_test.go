@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func intAddr() string {
@@ -32,42 +30,19 @@ func intPassword() string {
 	return "ClueCon"
 }
 
-// TestOriginateLoopbackEcho asks FreeSWITCH to originate a call where both
-// legs are loopback dial strings into the `9196` echo extension. This
-// verifies the ESL connect → bgapi originate → reply parse chain end to end
-// without needing a real SIP trunk or a registered softphone.
-//
-// The originate is BACKGROUNDED (bgapi), so success means: connection
-// established, command accepted, a Job-UUID parsed from the reply. The
-// background call itself is best-effort — we don't wait for the channel.
-func TestOriginateLoopbackEcho(t *testing.T) {
+// TestCommandStatus runs a synchronous api command against FreeSWITCH. This
+// verifies the ESL connect → auth → api command → reply chain end to end.
+func TestCommandStatus(t *testing.T) {
 	c := New(intAddr(), intPassword())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	chanUUID := uuid.NewString()
-	res, err := c.Originate(ctx, OriginateRequest{
-		ALeg:     "loopback/9196/default",
-		BLegs:    []string{"loopback/9196/default"},
-		UUID:     chanUUID,
-		CallerID: "+918000000000",
-		Vars: map[string]string{
-			"hangup_after_bridge": "true",
-			"ignore_early_media":  "true",
-		},
-	})
+	reply, err := c.Command(ctx, "status", "")
 	if err != nil {
-		t.Fatalf("Originate: %v", err)
+		t.Fatalf("Command status: %v", err)
 	}
-	if res.ChannelUUID != chanUUID {
-		t.Errorf("ChannelUUID = %q, want pre-allocated %q", res.ChannelUUID, chanUUID)
-	}
-	if res.JobUUID == "" {
-		t.Errorf("JobUUID empty — Reply-Text parsing broke; was: %+v", res)
-	}
-	// Sanity: Job-UUIDs from FreeSWITCH are UUID-shaped.
-	if !strings.Contains(res.JobUUID, "-") {
-		t.Errorf("JobUUID %q doesn't look like a UUID", res.JobUUID)
+	if !strings.Contains(reply, "UP") {
+		t.Errorf("status reply = %q, want it to report FreeSWITCH UP", reply)
 	}
 }

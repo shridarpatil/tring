@@ -63,8 +63,7 @@ func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to, callerI
 		return nil, "", to, errDialUnavailable
 	}
 
-	// India-primary normalization, matching the ESL/API originate path
-	// (internal/provider's Indian trunks use the same dial.India).
+	// India-primary normalization (dial.India).
 	// Without this, a bare 10-digit or 0-/91-prefixed number sails straight
 	// into room.OriginateRequest.To and gets rejected downstream instead of
 	// here, with a much less useful error.

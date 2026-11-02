@@ -92,3 +92,63 @@ func TestOwnsNumber(t *testing.T) {
 		t.Error("another tenant must not own this tenant's number")
 	}
 }
+
+// insertOutbound seeds a trunk plus an outbound number bound to it and returns
+// the number's expected gateway name.
+func insertOutbound(t *testing.T, fx *dbtest.Fixture, tenant uuid.UUID, e164 string, priority int, active bool) string {
+	t.Helper()
+	ctx := context.Background()
+	var trunkID uuid.UUID
+	if err := fx.DB.Pool.QueryRow(ctx, `
+		INSERT INTO trunks (tenant_id, name, provider_type, active)
+		VALUES ($1, $2, 'generic', $3)
+		RETURNING id
+	`, tenant, "trunk-"+e164, active).Scan(&trunkID); err != nil {
+		t.Fatalf("insert trunk: %v", err)
+	}
+	if _, err := fx.DB.Pool.Exec(ctx, `
+		INSERT INTO numbers (tenant_id, e164, type, trunk_id, priority, active)
+		VALUES ($1, $2, 'outbound', $3, $4, $5)
+	`, fx.TenantID, e164, trunkID, priority, active); err != nil {
+		t.Fatalf("insert number: %v", err)
+	}
+	return freeswitch.GatewayName(trunkID)
+}
+
+// TestOutboundTrunks_InactiveExcluded: an inactive number + trunk is skipped
+// even when its priority would win.
+func TestOutboundTrunks_InactiveExcluded(t *testing.T) {
+	fx := dbtest.Setup(t)
+	insertOutbound(t, fx, fx.TenantID, "+918001111111", 100, true)
+	insertOutbound(t, fx, fx.TenantID, "+918002222222", 50, false)
+
+	trunks, err := New(fx.DB).OutboundTrunks(context.Background(), fx.TenantID)
+	if err != nil {
+		t.Fatalf("OutboundTrunks: %v", err)
+	}
+	if len(trunks) != 1 || trunks[0].E164 != "+918001111111" {
+		t.Errorf("got %+v, want only +918001111111 (the other is inactive)", trunks)
+	}
+}
+
+// TestOutboundTrunks_IgnoresForeignTrunk: a number of this tenant pointing at
+// another tenant's trunk must never be dialed through.
+func TestOutboundTrunks_IgnoresForeignTrunk(t *testing.T) {
+	fx := dbtest.Setup(t)
+	var other uuid.UUID
+	if err := fx.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
+		VALUES ('other', 'other.tring.local', $1, 'deprecated--') RETURNING id
+	`, "deprecated-"+uuid.NewString()).Scan(&other); err != nil {
+		t.Fatalf("insert other tenant: %v", err)
+	}
+	insertOutbound(t, fx, other, "+919800000007", 100, true)
+
+	trunks, err := New(fx.DB).OutboundTrunks(context.Background(), fx.TenantID)
+	if err != nil {
+		t.Fatalf("OutboundTrunks: %v", err)
+	}
+	if len(trunks) != 0 {
+		t.Fatalf("selected a number routed through another tenant's trunk: %+v", trunks)
+	}
+}
