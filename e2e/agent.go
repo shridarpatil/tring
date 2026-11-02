@@ -312,7 +312,7 @@ func (a *Agent) record(tr *webrtc.TrackRemote) {
 		if err != nil {
 			n = 0
 		}
-		a.got.Add(Arrival{At: time.Now(), Seq: pkt.SequenceNumber, TS: pkt.Timestamp, Marker: pkt.Marker, PCM: append([]int16(nil), pcm[:n]...)})
+		a.got.Add(Arrival{At: time.Now(), Src: tr.StreamID(), Seq: pkt.SequenceNumber, TS: pkt.Timestamp, Marker: pkt.Marker, PCM: append([]int16(nil), pcm[:n]...)})
 	}
 }
 
