@@ -147,12 +147,16 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	plugGot := 0
+	var stamps []uint32
 	for plugGot < 10 {
-		got := make(chan struct{})
-		go func() { _, _ = leg.Source.ReadRTP(); close(got) }()
+		got := make(chan *rtp.Packet, 1)
+		go func() { pkt, _ := leg.Source.ReadRTP(); got <- pkt }()
 		select {
-		case <-got:
+		case pkt := <-got:
 			plugGot++
+			if pkt != nil {
+				stamps = append(stamps, pkt.Timestamp)
+			}
 			continue
 		case <-time.After(2 * time.Second):
 		}
@@ -160,6 +164,17 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 	}
 	if plugGot < 10 {
 		t.Errorf("plug got %d Opus packets from the carrier's audio, want ≥10", plugGot)
+	}
+	// Opus RTP runs on a 48 kHz clock whatever the encoder's rate (RFC 7587), so
+	// 20 ms frames step the timestamp by 960. Browsers play the plug's packets
+	// as they arrive; another step garbles or silences them there. FreeSWITCH
+	// restarts its timestamps on the second packet (marker bit set), so the
+	// steady step is measured from there.
+	for i := 2; i < len(stamps); i++ {
+		if d := stamps[i] - stamps[i-1]; d != 960 {
+			t.Errorf("plug's Opus RTP timestamp stepped by %d (packets %d→%d, stamps %v), want 960", d, i-1, i, stamps)
+			break
+		}
 	}
 	if n := <-carrierGot; n < 10 {
 		t.Errorf("carrier got %d G.711 packets from the plug's audio, want ≥10", n)
