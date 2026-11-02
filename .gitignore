@@ -67,3 +67,7 @@ __pycache__/
 .superpowers/
 docs/superpowers/
 /api
+
+# e2e/up.sh output
+/.e2e.env
+/.e2e.compose.yml
