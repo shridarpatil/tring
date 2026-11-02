@@ -18,15 +18,19 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/shridarpatil/tring/main/install.sh | sh
 #   cd tring
-#   $EDITOR .env             # generated with random secrets; set network IPs, TZ, TRING_TAG
+#   $EDITOR .env             # generated with random secrets; set network IPs, TZ
 #   docker compose pull && docker compose up -d
+#
+# Version: pins the latest GitHub release (TRING_TAG in .env, and the
+# docker-compose.yml from that tag). A re-run keeps the TRING_TAG already in
+# .env. Before the first release, or with TRING_VERSION=develop, it tracks main.
+#   TRING_VERSION=v0.1.0 sh install.sh
 #
 # Override the target dir:
 #   TRING_DIR=/srv/tring curl -fsSL .../install.sh | sh
 
 set -eu
 
-REPO_RAW="${TRING_REPO:-https://raw.githubusercontent.com/shridarpatil/tring/main}"
 TARGET="${TRING_DIR:-tring}"
 
 # The two files to fetch. Everything else — the three tring images
@@ -46,7 +50,8 @@ freeswitch/conf/sip_profiles/external/dynamic
 recordings
 "
 
-# Pick a downloader. curl on macOS/Linux, wget as fallback.
+# Pick a downloader. curl on macOS/Linux, wget as fallback. "-" as the
+# destination writes to stdout.
 if command -v curl >/dev/null 2>&1; then
     fetch() { curl -fsSL "$1" -o "$2"; }
 elif command -v wget >/dev/null 2>&1; then
@@ -59,7 +64,25 @@ fi
 mkdir -p "$TARGET"
 cd "$TARGET"
 
-echo "tring: downloading into $(pwd)"
+# The version: TRING_VERSION, else the TRING_TAG an earlier run pinned in
+# .env, else the latest release (prereleases are skipped), else develop.
+latest_release() {
+    fetch https://api.github.com/repos/shridarpatil/tring/releases/latest - 2>/dev/null |
+        sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
+}
+TAG="${TRING_VERSION:-}"
+if [ -z "$TAG" ] && [ -f .env ]; then
+    TAG="$(sed -n 's/^TRING_TAG=//p' .env | head -n 1)"
+fi
+[ -n "$TAG" ] || TAG="$(latest_release)"
+[ -n "$TAG" ] || TAG=develop
+case "$TAG" in
+    develop) REF=main ;;
+    *) REF="$TAG" ;;
+esac
+REPO_RAW="${TRING_REPO:-https://raw.githubusercontent.com/shridarpatil/tring/$REF}"
+
+echo "tring: downloading $TAG into $(pwd)"
 for f in $FILES; do
     mkdir -p "$(dirname "$f")"
     echo "  $f"
@@ -81,6 +104,7 @@ if [ ! -f .env ]; then
         -e "s|^TRING_ESL_PASSWORD=.*|TRING_ESL_PASSWORD=$(rand)|" \
         -e "s|^TRING_REDIS_PASSWORD=.*|TRING_REDIS_PASSWORD=$(rand)|" \
         -e "s|^TRING_ADMIN_PASSWORD=.*|TRING_ADMIN_PASSWORD=$(rand)|" \
+        -e "s|^TRING_TAG=.*|TRING_TAG=$TAG|" \
         .env.example > .env
     chmod 600 .env
     echo "  .env (random secrets generated)"
@@ -102,7 +126,7 @@ Next steps:
   #   TRING_PUBLIC_IP=<public/elastic ip>   # rewrites the gateway's WebRTC ICE candidate
   #   TRING_REDIS_ADDR=127.0.0.1:6379       # gateway HARD-dep when REQUIRE_AUTH=true (default)
   #   TZ=Asia/Kolkata                       # applies to every container
-  #   TRING_TAG=develop                      # pin a release (e.g. v0.1.0) for production
+  #   TRING_TAG=$TAG                      # image version; change it to upgrade
   docker compose pull        # pull the shridh0r/tring-* images + Postgres/Redis
   docker compose up -d
 

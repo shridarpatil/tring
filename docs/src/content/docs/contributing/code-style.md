@@ -24,7 +24,7 @@ app structure). This doc is the short version; when in doubt, match those.
 
 ## Folder structure
 ```
-cmd/<binary>/main.go     # one dir per binary (api, orchestrator); wiring only
+cmd/<binary>/main.go     # one dir per binary (api, gateway); wiring only
 internal/<pkg>/          # flat, function-named packages:
   api/                   #   HTTP surface (REST, console auth, /fs, /sdk, /admin)
   orchestrator/          #   FreeSWITCH-facing ESL service + IVR executor
