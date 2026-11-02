@@ -88,6 +88,7 @@ export interface RtcCallOpts {
 export type RtcCallEvent =
   | { type: "connecting" }
   | { type: "connected" }
+  | { type: "answered" }
   | { type: "track"; kind: "audio" | "video"; stream: MediaStream; track: MediaStreamTrack }
   | { type: "peer-joined"; participantId: string; name?: string }
   | { type: "peer-left"; participantId: string }
@@ -218,6 +219,10 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         // server keeps this leg on the call, so this is informational, not an
         // "ended"/"error" teardown signal — the call continues.
         this.emit({ type: "transfer-failed", reason: m.reason ?? "transfer failed" });
+        break;
+      case ServerMsgType.Answered:
+        // A click-to-call customer picked up (this leg auto-answered earlier).
+        this.emit({ type: "answered" });
         break;
       case ServerMsgType.Supervisor:
         this.emit({

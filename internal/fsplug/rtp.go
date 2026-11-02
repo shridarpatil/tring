@@ -117,6 +117,20 @@ func (m *mediaSession) ReadRTP() (*rtp.Packet, error) {
 	}
 }
 
+// discardQueued drops the inbound Opus queued so far. An outbound leg's socket
+// receives the carrier's ringback (early media) while nobody reads it; left
+// queued, the room would play seconds of stale ringing on answer and then run
+// that far behind.
+func (m *mediaSession) discardQueued() {
+	for {
+		select {
+		case <-m.in:
+		default:
+			return
+		}
+	}
+}
+
 // write re-stamps a room packet onto this session's clean outbound stream and
 // sends it to the remote. No-op until setRemote is called.
 func (m *mediaSession) write(pkt *rtp.Packet) error {

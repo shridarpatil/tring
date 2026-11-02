@@ -110,7 +110,7 @@ await tring.disconnect();
 | `reconnecting` | `{ attempt: number }` | The connection dropped unexpectedly. The SDK retries with backoff (1 s, doubling, up to 10 s) and fetches a fresh token each time. `attempt` is currently always `0`. |
 | `unregistered` | `{ reason?: string }` | The connection was closed by `disconnect()`. `reason` is currently not set. |
 | `call:ringing` | `{ call: Call }` | A call is ringing this agent. With `autoAnswer: true`, the SDK accepts it right away. |
-| `call:answered` | `{ call: Call }` | Audio is flowing. `call.status` is now `"connected"`. |
+| `call:answered` | `{ call: Call }` | Audio is flowing. `call.status` is now `"connected"`. On a click-to-call (`POST /v1/calls`), this fires when the customer picks up, not when the agent's own leg answers. |
 | `call:ended` | `{ call: Call, cause?: string }` | The call ended: hung up, declined, taken by another agent, or ended by the server. `cause` is currently not set. |
 | `call:remote-video` | `{ call: Call, stream: MediaStream \| null }` | The other party started sharing their screen (`stream`) or stopped (`null`). |
 | `call:supervisor` | `{ call: Call, present: boolean, mode: string, name: string }` | A supervisor started (`present: true`) or stopped watching this call. `mode` is, for example, `"whisper"`. The customer is never told. |

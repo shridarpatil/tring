@@ -162,6 +162,9 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	if sink := s.cfg.Calls.Answered(string(roomID), agentPID, req.AgentSIP); sink != nil {
 		s.sfu.AddSink(roomID, agentPID, sink)
 	}
+	if c := s.connFor(agentPID); c != nil {
+		_ = c.send(msg{Type: msgAnswered}) // the widget's call timer starts now
+	}
 	s.log.Info("call: connected", "room", roomID)
 
 	<-leg.Done
