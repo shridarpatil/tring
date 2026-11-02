@@ -212,7 +212,7 @@ In production use `TRING_TURN_SECRET` (ephemeral credentials) with TURNS on port
 
 | Variable | Default | What it does |
 |---|---|---|
-| `TRING_TAG` | `develop` | Docker image tag for `tring-api`, `tring-gateway` and `tring-freeswitch`. `develop` tracks the latest `main`. Pin a release tag in production. |
+| `TRING_TAG` | `develop` | Docker image tag for `tring-api`, `tring-gateway` and `tring-freeswitch`. `develop` tracks the latest `main`. Pin a release tag in production; `install.sh` writes the latest release here. |
 
 ## Other variables
 
