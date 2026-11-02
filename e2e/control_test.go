@@ -20,7 +20,7 @@ type call struct {
 // inboundCall connects a carrier call through the DID's flow to agent one.
 func inboundCall(t *testing.T, f *fixture) (call, error) {
 	a1 := NewAgent(t, f.api, f.a1, f.a1Sip, FreqAgent1)
-	customer := NewCarrier(t, carrierIP(t)).Dial(env("TRING_E2E_FS_EXTERNAL", ""), f.did, FreqCustomer)
+	customer := TheCarrier(t).Dial(env("TRING_E2E_FS_EXTERNAL", ""), f.did, FreqCustomer)
 	t.Cleanup(customer.Hangup)
 	room, _, _ := a1.WaitIncoming(15 * time.Second)
 	return call{a1, customer}, a1.Join(room)
@@ -29,7 +29,7 @@ func inboundCall(t *testing.T, f *fixture) (call, error) {
 // clickToCall connects a POST /v1/calls from agent one to the customer.
 func clickToCall(t *testing.T, f *fixture) (call, error) {
 	a1 := NewAgent(t, f.api, f.a1, f.a1Sip, FreqAgent1)
-	customer := NewCarrier(t, carrierIP(t)).OnNumber(ruriCustomer, FreqCustomer)
+	customer := TheCarrier(t).OnNumber(ruriCustomer, FreqCustomer)
 	t.Cleanup(customer.Hangup)
 	f.api.Call(f.a1Sip, customerNumber)
 	room, _, _ := a1.WaitIncoming(15 * time.Second)
@@ -58,8 +58,8 @@ func TestHoldResume(t *testing.T) {
 		"click-to-call": clickToCall,
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := seed(t)
 			live(t, func(t *testing.T) error {
+				f := seed(t) // this attempt's client
 				c, err := place(t, f)
 				if err != nil {
 					return err
@@ -93,8 +93,8 @@ func TestTransferToTeam(t *testing.T) {
 // only member) is rung, joins, and then hears the customer and is heard by
 // them, while agent one's leg ends.
 func testTransfer(t *testing.T, transfer func(*fixture, *Agent)) {
-	f := seed(t)
 	live(t, func(t *testing.T) error {
+		f := seed(t) // this attempt's client
 		a2 := NewAgent(t, f.api, f.a2, f.a2Sip, FreqAgent2)
 		c, err := inboundCall(t, f)
 		if err != nil {

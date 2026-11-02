@@ -19,7 +19,7 @@ func TestAgentGetsAudioThroughGateway(t *testing.T) {
 	api.CreateNumber(did, "inbound", "", flow)
 
 	agent := NewAgent(t, api, agentID, sip, FreqAgent1)
-	carrier := NewCarrier(t, carrierIP(t))
+	carrier := TheCarrier(t)
 	customer := carrier.Dial(env("TRING_E2E_FS_EXTERNAL", ""), did, FreqCustomer)
 	defer customer.Hangup()
 

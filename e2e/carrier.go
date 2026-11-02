@@ -25,22 +25,35 @@ const (
 	pcmuFrame    = 160 // 20 ms at 8 kHz
 )
 
-// Carrier is a fake SIP carrier on FreeSWITCH's trunk side: a UAS that
+// carrierCore is a fake SIP carrier on FreeSWITCH's trunk side: a UAS that
 // answers Tring's outbound legs (with early-media ringback first) and a UAC
 // that places inbound calls. Every leg plays its own tone as PCMU and records
-// what it receives.
-type Carrier struct {
-	t       *testing.T
+// what it receives. There is one per test binary, listening for the whole run,
+// so FreeSWITCH's trunk pings (every 25 s) are answered between tests too.
+type carrierCore struct {
 	ip      string
 	client  *sipgo.Client
 	ds      *sipgo.DialogServerCache
 	dc      *sipgo.DialogClientCache
-	RingFor time.Duration
+	ringFor time.Duration
 
 	mu      sync.Mutex
 	numbers map[string]*Leg // RURI user → the leg to answer it with
 	byCall  map[string]*Leg // SIP Call-ID → leg
 }
+
+// Carrier is a test's handle on the shared carrier: legs it creates belong to
+// that test and are hung up when it ends.
+type Carrier struct {
+	*carrierCore
+	t *testing.T
+}
+
+var (
+	carrierOnce sync.Once
+	carrier     *carrierCore
+	carrierErr  error
+)
 
 // carrierIP is FreeSWITCH's trunk-facing address, which up.sh exports.
 func carrierIP(t *testing.T) string {
@@ -51,24 +64,34 @@ func carrierIP(t *testing.T) string {
 	return ip
 }
 
-// NewCarrier starts the carrier's SIP stack on ip:5999 until the test ends.
-func NewCarrier(t *testing.T, ip string) *Carrier {
+// TheCarrier returns t's handle on the shared carrier, starting its SIP stack
+// on <trunk ip>:5999 the first time.
+func TheCarrier(t *testing.T) *Carrier {
 	t.Helper()
+	ip := carrierIP(t)
+	carrierOnce.Do(func() { carrier, carrierErr = startCarrier(ip) })
+	if carrierErr != nil {
+		t.Fatalf("carrier: %v", carrierErr)
+	}
+	return &Carrier{carrierCore: carrier, t: t}
+}
+
+func startCarrier(ip string) (*carrierCore, error) {
 	ua, err := sipgo.NewUA(sipgo.WithUserAgentHostname(ip))
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	srv, err := sipgo.NewServer(ua)
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	client, err := sipgo.NewClient(ua, sipgo.WithClientHostname(ip))
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	contact := sip.ContactHeader{Address: sip.Uri{User: "carrier", Host: ip, Port: carrierSIPPort}}
-	c := &Carrier{
-		t: t, ip: ip, client: client, RingFor: 3 * time.Second,
+	c := &carrierCore{
+		ip: ip, client: client, ringFor: 3 * time.Second,
 		ds:      sipgo.NewDialogServerCache(client, contact),
 		dc:      sipgo.NewDialogClientCache(client, contact),
 		numbers: map[string]*Leg{},
@@ -89,28 +112,16 @@ func NewCarrier(t *testing.T, ip string) *Carrier {
 	})
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(ip), Port: carrierSIPPort})
 	if err != nil {
-		t.Fatalf("carrier: listen %s:%d: %v", ip, carrierSIPPort, err)
+		return nil, fmt.Errorf("listen %s:%d: %w", ip, carrierSIPPort, err)
 	}
-	go func() { _ = srv.ServeUDP(conn) }()
-	t.Cleanup(func() {
-		c.mu.Lock()
-		legs := make([]*Leg, 0, len(c.byCall))
-		for _, l := range c.byCall {
-			legs = append(legs, l)
-		}
-		c.mu.Unlock()
-		for _, l := range legs {
-			l.Hangup()
-		}
-		_ = conn.Close()
-	})
-	return c
+	go func() { _ = srv.ServeUDP(conn) }() // lives for the whole test binary
+	return c, nil
 }
 
 // Addr is the carrier's SIP address, the trunk's proxy.
-func (c *Carrier) Addr() string { return c.ip + ":" + strconv.Itoa(carrierSIPPort) }
+func (c *carrierCore) Addr() string { return c.ip + ":" + strconv.Itoa(carrierSIPPort) }
 
-func (c *Carrier) leg(callID string) *Leg {
+func (c *carrierCore) leg(callID string) *Leg {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.byCall[callID]
@@ -123,10 +134,17 @@ func (c *Carrier) OnNumber(ruriUser string, tone float64) *Leg {
 	c.mu.Lock()
 	c.numbers[ruriUser] = l
 	c.mu.Unlock()
+	c.t.Cleanup(func() {
+		c.mu.Lock()
+		if c.numbers[ruriUser] == l {
+			delete(c.numbers, ruriUser)
+		}
+		c.mu.Unlock()
+	})
 	return l
 }
 
-func (c *Carrier) onInvite(req *sip.Request, tx sip.ServerTransaction) {
+func (c *carrierCore) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	user := req.Recipient.User
 	c.mu.Lock()
 	l := c.numbers[user]
@@ -141,23 +159,29 @@ func (c *Carrier) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 	dlg, err := c.ds.ReadInvite(req, tx)
 	if err != nil {
-		c.t.Errorf("carrier: read invite for %s: %v", user, err)
+		l.report("carrier: read invite for %s: %v", user, err)
 		return
 	}
 	ip, port, err := parseSDP(req.Body())
 	if err != nil {
-		c.t.Errorf("carrier: invite for %s: %v", user, err)
+		l.report("carrier: invite for %s: %v", user, err)
 		return
 	}
 	l.setRemote(ip, port)
+	l.mu.Lock()
 	l.server = dlg
+	l.mu.Unlock()
 	answer := l.sdp()
 	_ = dlg.Respond(sip.StatusTrying, "Trying", nil)
 	_ = dlg.Respond(183, "Session Progress", answer, sip.NewHeader("Content-Type", "application/sdp"))
 	l.play(freqRingback)
-	time.Sleep(c.RingFor) // the customer's phone ringing (early media flowing)
+	select { // the customer's phone ringing (early media flowing)
+	case <-time.After(c.ringFor):
+	case <-l.Done:
+		return
+	}
 	if err := dlg.RespondSDP(answer); err != nil {
-		c.t.Errorf("carrier: answer %s: %v", user, err)
+		l.report("carrier: answer %s: %v", user, err)
 		return
 	}
 	l.answer()
@@ -196,6 +220,7 @@ func (c *Carrier) Dial(fsExternal, did string, tone float64) *Leg {
 // Leg is one carrier call leg: its RTP socket, what it plays, what it got.
 type Leg struct {
 	t        *testing.T
+	report   func(format string, args ...any) // t.Errorf, safe from background goroutines
 	conn     *net.UDPConn
 	tone     float64
 	Answered chan struct{}
@@ -216,7 +241,8 @@ func newLeg(t *testing.T, ip string, tone float64) *Leg {
 	if err != nil {
 		t.Fatalf("carrier: rtp socket: %v", err)
 	}
-	l := &Leg{t: t, conn: conn, tone: tone, Answered: make(chan struct{}), Done: make(chan struct{}), Got: &Recorder{}}
+	l := &Leg{t: t, report: reporter(t).Errorf, conn: conn, tone: tone, Answered: make(chan struct{}), Done: make(chan struct{}), Got: &Recorder{}}
+	t.Cleanup(l.Hangup)
 	go l.recv()
 	go l.send()
 	return l

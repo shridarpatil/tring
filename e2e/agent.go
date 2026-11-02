@@ -107,6 +107,7 @@ func (s *sock) keepalive(m wsMsg) {
 // publishes the agent's tone and records what it hears.
 type Agent struct {
 	t       *testing.T
+	log     *report // a.t's Errorf/Logf, safe from background goroutines
 	api     *API
 	id, sip string
 	tone    float64
@@ -125,7 +126,7 @@ type Agent struct {
 func NewAgent(t *testing.T, api *API, agentID, sip string, tone float64) *Agent {
 	t.Helper()
 	token, gw := api.AgentToken(agentID)
-	a := &Agent{t: t, api: api, id: agentID, sip: sip, tone: tone, got: &Recorder{}, ctrl: make(chan wsMsg, 64)}
+	a := &Agent{t: t, api: api, id: agentID, sip: sip, tone: tone, got: &Recorder{}, ctrl: make(chan wsMsg, 64), log: reporter(t)}
 	a.pres = dialSock(t, gw, token)
 	a.pres.send(wsMsg{Type: "register"})
 	a.pres.keepalive(wsMsg{Type: "register"})
@@ -230,7 +231,7 @@ func (a *Agent) signal(pc *webrtc.PeerConnection, call *sock) {
 		switch m.Type {
 		case "offer":
 			if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: m.SDP}); err != nil {
-				a.t.Logf("agent %s: set offer: %v", a.sip, err)
+				a.log.Logf("agent %s: set offer: %v", a.sip, err)
 				continue
 			}
 			haveRemote = true
@@ -243,7 +244,7 @@ func (a *Agent) signal(pc *webrtc.PeerConnection, call *sock) {
 				err = pc.SetLocalDescription(ans)
 			}
 			if err != nil {
-				a.t.Logf("agent %s: answer: %v", a.sip, err)
+				a.log.Logf("agent %s: answer: %v", a.sip, err)
 				continue
 			}
 			call.send(wsMsg{Type: "answer", SDP: ans.SDP})
@@ -268,7 +269,7 @@ func (a *Agent) signal(pc *webrtc.PeerConnection, call *sock) {
 func (a *Agent) publish(track *webrtc.TrackLocalStaticSample, call *sock) {
 	enc, err := opus.NewEncoder(opusRate, 1, opus.AppVoIP)
 	if err != nil {
-		a.t.Errorf("opus encoder: %v", err)
+		a.log.Errorf("opus encoder: %v", err)
 		return
 	}
 	buf := make([]byte, 1500)
@@ -299,7 +300,7 @@ func (a *Agent) publish(track *webrtc.TrackLocalStaticSample, call *sock) {
 func (a *Agent) record(tr *webrtc.TrackRemote) {
 	dec, err := opus.NewDecoder(opusRate, 1)
 	if err != nil {
-		a.t.Errorf("opus decoder: %v", err)
+		a.log.Errorf("opus decoder: %v", err)
 		return
 	}
 	pcm := make([]int16, opusFrame*6)
