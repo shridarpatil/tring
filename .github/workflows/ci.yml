@@ -11,6 +11,11 @@ name: CI
 # the FreeSWITCH image boots with a worst-case random password. It runs on main,
 # manual dispatch and PRs from this repo (not forks).
 #
+# The `e2e` job (same trigger rules) builds the api, gateway and FreeSWITCH
+# images from this commit, brings the stack up and runs ./e2e: who hears whom on
+# inbound, click-to-call and connect calls, hold/resume and transfer. It is
+# advisory for now: `images` and `release` don't wait on it.
+#
 # Build/release stage (gated on the tests, push events only):
 #   - images : three images -> :develop on main, :<tag> on a v* tag, to
 #              GHCR + Docker Hub.
@@ -201,6 +206,73 @@ jobs:
   # (--build-arg CMD); freeswitch is its own image (amd64 only — its base
   # safarov/freeswitch has no arm64). On a tag, the `release` job then cuts
   # the GitHub Release.
+  e2e:
+    name: Call audio e2e (advisory)
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Install libopus (the test agents encode and decode Opus)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libopus-dev
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Built from this commit, with the images job's layer cache; loaded as
+      # :e2e so compose runs them without rebuilding.
+      - name: Build api image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          build-args: CMD=api
+          platforms: linux/amd64
+          load: true
+          tags: shridh0r/tring-api:e2e
+          cache-from: type=gha,scope=tring-api
+      - name: Build gateway image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          build-args: CMD=gateway
+          platforms: linux/amd64
+          load: true
+          tags: shridh0r/tring-gateway:e2e
+          cache-from: type=gha,scope=tring-gateway
+      - name: Build freeswitch image
+        uses: docker/build-push-action@v7
+        with:
+          context: freeswitch
+          platforms: linux/amd64
+          load: true
+          tags: shridh0r/tring-freeswitch:e2e
+          cache-from: type=gha,scope=tring-freeswitch
+
+      - name: Bring up the stack
+        env:
+          E2E_SKIP_BUILD: "1"
+          TRING_TAG: e2e
+        run: e2e/up.sh
+
+      - name: Run the e2e tests
+        run: go test -tags "e2e opus nolibopusfile" -count=1 -timeout=6m -v ./e2e/
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose logs --tail=200 api gateway freeswitch
+
   images:
     name: image · ${{ matrix.name }}
     needs: [unit, integration]
