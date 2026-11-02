@@ -113,10 +113,13 @@ func TestCallRingsAgentThenCustomer(t *testing.T) {
 	if id := h.call(); id != h.cl.id {
 		t.Fatalf("call id %v, want %v", id, h.cl.id)
 	}
-	h.answer()
+	agent := h.answer()
 	if got := <-h.o.dialed; got != "+919812345678" {
 		t.Errorf("dialed %q, want the customer", got)
 	}
+	// The agent's widget learns the customer picked up (its call timer starts
+	// then, not when its own leg auto-answered).
+	h.readUntil(agent, msgAnswered)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for len(h.cl.snapshot()) < 3 && time.Now().Before(deadline) {

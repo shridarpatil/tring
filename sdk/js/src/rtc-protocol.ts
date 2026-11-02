@@ -48,6 +48,7 @@ export const ServerMsgType = {
   Error: "error",
   Supervisor: "supervisor",
   TransferFailed: "transfer-failed",
+  Answered: "answered",
 } as const;
 
 /** Browser-facing STUN/TURN entry sent in `joined` (shape matches RTCIceServer). */

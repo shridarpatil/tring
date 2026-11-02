@@ -124,6 +124,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 		return nil, fmt.Errorf("fsplug: bad answer sdp: %w", err)
 	}
 	m.setRemote(ip, rtpPort)
+	m.discardQueued() // the ringback that arrived before the answer
 	if err := dlg.Ack(ctx); err != nil {
 		// Same as above: Established, so best-effort terminate before
 		// surfacing the error, even though the Ack we just tried failed.
