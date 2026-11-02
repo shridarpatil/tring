@@ -295,7 +295,7 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	if c == nil {
 		return nil, fmt.Errorf("fsplug: unknown call %s", id)
 	}
-	m, err := newMediaSession(room.ParticipantID(id), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT)
+	m, err := newMediaSession(room.ParticipantID(id), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
 	if err != nil {
 		return nil, err
 	}
