@@ -64,3 +64,18 @@ func TestRecorderSince(t *testing.T) {
 		t.Errorf("Since(+100ms) = %d arrivals, want 5", got)
 	}
 }
+
+func TestMainPicksTheBusiestSource(t *testing.T) {
+	as := paced(50, 960)
+	for i := range as {
+		as[i].Src = "customer"
+	}
+	hold := paced(5, 960)
+	for i := range hold {
+		hold[i].Src = "hold"
+	}
+	got := Main(append(hold, as...))
+	if len(got) != 50 || got[0].Src != "customer" {
+		t.Fatalf("Main kept %d arrivals from %q, want the 50 from customer", len(got), got[0].Src)
+	}
+}

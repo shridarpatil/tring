@@ -156,6 +156,23 @@ func (a *API) CreateNumber(e164, typ, trunkID, flowID string) string {
 	return r.ID
 }
 
+// DeactivateOutboundExcept turns off every active outbound number but keep.
+// The gateway dials through the first outbound number's trunk only, so numbers
+// left by earlier runs against the same database (trunks now down) must not
+// win.
+func (a *API) DeactivateOutboundExcept(keep string) {
+	var list []struct {
+		ID, Type string
+		Active   bool
+	}
+	a.do("GET", "/v1/numbers", nil, &list)
+	for _, n := range list {
+		if n.Type == "outbound" && n.Active && n.ID != keep {
+			a.do("PATCH", "/v1/numbers/"+n.ID, map[string]bool{"active": false}, nil)
+		}
+	}
+}
+
 func (a *API) CreateFlow(name string, definition any) string {
 	var r idResp
 	a.do("POST", "/v1/flows", map[string]any{"name": name, "is_active": true, "definition": definition}, &r)

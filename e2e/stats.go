@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
-// Arrival is one received RTP packet: when it arrived, its header fields, and
-// its decoded audio.
+// Arrival is one received RTP packet: when it arrived, which source sent it
+// (the WebRTC stream id, e.g. the hold-music player or the customer's leg), its
+// header fields, and its decoded audio.
 type Arrival struct {
 	At     time.Time
+	Src    string
 	Seq    uint16
 	TS     uint32
 	Marker bool
@@ -61,6 +63,27 @@ func waitArrivals(t *testing.T, r *Recorder, from time.Time, window time.Duratio
 	t.Helper()
 	time.Sleep(time.Until(from.Add(window)))
 	return Between(r.Since(from), from, from.Add(window))
+}
+
+// Main returns the arrivals of the busiest source. Timing checks run per
+// source: a browser agent gets hold music and the customer as separate tracks,
+// each on its own clock, overlapping briefly at answer.
+func Main(as []Arrival) []Arrival {
+	count := map[string]int{}
+	best := ""
+	for _, a := range as {
+		count[a.Src]++
+		if count[a.Src] > count[best] {
+			best = a.Src
+		}
+	}
+	var out []Arrival
+	for _, a := range as {
+		if a.Src == best {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // CheckArrives: at least min packets landed within window of the first one.
