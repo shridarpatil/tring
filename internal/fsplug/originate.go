@@ -68,7 +68,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	if len(req.Trunks) == 0 {
 		return nil, fmt.Errorf("fsplug: originate with no trunk")
 	}
-	m, err := newMediaSession(room.ParticipantID("out-"+uuid.NewString()), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT)
+	m, err := newMediaSession(room.ParticipantID("out-"+uuid.NewString()), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT, carrierRate)
 	if err != nil {
 		return nil, err
 	}
