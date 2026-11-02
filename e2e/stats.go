@@ -5,6 +5,7 @@ package e2e
 import (
 	"fmt"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -52,6 +53,14 @@ func Between(as []Arrival, from, to time.Time) []Arrival {
 		}
 	}
 	return out
+}
+
+// waitArrivals waits until window has passed since from, then returns what r
+// recorded in [from, from+window).
+func waitArrivals(t *testing.T, r *Recorder, from time.Time, window time.Duration) []Arrival {
+	t.Helper()
+	time.Sleep(time.Until(from.Add(window)))
+	return Between(r.Since(from), from, from.Add(window))
 }
 
 // CheckArrives: at least min packets landed within window of the first one.
