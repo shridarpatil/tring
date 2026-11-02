@@ -27,7 +27,6 @@ import {
   teamState,
   waitTone,
   sharedSla,
-  abandonedPct,
 } from "./liveDashboard.ts";
 import type { Call, QueueDepth } from "../api/types";
 
@@ -284,11 +283,6 @@ test("sharedSla: one common limit, else null", () => {
   assert.equal(sharedSla([]), null);
 });
 
-test("abandonedPct: one decimal, null without calls", () => {
-  assert.equal(abandonedPct(23, 406), "5.7");
-  assert.equal(abandonedPct(0, 10), "0.0");
-  assert.equal(abandonedPct(3, 0), null);
-});
 
 test("staffingSegments: Support-like team with a gap and away agents", () => {
   const segs = staffingSegments({ min_live_agents: 10, live: 5, on_call: 4, available: 1, away: 2 } as QueueDepth);

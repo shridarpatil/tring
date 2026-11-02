@@ -9,7 +9,6 @@ import DashAlerts from "../components/dashboard/DashAlerts.vue";
 import TeamBoard from "../components/dashboard/TeamBoard.vue";
 import AgentBoard from "../components/dashboard/AgentBoard.vue";
 import {
-  abandonedPct,
   sharedSla,
   breachingCount,
   buildAlerts,
@@ -43,7 +42,6 @@ const waitingNow = computed(() => teams.value.reduce((n, t) => n + t.waiting_sin
 const longestNow = computed(() => Math.max(0, ...teams.value.map((t) => longestWait(t, now.value))));
 const breachingNow = computed(() => teams.value.reduce((n, t) => n + breachingCount(t, now.value), 0));
 const slaLimit = computed(() => sharedSla(teams.value));
-const abandonedShare = computed(() => abandonedPct(stats.value?.abandoned_today ?? 0, stats.value?.calls_today ?? 0));
 
 // ── live calls: waiting callers first, filterable ─────────────────────
 const callFilters: { key: CallFilter; label: string }[] = [
@@ -135,7 +133,7 @@ usePoll(() => (now.value = Date.now()), 1000);
               <div class="trend-num" :style="{ color: (stats?.abandoned_today ?? 0) > 0 ? 'var(--warning)' : undefined }">
                 {{ stats?.abandoned_today ?? 0 }}
               </div>
-              <small class="text-light">Abandoned<template v-if="(stats?.abandoned_today ?? 0) > 0 && abandonedShare"> · {{ abandonedShare }}%</template></small>
+              <small class="text-light">Abandoned</small>
             </div>
           </div>
         </div>
