@@ -16,20 +16,8 @@ func TestCommandsRejectControlCharacters(t *testing.T) {
 	if _, err := c.Command(ctx, "uuid_setvar", "leg transfer_target x\n\napi status"); !errors.Is(err, ErrUnsafeArg) {
 		t.Errorf("Command err = %v, want ErrUnsafeArg", err)
 	}
-	_, err := c.Originate(ctx, OriginateRequest{
-		ALeg:  "loopback/1000",
-		BLegs: []string{"loopback/1\r\n\r\napi status"},
-	})
-	if !errors.Is(err, ErrUnsafeArg) {
-		t.Errorf("Originate BLeg err = %v, want ErrUnsafeArg", err)
-	}
-	_, err = c.Originate(ctx, OriginateRequest{
-		ALeg:  "loopback/1000",
-		BLegs: []string{"loopback/1"},
-		Vars:  map[string]string{"continue_on_fail": "'A\x00B'"},
-	})
-	if !errors.Is(err, ErrUnsafeArg) {
-		t.Errorf("Originate var err = %v, want ErrUnsafeArg", err)
+	if _, err := c.Command(ctx, "uuid_displace", "leg start x\x00y"); !errors.Is(err, ErrUnsafeArg) {
+		t.Errorf("Command NUL err = %v, want ErrUnsafeArg", err)
 	}
 
 	// Clean arguments get past the guard (and fail on the dial instead).

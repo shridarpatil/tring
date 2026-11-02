@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -165,11 +164,6 @@ type Server struct {
 	iceServers []iceServer
 	turnURL    string // for per-request ephemeral TURN entries
 	turnSecret string // empty → static TURN (legacy); set → ephemeral
-
-	// Round-robin trunk selection state. Lazily initialised in
-	// nextRoundRobin (see trunks.go).
-	rrMu sync.Mutex
-	rr   map[uuid.UUID]int
 
 	// Interactive IVR simulator sessions. In-memory, process-local,
 	// TTL'd on idle — they're a developer convenience, not durable
