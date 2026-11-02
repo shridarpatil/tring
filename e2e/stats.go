@@ -99,11 +99,13 @@ func CheckArrives(as []Arrival, min int, window time.Duration) error {
 }
 
 // CheckClock: from index 2 on (FreeSWITCH resets its timestamps on the second
-// packet), consecutive timestamps step by step.
+// packet), consecutive timestamps step by a whole number of frames of step. A
+// sender may skip a frame (a 2×step jump is legal RTP); a stream on the wrong
+// clock steps by a fraction of one (160 or 320 against 960).
 func CheckClock(as []Arrival, step uint32) error {
 	for i := 2; i < len(as); i++ {
-		if d := as[i].TS - as[i-1].TS; d != step {
-			return fmt.Errorf("timestamp stepped by %d at packet %d (seq %d→%d), want %d", d, i, as[i-1].Seq, as[i].Seq, step)
+		if d := as[i].TS - as[i-1].TS; d == 0 || d%step != 0 || d > 10*step {
+			return fmt.Errorf("timestamp stepped by %d at packet %d (seq %d→%d), want a multiple of %d", d, i, as[i-1].Seq, as[i].Seq, step)
 		}
 	}
 	return nil

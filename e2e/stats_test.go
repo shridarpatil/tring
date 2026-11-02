@@ -24,6 +24,13 @@ func TestCheckClock(t *testing.T) {
 	if err := CheckClock(as, 960); err != nil {
 		t.Errorf("960 steps from index 2: %v", err)
 	}
+	gap := paced(10, 960)
+	for i := 5; i < len(gap); i++ {
+		gap[i].TS += 960 // the sender skipped one frame (legal RTP)
+	}
+	if err := CheckClock(gap, 960); err != nil {
+		t.Errorf("one skipped frame (a 1920 step): %v", err)
+	}
 	bad := paced(10, 160)
 	err := CheckClock(bad, 960)
 	if err == nil || !strings.Contains(err.Error(), "160") {
