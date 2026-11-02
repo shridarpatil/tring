@@ -81,19 +81,15 @@ type Queries struct {
 	// ---- api: calls ----
 	GetAgentSipUsername     string `query:"get-agent-sip-username"`
 	CreateCallOutbound      string `query:"create-call-outbound"`
-	CreateCallBridge        string `query:"create-call-bridge"`
 	CreateCallInbound       string `query:"create-call-inbound"`
 	SetCallIVRPath          string `query:"set-call-ivr-path"`
-	SetCallAgent            string `query:"set-call-agent"`
 	SetCallAgentID          string `query:"set-call-agent-id"`
 	InsertCallEvent         string `query:"insert-call-event"`
 	ListCallEvents          string `query:"list-call-events"`
 	GetCallControlLeg       string `query:"get-call-control-leg"`
 	GetAgentActiveCallLeg   string `query:"get-agent-active-call-leg"`
-	SetCallCustomerLeg      string `query:"set-call-customer-leg"`
 	SetCallRecording        string `query:"set-call-recording"`
 	GetCallRecording        string `query:"get-call-recording"`
-	GetCallForRecording     string `query:"get-call-for-recording"`
 	SetCallRecordingS3      string `query:"set-call-recording-s3"`
 	GetAgentBySIP           string `query:"get-agent-by-sip"`
 	GetSuperviseTarget      string `query:"get-supervise-target"`
@@ -106,8 +102,6 @@ type Queries struct {
 	RevokeAPIKey        string `query:"revoke-api-key"`
 	ResolveAPIKeyTenant string `query:"resolve-api-key-tenant"`
 	TouchAPIKey         string `query:"touch-api-key"`
-	GetCallTenant       string `query:"get-call-tenant"`
-	GetCallAgentLabel   string `query:"get-call-agent-label"`
 	GetCall             string `query:"get-call"`
 	ListCalls           string `query:"list-calls"`
 	ListActiveCalls     string `query:"list-active-calls"`
@@ -162,23 +156,19 @@ type Queries struct {
 	ListPlaintextAgentSecrets string `query:"list-plaintext-agent-secrets"`
 	SetAgentSecret            string `query:"set-agent-secret"`
 
-	// ---- FreeSWITCH-originated call status (eslcdr) + callcdr settlement ----
-	FailCallByJob     string `query:"fail-call-by-job"`
-	MarkCallAnswered  string `query:"mark-call-answered"`
-	GetCallSettlement string `query:"get-call-settlement"`
-	SettleCall        string `query:"settle-call"`
-	GetCallPayload    string `query:"get-call-payload"`
+	// ---- call settlement (callcdr) ----
+	MarkCallAnswered string `query:"mark-call-answered"`
+	SettleCall       string `query:"settle-call"`
 
 	// ---- orchestrator: IVR executor (ivr_executor.go) ----
-	ResolveInboundNumber  string `query:"resolve-inbound-number"`
-	TenantOwnsNumber      string `query:"tenant-owns-number"`
-	TenantOwnsTrunk       string `query:"tenant-owns-trunk"`
-	TenantOwnsFlow        string `query:"tenant-owns-flow"`
-	TenantOwnsAudioPath   string `query:"tenant-owns-audio-path"`
-	InboundHeldElsewhere  string `query:"inbound-number-held-elsewhere"`
-	GetActiveFlowByID     string `query:"get-active-flow-by-id"`
-	ListAgentSipUsernames string `query:"list-agent-sip-usernames"`
-	GetTeamMOH            string `query:"get-team-moh"`
+	ResolveInboundNumber string `query:"resolve-inbound-number"`
+	TenantOwnsNumber     string `query:"tenant-owns-number"`
+	TenantOwnsTrunk      string `query:"tenant-owns-trunk"`
+	TenantOwnsFlow       string `query:"tenant-owns-flow"`
+	TenantOwnsAudioPath  string `query:"tenant-owns-audio-path"`
+	InboundHeldElsewhere string `query:"inbound-number-held-elsewhere"`
+	GetActiveFlowByID    string `query:"get-active-flow-by-id"`
+	GetTeamMOH           string `query:"get-team-moh"`
 	// NOTE: agentBridgeTarget reuses GetTenantSipDomain (SELECT sip_domain ...).
 
 	// ---- bootstrap / seed (first-boot + --seed-tenant CLI) ----

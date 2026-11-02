@@ -236,11 +236,6 @@ WHERE leg_id = $1 AND recording_url IS NULL;
 -- local spool by leg_id; non-NULL → stream from S3.
 SELECT leg_id, recording_s3_key FROM calls WHERE id = $1 AND tenant_id = $2;
 
--- name: get-call-for-recording
--- Tenant + start time for an in-flight recording, by call leg id — used by
--- the orchestrator on RECORD_STOP to build the date-wise S3 key.
-SELECT tenant_id, started_at FROM calls WHERE leg_id = $1;
-
 -- name: set-call-recording-s3
 -- Mark a recording as stored in S3 (after a successful upload).
 UPDATE calls SET recording_s3_key = $2 WHERE leg_id = $1;
@@ -367,12 +362,6 @@ INSERT INTO calls (tenant_id, direction, status, from_number, to_number, agent_i
 VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, $5, NULLIF($6,''), 'phone'::call_source, NULLIF($7, ''))
 RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, leg_id, started_at, source::text;
 
--- name: create-call-bridge
--- Two-PSTN-number bridge (click-to-call): no agent_id, both legs over the trunk.
-INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, job_uuid, source)
-VALUES ($1, 'outbound'::call_direction, 'ringing'::call_status, $2, $3, $4, NULLIF($5,''), 'phone'::call_source)
-RETURNING id, tenant_id, direction::text, status::text, from_number, to_number, agent_id, leg_id, started_at, source::text;
-
 -- name: create-call-inbound
 -- Inbound/IVR call (incl. guest web calls). $6 is the channel source
 -- ('web' | 'phone'); $7 is the pion room id (media plane) so a supervisor can be
@@ -404,12 +393,6 @@ UPDATE supervisor_sessions SET ended_at = now(), modes_used = $2 WHERE id = $1;
 -- matched by the call leg id. Best-effort; the column defaults to
 -- '[]' so a missed write just shows an empty path.
 UPDATE calls SET ivr_path = $1::jsonb WHERE leg_id = $2;
-
--- name: set-call-agent
--- Stamp the agent who answered an inbound/IVR call (on transfer connect), so
--- the call log shows who handled it, plus the agent's FreeSWITCH leg ($3) for
--- call control (hold/transfer). Matched by the caller leg id.
-UPDATE calls SET agent_id = $1, agent_leg_id = $3 WHERE leg_id = $2;
 
 -- name: set-call-agent-id
 -- Stamp just the answering agent on a media-plane call (callcdr) — no FS leg, the
@@ -449,29 +432,11 @@ FROM calls c JOIN tenants t ON t.id = c.tenant_id
 WHERE c.tenant_id = $1 AND c.agent_id = $2 AND c.status = 'answered'
 ORDER BY c.answered_at DESC NULLS LAST LIMIT 1;
 
--- name: set-call-customer-leg
--- Record the customer/visitor leg (the outbound bridged B-leg) so hold plays MOH
--- to the right party. Matched by the tracked leg id.
-UPDATE calls SET customer_leg_id = $1 WHERE leg_id = $2;
-
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute
 -- the answered transfer leg. Label falls back to the SIP username.
 SELECT id, COALESCE(NULLIF(display_name, ''), sip_username)
 FROM agents WHERE tenant_id = $1 AND sip_username = $2;
-
--- name: get-call-tenant
--- Owning tenant of a call by leg id. Used by the bridge-event
--- handler to scope the agent lookup; ErrNoRows means "not a Tring call".
-SELECT tenant_id FROM calls WHERE leg_id = $1;
-
--- name: get-call-agent-label
--- Display label of the agent attributed to a call (NULL/no row if none yet).
--- The transfer step reads this back after the bridge as the source of truth
--- for "who answered", since the CHANNEL_BRIDGE event stamps agent_id reliably.
-SELECT COALESCE(NULLIF(a.display_name, ''), a.sip_username)
-FROM calls c JOIN agents a ON a.id = c.agent_id
-WHERE c.leg_id = $1;
 
 -- name: get-call
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
@@ -794,17 +759,8 @@ WHERE n.tenant_id = $1
 ORDER BY n.priority ASC, n.created_at ASC;
 
 -- ===========================================================================
--- FreeSWITCH-originated call status (internal/eslcdr) + callcdr settlement
+-- Call settlement (internal/callcdr)
 -- ===========================================================================
-
--- name: fail-call-by-job
--- Originate failed before any channel existed: the only signal is the bgapi
--- Job-UUID + a -ERR cause. Mark the still-ringing row failed.
-UPDATE calls
-SET status='failed'::call_status, ended_at=now(),
-    duration_seconds=0, hangup_cause=$1
-WHERE job_uuid=$2 AND status='ringing'::call_status
-RETURNING id;
 
 -- name: mark-call-answered
 UPDATE calls
@@ -812,22 +768,11 @@ SET status = 'answered'::call_status, answered_at = now()
 WHERE leg_id = $1 AND status = 'ringing'::call_status
 RETURNING id;
 
--- name: get-call-settlement
-SELECT id, started_at, answered_at, status::text FROM calls WHERE leg_id = $1;
-
 -- name: settle-call
 UPDATE calls
 SET status = $1::call_status, ended_at = now(),
     duration_seconds = $2, hangup_cause = $3
 WHERE leg_id = $4 AND status NOT IN ('ended','failed');
-
--- name: get-call-payload
-SELECT id, tenant_id, direction::text, status::text,
-       from_number, to_number, agent_id,
-       leg_id, COALESCE(job_uuid,''),
-       started_at, answered_at, ended_at,
-       duration_seconds, hangup_cause, recording_url, source::text
-FROM calls WHERE leg_id = $1;
 
 -- ===========================================================================
 -- orchestrator: IVR executor (ivr_executor.go)
@@ -884,11 +829,6 @@ LIMIT 1;
 -- can put any flow_id in a join) must not resolve.
 SELECT tenant_id, name, COALESCE(definition::text, '')
 FROM flows WHERE id = $1 AND tenant_id = $2 AND is_active;
-
--- name: list-agent-sip-usernames
--- Ring targets only: skip agents the backend marked unavailable (Away/Break).
--- Connection presence (online/on_call) is checked separately by the caller.
-SELECT sip_username FROM agents WHERE tenant_id = $1 AND available_for_calls;
 
 -- ===========================================================================
 -- bootstrap / seed (first-boot + --seed-tenant CLI)

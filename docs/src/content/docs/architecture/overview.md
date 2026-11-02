@@ -254,8 +254,7 @@ later hardening). Tables:
 (`type` ∈ inbound/outbound/masking; `flow_id`, `provider`, `priority`, `trunk_id`)
 · `trunks` · `flows` (JSONB graph) · `calls` (CDR; `leg_id` = opaque leg id,
 `source` ∈ web/phone/whatsapp, stereo `recording_url`/`recording_s3_key`,
-`ivr_path`) · `masking_sessions` ·
-`guest_sessions` · `webhooks` · `webhook_deliveries` · `users` (console operators)
+`ivr_path`) · `webhooks` · `webhook_deliveries` · `users` (console operators)
 · `audio_assets` (tenant sound library).
 
 All runtime SQL lives in the root `queries.sql` catalog (listmonk-style), loaded
@@ -361,8 +360,6 @@ Scale by adding **gateway** instances (horizontal); FS scales vertically.
 | CDR + recording (web; phone when plug lands) | `internal/callcdr/` + `media/record` |
 | IVR walker (shared) | `internal/ivr/` ; consumers: `media/ivrdrive` (runtime), `brain/simulator.go` (Test panel) |
 | Agent bridge dial-string | `internal/agentleg/` |
-| Masking pool | `internal/masking/pool.go` |
-| Trunk providers | `internal/provider/` |
 | DB schema | `internal/migrate/migrations/*.sql` |
 | SQL catalog | `queries.sql` + `internal/queries` |
 | Config | `internal/config` (koanf) |
