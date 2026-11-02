@@ -233,11 +233,6 @@ export function sharedSla(ts: QueueDepth[]): number | null {
   return set.size === 1 ? [...set][0] : null;
 }
 
-// Abandoned share of today's calls, one decimal ("5.6"); null when there were no calls.
-export function abandonedPct(abandoned: number, calls: number): string | null {
-  return calls > 0 ? ((abandoned / calls) * 100).toFixed(1) : null;
-}
-
 // Live agents as a share of the minimum; null when the team has no minimum.
 export function staffedPct(t: QueueDepth): number | null {
   return t.min_live_agents > 0 ? Math.round((t.live / t.min_live_agents) * 100) : null;
