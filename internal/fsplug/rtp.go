@@ -11,7 +11,8 @@ import (
 )
 
 // mediaSession owns the plain-RTP UDP socket for one call leg. Inbound Opus
-// packets are queued for ReadRTP; telephone-event packets are decoded to DTMF.
+// packets are re-stamped onto the 48 kHz Opus clock and queued for ReadRTP;
+// telephone-event packets are decoded to DTMF.
 // Outbound room audio is re-stamped onto one clean stream via write. It
 // implements room.ParticipantSource.
 type mediaSession struct {
@@ -19,6 +20,11 @@ type mediaSession struct {
 	conn   *net.UDPConn
 	opusPT uint8
 	dtmfPT uint8
+	// tsScale turns FreeSWITCH's inbound Opus timestamps into 48 kHz ones. Run
+	// below 48 kHz (maxplaybackrate), FreeSWITCH stamps on that rate's clock
+	// (160 per 20 ms at 8 kHz), but Opus RTP is always 48 kHz (RFC 7587) and
+	// browsers play these packets as is.
+	tsScale uint32
 
 	in    chan *rtp.Packet // inbound Opus, drained by ReadRTP
 	dtmfC chan string
@@ -34,7 +40,8 @@ type mediaSession struct {
 	outTS   uint32
 }
 
-func newMediaSession(id room.ParticipantID, listenIP string, portMin, portMax int, opusPT, dtmfPT uint8) (*mediaSession, error) {
+// rate is the leg's Opus rate as offered or answered (0 = full band).
+func newMediaSession(id room.ParticipantID, listenIP string, portMin, portMax int, opusPT, dtmfPT uint8, rate int) (*mediaSession, error) {
 	var conn *net.UDPConn
 	var err error
 	for p := portMin; p <= portMax; p++ {
@@ -47,9 +54,12 @@ func newMediaSession(id room.ParticipantID, listenIP string, portMin, portMax in
 		return nil, fmt.Errorf("fsplug: no free RTP port in %d-%d: %w", portMin, portMax, err)
 	}
 	m := &mediaSession{
-		id: id, conn: conn, opusPT: opusPT, dtmfPT: dtmfPT,
+		id: id, conn: conn, opusPT: opusPT, dtmfPT: dtmfPT, tsScale: 1,
 		in: make(chan *rtp.Packet, 256), dtmfC: make(chan string, 8), doneC: make(chan struct{}),
 		outSSRC: 0x5052494e, // "PRIN" — stable per-session SSRC
+	}
+	if rate > 0 {
+		m.tsScale = uint32(48000 / rate)
 	}
 	go m.readLoop()
 	return m, nil
@@ -87,6 +97,7 @@ func (m *mediaSession) readLoop() {
 				}
 			}
 		case m.opusPT:
+			pkt.Timestamp *= m.tsScale // wraps consistently: gaps scale, mod 2^32
 			select {
 			case m.in <- pkt:
 			default: // queue full → drop this packet (newest); fine for RTP

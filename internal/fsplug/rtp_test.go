@@ -21,7 +21,7 @@ func dialUDP(t *testing.T, port int) *net.UDPConn {
 }
 
 func TestMediaSessionReadsOpusAndDecodesDTMF(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestMediaSessionReadsOpusAndDecodesDTMF(t *testing.T) {
 }
 
 func TestMediaSessionWriteReStampsToRemote(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestMediaSessionWriteReStampsToRemote(t *testing.T) {
 // so both are queued, then asserts each ReadRTP() call still has its own
 // distinct payload bytes.
 func TestMediaSessionNoPayloadAliasingUnderQueueDepth(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestMediaSessionNoPayloadAliasingUnderQueueDepth(t *testing.T) {
 // (only doneC), otherwise a send racing the close can panic and take down
 // the whole gateway process.
 func TestMediaSessionCloseDuringTrafficNoPanic(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,4 +216,39 @@ func TestMediaSessionCloseDuringTrafficNoPanic(t *testing.T) {
 	close(stop)
 	<-sendDone
 	wg.Wait()
+}
+
+// FreeSWITCH running the leg's Opus below 48 kHz (maxplaybackrate) stamps its
+// RTP on that rate's clock — 160 per 20 ms frame at 8 kHz. Opus RTP must run on
+// 48 kHz (RFC 7587), and browsers play these packets as they arrive, so the
+// session re-stamps them onto the 48 kHz clock.
+func TestMediaSessionRestampsOpusOntoTheOpusClock(t *testing.T) {
+	// fsStep is FreeSWITCH's timestamp step per 20 ms frame at that rate; 0 is a
+	// full-band leg, already on the 48 kHz clock. Stamps start near the wrap.
+	for _, tc := range []struct{ rate, fsStep int }{{8000, 160}, {16000, 320}, {0, 960}} {
+		m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, tc.rate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fs := dialUDP(t, m.localPort())
+		var stamps []uint32
+		for i := 0; i < 3; i++ {
+			ts := uint32(0xFFFFFF00) + uint32(i*tc.fsStep)
+			pkt := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: uint16(i), Timestamp: ts, SSRC: 1}, Payload: []byte{0xfc}}
+			raw, _ := pkt.Marshal()
+			fs.Write(raw)
+			got, err := m.ReadRTP()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stamps = append(stamps, got.Timestamp)
+		}
+		for i := 1; i < len(stamps); i++ {
+			if d := stamps[i] - stamps[i-1]; d != 960 {
+				t.Errorf("rate %d: timestamp stepped by %d, want 960 (stamps %v)", tc.rate, d, stamps)
+			}
+		}
+		fs.Close()
+		m.Close()
+	}
 }
