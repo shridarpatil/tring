@@ -4,6 +4,7 @@
 import { computed, ref, watch } from "vue";
 import { vPulse } from "../../lib/pulse";
 import { RouterLink } from "vue-router";
+import { Settings } from "lucide-vue-next";
 import type { QueueDepth } from "../../api/types";
 import {
   belowMinCount,
@@ -107,7 +108,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
         <div class="hstack gap-2">
           <strong class="name">{{ t.team }}</strong>
           <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
-          <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings">⚙</RouterLink>
+          <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings"><Settings :size="14" /></RouterLink>
         </div>
         <div class="sub text-lighter">{{ hours(t) }}<template v-if="!compact(t)"> · SLA&nbsp;{{ slaLabel(t) }}</template></div>
 
@@ -206,7 +207,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             </template>
             <td v-else colspan="8"></td>
             <td>
-              <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings">⚙</RouterLink>
+              <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings"><Settings :size="14" /></RouterLink>
             </td>
           </tr>
         </tbody>
