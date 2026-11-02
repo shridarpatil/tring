@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -67,15 +68,20 @@ func pad(s string, n int) string {
 }
 
 // live runs a scenario up to 3 times while the agent's media never connects
-// (in-process ICE stall); any other failure fails at once.
+// (in-process ICE stall); any other failure fails at once. Each attempt is its
+// own subtest, so what it set up (agents, carrier legs, calls) is torn down
+// before the next attempt starts.
 func live(t *testing.T, scenario func(t *testing.T) error) {
 	t.Helper()
 	for i := 1; i <= 3; i++ {
-		err := scenario(t)
-		if err == nil {
+		var err error
+		t.Run(fmt.Sprintf("attempt-%d", i), func(t *testing.T) { err = scenario(t) })
+		switch {
+		case t.Failed():
 			return
-		}
-		if !errors.Is(err, errNotLive) {
+		case err == nil:
+			return
+		case !errors.Is(err, errNotLive):
 			t.Fatal(err)
 		}
 		t.Logf("attempt %d: %v; retrying", i, err)
@@ -104,10 +110,10 @@ func checkHearsCustomer(t *testing.T, who string, got []Arrival, rate int, step 
 }
 
 func TestInboundAgentHearsCustomer(t *testing.T) {
-	f := seed(t)
 	live(t, func(t *testing.T) error {
+		f := seed(t) // this attempt's client
 		a1 := NewAgent(t, f.api, f.a1, f.a1Sip, FreqAgent1)
-		customer := NewCarrier(t, carrierIP(t)).Dial(env("TRING_E2E_FS_EXTERNAL", ""), f.did, FreqCustomer)
+		customer := TheCarrier(t).Dial(env("TRING_E2E_FS_EXTERNAL", ""), f.did, FreqCustomer)
 		defer customer.Hangup()
 		room, _, _ := a1.WaitIncoming(15 * time.Second)
 		if err := a1.Join(room); err != nil {
@@ -123,10 +129,10 @@ func TestInboundAgentHearsCustomer(t *testing.T) {
 }
 
 func TestClickToCallAgentHearsCustomer(t *testing.T) {
-	f := seed(t)
 	live(t, func(t *testing.T) error {
+		f := seed(t) // this attempt's client
 		a1 := NewAgent(t, f.api, f.a1, f.a1Sip, FreqAgent1)
-		carrier := NewCarrier(t, carrierIP(t))
+		carrier := TheCarrier(t)
 		customer := carrier.OnNumber(ruriCustomer, FreqCustomer)
 		defer customer.Hangup()
 		f.api.Call(f.a1Sip, customerNumber)
@@ -145,7 +151,7 @@ func TestClickToCallAgentHearsCustomer(t *testing.T) {
 
 func TestConnectAgentHearsCustomer(t *testing.T) {
 	f := seed(t)
-	carrier := NewCarrier(t, carrierIP(t))
+	carrier := TheCarrier(t)
 	agentPhone := carrier.OnNumber(ruriConnectAgent, FreqAgent1)
 	customer := carrier.OnNumber(ruriCustomer, FreqCustomer)
 	defer agentPhone.Hangup()
