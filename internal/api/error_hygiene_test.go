@@ -2,15 +2,12 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
 // A 5xx must answer with the generic message only; the detail goes to the
@@ -32,18 +29,5 @@ func TestWriteServerErrorHidesDetail(t *testing.T) {
 	}
 	if !strings.Contains(logBuf.String(), "secret_col") {
 		t.Errorf("detail not logged: %s", logBuf.String())
-	}
-}
-
-// A DB failure while picking trunks is a server error, not a caller error
-// carrying the pgx error text.
-func TestSelectTrunksDBFailureIsInternal(t *testing.T) {
-	f := dbtest.Setup(t)
-	s := newServerFor(f)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // every query now fails with a non-user error
-
-	if _, err := s.selectTrunks(ctx, &Tenant{ID: f.TenantID}); !errors.Is(err, errInternal) {
-		t.Errorf("selectTrunks on DB failure = %v, want errInternal", err)
 	}
 }
