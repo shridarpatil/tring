@@ -177,3 +177,32 @@ func TestClusterSnapshot(t *testing.T) {
 		t.Fatalf("Counts[OnCall][t1|100] = %d, want 1", got)
 	}
 }
+
+// A failed immediate write can leave Redis saying 0 while this node knows the
+// agent is on a call (or Away); the local truth must win until the heartbeat.
+func TestAgentViewLocalOnCallWinsOverStaleCluster(t *testing.T) {
+	ca, cb := newViewClusters(t)
+	sa := newViewServer(t, ca)
+	sb := newViewServer(t, cb)
+	c := &conn{}
+	sa.agents["t1"] = map[string]*conn{"100": c, "200": {}}
+	joinPair(t, sa, ca, cb, sb.ClusterSnapshot())
+
+	ctx := context.Background()
+	sa.setAgentOnCall("t1", "100", true)
+	ca.SetCount(ctx, cluster.OnCall, "t1", "100", 0) // stale: lost the write
+	sa.mu.Lock()
+	sa.away["t1|200"] = true // Away locally; Redis never heard
+	sa.mu.Unlock()
+
+	v := sa.agentView(ctx, "t1")
+	if v.free("100") {
+		t.Fatal("free(100) = true, want false (on a call here)")
+	}
+	if !sa.agentOnCall("t1", "100") {
+		t.Fatal("agentOnCall(100) = false, want true")
+	}
+	if v.free("200") {
+		t.Fatal("free(200) = true, want false (Away here)")
+	}
+}

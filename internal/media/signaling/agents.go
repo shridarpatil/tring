@@ -72,18 +72,21 @@ func (s *Server) publishPresence(tenant, sip, status string) {
 // presence refresh so a 10s TTL re-assert doesn't clobber on_call → online).
 // With peers it is the cluster-wide count: the agent's call may be on another
 // node, and a local-only answer would flip the shared store back to online.
+// A local call always counts: Redis may lag a failed immediate write.
 func (s *Server) agentOnCall(tenant, sip string) bool {
+	s.mu.Lock()
+	local := s.onCall[tenant+"|"+sip] > 0
+	s.mu.Unlock()
+	if local {
+		return true
+	}
 	if c := s.cfg.Cluster; !c.Alone() {
 		ctx, cancel := context.WithTimeout(context.Background(), clusterReadTimeout)
 		n, err := c.Count(ctx, cluster.OnCall, tenant, sip)
 		cancel()
-		if err == nil {
-			return n > 0
-		}
+		return err == nil && n > 0
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.onCall[tenant+"|"+sip] > 0
+	return false
 }
 
 func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {

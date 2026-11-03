@@ -29,11 +29,37 @@ func (s *Server) agentView(ctx context.Context, tenant string) agentView {
 		states, err := c.Agents(ctx, tenant)
 		cancel()
 		if err == nil {
+			s.mergeLocal(tenant, c.ID(), states)
 			return agentView{self: c.ID(), states: states}
 		}
 		s.log.Warn("cluster agents read failed, using local agents", "tenant", tenant, "err", err)
 	}
 	return s.localAgentView(tenant)
+}
+
+// mergeLocal folds this node's own maps into a cluster read. Redis can lag
+// what this node knows (an immediate write failed and the heartbeat hasn't
+// rewritten it yet), and a busy or Away agent must never read as free. So a
+// local call or Away wins, and an agent with a socket here is online even if
+// Redis missed it. The cluster count already includes this node's share, hence
+// max rather than sum (as in beginDial).
+func (s *Server) mergeLocal(tenant, self string, states map[string]cluster.AgentState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for sip := range s.agents[tenant] {
+		if _, ok := states[sip]; !ok {
+			states[sip] = cluster.AgentState{Node: self}
+		}
+	}
+	for sip, st := range states {
+		k := tenant + "|" + sip
+		st.OnCall = max(st.OnCall, s.onCall[k])
+		st.Dials = max(st.Dials, s.agentDials[k])
+		if s.agents[tenant][sip] != nil && s.away[k] {
+			st.Away = true
+		}
+		states[sip] = st
+	}
 }
 
 // localAgentView is the view from this node's maps alone (today's semantics).
