@@ -444,6 +444,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	peer.OnConnected = func() { p.MarkConnected() }
 	peer.OnClosed = func() { p.Drop() } // grace window; the left event tears down the SFU peer
 
+	// Mark the agent busy (presence store + the "free" check rings and transfers
+	// use) BEFORE telling them they've joined: the SDK reacts to joined, and a
+	// transfer or ring started in that gap would otherwise pick this agent as
+	// free. No early return lies between here and the read loop, and the defer
+	// ties the clear to this socket's lifetime (handleWS returns after readLoop).
+	agentCallLeg := flowID == "" && !princ.isVisitor
+	if agentCallLeg {
+		s.setAgentOnCall(tenant, princ.sip, true)
+		defer s.setAgentOnCall(tenant, princ.sip, false)
+	}
+
 	// Tell the joiner who it is + how to reach ICE, then who's already here.
 	_ = c.send(msg{
 		Type:        msgJoined,
@@ -506,19 +517,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
 	// caller's own join.
 	// A click-to-call is answered by the customer instead (clicktocall.go).
-	agentCallLeg := flowID == "" && !princ.isVisitor
 	if agentCallLeg && s.cfg.Calls != nil && !s.outboundPending(roomID) {
 		if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
 		}
 	}
-	// Reflect agent busy/available in presence so the dashboard shows "on call".
-	// Cleared when this call leg's socket closes (handleWS returns after readLoop).
-	if agentCallLeg {
-		s.setAgentOnCall(tenant, princ.sip, true)
-		defer s.setAgentOnCall(tenant, princ.sip, false)
-	}
-
 	// If a transfer is ringing for this room, this join is the agent answering:
 	// signalRing resolves the pending ring.
 	s.signalRing(roomID)
