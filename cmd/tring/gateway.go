@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/shridarpatil/tring/internal/callcdr"
+	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
@@ -39,9 +40,15 @@ type gatewayRole struct {
 	sig         *signaling.Server
 	srv, ctlSrv *http.Server
 	hub         *events.Hub
+
+	cl        *cluster.Cluster // nil without Redis: single node
+	stopCl    context.CancelFunc
+	clStopped chan struct{} // closed when cl.Run returns
 }
 
-func startGateway(d *deps) (*gatewayRole, error) {
+// startGateway starts the call plane. mode ("all" or "gateway") is what this
+// node advertises in the cluster registry.
+func startGateway(d *deps, mode string) (*gatewayRole, error) {
 	k, logger, redisCache := d.k, d.log, d.cache
 	g := &gatewayRole{d: d}
 
@@ -128,6 +135,21 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		supervisors = cdrLog
 	}
 
+	// Join the cluster: agent presence, on-call and dial counts, and rings are
+	// shared with the other nodes through Redis. Only with Redis; without it
+	// (all mode only, see gatewayNeedsRedis) this node runs alone.
+	if redisCache != nil {
+		g.cl, err = cluster.New(cluster.Config{
+			Addr:     k.String("redis_addr"),
+			Password: k.String("redis_password"),
+			Mode:     mode,
+			Version:  version,
+		}, logger)
+		if err != nil {
+			return nil, fmt.Errorf("cluster init failed: %w", err)
+		}
+	}
+
 	sig := signaling.New(signaling.Config{
 		SFU:             mediaSFU,
 		JWTSecret:       []byte(k.String("jwt_secret")),
@@ -151,9 +173,19 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		HTTP:            ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes
 		Webhooks:        webhooks,     // IVR node webhooks (nil without a DB)
 		Availability:    availability, // agent's Away flag sent on connect (nil without a DB)
+		Cluster:         g.cl,         // nil → single node: local agent maps only
 		Logger:          logger,
 	})
 	g.sig = sig
+
+	// Heartbeat + ring bus until shutdown. Started before the listeners so this
+	// node is visible to its peers by the time it takes calls.
+	clCtx, stopCl := context.WithCancel(context.Background())
+	g.stopCl, g.clStopped = stopCl, make(chan struct{})
+	go func() {
+		defer close(g.clStopped)
+		g.cl.Run(clCtx, sig.ClusterSnapshot, sig.HandleClusterMsg)
+	}()
 
 	// Backend Away/Break toggles (the api's agent.status event) reach the SDK
 	// live: forward each to the agent's presence socket if they're connected
@@ -184,7 +216,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		} else {
 			fsAllow, aerr := safehttp.ParseCIDRs(strings.Split(k.String("fsplug_allow_cidrs"), ","))
 			if aerr != nil {
-				g.hub.Close()
+				g.closeBackground()
 				return nil, fmt.Errorf("invalid fsplug_allow_cidrs: %w", aerr)
 			}
 			plug, perr := fsplug.New(fsplug.Config{
@@ -198,7 +230,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 				AllowFrom:    fsAllow,
 			}, logger)
 			if perr != nil {
-				g.hub.Close()
+				g.closeBackground()
 				return nil, fmt.Errorf("fsplug init failed: %w", perr)
 			}
 			sig.AttachPstn(plug, didResolver)
@@ -277,5 +309,18 @@ func (g *gatewayRole) shutdown(ctx context.Context) {
 	defer cancel()
 	_ = g.srv.Shutdown(ctx)
 	_ = g.ctlSrv.Shutdown(ctx)
+	g.closeBackground()
+}
+
+// closeBackground stops the events hub and leaves the cluster, on shutdown or
+// when startGateway fails after starting them. Heartbeats stop before Close
+// deletes this node's keys, so a late beat can't write them back; peers then
+// drop this node at once instead of after the TTL.
+func (g *gatewayRole) closeBackground() {
 	g.hub.Close()
+	g.stopCl()
+	<-g.clStopped
+	if err := g.cl.Close(); err != nil {
+		g.d.log.Warn("cluster close failed", "err", err)
+	}
 }
