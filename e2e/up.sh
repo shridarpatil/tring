@@ -1,6 +1,6 @@
 #!/bin/sh
-# Bring up the real Tring stack for the e2e tests: api, gateway and FreeSWITCH
-# built from this checkout, plus Postgres and Redis. Writes .env on first run
+# Bring up the real Tring stack for the e2e tests: tring (api + gateway roles)
+# and FreeSWITCH built from this checkout, plus Postgres and Redis. Writes .env on first run
 # (kept on re-runs, so the bootstrap admin's password stays valid) and the
 # test's settings to .e2e.env (sourced locally; appended to $GITHUB_ENV in CI).
 #
@@ -55,9 +55,9 @@ EOF
 fi
 
 if [ -z "${E2E_SKIP_BUILD:-}" ]; then
-	$compose build api gateway freeswitch
+	$compose build tring freeswitch
 fi
-$compose up -d postgres redis freeswitch api gateway
+$compose up -d postgres redis freeswitch tring
 
 # wait <what> <seconds> <command...>: poll until the command succeeds.
 wait_for() {
@@ -67,7 +67,7 @@ wait_for() {
 	until "$@" >/dev/null 2>&1; do
 		if [ "$(date +%s)" -ge "$end" ]; then
 			echo "e2e/up.sh: timed out after ${secs}s waiting for $what" >&2
-			$compose logs --tail=50 api gateway freeswitch >&2 || true
+			$compose logs --tail=50 tring freeswitch >&2 || true
 			exit 1
 		fi
 		sleep 1
