@@ -172,9 +172,11 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 // ringCallAgent rings sip's widget with an auto-answer incoming for the room and
 // waits for them to join it, returning their participant id.
 func (s *Server) ringCallAgent(roomID room.RoomID, name, tenant, sip, label string) (room.ParticipantID, bool) {
+	// The agent's widget may be connected to another node; the view (which may
+	// read Redis) is built before taking s.mu.
+	node := s.agentView(context.Background(), tenant).node(sip)
 	ring := make(chan struct{})
 	s.mu.Lock()
-	c := s.agents[tenant][sip]
 	s.rings[roomID] = ring // closed by signalRing when the agent joins
 	s.mu.Unlock()
 	defer func() {
@@ -184,13 +186,13 @@ func (s *Server) ringCallAgent(roomID room.RoomID, name, tenant, sip, label stri
 		}
 		s.mu.Unlock()
 	}()
-	if c == nil || c.send(msg{Type: msgIncoming, Room: name, From: label, Auto: true}) != nil {
+	if !s.pushRing(tenant, sip, node, name, label, true) {
 		return "", false
 	}
 	select {
 	case <-ring:
 	case <-time.After(callAgentTimeout):
-		_ = c.send(msg{Type: msgCancelRing, Room: name})
+		s.pushCancel(tenant, sip, node, name)
 		return "", false
 	}
 	r, ok := s.rooms.Get(roomID)

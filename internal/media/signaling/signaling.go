@@ -228,6 +228,7 @@ type Server struct {
 	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
 	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
+	remoteRings  map[string]string                                    // "tenant/room|sip" → node that rang this agent over the bus; a decline goes back there (cluster.go)
 
 	draining  atomic.Bool  // shutting down: no new calls (drain.go)
 	portCalls atomic.Int64 // phone/connect calls in progress (drain.go)
@@ -272,6 +273,7 @@ func New(cfg Config) *Server {
 		invites:      make(map[room.RoomID]map[string]bool),
 		dialing:      make(map[room.RoomID]bool),
 		agentDials:   make(map[string]int),
+		remoteRings:  make(map[string]string),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on

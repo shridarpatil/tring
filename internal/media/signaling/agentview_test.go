@@ -30,12 +30,20 @@ func newViewServer(t *testing.T, c *cluster.Cluster) *Server {
 // test ends), skipping unless TRING_TEST_REDIS is set.
 func newViewClusters(t *testing.T) (ca, cb *cluster.Cluster) {
 	t.Helper()
+	ca, cb, _ = newTestClusters(t)
+	return ca, cb
+}
+
+// newTestClusters is newViewClusters plus the key prefix, for tests that watch
+// the bus channels themselves.
+func newTestClusters(t *testing.T) (ca, cb *cluster.Cluster, prefix string) {
+	t.Helper()
 	addr := os.Getenv("TRING_TEST_REDIS")
 	if addr == "" {
 		t.Skip("TRING_TEST_REDIS not set")
 	}
 	pass := os.Getenv("TRING_TEST_REDIS_PASSWORD")
-	prefix := "tringtest:" + uuid.NewString() + ":"
+	prefix = "tringtest:" + uuid.NewString() + ":"
 	t.Cleanup(func() {
 		rdb := redis.NewClient(cache.Options(addr, pass))
 		defer rdb.Close()
@@ -61,7 +69,7 @@ func newViewClusters(t *testing.T) (ca, cb *cluster.Cluster) {
 		t.Cleanup(func() { _ = c.Close() })
 		return c
 	}
-	return mk("node-a"), mk("node-b")
+	return mk("node-a"), mk("node-b"), prefix
 }
 
 func beatSnap(t *testing.T, c *cluster.Cluster, s cluster.Snapshot) {
