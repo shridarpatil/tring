@@ -19,14 +19,14 @@ services:
       - SYS_NICE
     ulimits:
       rtprio: 95
-    # Start after the API container so FreeSWITCH's first mod_xml_curl lookups
-    # (directory/gateways/ACL against :8085 on boot) are less likely to race a
-    # not-yet-listening API. service_started (not _healthy) because the API is a
-    # distroless image with no shell/curl for a healthcheck — this is ordering
+    # Start after the tring container so FreeSWITCH's first mod_xml_curl lookups
+    # (directory/gateways/ACL against the api role on boot) are less likely to
+    # race a not-yet-listening api. service_started (not _healthy) because tring
+    # is a distroless image with no shell/curl for a healthcheck — this is ordering
     # only, so a brief first-query race can still occur, but FS retries on real
     # lookups so it self-heals.
     depends_on:
-      api:
+      tring:
         condition: service_started
     env_file:
       # Per-deployment trunk credentials. Gitignored; see
@@ -67,7 +67,7 @@ services:
       POSTGRES_PASSWORD: tring_dev
       POSTGRES_DB: tring
       TZ: ${TZ:-Asia/Kolkata}
-    # Loopback only: api/gateway use host networking and reach it on
+    # Loopback only: tring uses host networking and reach it on
     # 127.0.0.1. A bare "5434:5432" publishes on 0.0.0.0 and Docker's iptables
     # rules bypass ufw/firewalld, exposing the DB to the network.
     ports:
@@ -81,7 +81,7 @@ services:
       #
       #   docker exec -i tring-db psql -U tring -d tring < db/seed.sql
       #
-      # For prod: docker compose run --rm api --seed-tenant "Your Org"
+      # For prod: docker compose run --rm tring --seed-tenant "Your Org"
       # to generate a fresh API key.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tring -d tring"]
@@ -97,7 +97,7 @@ services:
     # Postgres on a miss, so losing it on restart only costs a few DB reads.
     #
     # Auth: when TRING_REDIS_PASSWORD is set (in .env — `make up`/install.sh
-    # generate one), Redis requires it (requirepass) and the api + gateway send
+    # generate one), Redis requires it (requirepass) and tring sends
     # it. Empty = no auth (pre-existing deployments keep working). The password
     # is fed to redis-server as a config file on stdin rather than as an argv
     # flag so it doesn't show up in `ps` on the host. `$$` defers expansion to
@@ -129,33 +129,35 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # ---- Tring Go services ------------------------------------------------
-  # Both are built from the same Dockerfile via build args (CMD=api or
-  # CMD=gateway). Distroless final image, statically linked binary,
-  # ~15 MB. Use host networking so they can speak to FreeSWITCH on the
-  # standard 127.0.0.1:8021 ESL port and the host-mapped Postgres on :5434
-  # without bridge-DNS gymnastics.
+  # ---- Tring ------------------------------------------------------------
+  # One binary, one container: the api role (REST, console, /fs callbacks,
+  # migrations) and the gateway role (pion SFU + brain on /rtc, fsplug). Host
+  # networking so it can speak to FreeSWITCH on the standard 127.0.0.1:8021 ESL
+  # port and the host-mapped Postgres on :5434 without bridge-DNS gymnastics,
+  # and so the UDP media range exchanges media with browsers without NAT
+  # hairpinning.
   #
-  # For dev hot-reload, stop the relevant container and `go run` it on the
-  # host instead:  `docker compose stop api && go run ./cmd/api`.
-
-  api:
+  # For dev hot-reload, stop the container and `go run` it on the host
+  # instead:  `docker compose stop tring && make run`.
+  tring:
     # Pulls the published image by default. CI/CD pushes :develop on every
     # main push and a versioned tag (:v0.1.0) on each release. Pin via
     # `TRING_TAG=v0.1.0` in .env. Local source-tree dev: bypass with
-    # `docker compose up -d --build api`.
-    image: shridh0r/tring-api:${TRING_TAG:-develop}
+    # `docker compose up -d --build tring`.
+    image: shridh0r/tring:${TRING_TAG:-develop}
     build:
       context: .
-      args:
-        CMD: api
-    container_name: tring-api
+    container_name: tring
     network_mode: host
-    # Run as the typical host UID so the bind-mounted gateway dir
-    # below is writable from inside the distroless container (the
-    # default `nonroot` UID 65532 would clash with a host dir owned
-    # by 1000). Override TRING_API_UID/GID for other host users.
+    # Run as the typical host UID so the bind-mounted dirs below (trunk XMLs,
+    # sounds, recordings spool) are writable from inside the distroless
+    # container (the default `nonroot` UID 65532 would clash with host dirs
+    # owned by 1000). Override TRING_API_UID/GID for other host users.
     user: "${TRING_API_UID:-1000}:${TRING_API_GID:-1000}"
+    # docker stop waits this long before SIGKILL. On SIGTERM the gateway role
+    # stops taking new calls and lets live ones finish for up to
+    # TRING_GATEWAY_DRAIN_SECONDS (default 300); keep this above it.
+    stop_grace_period: 330s
     depends_on:
       postgres:
         condition: service_healthy
@@ -172,54 +174,13 @@ services:
       # Same host path mounted at the same container path so the Go code
       # can write to /etc/freeswitch/... by default.
       - ./freeswitch/conf/sip_profiles/external/dynamic:/etc/freeswitch/sip_profiles/external/dynamic:rw
-      # Tenant sound library — the api writes uploaded audio + synthesized TTS
-      # here; the gateway reads + plays it on the media plane. Shared host dir
-      # mounted at audio_dir (/var/lib/tring/sounds) in both containers.
+      # Tenant sound library — the api role writes uploaded audio + synthesized
+      # TTS here; the gateway role plays it on the media plane (audio_dir).
       - ./freeswitch/sounds:/var/lib/tring/sounds:rw
-      # Call recordings — read-only here; the gateway writes them, the api serves
-      # them (GET /v1/calls/{id}/recording). Same host bind-mount as the gateway.
-      - ./recordings:/var/lib/tring/recordings:ro
-    restart: unless-stopped
-
-  # Call-plane gateway (web plug): pion media SFU + brain, served on /rtc.
-  # Browsers peer with this over raw WebRTC (WebSocket signaling on :8087);
-  # the SFU fans media between participants. FreeSWITCH / PSTN adapters are
-  # not wired here — this binary is the pure web plug. host networking so
-  # the UDP RTP range exchanges media with browsers without NAT hairpinning.
-  gateway:
-    image: shridh0r/tring-gateway:${TRING_TAG:-develop}
-    build:
-      context: .
-      args:
-        CMD: gateway
-    container_name: tring-gateway
-    network_mode: host
-    # docker stop waits this long before SIGKILL. On SIGTERM the gateway stops
-    # taking new calls and lets live ones finish for up to
-    # TRING_GATEWAY_DRAIN_SECONDS (default 300); keep this above it.
-    stop_grace_period: 330s
-    # Run as the host user (like the api) so the bind-mounted recordings spool
-    # below is writable — the gateway, not FreeSWITCH, writes recordings now, so
-    # they no longer need a root-owned volume. Override TRING_API_UID/GID to match.
-    user: "${TRING_API_UID:-1000}:${TRING_API_GID:-1000}"
-    depends_on:
-      freeswitch:
-        condition: service_started
-    # All config from .env — see .env.example (TRING_GATEWAY_ADDR/_UDP_*/
-    # _REQUIRE_AUTH, TRING_PUBLIC_IP, STUN/TURN, JWT secret shared with the api,
-    # DB/Redis/S3, …).
-    env_file:
-      - path: .env
-        required: false
-    volumes:
-      # Tenant sound library — the api writes uploaded prompts here; the gateway
-      # reads + plays them on the web (pion) plane. Same shared dir as the api
-      # (audio_dir == /var/lib/tring/sounds), read-only.
-      - ./freeswitch/sounds:/var/lib/tring/sounds:ro
-      # Call recordings — rw: the gateway records media-plane calls (web + phone
-      # plug) into the same spool the api serves (and uploads to S3 when set). A
-      # host bind-mount (owned by the host user, like sounds), NOT a root-owned
-      # volume — FreeSWITCH no longer writes recordings, the nonroot gateway does.
+      # Call recordings — the gateway role records media-plane calls (web +
+      # phone plug) into this spool and the api role serves them (and uploads
+      # to S3 when set). A host bind-mount owned by the host user, NOT a
+      # root-owned volume — FreeSWITCH no longer writes recordings.
       - ./recordings:/var/lib/tring/recordings
     restart: unless-stopped
 

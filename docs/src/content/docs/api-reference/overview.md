@@ -3,7 +3,7 @@ title: API overview
 description: Base URL, request and response conventions, errors, pagination and timeouts for the Tring REST API.
 ---
 
-The Tring REST API is served by the `tring-api` container (port `8085` by default), on the same origin as the admin console (`/admin/`) and the browser SDK bundles (`/sdk/`). Everything your backend calls lives under the `/v1` prefix.
+The Tring REST API is served by the `tring` container's api role (port `8085` by default), on the same origin as the admin console (`/admin/`) and the browser SDK bundles (`/sdk/`). Everything your backend calls lives under the `/v1` prefix.
 
 ## Base URL
 

@@ -28,7 +28,7 @@ import (
 // delays the one call, not the rest of the server.
 const ringTimeout = 30 * time.Second
 
-// Config is the plug's wiring, built from koanf in cmd/gateway.
+// Config is the plug's wiring, built from koanf in cmd/tring.
 type Config struct {
 	SIPListen    string // UAS bind, e.g. ":5080"
 	SIPAdvertise string // IP put in SDP/Contact, e.g. "127.0.0.1"

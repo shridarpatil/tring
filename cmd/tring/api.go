@@ -1,155 +1,92 @@
 package main
 
+// api.go — the api role: stateless REST, admin console, token minting,
+// recordings serving, outbound originate over ESL, and the /fs/* callbacks.
+
 import (
 	"context"
-	"flag"
+	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/shridarpatil/tring/internal/api"
-	"github.com/shridarpatil/tring/internal/blobstore"
 	"github.com/shridarpatil/tring/internal/bootstrap"
-	"github.com/shridarpatil/tring/internal/cache"
-	"github.com/shridarpatil/tring/internal/config"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
-	"github.com/shridarpatil/tring/internal/logging"
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
 	"github.com/shridarpatil/tring/internal/queries"
-	"github.com/shridarpatil/tring/internal/safehttp"
-	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/tts"
 )
 
-// csv splits a comma-separated config value into trimmed, non-empty entries.
-// koanf hands env vars through as plain strings, so a list-valued setting
-// (trusted_proxies) is split here at the wiring layer.
-func csv(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
+type apiRole struct {
+	d          *deps
+	srv, fsSrv *http.Server
+	hub        *events.Hub
+	cancel     context.CancelFunc // stops the hub
+	db         *db.DB
 }
 
-// migrateRun is a tiny shim so the call site reads `migrateRun(...)`
-// rather than the long aliased package name everywhere.
-var migrateRun = tringmigrate.Run
-
-// version is stamped at build time (-ldflags "-X main.version=…", by the
-// Dockerfile and GoReleaser); a plain `go build` reports "dev".
-var version = "dev"
-
-func main() {
-	// Config: defaults + TRING_* env (koanf). Flags below take precedence
-	// by defaulting to the resolved value, so flag > env > default.
-	k := config.Load()
-	logger := logging.New(k.String("log_format"), k.String("log_level"))
-	slog.SetDefault(logger) // so startup helpers (bootstrap) log through it too
-	if weak := config.WeakSecrets(k, "jwt_secret", "fs_basic_auth", "esl_password"); len(weak) > 0 && !k.Bool("allow_insecure_secrets") {
-		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
-		os.Exit(1)
-	}
-	// TRING_SECRETS_KEY seals trunk/agent SIP passwords at rest. Optional for
-	// now (see api.PrepareStoredSecrets for the keyless upgrade path), but a
-	// set-and-malformed key is always fatal.
-	var secrets *secretbox.Box
-	if v := k.String("secrets_key"); v != "" {
-		key, err := secretbox.ParseKey(v)
-		if err == nil {
-			secrets, err = secretbox.New(key)
-		}
-		if err != nil {
-			logger.Error("invalid TRING_SECRETS_KEY", "err", err)
-			os.Exit(1)
-		}
-	}
-	outboundAllow, err := safehttp.ParseCIDRs(csv(k.String("outbound_allow_cidrs")))
-	if err != nil {
-		logger.Error("invalid outbound_allow_cidrs", "err", err)
-		os.Exit(1)
-	}
-	addr := flag.String("addr", k.String("api_addr"), "HTTP listen address")
-	dsn := flag.String("dsn", k.String("dsn"), "Postgres connection string")
-	seed := flag.String("seed-tenant", "", "If set, creates a tenant with the given name, prints the API key, then exits")
-	flag.Parse()
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
-
+// openDB migrates, connects and runs first-boot bootstrap: what both the api
+// role and --seed-tenant need before touching tenants.
+func openDB(ctx context.Context, d *deps, dsn string) (*db.DB, error) {
 	// Apply embedded schema migrations before opening the pool so the
 	// schema is at the expected version when handlers start running.
 	// Idempotent — no-op when the DB is already at the latest version.
-	if err := migrateRun(*dsn); err != nil {
-		logger.Error("migrate failed", "err", err)
-		os.Exit(1)
+	if err := tringmigrate.Run(dsn); err != nil {
+		return nil, fmt.Errorf("migrate failed: %w", err)
 	}
-
-	database, err := db.Connect(ctx, *dsn)
+	database, err := db.Connect(ctx, dsn)
 	if err != nil {
-		logger.Error("db connect failed", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("db connect failed: %w", err)
 	}
-	defer database.Close()
-
 	// Auto-seed the initial tenant + admin user from env on first boot
 	// against an empty database. No-op on every subsequent boot, and a
 	// no-op if the operator hasn't set the bootstrap env vars at all.
 	if err := bootstrap.Run(ctx, database, bootstrap.Config{
-		TenantName:    k.String("bootstrap_tenant"),
-		AdminEmail:    k.String("admin_email"),
-		AdminPassword: k.String("admin_password"),
+		TenantName:    d.k.String("bootstrap_tenant"),
+		AdminEmail:    d.k.String("admin_email"),
+		AdminPassword: d.k.String("admin_password"),
 	}); err != nil {
-		logger.Error("bootstrap failed", "err", err)
-		os.Exit(1)
+		database.Close()
+		return nil, fmt.Errorf("bootstrap failed: %w", err)
 	}
+	return database, nil
+}
 
-	if *seed != "" {
-		if err := seedTenant(ctx, database, *seed); err != nil {
-			logger.Error("seed failed", "err", err)
-			os.Exit(1)
-		}
-		return
+// runSeed creates one tenant and prints its API key. It never starts a listener.
+func runSeed(d *deps, o options) error {
+	ctx := context.Background()
+	database, err := openDB(ctx, d, o.dsn)
+	if err != nil {
+		return err
 	}
+	defer database.Close()
+	return seedTenant(ctx, database, o.seedTenant)
+}
+
+func startAPI(d *deps, o options) (*apiRole, error) {
+	k, logger := d.k, d.log
+	// The hub outlives the signal: it runs until shutdown, so the console keeps
+	// live updates while the gateway role drains.
+	ctx, cancel := context.WithCancel(context.Background())
+	a := &apiRole{d: d, cancel: cancel}
+
+	database, err := openDB(ctx, d, o.dsn)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	a.db = database
 
 	// Seal legacy plaintext SIP passwords (key set), or refuse to run keyless
 	// against sealed ones. Before serving: the gateway XML render needs it.
-	if err := api.PrepareStoredSecrets(ctx, database, secrets, logger); err != nil {
-		logger.Error("stored SIP passwords", "err", err)
-		os.Exit(1)
-	}
-
-	// Shared Redis cache. The API uses it to invalidate the inbound routes and
-	// IVR flows the gateway caches — must point at the SAME Redis as the
-	// gateway. Optional: log-and-disable if unreachable.
-	flowCache, err := cache.New(k.String("redis_addr"), k.String("redis_password"))
-	if err != nil {
-		logger.Warn("redis unavailable, flow-cache invalidation disabled", "err", err)
-	}
-	defer flowCache.Close()
-
-	// Optional S3 store for serving call recordings (mirrors the orchestrator's
-	// uploader). Misconfig → warn and serve from the local volume instead.
-	blob, err := blobstore.New(blobstore.Config{
-		Bucket:    k.String("s3_bucket"),
-		Region:    k.String("s3_region"),
-		Endpoint:  k.String("s3_endpoint"),
-		AccessKey: k.String("s3_access_key"),
-		SecretKey: k.String("s3_secret_key"),
-		Prefix:    k.String("s3_prefix"),
-		UseSSL:    k.Bool("s3_use_ssl"),
-	})
-	if err != nil {
-		logger.Warn("S3 recording storage disabled (config error)", "err", err)
+	if err := api.PrepareStoredSecrets(ctx, database, d.secrets, logger); err != nil {
+		a.close()
+		return nil, fmt.Errorf("stored SIP passwords: %w", err)
 	}
 
 	// Local Piper TTS: synthesizes IVR node prompt text to an audio file on flow
@@ -163,19 +100,13 @@ func main() {
 		Logger:   logger,
 	})
 
-	// Dashboard live-update bus (shares the same Redis as the gateway). Both
-	// best-effort: if Redis is down, the dashboard still serves the connect-time
+	// Dashboard live-update bus (shares the same Redis as the gateway).
+	// Best-effort: if Redis is down, the dashboard still serves the connect-time
 	// snapshot, just no live deltas.
-	hub, err := events.NewHub(k.String("redis_addr"), k.String("redis_password"), logger)
+	a.hub, err = events.NewHub(k.String("redis_addr"), k.String("redis_password"), logger)
 	if err != nil {
 		logger.Warn("redis unavailable, dashboard live stream disabled", "err", err)
 	}
-	defer hub.Close()
-	eventsPub, err := events.NewPublisher(k.String("redis_addr"), k.String("redis_password"), logger)
-	if err != nil {
-		logger.Warn("redis unavailable, event publishing disabled", "err", err)
-	}
-	defer eventsPub.Close()
 
 	apiSrv := api.NewServer(api.Config{
 		DB:                database,
@@ -196,13 +127,13 @@ func main() {
 		GatewayControlURL: k.String("gateway_control_url"),
 		AudioDir:          k.String("audio_dir"),
 		RecordingsDir:     k.String("recordings_dir"),
-		Blob:              blob,
-		Cache:             flowCache,
-		Hub:               hub,
-		Events:            eventsPub,
+		Blob:              d.blob,
+		Cache:             d.cache,
+		Hub:               a.hub,
+		Events:            d.pub,
 		TrustedProxies:    csv(k.String("trusted_proxies")),
-		OutboundAllow:     outboundAllow,
-		Secrets:           secrets,
+		OutboundAllow:     d.outboundAllow,
+		Secrets:           d.secrets,
 		Version:           version,
 		Logger:            logger,
 	})
@@ -210,14 +141,14 @@ func main() {
 	// Register live forwards + coalesced recomputers, then start the subscriber.
 	// Forward/Recompute write hub maps lock-free and MUST complete before Run
 	// starts reading them.
-	hub.Forward(
+	a.hub.Forward(
 		events.TypeCallRinging, events.TypeCallRouting, events.TypeCallAnswered, events.TypeCallEnded,
 		events.TypeAgentPresence, events.TypeAgentStatus, events.TypeCallSupervised, events.TypeCallTransferred,
 		events.TypeQueueStint,
 	)
 	// Stats carries SLA breaches (today + the hourly red segment), which move
 	// on queue.stint as well as on the call lifecycle.
-	hub.Recompute(
+	a.hub.Recompute(
 		[]string{events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded, events.TypeQueueStint},
 		events.TypeStats, 1500*time.Millisecond, apiSrv.StatsData,
 	)
@@ -226,7 +157,7 @@ func main() {
 	// queue.depth. Without the call.* triggers, on_call goes stale after a call
 	// ends (nothing recomputes it until the next queueing activity). It also
 	// carries each team's live staffing (agent.*) and waits/breaches (queue.stint).
-	hub.Recompute(
+	a.hub.Recompute(
 		[]string{
 			events.TypeCallRinging, events.TypeCallAnswered, events.TypeCallEnded, events.TypeQueueDepth,
 			events.TypeAgentPresence, events.TypeAgentStatus, events.TypeQueueStint,
@@ -236,18 +167,18 @@ func main() {
 	// Team open/closed and below-minimum change with the clock, not an event
 	// (Support opens at 9:00 and nobody calls): recheck once a minute and push
 	// only when the frame changed.
-	hub.Every(60*time.Second, events.TypeQueues, apiSrv.QueuesData)
+	a.hub.Every(60*time.Second, events.TypeQueues, apiSrv.QueuesData)
 	// A waiting caller crosses the SLA with no event; recheck stats the same way
 	// so "SLA breaches today" keeps up with the team cards.
-	hub.Every(60*time.Second, events.TypeStats, apiSrv.StatsData)
-	go hub.Run(ctx)
+	a.hub.Every(60*time.Second, events.TypeStats, apiSrv.StatsData)
+	go a.hub.Run(ctx)
 
 	// ReadTimeout bounds a slow-trickled request body (slowloris); IdleTimeout
 	// reaps idle keep-alives. No WriteTimeout: /v1/stream/dashboard is a
 	// long-lived SSE response. The 10 MiB audio upload already runs under a 30s
 	// middleware.Timeout, so ReadTimeout doesn't tighten it further.
-	srv := &http.Server{
-		Addr:              *addr,
+	a.srv = &http.Server{
+		Addr:              o.addr,
 		Handler:           apiSrv.Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -256,7 +187,7 @@ func main() {
 
 	// FreeSWITCH mod_xml_curl endpoints on their own loopback listener, so the
 	// public api_addr (and any reverse proxy in front of it) never serves them.
-	fsSrv := &http.Server{
+	a.fsSrv = &http.Server{
 		Addr:              k.String("fs_addr"),
 		Handler:           apiSrv.FSRouter(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -265,26 +196,35 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("api listening", "addr", *addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Info("api listening", "addr", a.srv.Addr)
+		if err := a.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("api listen failed", "err", err)
 			os.Exit(1)
 		}
 	}()
 	go func() {
-		logger.Info("fs endpoints listening", "addr", fsSrv.Addr)
-		if err := fsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Info("fs endpoints listening", "addr", a.fsSrv.Addr)
+		if err := a.fsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("fs listen failed", "err", err)
 			os.Exit(1)
 		}
 	}()
+	return a, nil
+}
 
-	<-ctx.Done()
-	logger.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (a *apiRole) shutdown(ctx context.Context) {
+	a.d.log.Info("api shutting down")
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
-	_ = fsSrv.Shutdown(shutdownCtx)
+	_ = a.srv.Shutdown(ctx)
+	_ = a.fsSrv.Shutdown(ctx)
+	a.close()
+}
+
+func (a *apiRole) close() {
+	a.cancel()
+	a.hub.Close()
+	a.db.Close()
 }
 
 func seedTenant(ctx context.Context, database *db.DB, name string) error {
