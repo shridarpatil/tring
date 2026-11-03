@@ -6,14 +6,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/presence"
 )
 
 // RRCounter yields a rotating start offset per key for the round_robin strategy.
-// NewMemRR is per-process (load-spreading, not strict fairness, matching the
-// trunk round_robin precedent); NewRedisRR rotates consistently across gateway
-// nodes sharing one Redis.
+// The in-memory default is per-process (load-spreading, not strict fairness,
+// matching the trunk round_robin precedent); a Redis-backed implementation can
+// be added later to rotate consistently across processes.
 type RRCounter interface {
 	Next(key string, n int) int
 }
@@ -25,29 +24,6 @@ type memRR struct {
 
 // NewMemRR returns the in-process round-robin counter.
 func NewMemRR() RRCounter { return &memRR{m: map[string]int{}} }
-
-type redisRR struct {
-	c        *cache.Cache
-	fallback RRCounter
-}
-
-// NewRedisRR rotates through a shared Redis counter so every gateway node
-// advances the same per-team position. If Redis errors (or c is nil) it falls
-// back to an in-process counter: ringing must not stop because Redis is down.
-func NewRedisRR(c *cache.Cache) RRCounter {
-	return &redisRR{c: c, fallback: NewMemRR()}
-}
-
-func (r *redisRR) Next(key string, n int) int {
-	if n <= 0 {
-		return 0
-	}
-	v, err := r.c.Incr(context.Background(), "tring:rr:"+key)
-	if err != nil {
-		return r.fallback.Next(key, n)
-	}
-	return int((v - 1) % int64(n))
-}
 
 func (r *memRR) Next(key string, n int) int {
 	if n <= 0 {
