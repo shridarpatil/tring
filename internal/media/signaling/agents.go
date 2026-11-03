@@ -519,10 +519,10 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		}
 	}
 	if len(failed) > 0 {
-		// Not rung (bus down, or the socket went away): no popup to withdraw and
-		// no invite to honor. The attempt then plays out as an unanswered ring.
-		// One-at-a-time keeps them as tried so the next attempt moves on; ring_all
-		// forgets them so a later attempt retries.
+		// Not rung (bus down, the agent's node is gone, or the socket went away):
+		// no popup to withdraw and no invite to honor. One-at-a-time keeps them as
+		// tried so the next attempt moves on; ring_all forgets them so a later
+		// attempt retries.
 		p.s.mu.Lock()
 		for _, sip := range failed {
 			delete(p.active, sip)
@@ -534,7 +534,19 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 				rungNow = ""
 			}
 		}
+		ringing := len(p.active)
 		p.s.mu.Unlock()
+		// Nobody is ringing, so waiting out the window can't be answered: return
+		// now and let the router move on (as after a decline). Checked only after
+		// a failure, so an attempt with nothing to pop still waits and can't spin.
+		if ringing == 0 {
+			select {
+			case <-p.ring:
+				return routing.RingOutcome{Answered: true}, nil
+			default:
+				return routing.RingOutcome{}, nil
+			}
+		}
 	}
 
 	// Record each agent actually rung on the durable timeline (id + name resolved

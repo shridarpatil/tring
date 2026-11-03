@@ -160,3 +160,21 @@ func TestNoWritesAfterClose(t *testing.T) {
 		t.Fatalf("keys left after close: %v", keys)
 	}
 }
+
+// A node that is registered but not subscribed (crashed, keys not yet expired)
+// can't take a ring; Send must say so instead of reporting a delivery.
+func TestSendToNodeWithoutSubscriber(t *testing.T) {
+	p := newTestPrefix(t)
+	a := newTestCluster(t, p, "a")
+	b := newTestCluster(t, p, "b")
+	runNode(t, b, func() Snapshot { return Snapshot{} })
+	ctx := context.Background()
+
+	err := a.Send(ctx, "gone", Msg{Type: MsgRing, Tenant: "t1", SIP: "100", Room: "r1"})
+	if !errors.Is(err, ErrNoReceiver) {
+		t.Fatalf("Send to unsubscribed node = %v, want ErrNoReceiver", err)
+	}
+	if err := a.Send(ctx, b.ID(), Msg{Type: MsgRing, Tenant: "t1", SIP: "100", Room: "r1"}); err != nil {
+		t.Fatalf("Send to running node = %v, want nil", err)
+	}
+}

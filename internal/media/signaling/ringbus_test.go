@@ -248,3 +248,35 @@ func TestLocalRingStaysLocal(t *testing.T) {
 		t.Fatalf("bus got %s: %s, want nothing", m.Channel, m.Payload)
 	}
 }
+
+// A node that crashed leaves its keys live until TTL, so the view still puts
+// its agents there, but nobody reads its bus. The ring must count as not
+// delivered right away — not hold the router for the whole ring window — and
+// leave no popup or invite behind.
+func TestRingToNodeWithoutListenerIsNotDelivered(t *testing.T) {
+	ca, cb := newViewClusters(t)
+	sa := newViewServer(t, ca)
+	// B heartbeated agent 100 but never runs its bus: like a SIGKILLed node.
+	joinPair(t, sa, ca, cb, cluster.Snapshot{Online: map[string][]string{"t1": {"100"}}})
+	if n := sa.agentView(context.Background(), "t1").node("100"); n != cb.ID() {
+		t.Fatalf("node(100) = %q, want %q", n, cb.ID())
+	}
+
+	_, eff, cleanup := sa.Prepare(context.Background(), "t1/r1", ivrdrive.Target{Label: "Caller"}, false, []string{"100"}, "", "")
+	defer cleanup()
+	start := time.Now()
+	out, err := eff.Ring(context.Background(), []string{"100"}, 3*time.Second)
+	if el := time.Since(start); el >= time.Second {
+		t.Fatalf("Ring took %v, want < 1s (nobody could be rung)", el)
+	}
+	if out.Answered || err != nil {
+		t.Fatalf("Ring = answered %v err %v, want not answered", out.Answered, err)
+	}
+	p := eff.(*pionRing)
+	sa.mu.Lock()
+	active, invited := p.active["100"], sa.invites["t1/r1"]["100"]
+	sa.mu.Unlock()
+	if active || invited {
+		t.Fatalf("after a failed ring: active=%v invited=%v, want neither", active, invited)
+	}
+}
