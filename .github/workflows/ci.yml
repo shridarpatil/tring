@@ -61,17 +61,6 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-      # Redis-backed tests (cluster state + ring bus, routing, caches, presence)
-      # read TRING_TEST_REDIS and skip when it's unset.
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -117,7 +106,6 @@ jobs:
           # The dbtest harness reads this; unset == skip DB-dependent tests.
           # DB name must contain "test" (guard against truncating real data).
           TRING_TEST_DSN: postgres://tring:tring_dev@127.0.0.1:5432/tring_test
-          TRING_TEST_REDIS: 127.0.0.1:6379
         # -p 1 serialises test-package execution. dbtest.Setup TRUNCATEs
         # shared tables + inserts a fixed-sip-domain tenant; running two
         # packages in parallel would have them race on the UNIQUE

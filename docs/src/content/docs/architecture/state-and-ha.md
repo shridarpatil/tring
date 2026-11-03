@@ -84,7 +84,7 @@ Postgres (`calls`/CDR, tenants, agents, flows, numbers), finished recordings
 | Gateway restart/crash | all its calls drop; **CDRs stuck `answered`**; presence self-heals (TTL) | ⚠️ orphaned CDRs |
 | Orchestrator restart | FS-path calls drop; **masking pool lost** (active masked calls misroute) | ❌ masking loss |
 | Deploy (`docker compose up`) | hard kill mid-call | ❌ no drain |
-| Add a 2nd gateway (`tring --gateway`) | agents (online/Away), on-call and dial counts, and round-robin are cluster-wide via Redis: a call on any node rings an agent connected to any node (ring, cancel and decline cross a per-node Redis bus). A node's share expires with it. Still missing: routing the agent's *answer* to the room's node (the front door) | ⚠️ ringing shared; answer routing pending |
+| Add a 2nd gateway | calls/agents split across processes with no affinity → broken | ❌ no routing story |
 
 ## 5. The posture (decisions)
 
