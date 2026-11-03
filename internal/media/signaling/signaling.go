@@ -30,7 +30,6 @@ import (
 
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/cache"
-	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -111,11 +110,7 @@ type Config struct {
 	// socket connects (internal/flowstore implements it). nil → the agent is
 	// told nothing and the SDK shows plain Online.
 	Availability AvailabilityResolver
-	// Cluster shares agent presence, Away and call/dial counts with the other
-	// tring nodes so ringing decisions see agents connected elsewhere. nil →
-	// single node: every decision reads the local maps only.
-	Cluster *cluster.Cluster
-	Logger  *slog.Logger
+	Logger       *slog.Logger
 }
 
 // AvailabilityResolver reads an agent's available_for_calls by SIP username.
@@ -228,7 +223,6 @@ type Server struct {
 	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
 	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
-	remoteRings  map[string]string                                    // "tenant/room|sip" → node that rang this agent over the bus; a decline goes back there (cluster.go)
 
 	draining  atomic.Bool  // shutting down: no new calls (drain.go)
 	portCalls atomic.Int64 // phone/connect calls in progress (drain.go)
@@ -273,21 +267,18 @@ func New(cfg Config) *Server {
 		invites:      make(map[room.RoomID]map[string]bool),
 		dialing:      make(map[room.RoomID]bool),
 		agentDials:   make(map[string]int),
-		remoteRings:  make(map[string]string),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
 	// the same Redis), else in-memory. presence.New(nil) is a disabled no-op.
 	var queue routing.Queue
 	var reserve routing.Reservations
-	var rr routing.RRCounter
 	if cfg.Cache != nil {
 		queue, reserve = routing.NewRedisQueue(cfg.Cache), routing.NewRedisReservations(cfg.Cache)
-		rr = routing.NewRedisRR(cfg.Cache)
 	} else {
-		queue, reserve, rr = routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR()
+		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
-	s.router = routing.NewRouter(queue, reserve, rr, cfg.Presence, cfg.Cache, cfg.Events, s.log)
+	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, cfg.Events, s.log)
 	// Queue stints come from the call log when it records them (*callcdr.Log).
 	// A nil Calls leaves stints as an untyped nil; (*callcdr.Log) methods are
 	// nil-receiver safe for the typed-nil case.

@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/brain"
-	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -40,7 +39,6 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 		delete(s.onCall, k)
 	}
 	s.mu.Unlock()
-	s.peers().SetCount(context.Background(), cluster.OnCall, tenant, sip, n)
 	if pres := s.cfg.Presence; pres != nil {
 		if n > 0 {
 			pres.MarkOnCall(context.Background(), tenant, sip)
@@ -70,23 +68,10 @@ func (s *Server) publishPresence(tenant, sip, status string) {
 
 // agentOnCall reports whether the agent has any active call leg (used by the
 // presence refresh so a 10s TTL re-assert doesn't clobber on_call → online).
-// With peers it is the cluster-wide count: the agent's call may be on another
-// node, and a local-only answer would flip the shared store back to online.
-// A local call always counts: Redis may lag a failed immediate write.
 func (s *Server) agentOnCall(tenant, sip string) bool {
 	s.mu.Lock()
-	local := s.onCall[tenant+"|"+sip] > 0
-	s.mu.Unlock()
-	if local {
-		return true
-	}
-	if c := s.cfg.Cluster; !c.Alone() {
-		ctx, cancel := context.WithTimeout(context.Background(), clusterReadTimeout)
-		n, err := c.Count(ctx, cluster.OnCall, tenant, sip)
-		cancel()
-		return err == nil && n > 0
-	}
-	return false
+	defer s.mu.Unlock()
+	return s.onCall[tenant+"|"+sip] > 0
 }
 
 func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
@@ -102,10 +87,6 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	}
 	s.away[tenant+"|"+sip] = true
 	s.mu.Unlock()
-	// Away before online, so a peer never sees this agent online and ringable
-	// before the backend flag is known.
-	s.peers().SetAway(context.Background(), tenant, sip, true)
-	s.peers().SetOnline(context.Background(), tenant, sip, true)
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
 	// Read after registering above, so a change that lands meanwhile is either
@@ -144,18 +125,11 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 
 	defer func() {
 		s.mu.Lock()
-		gone := s.agents[tenant][sip] == c
-		if gone {
+		if s.agents[tenant][sip] == c {
 			delete(s.agents[tenant], sip)
 			delete(s.away, tenant+"|"+sip)
 		}
 		s.mu.Unlock()
-		// Only when this socket was still the agent's: a reconnect that replaced
-		// it has already re-registered them online.
-		if gone {
-			s.peers().SetOnline(context.Background(), tenant, sip, false)
-			s.peers().SetAway(context.Background(), tenant, sip, false)
-		}
 		_ = c.Close()
 		s.log.Info("agent offline", "tenant", tenant, "sip", sip)
 	}()
@@ -246,54 +220,35 @@ func (s *Server) PushAvailability(tenant, sip string, available bool) {
 // It reports false, changing nothing, when c is no longer the agent's socket.
 func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.agents[tenant][sip] != c {
-		s.mu.Unlock()
 		return false
 	}
 	k := tenant + "|" + sip
 	if !away {
 		delete(s.away, k)
-	} else {
-		if s.away == nil {
-			s.away = map[string]bool{}
-		}
-		s.away[k] = true
+		return true
 	}
-	s.mu.Unlock()
-	s.peers().SetAway(context.Background(), tenant, sip, away)
+	if s.away == nil {
+		s.away = map[string]bool{}
+	}
+	s.away[k] = true
 	return true
 }
 
 // handleDecline delivers an agent's rejection of a ringing call to that room's
 // active ring (registered by Prepare), which advances the router to the next
-// agent without waiting out the ring timeout. When the ring came over the bus,
-// the room lives on the node that sent it, so the decline goes back there. No-op
-// if the ring already ended.
+// agent without waiting out the ring timeout. No-op if the ring already ended.
 func (s *Server) handleDecline(tenant, sip, roomName string) {
 	if roomName == "" {
 		return
 	}
 	rid := room.RoomID(tenant + "/" + roomName)
-	key := remoteRingKey(tenant, roomName, sip)
 	s.mu.Lock()
 	dec := s.declines[rid]
-	from := ""
-	if dec == nil {
-		from = s.remoteRings[key]
-		delete(s.remoteRings, key)
-	}
 	s.mu.Unlock()
-	switch {
-	case dec != nil:
+	if dec != nil {
 		dec(sip)
-	case from != "":
-		err := s.cfg.Cluster.Send(context.Background(), from, cluster.Msg{
-			Type: cluster.MsgDecline, Tenant: tenant, SIP: sip, Room: roomName,
-		})
-		if err != nil {
-			// The room node waits out the ring instead of advancing now.
-			s.log.Error("ring bus: decline not delivered", "tenant", tenant, "sip", sip, "node", from, "room", roomName, "err", err)
-		}
 	}
 }
 
@@ -308,26 +263,32 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	eff := &pionRing{
 		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label,
 		strategy: strategy, moh: moh, ring: ring,
-		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{}, nodes: map[string]string{},
+		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{},
 		declineCh: make(chan struct{}, 1),
 	}
 
 	// candidates excludes agents who declined this call (as well as busy, Away
 	// and offline ones) so the router never re-rings a decliner and the
 	// queue/hold logic sees the true remaining pool.
-	candidates := func(ctx context.Context) []string {
-		// The view may read Redis, so it is built before taking s.mu.
-		v := s.agentView(ctx, tenant)
-		pool := sips
-		if ringAll {
-			pool = v.onlineSIPs()
-		}
+	candidates := func(context.Context) []string {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		free := func(sip string) bool {
+			k := tenant + "|" + sip
+			return s.onCall[k] == 0 && !s.away[k] && !eff.declined[sip]
+		}
 		var out []string
-		for _, sip := range pool {
-			if v.free(sip) && !eff.declined[sip] {
-				out = append(out, sip)
+		if ringAll {
+			for sip := range s.agents[tenant] {
+				if free(sip) {
+					out = append(out, sip)
+				}
+			}
+		} else {
+			for _, sip := range sips {
+				if s.agents[tenant][sip] != nil && free(sip) {
+					out = append(out, sip)
+				}
 			}
 		}
 		return out
@@ -379,16 +340,15 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 type pionRing struct {
 	s        *Server
 	tenant   string
-	roomID   room.RoomID       // full "<tenant>/<name>" — where hold music is injected
-	roomName string            // un-namespaced name agents join
-	label    string            // caller label shown to the agent
-	strategy string            // team strategy; "" / ring_all → all at once, else one at a time
-	moh      string            // resolved team hold music played to the caller while waiting
-	ring     <-chan struct{}   // closed on a room join
-	rung     map[string]bool   // sips popped at least once this transfer (suppresses re-pop within a round)
-	active   map[string]bool   // sips whose popup is currently showing (guarded by s.mu)
-	declined map[string]bool   // sips that rejected this call — excluded from candidates (guarded by s.mu)
-	nodes    map[string]string // sip → node its ring went to ("" = this node), so the cancel follows it (guarded by s.mu)
+	roomID   room.RoomID     // full "<tenant>/<name>" — where hold music is injected
+	roomName string          // un-namespaced name agents join
+	label    string          // caller label shown to the agent
+	strategy string          // team strategy; "" / ring_all → all at once, else one at a time
+	moh      string          // resolved team hold music played to the caller while waiting
+	ring     <-chan struct{} // closed on a room join
+	rung     map[string]bool // sips popped at least once this transfer (suppresses re-pop within a round)
+	active   map[string]bool // sips whose popup is currently showing (guarded by s.mu)
+	declined map[string]bool // sips that rejected this call — excluded from candidates (guarded by s.mu)
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
@@ -447,8 +407,6 @@ func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == n
 func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.Duration) (routing.RingOutcome, error) {
 	p.ensureHold() // caller hears hold music from the first ring, not just once queued
 	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
-	// Where each agent's presence socket is. It may read Redis, so before s.mu.
-	view := p.s.agentView(ctx, p.tenant)
 
 	p.s.mu.Lock()
 	inSet := make(map[string]bool, len(ordered))
@@ -461,23 +419,18 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		}
 	}
 
-	// pop records the ring under the lock (so an answer racing the push finds
-	// its invite) and queues the push itself for after the unlock: a remote
-	// agent is rung over the bus, and Redis I/O never runs under s.mu.
-	var pops []string
+	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
-		node := view.node(sip)
-		if node == "" && p.s.agents[p.tenant][sip] == nil {
-			return // not connected here, nor anywhere the view knows of
+		if c := p.s.agents[p.tenant][sip]; c != nil {
+			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
+			if p.s.invites[p.roomID] == nil {
+				p.s.invites[p.roomID] = map[string]bool{}
+			}
+			p.s.invites[p.roomID][sip] = true
+			p.rung[sip] = true
+			p.active[sip] = true
+			poppedNow = append(poppedNow, sip)
 		}
-		if p.s.invites[p.roomID] == nil {
-			p.s.invites[p.roomID] = map[string]bool{}
-		}
-		p.s.invites[p.roomID][sip] = true
-		p.rung[sip] = true
-		p.active[sip] = true
-		p.nodes[sip] = node
-		pops = append(pops, sip)
 	}
 
 	var rungNow string // the single agent rung this attempt (one-at-a-time only)
@@ -504,50 +457,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 			}
 		}
 	}
-	nodes := make([]string, len(pops))
-	for i, sip := range pops {
-		nodes[i] = p.nodes[sip]
-	}
 	p.s.mu.Unlock()
-
-	var poppedNow, failed []string // agents actually rung this call — recorded on the timeline below
-	for i, sip := range pops {
-		if p.s.pushRing(p.tenant, sip, nodes[i], p.roomName, p.label, false) {
-			poppedNow = append(poppedNow, sip)
-		} else {
-			failed = append(failed, sip)
-		}
-	}
-	if len(failed) > 0 {
-		// Not rung (bus down, the agent's node is gone, or the socket went away):
-		// no popup to withdraw and no invite to honor. One-at-a-time keeps them as
-		// tried so the next attempt moves on; ring_all forgets them so a later
-		// attempt retries.
-		p.s.mu.Lock()
-		for _, sip := range failed {
-			delete(p.active, sip)
-			delete(p.s.invites[p.roomID], sip)
-			if !oneAtATime {
-				delete(p.rung, sip)
-			}
-			if sip == rungNow {
-				rungNow = ""
-			}
-		}
-		ringing := len(p.active)
-		p.s.mu.Unlock()
-		// Nobody is ringing, so waiting out the window can't be answered: return
-		// now and let the router move on (as after a decline). Checked only after
-		// a failure, so an attempt with nothing to pop still waits and can't spin.
-		if ringing == 0 {
-			select {
-			case <-p.ring:
-				return routing.RingOutcome{Answered: true}, nil
-			default:
-				return routing.RingOutcome{}, nil
-			}
-		}
-	}
 
 	// Record each agent actually rung on the durable timeline (id + name resolved
 	// by callcdr), off the lock. ring_all pops several at once; a one-at-a-time
@@ -591,16 +501,13 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 // cancelSips withdraws the incoming-call UI on the given agents (best-effort) and
 // clears their active-popup flag.
 func (p *pionRing) cancelSips(sips []string) {
-	nodes := make([]string, len(sips))
 	p.s.mu.Lock()
-	for i, sip := range sips {
+	defer p.s.mu.Unlock()
+	for _, sip := range sips {
 		delete(p.active, sip)
-		nodes[i] = p.nodes[sip]
-	}
-	p.s.mu.Unlock()
-	// After the unlock: a remote cancel is Redis I/O.
-	for i, sip := range sips {
-		p.s.pushCancel(p.tenant, sip, nodes[i], p.roomName)
+		if c := p.s.agents[p.tenant][sip]; c != nil {
+			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
+		}
 	}
 }
 
