@@ -43,12 +43,12 @@ the call logic. A future AI voice agent plugs in as just another media leg
 
 ## 3. Processes & datastores
 
-Two Go binaries, one Postgres, one Redis, one (PRIVATE) FreeSWITCH:
+One Go binary (`cmd/tring`) running two roles, one Postgres, one Redis, one (PRIVATE) FreeSWITCH. `tring` runs both roles in one process; `tring --gateway` runs only the gateway role:
 
-| Binary | Role | Faces | State | Ports |
+| Role | Does | Faces | State | Ports |
 |---|---|---|---|---|
-| **`cmd/api`** | Public REST + admin console + token minting; outbound PSTN originate via FS ESL | integrators (server→server), operators | stateless | `8085` |
-| **`cmd/gateway`** | The call plane: browser-facing **pion media plane** (`/rtc`) with the **brain** (IVR + agent routing + CDR) embedded **in-process** | browsers (WebRTC) | in-proc rooms | `8087` (+ `/rtc`) |
+| **api** | Public REST + admin console + token minting; outbound PSTN originate via FS ESL | integrators (server→server), operators | stateless | `8085` |
+| **gateway** | The call plane: browser-facing **pion media plane** (`/rtc`) with the **brain** (IVR + agent routing + CDR) embedded **in-process** | browsers (WebRTC) | in-proc rooms | `8087` (+ `/rtc`) |
 
 Datastores: **Postgres** (the system of record — see §10), **Redis** (agent
 presence + single-use token jtis + cross-plane queue depth/reservations; a hard
@@ -106,7 +106,7 @@ The seam is **test-proven** today via `fakePstn` (`signaling_test.go`), but
 **no FreeSWITCH adapter is wired yet** — the old ESL inbound path
 (`cmd/orchestrator`) was deleted in the convergence migration, and the clean FS
 plug package is future work (gated on provisioning a real SIP trunk). Outbound
-PSTN still goes through FreeSWITCH today, originated by `cmd/api` over ESL.
+PSTN still goes through FreeSWITCH today, originated by the api role over ESL.
 **Swapping/adding a channel** = implementing `room.Plug` in a sibling package;
 nothing in `internal/media` changes.
 
@@ -246,7 +246,7 @@ key). There is no public/anonymous mint — `gateway_require_auth` defaults true
 
 ## 10. Data model (`internal/migrate/migrations/*.sql`)
 
-Source of truth = embedded migrations, applied on `cmd/api` startup. Every
+Source of truth = embedded migrations, applied when `tring` starts (api role). Every
 non-`tenants` row carries `tenant_id` and queries MUST filter by it (RLS is a
 later hardening). Tables:
 

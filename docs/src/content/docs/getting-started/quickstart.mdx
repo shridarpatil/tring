@@ -56,8 +56,7 @@ Tring runs as a set of Docker containers. You need **Docker** with the **Compose
 3. For hot-reload while developing, run the Go services on the host against the same Postgres, Redis and FreeSWITCH:
 
    ```bash
-   make api        # REST API + admin console on :8085
-   make gateway    # media plane + brain on :8087
+   make run        # REST API + admin console on :8085, media plane + brain on :8087
    ```
 
    `make help` lists all targets. After changing Go code or `freeswitch/conf/*`, run `make images` so `docker compose up` picks up the changes.
@@ -75,8 +74,7 @@ Avoid piping the installer straight into `sh` (`curl … | sh`). Download it and
 
 | Container | Port | What it does |
 |---|---|---|
-| `tring-api` | `8085` | REST API, admin console (`/admin/`), SDK bundles (`/sdk/`) |
-| `tring-gateway` | `8087` | Media plane and brain: IVR, routing, recording, call records |
+| `tring` | `8085`, `8087` | The api role on `8085`: REST API, admin console (`/admin/`), SDK bundles (`/sdk/`). The gateway role on `8087`: media plane and brain (IVR, routing, recording, call records) |
 | `tring-fs` | `5060` SIP, `8021` ESL | FreeSWITCH, the edge to phone trunks. **Keep it private.** |
 | `tring-db` | `5434` | Postgres |
 | `tring-redis` | `6379` | Agent presence and single-use call tokens |

@@ -27,7 +27,7 @@ type DIDResolver interface {
 }
 
 // AttachPstn wires a phone plug into the server: inbound calls become rooms
-// running the IVR. Call once at startup (cmd/gateway) when a plug is configured.
+// running the IVR. Call once at startup (cmd/tring) when a plug is configured.
 func (s *Server) AttachPstn(gw room.Plug, resolve DIDResolver) {
 	s.pstnGW = gw
 	s.pstnDID = resolve
@@ -37,7 +37,7 @@ func (s *Server) AttachPstn(gw room.Plug, resolve DIDResolver) {
 
 // AttachOriginator wires agent-initiated OUTBOUND dialing (msgDial,
 // outbound.go) into the server: o places/hangs up the carrier leg, t resolves
-// which trunk(s) a tenant dials through. Call once at startup (cmd/gateway)
+// which trunk(s) a tenant dials through. Call once at startup (cmd/tring)
 // alongside AttachPstn, before the server serves — both nil until this is
 // called, so outbound dialing stays disabled until wired.
 func (s *Server) AttachOriginator(o Originator, t TrunkResolver) {

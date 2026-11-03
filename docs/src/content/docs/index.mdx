@@ -40,8 +40,7 @@ Tring is two Go binaries, one Postgres and one Redis, plus FreeSWITCH as a priva
 
 | Service | Role |
 |---|---|
-| `tring-api` (`:8085`) | REST API, admin console, browser SDK bundles |
-| `tring-gateway` (`:8087`) | The media plane and the "brain": IVR, agent routing, recording, call records |
+| `tring` (`:8085`, `:8087`) | One binary with two roles. The api role (`:8085`): REST API, admin console, browser SDK bundles. The gateway role (`:8087`): the media plane and the "brain": IVR, agent routing, recording, call records |
 | `tring-fs` | FreeSWITCH: the SIP edge to your carrier trunks (and WhatsApp) |
 | `tring-db`, `tring-redis` | Postgres for data, Redis for agent presence and call tokens |
 

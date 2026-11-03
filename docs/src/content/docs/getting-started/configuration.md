@@ -3,7 +3,7 @@ title: Configuration
 description: Every TRING_* environment variable in .env, what it does, its default, and what to set in production.
 ---
 
-Tring is configured with environment variables. Docker Compose loads `.env` into every container. The Go binaries (`tring-api`, `tring-gateway`) read `TRING_*` variables over built-in defaults, and FreeSWITCH reads a few of the same variables from its `vars.xml`.
+Tring is configured with environment variables. Docker Compose loads `.env` into every container. The `tring` binary reads `TRING_*` variables over built-in defaults, and FreeSWITCH reads a few of the same variables from its `vars.xml`.
 
 ```bash
 make .env   # or install.sh: copies .env.example and generates random secrets
@@ -96,7 +96,7 @@ Never expose the ESL port to the internet. ESL gives full control of FreeSWITCH,
 
 ## 5. Call-plane gateway
 
-The gateway (`cmd/gateway`) runs browser WebRTC on `/rtc`, the IVR, agent routing and call records.
+The gateway role runs browser WebRTC on `/rtc`, the IVR, agent routing and call records.
 
 ### Browser-facing
 
@@ -212,7 +212,7 @@ In production use `TRING_TURN_SECRET` (ephemeral credentials) with TURNS on port
 
 | Variable | Default | What it does |
 |---|---|---|
-| `TRING_TAG` | `develop` | Docker image tag for `tring-api`, `tring-gateway` and `tring-freeswitch`. `develop` tracks the latest `main`. Pin a release tag in production; `install.sh` writes the latest release here. |
+| `TRING_TAG` | `develop` | Docker image tag for `tring` and `tring-freeswitch`. `develop` tracks the latest `main`. Pin a release tag in production; `install.sh` writes the latest release here. |
 
 ## Other variables
 

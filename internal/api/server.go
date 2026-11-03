@@ -32,7 +32,7 @@ import (
 
 // Config bundles the dependencies an api.Server needs at construction time.
 // Wiring it explicitly (vs. picking env vars inside api/) keeps the package
-// testable and lets the CLI in cmd/api drive defaults.
+// testable and lets cmd/tring drive defaults.
 type Config struct {
 	DB          *db.DB
 	JWTSecret   string
