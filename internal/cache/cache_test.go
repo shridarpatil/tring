@@ -2,8 +2,11 @@ package cache
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // A nil *Cache is the "caching disabled" sentinel used throughout the app
@@ -49,5 +52,30 @@ func TestOptionsSetsAddrAndPassword(t *testing.T) {
 	}
 	if o := Options("127.0.0.1:6379", ""); o.Password != "" {
 		t.Error("empty password should yield no auth, got a non-empty Password")
+	}
+}
+
+func TestIncr(t *testing.T) {
+	ctx := context.Background()
+	var nilc *Cache
+	if _, err := nilc.Incr(ctx, "k"); err == nil {
+		t.Error("Incr on nil cache returned nil error")
+	}
+	addr := os.Getenv("TRING_TEST_REDIS")
+	if addr == "" {
+		t.Skip("TRING_TEST_REDIS not set")
+	}
+	c, err := New(addr, os.Getenv("TRING_TEST_REDIS_PASSWORD"))
+	if err != nil {
+		t.Skipf("redis not reachable: %v", err)
+	}
+	defer c.Close()
+	key := "test:incr:" + uuid.NewString()
+	t.Cleanup(func() { _ = c.Delete(ctx, key) })
+	for want := int64(1); want <= 2; want++ {
+		got, err := c.Incr(ctx, key)
+		if err != nil || got != want {
+			t.Fatalf("Incr = %d, %v; want %d", got, err, want)
+		}
 	}
 }

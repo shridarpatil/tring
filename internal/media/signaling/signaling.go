@@ -273,12 +273,14 @@ func New(cfg Config) *Server {
 	// the same Redis), else in-memory. presence.New(nil) is a disabled no-op.
 	var queue routing.Queue
 	var reserve routing.Reservations
+	var rr routing.RRCounter
 	if cfg.Cache != nil {
 		queue, reserve = routing.NewRedisQueue(cfg.Cache), routing.NewRedisReservations(cfg.Cache)
+		rr = routing.NewRedisRR(cfg.Cache)
 	} else {
-		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
+		queue, reserve, rr = routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR()
 	}
-	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, cfg.Events, s.log)
+	s.router = routing.NewRouter(queue, reserve, rr, cfg.Presence, cfg.Cache, cfg.Events, s.log)
 	// Queue stints come from the call log when it records them (*callcdr.Log).
 	// A nil Calls leaves stints as an untyped nil; (*callcdr.Log) methods are
 	// nil-receiver safe for the typed-nil case.
