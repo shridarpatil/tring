@@ -67,7 +67,7 @@ Redis is a **hard dependency** of the gateway when `TRING_GATEWAY_REQUIRE_AUTH=t
 
 In production, use a strong Postgres password, enable TLS on the connection where the database is remote (`?sslmode=require` or stricter), and bind Postgres and Redis to private interfaces only. The Compose stack publishes Redis on `127.0.0.1` only, but any process on the host can still reach that port, so set `TRING_REDIS_PASSWORD`. The startup secret check does not require it, because you may run Redis elsewhere behind network isolation instead.
 
-To turn on Redis authentication for an existing deployment, add `TRING_REDIS_PASSWORD` to `.env`, then recreate Redis, the api and the gateway together: `docker compose up -d --force-recreate redis api gateway`. A Redis that requires a password the binaries don't send (or the reverse) makes them start with Redis-backed features disabled, and the gateway refuses to start when `TRING_GATEWAY_REQUIRE_AUTH=true`. Redis here is a cache with no persistence, so the restart only loses cached data, presence and in-flight queue state.
+To turn on Redis authentication for an existing deployment, add `TRING_REDIS_PASSWORD` to `.env`, then recreate Redis and tring together: `docker compose up -d --force-recreate redis tring`. A Redis that requires a password the binaries don't send (or the reverse) makes them start with Redis-backed features disabled, and the gateway refuses to start when `TRING_GATEWAY_REQUIRE_AUTH=true`. Redis here is a cache with no persistence, so the restart only loses cached data, presence and in-flight queue state.
 
 ## 3. First-boot bootstrap
 

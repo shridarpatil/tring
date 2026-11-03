@@ -48,3 +48,16 @@ func TestWeakSecretKeys(t *testing.T) {
 		t.Errorf("all: %v", got)
 	}
 }
+
+// --dsn must reach both roles: the gateway reads the DSN from config, so the
+// flag has to land there too.
+func TestParseOptionsDSNAppliesToConfig(t *testing.T) {
+	k := config.Load()
+	o, err := parseOptions([]string{"--dsn", "postgres://u:p@db.example:5432/tring_x"}, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.String("dsn") != o.dsn {
+		t.Errorf("config dsn = %q, want the flag's %q", k.String("dsn"), o.dsn)
+	}
+}
