@@ -1,17 +1,17 @@
 # Tring dev convenience. Keep targets thin — anything non-trivial belongs
 # in a script or in the README, not here.
 
-.PHONY: help up down api gateway build sdk sdk-watch test fmt vet clean demo
+.PHONY: help up down run gateway build sdk sdk-watch test fmt vet clean demo
 
 help:
 	@echo "Common targets:"
-	@echo "  make up            - docker compose up -d  (FS + Postgres + Redis + API + gateway)"
+	@echo "  make up            - docker compose up -d  (FS + Postgres + Redis + tring)"
 	@echo "  make down          - docker compose down"
 	@echo "  make logs          - tail logs of all services"
-	@echo "  make images        - rebuild the Go images (forces fresh binary)"
-	@echo "  make api           - run the API on :8085 (foreground, host) — for dev hot-iterate"
-	@echo "  make gateway       - run the call-plane gateway on :8087 (foreground, host)"
-	@echo "  make build         - go build ./... (all binaries)"
+	@echo "  make images        - rebuild the images (forces fresh binary)"
+	@echo "  make run           - run tring (api :8085 + gateway :8087) in the foreground on the host — for dev hot-iterate"
+	@echo "  make gateway       - run tring --gateway (call plane only, :8087)"
+	@echo "  make build         - go build ./..."
 	@echo "  make sdk           - npm run build in sdk/js"
 	@echo "  make sdk-watch     - rebuild SDK on change"
 	@echo "  make test          - go test ./..."
@@ -43,14 +43,14 @@ logs:
 	docker compose logs -f --tail=20
 
 images:
-	docker compose build api gateway freeswitch
+	docker compose build tring freeswitch
 
-# Host-run binaries load .env so they share the containers' secrets.
-api: .env
-	set -a; . ./.env; set +a; go run ./cmd/api
+# Host runs load .env so they share the containers' secrets.
+run: .env
+	set -a; . ./.env; set +a; go run ./cmd/tring
 
 gateway: .env
-	set -a; . ./.env; set +a; go run ./cmd/gateway
+	set -a; . ./.env; set +a; go run ./cmd/tring --gateway
 
 build:
 	go build ./...

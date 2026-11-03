@@ -1,22 +1,21 @@
 # syntax=docker/dockerfile:1.7
 #
-# Multi-stage build for the Tring Go binaries. Build any binary with:
+# Multi-stage build for the single Tring binary (`tring` = api + gateway,
+# `tring --gateway` = gateway only):
 #
-#   docker build --build-arg CMD=api      -t tring-api     .
-#   docker build --build-arg CMD=gateway  -t tring-gateway .
+#   docker build -t tring .
 #
-# Final images are distroless/cc running as non-root. CGO is off for the api, so
-# it is statically linked; the gateway links libopus (cgo) to mix a supervisor's
-# barge into phone calls. The runtime carries glibc for the gateway and for the
-# bundled Piper TTS (+ its onnxruntime). No shell, no package manager in the image.
+# The final image is distroless/cc running as non-root. The binary links libopus
+# (cgo) to mix a supervisor's barge into phone calls. The runtime carries glibc
+# for it and for the bundled Piper TTS (+ its onnxruntime). No shell, no package
+# manager in the image.
 
 ARG GO_VERSION=1.26
 ARG NODE_VERSION=22
 
 # ---- web UI build --------------------------------------------------------
 # Builds the Vue admin console; its dist/ is consumed by the Go embed step
-# below. Cheap to always run — the gateway binary doesn't import the
-# webui package so the dist bytes don't end up in its image either way.
+# below.
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS web
 
 WORKDIR /web
@@ -35,8 +34,7 @@ RUN npm run build
 # ---- browser widget build ------------------------------------------------
 # Builds the drop-in JS widgets (voice.js / agent.js / tring.js). Their
 # bundles are embedded by the Go build below and served at /sdk/* on the
-# same origin as the API, so self-hosters need no CDN. The gateway
-# binary doesn't import internal/widget, so the bytes don't reach its image.
+# same origin as the API, so self-hosters need no CDN.
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-alpine AS sdk
 
 WORKDIR /sdk
@@ -57,12 +55,11 @@ RUN npm run build && \
 # (always amd64 on a stock GitHub runner). Combined with GOARCH=$TARGETARCH
 # below, this turns multi-arch builds into native Go cross-compilation
 # instead of QEMU-emulated `go build`, which is ~10x faster for arm64.
-# Debian bookworm, not alpine: the gateway's libopus must match the glibc of
-# the distroless/cc-debian12 runtime.
+# Debian bookworm, not alpine: libopus must match the glibc of the
+# distroless/cc-debian12 runtime.
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bookworm AS builder
 
-ARG CMD=api
-# VERSION is stamped into the api binary (main.version) and shown in the
+# VERSION is stamped into the binary (main.version) and shown in the
 # console footer. CI passes the tag, or develop-<short sha> for :develop.
 ARG VERSION=dev
 # TARGETOS and TARGETARCH are auto-populated by BuildKit to the target
@@ -72,21 +69,19 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG BUILDARCH
 
-# The gateway only: a C compiler for the target arch and the target's libopus
-# (Debian multiarch), so arm64 stays a native cross-build with cgo on.
+# A C compiler for the target arch and the target's libopus (Debian
+# multiarch), so arm64 stays a native cross-build with cgo on.
 RUN set -eux; \
-    if [ "$CMD" = gateway ]; then \
-      case "$TARGETARCH" in \
-        amd64) cross=gcc-x86-64-linux-gnu ;; \
-        arm64) cross=gcc-aarch64-linux-gnu ;; \
-        *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
-      esac; \
-      if [ "$TARGETARCH" = "$BUILDARCH" ]; then cross=gcc; fi; \
-      dpkg --add-architecture "$TARGETARCH"; \
-      apt-get update; \
-      apt-get install -y --no-install-recommends "$cross" pkg-config "libc6-dev:$TARGETARCH" "libopus-dev:$TARGETARCH"; \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
+    case "$TARGETARCH" in \
+      amd64) cross=gcc-x86-64-linux-gnu ;; \
+      arm64) cross=gcc-aarch64-linux-gnu ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    if [ "$TARGETARCH" = "$BUILDARCH" ]; then cross=gcc; fi; \
+    dpkg --add-architecture "$TARGETARCH"; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends "$cross" pkg-config "libc6-dev:$TARGETARCH" "libopus-dev:$TARGETARCH"; \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 
@@ -97,44 +92,37 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 
 # Drop the compiled UI dist into the embed source dir so //go:embed picks
-# it up. Overwrites the .gitkeep placeholder. The api binary's bundle
-# will include index.html + assets.
+# it up. Overwrites the .gitkeep placeholder.
 COPY --from=web /internal/webui/dist /src/internal/webui/dist
 
 # Drop the compiled widget bundles into the embed source dir so the api
-# binary serves them at /sdk/*. Overwrites the .gitkeep placeholder.
+# role serves them at /sdk/*. Overwrites the .gitkeep placeholder.
 COPY --from=sdk /widget-dist /src/internal/widget/dist
 
 # -s -w strips DWARF + symbol tables; saves ~30% binary size.
 # Trimpath removes absolute paths from binaries (reproducibility +
-# slightly smaller binary). The gateway is built with cgo and `-tags opus` so
-# ports can mix (internal/media/sfu/mix.go; nolibopusfile: only libopus is
-# needed), and its libopus.so.0 is staged in /out/lib for the runtime.
+# slightly smaller binary). Built with cgo and `-tags opus` so ports can mix
+# (internal/media/sfu/mix.go; nolibopusfile: only libopus is needed), and
+# libopus.so.0 is staged in /out/lib for the runtime.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     set -eux; \
     mkdir -p /out/lib; \
-    if [ "$CMD" = gateway ]; then \
-      case "$TARGETARCH" in \
-        amd64) triple=x86_64-linux-gnu ;; \
-        arm64) triple=aarch64-linux-gnu ;; \
-      esac; \
-      CGO_ENABLED=1 CC="$triple-gcc" PKG_CONFIG_PATH="/usr/lib/$triple/pkgconfig" \
-      GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-      go build -trimpath -tags "opus nolibopusfile" -ldflags="-s -w" -o /out/tring ./cmd/gateway; \
-      cp -L "/usr/lib/$triple/libopus.so.0" /out/lib/; \
-    else \
-      CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-      go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/tring ./cmd/${CMD}; \
-    fi
+    case "$TARGETARCH" in \
+      amd64) triple=x86_64-linux-gnu ;; \
+      arm64) triple=aarch64-linux-gnu ;; \
+    esac; \
+    CGO_ENABLED=1 CC="$triple-gcc" PKG_CONFIG_PATH="/usr/lib/$triple/pkgconfig" \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -tags "opus nolibopusfile" -ldflags="-s -w -X main.version=${VERSION}" -o /out/tring ./cmd/tring; \
+    cp -L "/usr/lib/$triple/libopus.so.0" /out/lib/
 
 # ---- piper TTS stage -----------------------------------------------------
 # Fetches the Piper release (self-contained: binary + libonnxruntime +
 # libpiper_phonemize + espeak-ng-data) and one default voice model. Embedded in
 # the runtime so the API can synthesize IVR prompt text to audio on flow save.
 # Piper is glibc-built, hence the distroless/cc runtime below. Layers are
-# content-addressed, so the registry stores piper once even though all three
-# images share this runtime. (Only the API uses it; the others just carry it.)
+# content-addressed, so the registry stores piper once. (The api role uses it.)
 FROM --platform=$BUILDPLATFORM alpine:3.20 AS piper
 ARG TARGETARCH
 ARG PIPER_VERSION=2023.11.14-2
@@ -161,8 +149,8 @@ RUN set -eux; \
 FROM gcr.io/distroless/cc-debian12:nonroot
 
 # A statically-linked ffmpeg (runs in distroless — no shell/libc needed). Used to
-# transcode uploaded prompts + synthesized TTS to Opus-Ogg (api) and merge stereo
-# recordings (gateway). /usr/local/bin is on the distroless PATH.
+# transcode uploaded prompts + synthesized TTS to Opus-Ogg (api role) and merge
+# stereo recordings (gateway role). /usr/local/bin is on the distroless PATH.
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 
 # Piper binary (+ its bundled .so's and espeak-ng-data) and the default voice.
@@ -170,7 +158,7 @@ COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 # is found relative to the binary.
 COPY --from=piper /opt/piper /opt/piper
 COPY --from=piper /usr/local/share/piper /usr/local/share/piper
-# libopus for the gateway (empty for the api).
+# libopus for the cgo opus mixer.
 COPY --from=builder /out/lib/ /opt/tring/lib/
 ENV LD_LIBRARY_PATH=/opt/piper:/opt/tring/lib
 
@@ -179,6 +167,6 @@ USER nonroot:nonroot
 
 COPY --from=builder /out/tring /tring
 
-# Both binaries are configured entirely via env vars (TRING_DSN,
+# Configured entirely via env vars (TRING_DSN,
 # TRING_ESL_ADDR, etc.). See .env.example for the full list.
 ENTRYPOINT ["/tring"]
