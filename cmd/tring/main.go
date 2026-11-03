@@ -52,6 +52,11 @@ func parseOptions(args []string, k *koanf.Koanf) (options, error) {
 	if o.gatewayOnly && o.seedTenant != "" {
 		return o, errors.New("--seed-tenant can't be combined with --gateway")
 	}
+	// The gateway role reads the DSN from config; write the flag back so --dsn
+	// applies to the whole process, not just the api role.
+	if err := k.Set("dsn", o.dsn); err != nil {
+		return o, err
+	}
 	return o, nil
 }
 

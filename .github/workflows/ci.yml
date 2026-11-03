@@ -366,4 +366,6 @@ jobs:
             --title "Tring $TAG" --generate-notes $pre \
             --notes "Set \`TRING_TAG=$TAG\` in \`.env\`, then \`docker compose pull && docker compose up -d\`.
 
-          Images: \`$DOCKER_ORG/{tring,tring-freeswitch}:$TAG\` (also on ghcr.io/${{ github.repository_owner }})."
+          Images: \`$DOCKER_ORG/{tring,tring-freeswitch}:$TAG\` (also on ghcr.io/${{ github.repository_owner }}).
+
+          Upgrading from the separate \`tring-api\` / \`tring-gateway\` images: replace \`docker-compose.yml\` first (\`TRING_VERSION=$TAG sh install.sh\`), then \`docker compose pull && docker compose up -d --remove-orphans\`. See https://shridarpatil.github.io/tring/getting-started/upgrading/."
