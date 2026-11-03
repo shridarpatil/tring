@@ -5,9 +5,9 @@
 # `docker compose up -d` into the current directory:
 #   - docker-compose.yml   (pulls the shridh0r/tring-* images from Docker Hub)
 #   - .env.example         (copy to .env to override defaults)
-#   - freeswitch/sounds/                         (host dir: prompt audio / hold music, shared api<->gateway)
+#   - freeswitch/sounds/                         (host dir: prompt audio / hold music)
 #   - freeswitch/conf/sip_profiles/external/dynamic/  (host dir: UI-managed trunk gateways)
-#   - recordings/                                (host dir: stereo call recordings the gateway writes + api serves)
+#   - recordings/                                (host dir: stereo call recordings tring writes + serves)
 #
 # The FreeSWITCH config (vars.xml, dialplan, sofia profiles) is BAKED INTO the
 # tring-freeswitch image — it is no longer bind-mounted, so it is not downloaded
@@ -33,8 +33,8 @@ set -eu
 
 TARGET="${TRING_DIR:-tring}"
 
-# The two files to fetch. Everything else — the three tring images
-# (shridh0r/tring-{api,gateway,freeswitch}), the upstream Postgres + Redis
+# The two files to fetch. Everything else — the two tring images
+# (shridh0r/tring, shridh0r/tring-freeswitch), the upstream Postgres + Redis
 # images, and the baked FreeSWITCH config — comes via `docker compose pull`.
 FILES="
 docker-compose.yml
@@ -42,7 +42,7 @@ docker-compose.yml
 "
 
 # The host directories docker-compose.yml bind-mounts. Created empty (owned by
-# this user, so the non-root gateway can write); Tring fills them at runtime
+# this user, so the non-root tring container can write); Tring fills them at runtime
 # (sound uploads, dynamic trunk XML, call recordings).
 DIRS="
 freeswitch/sounds
@@ -93,7 +93,7 @@ for d in $DIRS; do
     mkdir -p "$d"
 done
 
-# First run only: create .env with fresh random secrets. The api and gateway
+# First run only: create .env with fresh random secrets. tring will
 # refuse to start while the .env.example placeholders are still in place.
 rand() { od -An -tx1 -N24 /dev/urandom | tr -d ' \n'; }
 key32() { od -An -tx1 -N32 /dev/urandom | tr -d ' \n'; }
@@ -127,7 +127,7 @@ Next steps:
   #   TRING_REDIS_ADDR=127.0.0.1:6379       # gateway HARD-dep when REQUIRE_AUTH=true (default)
   #   TZ=Asia/Kolkata                       # applies to every container
   #   TRING_TAG=$TAG                      # image version; change it to upgrade
-  docker compose pull        # pull the shridh0r/tring-* images + Postgres/Redis
+  docker compose pull        # pull the shridh0r/tring images + Postgres/Redis
   docker compose up -d
 
 Then open http://<server>:8085/admin/ and sign in with the
