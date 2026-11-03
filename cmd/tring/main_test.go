@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/shridarpatil/tring/internal/config"
@@ -59,5 +60,20 @@ func TestParseOptionsDSNAppliesToConfig(t *testing.T) {
 	}
 	if k.String("dsn") != o.dsn {
 		t.Errorf("config dsn = %q, want the flag's %q", k.String("dsn"), o.dsn)
+	}
+}
+
+// A gateway-only node shares agent state through Redis, so it must not start
+// without it; all mode still runs single-node without Redis.
+func TestGatewayNeedsRedis(t *testing.T) {
+	err := gatewayNeedsRedis(options{gatewayOnly: true}, false)
+	if err == nil || !strings.Contains(err.Error(), "TRING_REDIS_ADDR") {
+		t.Fatalf("gateway without Redis: err = %v, want one naming TRING_REDIS_ADDR", err)
+	}
+	if err := gatewayNeedsRedis(options{}, false); err != nil {
+		t.Errorf("all mode without Redis: %v, want nil", err)
+	}
+	if err := gatewayNeedsRedis(options{gatewayOnly: true}, true); err != nil {
+		t.Errorf("gateway with Redis: %v, want nil", err)
 	}
 }
