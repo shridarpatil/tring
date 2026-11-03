@@ -150,7 +150,7 @@ func (s *Server) beginDial(roomID room.RoomID, agentKey string) (func(), bool) {
 	s.agentDials[agentKey]++
 	n := s.agentDials[agentKey]
 	s.mu.Unlock()
-	s.cfg.Cluster.SetCount(context.Background(), cluster.Dials, tenant, sip, n)
+	s.peers().SetCount(context.Background(), cluster.Dials, tenant, sip, n)
 
 	return func() {
 		s.mu.Lock()
@@ -161,7 +161,7 @@ func (s *Server) beginDial(roomID room.RoomID, agentKey string) (func(), bool) {
 			delete(s.agentDials, agentKey)
 		}
 		s.mu.Unlock()
-		s.cfg.Cluster.SetCount(context.Background(), cluster.Dials, tenant, sip, n)
+		s.peers().SetCount(context.Background(), cluster.Dials, tenant, sip, n)
 	}, true
 }
 

@@ -40,7 +40,7 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 		delete(s.onCall, k)
 	}
 	s.mu.Unlock()
-	s.cfg.Cluster.SetCount(context.Background(), cluster.OnCall, tenant, sip, n)
+	s.peers().SetCount(context.Background(), cluster.OnCall, tenant, sip, n)
 	if pres := s.cfg.Presence; pres != nil {
 		if n > 0 {
 			pres.MarkOnCall(context.Background(), tenant, sip)
@@ -104,8 +104,8 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	s.mu.Unlock()
 	// Away before online, so a peer never sees this agent online and ringable
 	// before the backend flag is known.
-	s.cfg.Cluster.SetAway(context.Background(), tenant, sip, true)
-	s.cfg.Cluster.SetOnline(context.Background(), tenant, sip, true)
+	s.peers().SetAway(context.Background(), tenant, sip, true)
+	s.peers().SetOnline(context.Background(), tenant, sip, true)
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
 	// Read after registering above, so a change that lands meanwhile is either
@@ -153,8 +153,8 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		// Only when this socket was still the agent's: a reconnect that replaced
 		// it has already re-registered them online.
 		if gone {
-			s.cfg.Cluster.SetOnline(context.Background(), tenant, sip, false)
-			s.cfg.Cluster.SetAway(context.Background(), tenant, sip, false)
+			s.peers().SetOnline(context.Background(), tenant, sip, false)
+			s.peers().SetAway(context.Background(), tenant, sip, false)
 		}
 		_ = c.Close()
 		s.log.Info("agent offline", "tenant", tenant, "sip", sip)
@@ -260,7 +260,7 @@ func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 		s.away[k] = true
 	}
 	s.mu.Unlock()
-	s.cfg.Cluster.SetAway(context.Background(), tenant, sip, away)
+	s.peers().SetAway(context.Background(), tenant, sip, away)
 	return true
 }
 
