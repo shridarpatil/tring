@@ -233,24 +233,14 @@ jobs:
 
       # Built from this commit, with the images job's layer cache; loaded as
       # :e2e so compose runs them without rebuilding.
-      - name: Build api image
+      - name: Build tring image
         uses: docker/build-push-action@v7
         with:
           context: .
-          build-args: CMD=api
           platforms: linux/amd64
           load: true
-          tags: shridh0r/tring-api:e2e
-          cache-from: type=gha,scope=tring-api
-      - name: Build gateway image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          build-args: CMD=gateway
-          platforms: linux/amd64
-          load: true
-          tags: shridh0r/tring-gateway:e2e
-          cache-from: type=gha,scope=tring-gateway
+          tags: shridh0r/tring:e2e
+          cache-from: type=gha,scope=tring
       - name: Build freeswitch image
         uses: docker/build-push-action@v7
         with:
@@ -271,7 +261,7 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose logs --tail=200 api gateway freeswitch
+        run: docker compose logs --tail=200 tring freeswitch
 
   images:
     name: image · ${{ matrix.name }}
