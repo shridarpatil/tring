@@ -48,7 +48,7 @@ func TestDashboardStreamSnapshotThenEvent(t *testing.T) {
 	}
 }
 
-// Regression test for the missed hub.Forward(...) entry in cmd/api/main.go:
+// Regression test for the missed hub.Forward(...) entry in cmd/tring/api.go:
 // the gateway publishes events.TypeCallSupervised and the frontend consumes
 // it, but it must also be in the Hub's forward allowlist or the SSE stream
 // silently drops it before it reaches the dashboard.
@@ -81,7 +81,7 @@ func TestDashboardStreamForwardsCallSupervised(t *testing.T) {
 	}
 }
 
-// queue.stint must be in the hub's forward allowlist (cmd/api/main.go) so the
+// queue.stint must be in the hub's forward allowlist (cmd/tring/api.go) so the
 // dashboard sees a caller's wait start and end live.
 func TestDashboardStreamForwardsQueueStint(t *testing.T) {
 	hub := events.NewTestHub()

@@ -1,90 +1,49 @@
-// Package main: Tring call-plane gateway (pion media + brain, served on /rtc).
-//
-// The web-calling plane. Browsers join as rooms on /rtc (WebSocket signaling);
-// the SFU fans media between participants. The gateway runs the web plug with the
-// brain embedded in-process — IVR and team routing happen here, not over a remote
-// control channel. FreeSWITCH / PSTN adapters are not wired here.
+package main
+
+// gateway.go — the gateway role: the call plane. Browsers join rooms on /rtc
+// (WebSocket signaling) and the pion SFU fans media between participants, with
+// the brain (IVR + team routing + CDR) embedded in-process. Phone legs arrive
+// through the FreeSWITCH plug (internal/fsplug) when fsplug_enabled is set.
 //
 // Env: TRING_GATEWAY_ADDR, TRING_STUN_URL, TRING_TURN_URL, and either
 //
 //	TRING_TURN_USERNAME/_PASSWORD (static creds) or TRING_TURN_SECRET (the
 //	gateway mints its own ephemeral coturn creds, lifetime TRING_TURN_TTL_SECONDS),
 //	TRING_TURN_RELAY_ONLY, TRING_PUBLIC_IP, TRING_GATEWAY_UDP_MIN/_MAX.
-package main
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
+	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/shridarpatil/tring/internal/blobstore"
-	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/callcdr"
-	"github.com/shridarpatil/tring/internal/config"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
 	"github.com/shridarpatil/tring/internal/fsplug"
-	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/media/signaling"
 	"github.com/shridarpatil/tring/internal/outboundtrunks"
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/safehttp"
-	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/webhook"
 )
 
-func main() {
-	k := config.Load()
+type gatewayRole struct {
+	d           *deps
+	sig         *signaling.Server
+	srv, ctlSrv *http.Server
+	hub         *events.Hub
+}
 
-	logger := logging.New(k.String("log_format"), k.String("log_level"))
-	slog.SetDefault(logger)
-	if weak := config.WeakSecrets(k, "jwt_secret"); len(weak) > 0 && !k.Bool("allow_insecure_secrets") {
-		logger.Error("refusing to start with default or short secrets; set them in .env (or TRING_ALLOW_INSECURE_SECRETS=true for local dev)", "keys", weak)
-		os.Exit(1)
-	}
-
-	// SSRF guard for tenant-supplied URLs (IVR http_callback, webhooks): one
-	// client, public internet + the operator's outbound_allow_cidrs only.
-	outboundAllow, err := safehttp.ParseCIDRs(strings.Split(k.String("outbound_allow_cidrs"), ","))
-	if err != nil {
-		logger.Error("invalid outbound_allow_cidrs", "err", err)
-		os.Exit(1)
-	}
-	ivrHTTP := safehttp.NewClient(outboundAllow, 0) // per-node timeout via ctx (ivrdrive)
-	// TRING_SECRETS_KEY opens sealed webhook headers (the api seals them). A
-	// set-and-malformed key is fatal, as in the api.
-	var secrets *secretbox.Box
-	if v := k.String("secrets_key"); v != "" {
-		key, err := secretbox.ParseKey(v)
-		if err == nil {
-			secrets, err = secretbox.New(key)
-		}
-		if err != nil {
-			logger.Error("invalid TRING_SECRETS_KEY", "err", err)
-			os.Exit(1)
-		}
-	}
-	webhookHTTP := safehttp.NewClient(outboundAllow, webhook.DeliveryTimeout)
-
-	turnURL := k.String("turn_url")
-	turnSecret := k.String("turn_secret")
-
-	// Redis (shared with api/orchestrator) backs agent presence. Optional:
-	// log-and-disable if unreachable — presence just goes dark, calls still work.
-	redisCache, err := cache.New(k.String("redis_addr"), k.String("redis_password"))
-	if err != nil {
-		logger.Warn("redis unavailable, agent presence disabled", "err", err)
-	}
-	defer redisCache.Close()
+func startGateway(d *deps) (*gatewayRole, error) {
+	k, logger, redisCache := d.k, d.log, d.cache
+	g := &gatewayRole{d: d}
 
 	// Redis is a HARD dependency for single-use gateway-call-token enforcement:
 	// without it consumeToken can't prove a token is fresh and the gateway fails
@@ -92,23 +51,19 @@ func main() {
 	// without a reachable Redis rather than serve 503s — the operator must set
 	// TRING_REDIS_ADDR (or explicitly disable auth for an open/dev gateway).
 	if k.Bool("gateway_require_auth") && redisCache == nil {
-		logger.Error("gateway_require_auth is set but Redis is unavailable — " +
+		return nil, errors.New("gateway_require_auth is set but Redis is unavailable — " +
 			"set TRING_REDIS_ADDR to a reachable Redis (single-use token enforcement " +
 			"needs it), or set TRING_GATEWAY_REQUIRE_AUTH=false for an open gateway")
-		os.Exit(1)
 	}
 
-	// Dashboard live-update publisher (shares the Redis the api Hub subscribes
-	// to). Best-effort: nil when Redis is off → events simply don't fire.
-	eventsPub, err := events.NewPublisher(k.String("redis_addr"), k.String("redis_password"), logger)
-	if err != nil {
-		logger.Warn("redis unavailable, dashboard events disabled", "err", err)
-	}
-	defer eventsPub.Close()
+	ivrHTTP := safehttp.NewClient(d.outboundAllow, 0) // per-node timeout via ctx (ivrdrive)
+	webhookHTTP := safehttp.NewClient(d.outboundAllow, webhook.DeliveryTimeout)
+
+	turnURL := k.String("turn_url")
+	turnSecret := k.String("turn_secret")
 
 	// Pion SFU media plane (internal/media) — the N-party web-calling path,
-	// served on /rtc. Same ICE/TURN/public-IP config as the legacy bridge;
-	// shares the media UDP range.
+	// served on /rtc.
 	var sfuICE []sfu.ICEServer
 	if stun := k.String("stun_url"); stun != "" {
 		sfuICE = append(sfuICE, sfu.ICEServer{URLs: []string{stun}})
@@ -132,8 +87,7 @@ func main() {
 		Logger:     logger,
 	})
 	if err != nil {
-		logger.Error("sfu init failed", "err", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("sfu init failed: %w", err)
 	}
 	// Read-only DB for loading IVR flows (web-to-web IVR runs on the media plane).
 	// Best-effort: if the DB is unreachable, web calls are plain peer-to-peer
@@ -156,20 +110,6 @@ func main() {
 		transferMessage = store
 		availability = store
 		trunkRes = outboundtrunks.New(database)
-		// CDRs + recordings for media-plane calls (web + phone): same calls table,
-		// spool dir, and S3 scheme as the FreeSWITCH path. S3 stays opt-in.
-		blob, berr := blobstore.New(blobstore.Config{
-			Bucket:    k.String("s3_bucket"),
-			Region:    k.String("s3_region"),
-			Endpoint:  k.String("s3_endpoint"),
-			AccessKey: k.String("s3_access_key"),
-			SecretKey: k.String("s3_secret_key"),
-			Prefix:    k.String("s3_prefix"),
-			UseSSL:    k.Bool("s3_use_ssl"),
-		})
-		if berr != nil {
-			logger.Warn("S3 recording storage disabled (config error)", "err", berr)
-		}
 		// One *callcdr.Log satisfies both CallLog and SupervisorLog; assign it into
 		// each interface-typed var from its concrete type so a nil DB leaves BOTH
 		// unset (a typed-nil stored in an interface would compare != nil and break
@@ -178,9 +118,11 @@ func main() {
 		// and sees each media-plane call end (call.ended to a flow's "on call
 		// end" webhook), so each fires once however many api replicas run.
 		notifier := webhook.New(database).WithLogger(logger).WithHTTPClient(webhookHTTP).
-			WithCache(redisCache).WithSecrets(secrets)
+			WithCache(redisCache).WithSecrets(d.secrets)
 		webhooks = notifier
-		cdrLog := callcdr.New(database, blob, k.String("recordings_dir"), logger, eventsPub).
+		// CDRs + recordings for media-plane calls (web + phone): same calls
+		// table, spool dir, and S3 scheme. S3 stays opt-in.
+		cdrLog := callcdr.New(database, d.blob, k.String("recordings_dir"), logger, d.pub).
 			WithWebhooks(notifier).WithCache(redisCache)
 		calls = cdrLog
 		supervisors = cdrLog
@@ -204,23 +146,25 @@ func main() {
 		Presence:        presence.New(redisCache), // publish agent online/offline for the dashboard
 		Calls:           calls,                    // CDRs + recordings (one path for web + phone)
 		Cache:           redisCache,               // publish web team-queue depth for the dashboard
-		Events:          eventsPub,
+		Events:          d.pub,
 		Supervisors:     supervisors,  // supervisor session audit (nil DB → nil, no audit)
 		HTTP:            ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes
 		Webhooks:        webhooks,     // IVR node webhooks (nil without a DB)
 		Availability:    availability, // agent's Away flag sent on connect (nil without a DB)
 		Logger:          logger,
 	})
+	g.sig = sig
 
 	// Backend Away/Break toggles (the api's agent.status event) reach the SDK
 	// live: forward each to the agent's presence socket if they're connected
 	// here. Best-effort: without Redis the agent only learns it on reconnect.
-	hub, err := events.NewHub(k.String("redis_addr"), k.String("redis_password"), logger)
+	// Its own Hub, not the api role's: this one only uses On, and each Hub's
+	// registrations must finish before its Run.
+	g.hub, err = events.NewHub(k.String("redis_addr"), k.String("redis_password"), logger)
 	if err != nil {
 		logger.Warn("redis unavailable, live agent availability disabled", "err", err)
 	}
-	defer hub.Close()
-	hub.On(events.TypeAgentStatus, func(tenant string, data json.RawMessage) {
+	g.hub.On(events.TypeAgentStatus, func(tenant string, data json.RawMessage) {
 		var e struct {
 			Sip       string `json:"sip_username"`
 			Available bool   `json:"available_for_calls"`
@@ -229,7 +173,7 @@ func main() {
 			sig.PushAvailability(tenant, e.Sip, e.Available)
 		}
 	})
-	go hub.Run(context.Background())
+	go g.hub.Run(context.Background())
 
 	// FreeSWITCH SIP plug (internal/fsplug) — inbound PSTN calls over
 	// FreeSWITCH, routed through the room.Plug seam. OFF by default; needs
@@ -240,8 +184,8 @@ func main() {
 		} else {
 			fsAllow, aerr := safehttp.ParseCIDRs(strings.Split(k.String("fsplug_allow_cidrs"), ","))
 			if aerr != nil {
-				logger.Error("invalid fsplug_allow_cidrs", "err", aerr)
-				os.Exit(1)
+				g.hub.Close()
+				return nil, fmt.Errorf("invalid fsplug_allow_cidrs: %w", aerr)
 			}
 			plug, perr := fsplug.New(fsplug.Config{
 				SIPListen:    k.String("fsplug_sip_listen"),
@@ -254,8 +198,8 @@ func main() {
 				AllowFrom:    fsAllow,
 			}, logger)
 			if perr != nil {
-				logger.Error("fsplug init failed", "err", perr)
-				os.Exit(1)
+				g.hub.Close()
+				return nil, fmt.Errorf("fsplug init failed: %w", perr)
 			}
 			sig.AttachPstn(plug, didResolver)
 			if trunkRes != nil {
@@ -270,12 +214,7 @@ func main() {
 		}
 	}
 
-	addr := k.String("gateway_addr")
 	sigHandler := sig.Handler()
-
-	// One listener serves the pion media plane only: /rtc (WebSocket signaling).
-	// The legacy bridge endpoints are not wired in this binary — the gateway
-	// implements only the web plug (pion-based N-party calls on /rtc).
 	root := http.NewServeMux()
 	root.Handle("/rtc", sigHandler)
 	root.Handle("/rtc/", sigHandler)
@@ -285,8 +224,8 @@ func main() {
 	// (inside ws.UpgradeHTTP) clears the conn deadlines, and the signaling
 	// layer sets its own per-read deadlines on the socket. No WriteTimeout —
 	// it would be meaningless for (and is likewise cleared on) hijacked conns.
-	srv := &http.Server{
-		Addr:              addr,
+	g.srv = &http.Server{
+		Addr:              k.String("gateway_addr"),
 		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -294,7 +233,7 @@ func main() {
 	}
 	// The API's control calls (two-number connect) on their own loopback
 	// listener, like the api's fs_addr: never reachable through gateway_addr.
-	ctlSrv := &http.Server{
+	g.ctlSrv = &http.Server{
 		Addr:              k.String("gateway_control_addr"),
 		Handler:           sig.ControlHandler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -302,37 +241,41 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 	go func() {
-		logger.Info("gateway control listening", "addr", ctlSrv.Addr)
-		if err := ctlSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("gateway control listening", "addr", g.ctlSrv.Addr)
+		if err := g.ctlSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("gateway control serve failed", "err", err)
 			os.Exit(1)
 		}
 	}()
-
 	go func() {
-		logger.Info("gateway listening", "addr", addr)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		logger.Info("gateway listening", "addr", g.srv.Addr)
+		if err := g.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("gateway serve failed", "err", err)
 			os.Exit(1)
 		}
 	}()
+	return g, nil
+}
 
-	// Graceful shutdown: on SIGTERM (docker stop) take no new calls and let the
-	// live ones finish, up to gateway_drain_seconds; then exit. Keep compose's
-	// stop_grace_period above that, or Docker SIGKILLs mid-drain. A second
-	// signal (stop() restores the default) exits at once.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	<-ctx.Done()
-	stop()
-	drainCtx, cancel := context.WithTimeout(context.Background(), time.Duration(k.Int("gateway_drain_seconds"))*time.Second)
-	if left := sig.Drain(drainCtx); left > 0 {
-		logger.Warn("drain timed out, ending live calls", "calls", left)
-	} else {
-		logger.Info("drained, shutting down")
-	}
-	cancel()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// drain takes no new calls and lets the live ones finish, up to
+// gateway_drain_seconds. Keep compose's stop_grace_period above that, or Docker
+// SIGKILLs mid-drain. It returns the calls still live when it gave up.
+func (g *gatewayRole) drain(ctx context.Context) int {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(g.d.k.Int("gateway_drain_seconds"))*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
-	_ = ctlSrv.Shutdown(shutdownCtx)
+	left := g.sig.Drain(ctx)
+	if left > 0 {
+		g.d.log.Warn("drain timed out, ending live calls", "calls", left)
+	} else {
+		g.d.log.Info("drained, shutting down")
+	}
+	return left
+}
+
+func (g *gatewayRole) shutdown(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_ = g.srv.Shutdown(ctx)
+	_ = g.ctlSrv.Shutdown(ctx)
+	g.hub.Close()
 }

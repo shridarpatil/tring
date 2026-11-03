@@ -146,8 +146,8 @@ eventually correct even after an ungraceful crash.
 | Item | Where | Effort |
 |---|---|---|
 | Per-call liveness heartbeat (node writes, sweeper reads) | gateway `callcdr` + orchestrator runner → Redis | M |
-| Reconciliation sweeper | new job in `cmd/api` (system of record) | S |
-| Graceful drain (SIGTERM → readiness false → drain → shed) | `cmd/gateway`, `cmd/orchestrator` main + signaling/runner | M |
+| Reconciliation sweeper | new job in the api role (system of record) | S |
+| Graceful drain (SIGTERM → readiness false → drain → shed) | `cmd/tring` (gateway role) + signaling (done) | M |
 | Readiness vs liveness probes split | all three binaries (`/readyz` vs `/healthz`) | S |
 | Cell-pinned gateway URL in the mints | `internal/api` guest-credentials / agent token | M |
 | Edge router / cell selection | new (only when >1 cell is real) | L — defer |

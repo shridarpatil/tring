@@ -17,11 +17,11 @@ name: CI
 # advisory for now: `images` and `release` don't wait on it.
 #
 # Build/release stage (gated on the tests, push events only):
-#   - images : three images -> :develop on main, :<tag> on a v* tag, to
+#   - images : two images (tring, freeswitch) -> :develop on main, :<tag> on a v* tag, to
 #              GHCR + Docker Hub.
 #   - release: a GitHub Release on a v* tag, once its images are pushed.
-#              Tring ships as images only: no binaries (the gateway needs
-#              cgo + libopus, the api embeds the built console).
+#              Tring ships as images only: no binaries (tring needs cgo +
+#              libopus and embeds the built console).
 
 on:
   push:
@@ -113,7 +113,7 @@ jobs:
         run: go test -race -p 1 -count=1 -timeout=90s ./...
 
       - name: go test (libopus mixer)
-        # The gateway image links libopus so a supervisor's barge is mixed into
+        # The tring image links libopus so a supervisor's barge is mixed into
         # phone calls (internal/media/sfu/mix_opus.go, build tag `opus`).
         run: |
           sudo apt-get update -qq
@@ -144,12 +144,12 @@ jobs:
           go-version: "1.26"
           cache: true
 
-      # Boot just the bits the FS integration test needs. Bringing up `api`
+      # Boot just the bits the FS integration test needs. Bringing up `tring`
       # here too would force a rebuild of an image per CI run; we don't need
       # it for the ESL-level test. FreeSWITCH is built from this commit's
       # freeswitch/ (cheap: config COPYs on the base image) rather than pulled,
       # so the fsplug test runs against the dialplan under review. Built on its
-      # own: `up --build` would also rebuild api, which freeswitch depends on.
+      # own: `up --build` would also rebuild tring.
       - name: Boot FreeSWITCH + Postgres
         run: |
           docker compose build freeswitch
@@ -198,12 +198,12 @@ jobs:
         run: docker compose logs freeswitch | tail -200
 
   # ─── Publish phase ────────────────────────────────────────────────
-  # ONE job builds & pushes three images on BOTH triggers, gated on the tests
+  # ONE job builds & pushes two images on BOTH triggers, gated on the tests
   # above:
   #   push to main   -> :develop
   #   push a v* tag  -> :<tag>   (the tag name verbatim, e.g. v0.1.0)
-  # to GHCR + Docker Hub. The two Go binaries share the root Dockerfile
-  # (--build-arg CMD); freeswitch is its own image (amd64 only — its base
+  # to GHCR + Docker Hub. The tring binary (api + gateway roles) builds from
+  # the root Dockerfile; freeswitch is its own image (amd64 only — its base
   # safarov/freeswitch has no arm64). On a tag, the `release` job then cuts
   # the GitHub Release.
   e2e:
@@ -233,24 +233,14 @@ jobs:
 
       # Built from this commit, with the images job's layer cache; loaded as
       # :e2e so compose runs them without rebuilding.
-      - name: Build api image
+      - name: Build tring image
         uses: docker/build-push-action@v7
         with:
           context: .
-          build-args: CMD=api
           platforms: linux/amd64
           load: true
-          tags: shridh0r/tring-api:e2e
-          cache-from: type=gha,scope=tring-api
-      - name: Build gateway image
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          build-args: CMD=gateway
-          platforms: linux/amd64
-          load: true
-          tags: shridh0r/tring-gateway:e2e
-          cache-from: type=gha,scope=tring-gateway
+          tags: shridh0r/tring:e2e
+          cache-from: type=gha,scope=tring
       - name: Build freeswitch image
         uses: docker/build-push-action@v7
         with:
@@ -271,7 +261,7 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose logs --tail=200 api gateway freeswitch
+        run: docker compose logs --tail=200 tring freeswitch
 
   images:
     name: image · ${{ matrix.name }}
@@ -285,9 +275,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: api,        context: ".",          file: Dockerfile,             args: "CMD=api",    platforms: "linux/amd64,linux/arm64" }
-          - { name: gateway,    context: ".",          file: Dockerfile,             args: "CMD=gateway", platforms: "linux/amd64,linux/arm64" }
-          - { name: freeswitch, context: "freeswitch", file: "freeswitch/Dockerfile", args: "",          platforms: "linux/amd64" }
+          - { name: tring,      image: tring,            context: ".",          file: Dockerfile,             platforms: "linux/amd64,linux/arm64" }
+          - { name: freeswitch, image: tring-freeswitch, context: "freeswitch", file: "freeswitch/Dockerfile", platforms: "linux/amd64" }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -311,7 +300,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The tag on a release, develop-<short sha> on main; read by the api's
+      # The tag on a release, develop-<short sha> on main; read by the
       # console footer (Dockerfile ARG VERSION → main.version).
       - name: Build version
         id: version
@@ -324,8 +313,8 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/tring-${{ matrix.name }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/tring-${{ matrix.name }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
           tags: |
             type=raw,value=develop,enable={{is_default_branch}}
             type=ref,event=tag
@@ -336,7 +325,6 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           build-args: |
-            ${{ matrix.args }}
             VERSION=${{ steps.version.outputs.version }}
           platforms: ${{ matrix.platforms }}
           push: true
@@ -368,4 +356,6 @@ jobs:
             --title "Tring $TAG" --generate-notes $pre \
             --notes "Set \`TRING_TAG=$TAG\` in \`.env\`, then \`docker compose pull && docker compose up -d\`.
 
-          Images: \`$DOCKER_ORG/tring-{api,gateway,freeswitch}:$TAG\` (also on ghcr.io/${{ github.repository_owner }})."
+          Images: \`$DOCKER_ORG/{tring,tring-freeswitch}:$TAG\` (also on ghcr.io/${{ github.repository_owner }}).
+
+          Upgrading from the separate \`tring-api\` / \`tring-gateway\` images: replace \`docker-compose.yml\` first (\`TRING_VERSION=$TAG sh install.sh\`), then \`docker compose pull && docker compose up -d --remove-orphans\`. See https://shridarpatil.github.io/tring/getting-started/upgrading/."

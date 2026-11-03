@@ -22,8 +22,8 @@ var sqlFile = tring.QueriesSQL
 
 // Queries is the typed handle to every named statement in queries.sql. Each
 // field's `query:"<tag>"` struct tag binds it to a `-- name: <tag>` block.
-// Both cmd/api and cmd/orchestrator share this one struct; fields are grouped
-// by the domain (and owning binary) they serve.
+// The api and gateway roles share this one struct; fields are grouped by the
+// domain (and owning role) they serve.
 type Queries struct {
 	// ---- api: agents ----
 	CreateAgent          string `query:"create-agent"`

@@ -39,7 +39,7 @@ Open-source, API-first voice calling for any CRM. Bring your own SIP trunk.
 
 ### Docker
 
-Pre-built images are on Docker Hub (`shridh0r/tring-api`, `tring-gateway`, `tring-freeswitch`).
+Pre-built images are on Docker Hub (`shridh0r/tring`, `shridh0r/tring-freeswitch`).
 
 ```bash
 # Download the installer, read it, then run it (creates ./tring)
@@ -69,12 +69,11 @@ See the [documentation](https://shridarpatil.github.io/tring/) for the quickstar
 
 ## Developers
 
-The backend is Go (two binaries: `cmd/api` for the REST API and console, `cmd/gateway` for the call plane) with FreeSWITCH as the carrier edge. The console is Vue 3.
+The backend is one Go binary, `cmd/tring`, with FreeSWITCH as the carrier edge. `tring` runs the api role (REST API, console) and the gateway role (call plane); `tring --gateway` runs only the call plane. The console is Vue 3.
 
 ```bash
 docker compose up -d   # Postgres, Redis, FreeSWITCH
-make api               # REST API + console on :8085
-make gateway           # call plane on :8087
+make run               # tring: REST API + console on :8085, call plane on :8087
 make help              # all targets (sdk, images, test, …)
 ```
 
