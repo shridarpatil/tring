@@ -41,15 +41,16 @@ func (s *Server) agentView(ctx context.Context, tenant string) agentView {
 // what this node knows (an immediate write failed and the heartbeat hasn't
 // rewritten it yet), and a busy or Away agent must never read as free. So a
 // local call or Away wins, and an agent with a socket here is online even if
-// Redis missed it. The cluster count already includes this node's share, hence
+// Redis missed it, and is rung here (no bus hop) even if Redis also lists a
+// socket elsewhere. The cluster count already includes this node's share, hence
 // max rather than sum (as in beginDial).
 func (s *Server) mergeLocal(tenant, self string, states map[string]cluster.AgentState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for sip := range s.agents[tenant] {
-		if _, ok := states[sip]; !ok {
-			states[sip] = cluster.AgentState{Node: self}
-		}
+		st := states[sip]
+		st.Node = self
+		states[sip] = st
 	}
 	for sip, st := range states {
 		k := tenant + "|" + sip

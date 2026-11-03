@@ -266,17 +266,34 @@ func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 
 // handleDecline delivers an agent's rejection of a ringing call to that room's
 // active ring (registered by Prepare), which advances the router to the next
-// agent without waiting out the ring timeout. No-op if the ring already ended.
+// agent without waiting out the ring timeout. When the ring came over the bus,
+// the room lives on the node that sent it, so the decline goes back there. No-op
+// if the ring already ended.
 func (s *Server) handleDecline(tenant, sip, roomName string) {
 	if roomName == "" {
 		return
 	}
 	rid := room.RoomID(tenant + "/" + roomName)
+	key := remoteRingKey(tenant, roomName, sip)
 	s.mu.Lock()
 	dec := s.declines[rid]
+	from := ""
+	if dec == nil {
+		from = s.remoteRings[key]
+		delete(s.remoteRings, key)
+	}
 	s.mu.Unlock()
-	if dec != nil {
+	switch {
+	case dec != nil:
 		dec(sip)
+	case from != "":
+		err := s.cfg.Cluster.Send(context.Background(), from, cluster.Msg{
+			Type: cluster.MsgDecline, Tenant: tenant, SIP: sip, Room: roomName,
+		})
+		if err != nil {
+			// The room node waits out the ring instead of advancing now.
+			s.log.Error("ring bus: decline not delivered", "tenant", tenant, "sip", sip, "node", from, "room", roomName, "err", err)
+		}
 	}
 }
 
@@ -291,7 +308,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	eff := &pionRing{
 		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label,
 		strategy: strategy, moh: moh, ring: ring,
-		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{},
+		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{}, nodes: map[string]string{},
 		declineCh: make(chan struct{}, 1),
 	}
 
@@ -362,15 +379,16 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 type pionRing struct {
 	s        *Server
 	tenant   string
-	roomID   room.RoomID     // full "<tenant>/<name>" — where hold music is injected
-	roomName string          // un-namespaced name agents join
-	label    string          // caller label shown to the agent
-	strategy string          // team strategy; "" / ring_all → all at once, else one at a time
-	moh      string          // resolved team hold music played to the caller while waiting
-	ring     <-chan struct{} // closed on a room join
-	rung     map[string]bool // sips popped at least once this transfer (suppresses re-pop within a round)
-	active   map[string]bool // sips whose popup is currently showing (guarded by s.mu)
-	declined map[string]bool // sips that rejected this call — excluded from candidates (guarded by s.mu)
+	roomID   room.RoomID       // full "<tenant>/<name>" — where hold music is injected
+	roomName string            // un-namespaced name agents join
+	label    string            // caller label shown to the agent
+	strategy string            // team strategy; "" / ring_all → all at once, else one at a time
+	moh      string            // resolved team hold music played to the caller while waiting
+	ring     <-chan struct{}   // closed on a room join
+	rung     map[string]bool   // sips popped at least once this transfer (suppresses re-pop within a round)
+	active   map[string]bool   // sips whose popup is currently showing (guarded by s.mu)
+	declined map[string]bool   // sips that rejected this call — excluded from candidates (guarded by s.mu)
+	nodes    map[string]string // sip → node its ring went to ("" = this node), so the cancel follows it (guarded by s.mu)
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
@@ -429,6 +447,8 @@ func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == n
 func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.Duration) (routing.RingOutcome, error) {
 	p.ensureHold() // caller hears hold music from the first ring, not just once queued
 	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
+	// Where each agent's presence socket is. It may read Redis, so before s.mu.
+	view := p.s.agentView(ctx, p.tenant)
 
 	p.s.mu.Lock()
 	inSet := make(map[string]bool, len(ordered))
@@ -441,18 +461,23 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		}
 	}
 
-	var poppedNow []string // agents actually rung this call — recorded on the timeline below
+	// pop records the ring under the lock (so an answer racing the push finds
+	// its invite) and queues the push itself for after the unlock: a remote
+	// agent is rung over the bus, and Redis I/O never runs under s.mu.
+	var pops []string
 	pop := func(sip string) {
-		if c := p.s.agents[p.tenant][sip]; c != nil {
-			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
-			if p.s.invites[p.roomID] == nil {
-				p.s.invites[p.roomID] = map[string]bool{}
-			}
-			p.s.invites[p.roomID][sip] = true
-			p.rung[sip] = true
-			p.active[sip] = true
-			poppedNow = append(poppedNow, sip)
+		node := view.node(sip)
+		if node == "" && p.s.agents[p.tenant][sip] == nil {
+			return // not connected here, nor anywhere the view knows of
 		}
+		if p.s.invites[p.roomID] == nil {
+			p.s.invites[p.roomID] = map[string]bool{}
+		}
+		p.s.invites[p.roomID][sip] = true
+		p.rung[sip] = true
+		p.active[sip] = true
+		p.nodes[sip] = node
+		pops = append(pops, sip)
 	}
 
 	var rungNow string // the single agent rung this attempt (one-at-a-time only)
@@ -479,7 +504,38 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 			}
 		}
 	}
+	nodes := make([]string, len(pops))
+	for i, sip := range pops {
+		nodes[i] = p.nodes[sip]
+	}
 	p.s.mu.Unlock()
+
+	var poppedNow, failed []string // agents actually rung this call — recorded on the timeline below
+	for i, sip := range pops {
+		if p.s.pushRing(p.tenant, sip, nodes[i], p.roomName, p.label, false) {
+			poppedNow = append(poppedNow, sip)
+		} else {
+			failed = append(failed, sip)
+		}
+	}
+	if len(failed) > 0 {
+		// Not rung (bus down, or the socket went away): no popup to withdraw and
+		// no invite to honor. The attempt then plays out as an unanswered ring.
+		// One-at-a-time keeps them as tried so the next attempt moves on; ring_all
+		// forgets them so a later attempt retries.
+		p.s.mu.Lock()
+		for _, sip := range failed {
+			delete(p.active, sip)
+			delete(p.s.invites[p.roomID], sip)
+			if !oneAtATime {
+				delete(p.rung, sip)
+			}
+			if sip == rungNow {
+				rungNow = ""
+			}
+		}
+		p.s.mu.Unlock()
+	}
 
 	// Record each agent actually rung on the durable timeline (id + name resolved
 	// by callcdr), off the lock. ring_all pops several at once; a one-at-a-time
@@ -523,13 +579,16 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 // cancelSips withdraws the incoming-call UI on the given agents (best-effort) and
 // clears their active-popup flag.
 func (p *pionRing) cancelSips(sips []string) {
+	nodes := make([]string, len(sips))
 	p.s.mu.Lock()
-	defer p.s.mu.Unlock()
-	for _, sip := range sips {
+	for i, sip := range sips {
 		delete(p.active, sip)
-		if c := p.s.agents[p.tenant][sip]; c != nil {
-			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
-		}
+		nodes[i] = p.nodes[sip]
+	}
+	p.s.mu.Unlock()
+	// After the unlock: a remote cancel is Redis I/O.
+	for i, sip := range sips {
+		p.s.pushCancel(p.tenant, sip, nodes[i], p.roomName)
 	}
 }
 
