@@ -7,10 +7,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/knadh/koanf/v2"
 
@@ -59,13 +62,86 @@ func weakSecretKeys(gatewayOnly bool) []string {
 	return []string{"jwt_secret", "fs_basic_auth", "esl_password"}
 }
 
+// apiStopper and gatewayStopper are what run needs from a started role; tests
+// substitute fakes to pin the start and shutdown order.
+type apiStopper interface{ shutdown(context.Context) }
+
+type gatewayStopper interface {
+	drain(context.Context) int
+	shutdown(context.Context)
+}
+
+// roles starts each part of the process; main binds them to the shared deps.
+type roles struct {
+	api     func() (apiStopper, error)
+	gateway func() (gatewayStopper, error)
+	seed    func() error
+}
+
+// run starts the roles the options ask for and blocks until stop closes. The
+// api starts first because it migrates the schema the gateway reads. Shutdown
+// is the reverse: the gateway drains its live calls while the api (console,
+// live dashboard) keeps serving, then the api stops last.
+func run(o options, r roles, stop <-chan struct{}) error {
+	if o.seedTenant != "" {
+		return r.seed()
+	}
+	var a apiStopper
+	if !o.gatewayOnly {
+		var err error
+		if a, err = r.api(); err != nil {
+			return err
+		}
+	}
+	g, err := r.gateway()
+	if err != nil {
+		if a != nil {
+			a.shutdown(context.Background())
+		}
+		return err
+	}
+	<-stop
+	g.drain(context.Background())
+	g.shutdown(context.Background())
+	if a != nil {
+		a.shutdown(context.Background())
+	}
+	return nil
+}
+
 func main() {
-	o, err := parseOptions(os.Args[1:], config.Load())
+	k := config.Load()
+	o, err := parseOptions(os.Args[1:], k)
 	if err != nil {
 		os.Exit(2)
 	}
 	if o.showVersion {
 		fmt.Println(version)
 		return
+	}
+	d, err := newDeps(k, o.gatewayOnly)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer d.close()
+
+	// SIGTERM (docker stop) starts the drain. A second signal exits at once:
+	// stop() restores the default handler after the first.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+
+	err = run(o, roles{
+		api:     func() (apiStopper, error) { return startAPI(d, o) },
+		gateway: func() (gatewayStopper, error) { return startGateway(d) },
+		seed:    func() error { return runSeed(d, o) },
+	}, ctx.Done())
+	if err != nil {
+		d.log.Error("tring stopped", "err", err)
+		d.close()
+		os.Exit(1)
 	}
 }
