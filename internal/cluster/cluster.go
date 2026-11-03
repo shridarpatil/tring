@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -27,6 +28,9 @@ import (
 
 	"github.com/shridarpatil/tring/internal/cache"
 )
+
+// ErrClosed is returned by Heartbeat after Close.
+var ErrClosed = errors.New("cluster: closed")
 
 // Config configures a Cluster. Zero values get the documented defaults.
 type Config struct {
@@ -130,10 +134,15 @@ func (c *Cluster) Alone() bool {
 
 // Heartbeat refreshes this node's registry entry and rewrites its whole
 // contribution from s, then refreshes the cached live-node list. Tenants that
-// left s are not deleted here; their keys expire after TTL.
+// left s are not deleted here; their keys expire after TTL. After Close it
+// writes nothing and returns ErrClosed, so a late heartbeat can't resurrect the
+// node Close just removed.
 func (c *Cluster) Heartbeat(ctx context.Context, s Snapshot) error {
 	if c == nil {
 		return nil
+	}
+	if c.isClosed() {
+		return ErrClosed
 	}
 	if err := c.heartbeat(ctx, s); err != nil {
 		// Without a fresh view of the cluster, local state is the safe answer.
@@ -227,6 +236,12 @@ func (c *Cluster) heartbeat(ctx context.Context, s Snapshot) error {
 	}
 
 	c.mu.Lock()
+	if c.closed {
+		// Close ran while we were writing; take back what it couldn't know about.
+		c.mu.Unlock()
+		c.removeWritten(written)
+		return ErrClosed
+	}
 	c.live = live
 	c.alone = len(live) == 1
 	c.keys = written
@@ -269,6 +284,25 @@ func (c *Cluster) Close() error {
 		c.log.Warn("cluster: removing node keys failed", "err", err)
 	}
 	return c.rdb.Close()
+}
+
+func (c *Cluster) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+// removeWritten deletes keys written by a heartbeat that raced with Close.
+func (c *Cluster) removeWritten(written map[string]struct{}) {
+	keys := make([]string, 0, len(written))
+	for k := range written {
+		keys = append(keys, k)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), setTimeout)
+	defer cancel()
+	// The client may already be closed by Close; failure here is harmless.
+	_ = c.rdb.SRem(ctx, c.key("nodes"), c.cfg.ID).Err()
+	_ = c.rdb.Del(ctx, keys...).Err()
 }
 
 func (c *Cluster) key(s string) string { return c.cfg.Prefix + s }

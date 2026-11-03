@@ -43,7 +43,7 @@ type AgentState struct {
 // SetOnline adds or removes sip from this node's online set right away, so
 // peers see it before the next heartbeat.
 func (c *Cluster) SetOnline(ctx context.Context, tenant, sip string, online bool) {
-	if c == nil {
+	if c == nil || c.isClosed() {
 		return
 	}
 	c.setMember(ctx, c.agentsKey(tenant, c.cfg.ID), sip, online)
@@ -51,7 +51,7 @@ func (c *Cluster) SetOnline(ctx context.Context, tenant, sip string, online bool
 
 // SetAway adds or removes sip from this node's away set right away.
 func (c *Cluster) SetAway(ctx context.Context, tenant, sip string, away bool) {
-	if c == nil {
+	if c == nil || c.isClosed() {
 		return
 	}
 	c.setMember(ctx, c.awayKey(tenant, c.cfg.ID), sip, away)
@@ -59,7 +59,7 @@ func (c *Cluster) SetAway(ctx context.Context, tenant, sip string, away bool) {
 
 // SetCount writes this node's counter for the agent right away; n <= 0 deletes it.
 func (c *Cluster) SetCount(ctx context.Context, k Kind, tenant, sip string, n int) {
-	if c == nil {
+	if c == nil || c.isClosed() {
 		return
 	}
 	key := c.countKey(k, tenant, sip, c.cfg.ID)
