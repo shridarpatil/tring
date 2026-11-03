@@ -14,10 +14,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/knadh/koanf/v2"
 
 	"github.com/shridarpatil/tring/internal/config"
+	"github.com/shridarpatil/tring/internal/migrate"
 )
 
 // version is stamped at build time (-ldflags "-X main.version=…", by the
@@ -136,7 +138,17 @@ func main() {
 
 	err = run(o, roles{
 		api:     func() (apiStopper, error) { return startAPI(d, o) },
-		gateway: func() (gatewayStopper, error) { return startGateway(d) },
+		gateway: func() (gatewayStopper, error) {
+			// A gateway-only node never migrates; it waits for the main node to.
+			// All mode just migrated in the api role.
+			if o.gatewayOnly {
+				ready := func() error { return migrate.Ready(o.dsn) }
+				if err := waitForSchema(ctx.Done(), ready, 5*time.Second, d.log); err != nil {
+					return nil, err
+				}
+			}
+			return startGateway(d)
+		},
 		seed:    func() error { return runSeed(d, o) },
 	}, ctx.Done())
 	if err != nil {
