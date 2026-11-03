@@ -11,6 +11,19 @@ import (
 // decision falls back to this node's own agents rather than stall the call.
 const clusterReadTimeout = time.Second
 
+// peers returns the cluster for this node's immediate state writes (presence,
+// Away, on-call and dial counts), or nil while the node is alone. Alone, no
+// other node reads that state, so a synchronous write would only let a stalled
+// Redis delay agent connects and call join/leave; the first heartbeat after a
+// peer appears rewrites the full snapshot anyway. A nil *Cluster's writes are
+// no-ops.
+func (s *Server) peers() *cluster.Cluster {
+	if c := s.cfg.Cluster; !c.Alone() {
+		return c
+	}
+	return nil
+}
+
 // agentView is one tenant's agents as a ringing decision should see them: the
 // whole cluster when this node has live peers, else this node's own maps. Every
 // reader of "is this agent online / free" goes through it so single-node and
