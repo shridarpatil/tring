@@ -214,3 +214,59 @@ func TestAgentViewLocalOnCallWinsOverStaleCluster(t *testing.T) {
 		t.Fatal("free(200) = true, want false (Away here)")
 	}
 }
+
+// When a cluster read fails, ringing decisions use this node's own maps, even
+// with live peers. The failure is a WRONGTYPE count key behind a redis.Nil in
+// the same pipeline, which once read as a clean (under)count. Three nodes, so a
+// masked read differs from the local answer: C holds 200's real counts, B's
+// keys for 200 are the wrong type, A's are missing.
+func TestAgentViewLocalWhenClusterReadFails(t *testing.T) {
+	ca, cb, prefix := newTestClusters(t)
+	cc, err := cluster.New(cluster.Config{
+		Addr: os.Getenv("TRING_TEST_REDIS"), Password: os.Getenv("TRING_TEST_REDIS_PASSWORD"),
+		ID: "node-c", Mode: "all", Version: "test",
+		Prefix: prefix, Interval: 100 * time.Millisecond, TTL: time.Second,
+	}, nil)
+	if err != nil {
+		t.Fatalf("cluster.New: %v", err)
+	}
+	t.Cleanup(func() { _ = cc.Close() })
+
+	sa := newViewServer(t, ca)
+	sa.agents["t1"] = map[string]*conn{"100": {}}
+	beatSnap(t, cb, cluster.Snapshot{Online: map[string][]string{"t1": {"200"}}})
+	beatSnap(t, cc, cluster.Snapshot{Counts: map[cluster.Kind]map[string]int{
+		cluster.OnCall: {"t1|200": 1},
+		cluster.Dials:  {"t1|200": maxAgentOutbound},
+	}})
+	beatSnap(t, ca, sa.ClusterSnapshot())
+	if ca.Alone() {
+		t.Fatal("A is alone")
+	}
+
+	rdb := redis.NewClient(cache.Options(os.Getenv("TRING_TEST_REDIS"), os.Getenv("TRING_TEST_REDIS_PASSWORD")))
+	t.Cleanup(func() { _ = rdb.Close() })
+	ctx := context.Background()
+	for _, kind := range []cluster.Kind{cluster.OnCall, cluster.Dials} {
+		key := prefix + "count:" + string(kind) + ":t1:200:node-b"
+		if err := rdb.HSet(ctx, key, "x", "1").Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	v := sa.agentView(ctx, "t1")
+	if v.online("200") {
+		t.Fatal("online(200) = true, want the local view (200 is only on B)")
+	}
+	if !v.free("100") || v.node("100") != "" {
+		t.Fatalf("local agent 100: free=%v node=%q, want free and local", v.free("100"), v.node("100"))
+	}
+	if sa.agentOnCall("t1", "200") {
+		t.Fatal("agentOnCall(200) = true, want false from the local maps")
+	}
+	done, ok := sa.beginDial("room-x", "t1|200")
+	if !ok {
+		t.Fatal("beginDial refused, want the local count (0) to allow it")
+	}
+	done()
+}

@@ -157,7 +157,7 @@ func (c *Cluster) Agents(ctx context.Context, tenant string) (map[string]AgentSt
 		cmd  *redis.StringCmd
 	}
 	var refs []countRef
-	if _, err := c.rdb.Pipelined(ctx, func(p redis.Pipeliner) error {
+	cmds, err := c.rdb.Pipelined(ctx, func(p redis.Pipeliner) error {
 		for sip := range out {
 			for _, n := range live {
 				for _, k := range []Kind{OnCall, Dials} {
@@ -166,7 +166,8 @@ func (c *Cluster) Agents(ctx context.Context, tenant string) (map[string]AgentSt
 			}
 		}
 		return nil
-	}); err != nil && !errors.Is(err, redis.Nil) {
+	})
+	if err := readErr(cmds, err); err != nil {
 		return nil, fmt.Errorf("cluster: read counts: %w", err)
 	}
 	for _, r := range refs {
@@ -198,12 +199,13 @@ func (c *Cluster) Count(ctx context.Context, k Kind, tenant, sip string) (int, e
 	}
 	live := c.liveNodes()
 	cmds := make([]*redis.StringCmd, len(live))
-	if _, err := c.rdb.Pipelined(ctx, func(p redis.Pipeliner) error {
+	res, err := c.rdb.Pipelined(ctx, func(p redis.Pipeliner) error {
 		for i, n := range live {
 			cmds[i] = p.Get(ctx, c.countKey(k, tenant, sip, n))
 		}
 		return nil
-	}); err != nil && !errors.Is(err, redis.Nil) {
+	})
+	if err := readErr(res, err); err != nil {
 		return 0, fmt.Errorf("cluster: read count: %w", err)
 	}
 	total := 0
@@ -213,6 +215,22 @@ func (c *Cluster) Count(ctx context.Context, k Kind, tenant, sip string) (int, e
 		}
 	}
 	return total, nil
+}
+
+// readErr returns a pipeline's error (err is what Pipelined returned) other
+// than redis.Nil, a missing key that counts as zero. Pipelined returns only the
+// first command's error, so a Nil there would hide a later real failure and the
+// read would undercount, making a busy agent look free: hence every command.
+func readErr(cmds []redis.Cmder, err error) error {
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return err
+	}
+	for _, cmd := range cmds {
+		if err := cmd.Err(); err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+	}
+	return nil
 }
 
 // splitTenantSIP splits a Snapshot.Counts key "tenant|sip".

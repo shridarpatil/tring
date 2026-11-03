@@ -301,3 +301,37 @@ func TestCloseRemovesNode(t *testing.T) {
 		t.Fatalf("Count after b closed = %d, want 0", n)
 	}
 }
+
+// A redis.Nil (missing count key, the normal case) earlier in a pipeline must
+// not mask a real error later in it: the masked read would undercount and let a
+// busy agent look free. WRONGTYPE stands in for any per-command failure.
+func TestCountReadErrorNotMaskedByNil(t *testing.T) {
+	p := newTestPrefix(t)
+	a := newTestCluster(t, p, "a")
+	b := newTestCluster(t, p, "b")
+	snapA := Snapshot{Online: map[string][]string{"t1": {"100", "200"}}}
+	for range 2 {
+		beat(t, a, snapA)
+		beat(t, b, Snapshot{})
+	}
+	ctx := context.Background()
+	raw := rawClient(t)
+	// a's live list is [a, b]: per sip the first read is (a, oncall), missing →
+	// redis.Nil; b's dials key is the last read for that sip.
+	for _, sip := range []string{"100", "200"} {
+		if err := raw.HSet(ctx, b.countKey(Dials, "t1", sip, b.ID()), "x", "1").Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if got, err := a.Agents(ctx, "t1"); err == nil {
+		t.Fatalf("Agents = %+v, nil error; want the WRONGTYPE read error", got)
+	}
+	if n, err := a.Count(ctx, Dials, "t1", "100"); err == nil {
+		t.Fatalf("Count = %d, nil error; want the WRONGTYPE read error", n)
+	}
+	// Missing keys alone are still not an error.
+	if n, err := a.Count(ctx, OnCall, "t1", "100"); err != nil || n != 0 {
+		t.Fatalf("Count(missing) = %d, %v; want 0, nil", n, err)
+	}
+}
