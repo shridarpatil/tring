@@ -17,6 +17,11 @@ const (
 
 const busVersion = 1
 
+// ErrNoReceiver is returned by Send when nobody is subscribed to the target
+// node's bus: the node crashed (its keys outlive it until TTL) or hasn't
+// started its bus yet. The message is lost, so callers treat it as not sent.
+var ErrNoReceiver = errors.New("cluster: no receiver on bus")
+
 // Msg is one node-to-node message on the per-node bus. It is internal JSON,
 // versioned by V so a rolling upgrade can drop what it doesn't understand.
 type Msg struct {
@@ -33,9 +38,10 @@ type Msg struct {
 func (c *Cluster) busChannel(node string) string { return c.cfg.Prefix + "node:" + node + ":bus" }
 
 // Send publishes m to node's bus, setting V and From. It is a no-op (nil) on a
-// nil or closed Cluster. Pub/sub is fire-and-forget: a node that isn't
-// subscribed misses the message, which callers treat like a ring that nobody
-// answered.
+// nil or closed Cluster. It returns ErrNoReceiver (wrapped) when no subscriber
+// got the message, so a ring to a dead node fails fast instead of being waited
+// out like a ring nobody answered. A nil error still doesn't mean the message
+// was handled: the node may die right after receiving it.
 func (c *Cluster) Send(ctx context.Context, node string, m Msg) error {
 	if c == nil || c.isClosed() {
 		return nil
@@ -47,8 +53,12 @@ func (c *Cluster) Send(ctx context.Context, node string, m Msg) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, setTimeout)
 	defer cancel()
-	if err := c.rdb.Publish(ctx, c.busChannel(node), b).Err(); err != nil {
+	n, err := c.rdb.Publish(ctx, c.busChannel(node), b).Result()
+	if err != nil {
 		return fmt.Errorf("cluster: publish to %s: %w", node, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w %s", ErrNoReceiver, node)
 	}
 	return nil
 }
