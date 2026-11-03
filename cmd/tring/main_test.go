@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -75,5 +78,32 @@ func TestGatewayNeedsRedis(t *testing.T) {
 	}
 	if err := gatewayNeedsRedis(options{gatewayOnly: true}, true); err != nil {
 		t.Errorf("gateway with Redis: %v, want nil", err)
+	}
+}
+
+// All mode keeps today's single-node behaviour when the cluster can't start
+// (Redis flaky after the cache dialled); a gateway-only node has no reason to
+// exist without the cluster, so it still refuses.
+func TestClusterOrSingle(t *testing.T) {
+	fail := errors.New("dial tcp: connection refused")
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+
+	cl, err := clusterOrSingle("all", nil, fail, log)
+	if err != nil || cl != nil {
+		t.Fatalf("all mode: cl=%v err=%v, want nil, nil", cl, err)
+	}
+	if !strings.Contains(logs.String(), "cluster disabled, running as a single node") {
+		t.Errorf("all mode: no warning logged, got %q", logs.String())
+	}
+
+	cl, err = clusterOrSingle("gateway", nil, fail, log)
+	if err == nil || !errors.Is(err, fail) || cl != nil {
+		t.Fatalf("gateway mode: cl=%v err=%v, want the cluster error", cl, err)
+	}
+
+	cl, err = clusterOrSingle("all", nil, nil, log)
+	if err != nil || cl != nil {
+		t.Fatalf("no error: cl=%v err=%v, want nil, nil", cl, err)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -44,6 +45,21 @@ type gatewayRole struct {
 	cl        *cluster.Cluster // nil without Redis: single node
 	stopCl    context.CancelFunc
 	clStopped chan struct{} // closed when cl.Run returns
+}
+
+// clusterOrSingle decides what a failed cluster.New means. All mode must run
+// exactly as a single node does without Redis, so it warns and carries on with
+// a nil cluster; a gateway-only node exists to share load through the cluster
+// and is useless without it, so it refuses to start.
+func clusterOrSingle(mode string, cl *cluster.Cluster, err error, log *slog.Logger) (*cluster.Cluster, error) {
+	if err == nil {
+		return cl, nil
+	}
+	if mode == "gateway" {
+		return nil, fmt.Errorf("cluster init failed: %w", err)
+	}
+	log.Warn("cluster disabled, running as a single node", "err", err)
+	return nil, nil
 }
 
 // startGateway starts the call plane. mode ("all" or "gateway") is what this
@@ -139,14 +155,14 @@ func startGateway(d *deps, mode string) (*gatewayRole, error) {
 	// shared with the other nodes through Redis. Only with Redis; without it
 	// (all mode only, see gatewayNeedsRedis) this node runs alone.
 	if redisCache != nil {
-		g.cl, err = cluster.New(cluster.Config{
+		cl, clErr := cluster.New(cluster.Config{
 			Addr:     k.String("redis_addr"),
 			Password: k.String("redis_password"),
 			Mode:     mode,
 			Version:  version,
 		}, logger)
-		if err != nil {
-			return nil, fmt.Errorf("cluster init failed: %w", err)
+		if g.cl, err = clusterOrSingle(mode, cl, clErr, logger); err != nil {
+			return nil, err
 		}
 	}
 
