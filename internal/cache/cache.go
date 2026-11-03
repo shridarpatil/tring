@@ -102,6 +102,24 @@ func (c *Cache) SetNX(ctx context.Context, key string, val []byte, ttl time.Dura
 	return c.rdb.SetNX(ctx, key, val, ttl).Result()
 }
 
+// Incr atomically increments the integer at key (created at 0) and returns the
+// new value. The first increment also arms a 24h expiry (EXPIRE ... NX) so a
+// counter nobody touches again — an idle team's round-robin position — doesn't
+// leak a key forever. Returns an error on a nil cache or a Redis failure so the
+// caller can fall back to a local counter.
+func (c *Cache) Incr(ctx context.Context, key string) (int64, error) {
+	if c == nil {
+		return 0, errors.New("cache: redis not configured")
+	}
+	pipe := c.rdb.TxPipeline()
+	incr := pipe.Incr(ctx, key)
+	pipe.ExpireNX(ctx, key, 24*time.Hour)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+	return incr.Val(), nil
+}
+
 // Delete removes a key (cache invalidation). Returns any Redis error so the
 // caller can log it — a failed delete means readers see stale data until the
 // TTL expires. A nil cache is a no-op.
