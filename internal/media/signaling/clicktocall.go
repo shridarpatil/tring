@@ -67,10 +67,8 @@ func (s *Server) Call(ctx context.Context, tenant uuid.UUID, req CallRequest) (u
 		from = req.CallerID
 	}
 	agentKey := tenant.String() + "|" + req.AgentSIP
-	s.mu.Lock()
-	online := s.agents[tenant.String()][req.AgentSIP] != nil
-	busy := s.onCall[agentKey] > 0
-	s.mu.Unlock()
+	v := s.agentView(ctx, tenant.String())
+	online, busy := v.online(req.AgentSIP), v.onCall(req.AgentSIP)
 	if !online {
 		return uuid.Nil, errAgentOffline
 	}

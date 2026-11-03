@@ -14,10 +14,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -124,22 +126,42 @@ const maxAgentOutbound = 2
 
 // beginDial reserves the room's single outbound slot and one of the agent's
 // slots. false → a call is already being placed/up in this room, or the agent
-// is at its cap. The returned func releases both.
+// is at its cap (counted across nodes when there are peers). The returned func
+// releases both.
 func (s *Server) beginDial(roomID room.RoomID, agentKey string) (func(), bool) {
+	tenant, sip, _ := strings.Cut(agentKey, "|")
+	// The cluster-wide count is read before s.mu (Redis I/O never under it). It
+	// includes this node's own contribution, so max() never double-counts.
+	global := 0
+	if c := s.cfg.Cluster; !c.Alone() {
+		ctx, cancel := context.WithTimeout(context.Background(), clusterReadTimeout)
+		if n, err := c.Count(ctx, cluster.Dials, tenant, sip); err == nil {
+			global = n
+		}
+		cancel()
+	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.dialing[roomID] || s.agentDials[agentKey] >= maxAgentOutbound {
+	if s.dialing[roomID] || max(s.agentDials[agentKey], global) >= maxAgentOutbound {
+		s.mu.Unlock()
 		return nil, false
 	}
 	s.dialing[roomID] = true
 	s.agentDials[agentKey]++
+	n := s.agentDials[agentKey]
+	s.mu.Unlock()
+	s.cfg.Cluster.SetCount(context.Background(), cluster.Dials, tenant, sip, n)
+
 	return func() {
 		s.mu.Lock()
 		delete(s.dialing, roomID)
-		if s.agentDials[agentKey]--; s.agentDials[agentKey] <= 0 {
+		s.agentDials[agentKey]--
+		n := s.agentDials[agentKey]
+		if n <= 0 {
 			delete(s.agentDials, agentKey)
 		}
 		s.mu.Unlock()
+		s.cfg.Cluster.SetCount(context.Background(), cluster.Dials, tenant, sip, n)
 	}, true
 }
 
