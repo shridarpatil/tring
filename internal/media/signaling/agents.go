@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/brain"
+	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -39,6 +40,7 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 		delete(s.onCall, k)
 	}
 	s.mu.Unlock()
+	s.cfg.Cluster.SetCount(context.Background(), cluster.OnCall, tenant, sip, n)
 	if pres := s.cfg.Presence; pres != nil {
 		if n > 0 {
 			pres.MarkOnCall(context.Background(), tenant, sip)
@@ -68,7 +70,17 @@ func (s *Server) publishPresence(tenant, sip, status string) {
 
 // agentOnCall reports whether the agent has any active call leg (used by the
 // presence refresh so a 10s TTL re-assert doesn't clobber on_call → online).
+// With peers it is the cluster-wide count: the agent's call may be on another
+// node, and a local-only answer would flip the shared store back to online.
 func (s *Server) agentOnCall(tenant, sip string) bool {
+	if c := s.cfg.Cluster; !c.Alone() {
+		ctx, cancel := context.WithTimeout(context.Background(), clusterReadTimeout)
+		n, err := c.Count(ctx, cluster.OnCall, tenant, sip)
+		cancel()
+		if err == nil {
+			return n > 0
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.onCall[tenant+"|"+sip] > 0
@@ -87,6 +99,10 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	}
 	s.away[tenant+"|"+sip] = true
 	s.mu.Unlock()
+	// Away before online, so a peer never sees this agent online and ringable
+	// before the backend flag is known.
+	s.cfg.Cluster.SetAway(context.Background(), tenant, sip, true)
+	s.cfg.Cluster.SetOnline(context.Background(), tenant, sip, true)
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
 	// Read after registering above, so a change that lands meanwhile is either
@@ -125,11 +141,18 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 
 	defer func() {
 		s.mu.Lock()
-		if s.agents[tenant][sip] == c {
+		gone := s.agents[tenant][sip] == c
+		if gone {
 			delete(s.agents[tenant], sip)
 			delete(s.away, tenant+"|"+sip)
 		}
 		s.mu.Unlock()
+		// Only when this socket was still the agent's: a reconnect that replaced
+		// it has already re-registered them online.
+		if gone {
+			s.cfg.Cluster.SetOnline(context.Background(), tenant, sip, false)
+			s.cfg.Cluster.SetAway(context.Background(), tenant, sip, false)
+		}
 		_ = c.Close()
 		s.log.Info("agent offline", "tenant", tenant, "sip", sip)
 	}()
@@ -220,19 +243,21 @@ func (s *Server) PushAvailability(tenant, sip string, available bool) {
 // It reports false, changing nothing, when c is no longer the agent's socket.
 func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.agents[tenant][sip] != c {
+		s.mu.Unlock()
 		return false
 	}
 	k := tenant + "|" + sip
 	if !away {
 		delete(s.away, k)
-		return true
+	} else {
+		if s.away == nil {
+			s.away = map[string]bool{}
+		}
+		s.away[k] = true
 	}
-	if s.away == nil {
-		s.away = map[string]bool{}
-	}
-	s.away[k] = true
+	s.mu.Unlock()
+	s.cfg.Cluster.SetAway(context.Background(), tenant, sip, away)
 	return true
 }
 
@@ -270,25 +295,19 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	// candidates excludes agents who declined this call (as well as busy, Away
 	// and offline ones) so the router never re-rings a decliner and the
 	// queue/hold logic sees the true remaining pool.
-	candidates := func(context.Context) []string {
+	candidates := func(ctx context.Context) []string {
+		// The view may read Redis, so it is built before taking s.mu.
+		v := s.agentView(ctx, tenant)
+		pool := sips
+		if ringAll {
+			pool = v.onlineSIPs()
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		free := func(sip string) bool {
-			k := tenant + "|" + sip
-			return s.onCall[k] == 0 && !s.away[k] && !eff.declined[sip]
-		}
 		var out []string
-		if ringAll {
-			for sip := range s.agents[tenant] {
-				if free(sip) {
-					out = append(out, sip)
-				}
-			}
-		} else {
-			for _, sip := range sips {
-				if s.agents[tenant][sip] != nil && free(sip) {
-					out = append(out, sip)
-				}
+		for _, sip := range pool {
+			if v.free(sip) && !eff.declined[sip] {
+				out = append(out, sip)
 			}
 		}
 		return out

@@ -141,21 +141,14 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 // team, at least one resolved member must be. Best-effort — the ring itself is the
 // source of truth, this only avoids dropping the agent into an obviously-dead ring.
 func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) bool {
-	free := func(sip string) bool {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		k := tenant + "|" + sip
-		return s.agents[tenant][sip] != nil && s.onCall[k] == 0 && !s.away[k]
-	}
+	v := s.agentView(ctx, tenant)
 	if sip != "" {
-		return free(sip)
+		return v.free(sip)
 	}
 	// Team: resolve members (nil resolver → any online free agent qualifies).
 	if s.cfg.Teams == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for a := range s.agents[tenant] {
-			if k := tenant + "|" + a; s.onCall[k] == 0 && !s.away[k] {
+		for _, a := range v.onlineSIPs() {
+			if v.free(a) {
 				return true
 			}
 		}
@@ -170,7 +163,7 @@ func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) 
 		return false
 	}
 	for _, a := range sips {
-		if free(a) {
+		if v.free(a) {
 			return true
 		}
 	}

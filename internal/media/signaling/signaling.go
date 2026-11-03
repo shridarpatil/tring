@@ -30,6 +30,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -110,7 +111,11 @@ type Config struct {
 	// socket connects (internal/flowstore implements it). nil → the agent is
 	// told nothing and the SDK shows plain Online.
 	Availability AvailabilityResolver
-	Logger       *slog.Logger
+	// Cluster shares agent presence, Away and call/dial counts with the other
+	// tring nodes so ringing decisions see agents connected elsewhere. nil →
+	// single node: every decision reads the local maps only.
+	Cluster *cluster.Cluster
+	Logger  *slog.Logger
 }
 
 // AvailabilityResolver reads an agent's available_for_calls by SIP username.
