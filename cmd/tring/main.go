@@ -69,17 +69,6 @@ func weakSecretKeys(gatewayOnly bool) []string {
 	return []string{"jwt_secret", "fs_basic_auth", "esl_password"}
 }
 
-// gatewayNeedsRedis refuses a gateway-only node without Redis: a worker exists
-// to share the call load with other nodes, and agent state, rings and dials
-// only cross nodes through Redis. All mode may still run single-node without it.
-func gatewayNeedsRedis(o options, haveRedis bool) error {
-	if o.gatewayOnly && !haveRedis {
-		return errors.New("--gateway needs Redis to share agent state with the other nodes; " +
-			"set TRING_REDIS_ADDR to a reachable Redis")
-	}
-	return nil
-}
-
 // apiStopper and gatewayStopper are what run needs from a started role; tests
 // substitute fakes to pin the start and shutdown order.
 type apiStopper interface{ shutdown(context.Context) }
@@ -155,9 +144,6 @@ func main() {
 	err = run(o, roles{
 		api:     func() (apiStopper, error) { return startAPI(d, o) },
 		gateway: func() (gatewayStopper, error) {
-			if err := gatewayNeedsRedis(o, d.cache != nil); err != nil {
-				return nil, err
-			}
 			// A gateway-only node never migrates; it waits for the main node to.
 			// All mode just migrated in the api role.
 			if o.gatewayOnly {
@@ -166,11 +152,7 @@ func main() {
 					return nil, err
 				}
 			}
-			mode := "all"
-			if o.gatewayOnly {
-				mode = "gateway"
-			}
-			return startGateway(d, mode)
+			return startGateway(d)
 		},
 		seed:    func() error { return runSeed(d, o) },
 	}, ctx.Done())

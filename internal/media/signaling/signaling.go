@@ -30,7 +30,6 @@ import (
 
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/cache"
-	"github.com/shridarpatil/tring/internal/cluster"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -111,11 +110,7 @@ type Config struct {
 	// socket connects (internal/flowstore implements it). nil → the agent is
 	// told nothing and the SDK shows plain Online.
 	Availability AvailabilityResolver
-	// Cluster shares agent presence, Away and call/dial counts with the other
-	// tring nodes so ringing decisions see agents connected elsewhere. nil →
-	// single node: every decision reads the local maps only.
-	Cluster *cluster.Cluster
-	Logger  *slog.Logger
+	Logger       *slog.Logger
 }
 
 // AvailabilityResolver reads an agent's available_for_calls by SIP username.
@@ -228,7 +223,6 @@ type Server struct {
 	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
 	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
-	remoteRings  map[string]string                                    // "tenant/room|sip" → node that rang this agent over the bus; a decline goes back there (cluster.go)
 
 	draining  atomic.Bool  // shutting down: no new calls (drain.go)
 	portCalls atomic.Int64 // phone/connect calls in progress (drain.go)
@@ -273,21 +267,18 @@ func New(cfg Config) *Server {
 		invites:      make(map[room.RoomID]map[string]bool),
 		dialing:      make(map[room.RoomID]bool),
 		agentDials:   make(map[string]int),
-		remoteRings:  make(map[string]string),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
 	// the same Redis), else in-memory. presence.New(nil) is a disabled no-op.
 	var queue routing.Queue
 	var reserve routing.Reservations
-	var rr routing.RRCounter
 	if cfg.Cache != nil {
 		queue, reserve = routing.NewRedisQueue(cfg.Cache), routing.NewRedisReservations(cfg.Cache)
-		rr = routing.NewRedisRR(cfg.Cache)
 	} else {
-		queue, reserve, rr = routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR()
+		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
-	s.router = routing.NewRouter(queue, reserve, rr, cfg.Presence, cfg.Cache, cfg.Events, s.log)
+	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, cfg.Events, s.log)
 	// Queue stints come from the call log when it records them (*callcdr.Log).
 	// A nil Calls leaves stints as an untyped nil; (*callcdr.Log) methods are
 	// nil-receiver safe for the typed-nil case.
@@ -453,17 +444,6 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	peer.OnConnected = func() { p.MarkConnected() }
 	peer.OnClosed = func() { p.Drop() } // grace window; the left event tears down the SFU peer
 
-	// Mark the agent busy (presence store + the "free" check rings and transfers
-	// use) BEFORE telling them they've joined: the SDK reacts to joined, and a
-	// transfer or ring started in that gap would otherwise pick this agent as
-	// free. No early return lies between here and the read loop, and the defer
-	// ties the clear to this socket's lifetime (handleWS returns after readLoop).
-	agentCallLeg := flowID == "" && !princ.isVisitor
-	if agentCallLeg {
-		s.setAgentOnCall(tenant, princ.sip, true)
-		defer s.setAgentOnCall(tenant, princ.sip, false)
-	}
-
 	// Tell the joiner who it is + how to reach ICE, then who's already here.
 	_ = c.send(msg{
 		Type:        msgJoined,
@@ -526,11 +506,19 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
 	// caller's own join.
 	// A click-to-call is answered by the customer instead (clicktocall.go).
+	agentCallLeg := flowID == "" && !princ.isVisitor
 	if agentCallLeg && s.cfg.Calls != nil && !s.outboundPending(roomID) {
 		if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 			s.sfu.AddSink(roomID, p.ID(), sink)
 		}
 	}
+	// Reflect agent busy/available in presence so the dashboard shows "on call".
+	// Cleared when this call leg's socket closes (handleWS returns after readLoop).
+	if agentCallLeg {
+		s.setAgentOnCall(tenant, princ.sip, true)
+		defer s.setAgentOnCall(tenant, princ.sip, false)
+	}
+
 	// If a transfer is ringing for this room, this join is the agent answering:
 	// signalRing resolves the pending ring.
 	s.signalRing(roomID)
