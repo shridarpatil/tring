@@ -26,7 +26,7 @@ All IP addresses, hostnames and numbers below are placeholders (`203.0.113.10`, 
  │      │  dialplan context "whatsapp"                          │
  │      │  plain RTP, Opus                                      │
  │      ▼                                                       │
- │ tring-gateway  SIP plug (:5090)  ──► IVR flow ──► agents     │
+ │ tring (gateway role)  SIP plug (:5090)  ──► IVR ──► agents   │
  └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@ Once SIP is enabled on a number, Meta's Graph API calling endpoints stop working
 
 ### Tring side
 
-- Tring is deployed with Docker Compose (`tring-fs`, `tring-gateway`, `tring-api` running).
+- Tring is deployed with Docker Compose (`tring-fs` and `tring` running).
 - The SIP plug is on: `TRING_FSPLUG_ENABLED=true`, with `TRING_GATEWAY_ADVERT_IP` / `TRING_GATEWAY_SIP_PORT` matching `TRING_FSPLUG_SIP_ADVERTISE` / `TRING_FSPLUG_SIP_LISTEN`. If inbound phone calls from a carrier already work, this is done.
 - An IVR flow exists for WhatsApp callers (it can be the same flow your phone number uses).
 - A Tring API key for your tenant (for the API steps), or console access.
@@ -312,7 +312,7 @@ You don't need the Meta-generated SIP password (`include_sip_credentials=true`) 
 
    ```bash
    docker logs -f tring-fs 2>&1 | grep -iE 'whatsapp|INVITE|SIP/2.0'
-   docker logs -f tring-gateway
+   docker logs -f tring
    ```
 
 3. From a **personal** WhatsApp account (not the business number), open the business chat and tap **Call**.
@@ -347,7 +347,7 @@ Meta's extra headers (`x-wa-meta-user-id`, `x-wa-meta-username`, `x-wa-meta-waci
 | `488 Not Acceptable Here` | Meta is offering DTLS or plain RTP | Set `srtp_key_exchange_protocol` to `SDES` (section 7.1). |
 | `404 Not Found` | The request URI isn't a `+digits` number | Check the `INVITE` line in the trace. Meta must be dialing the phone number (no `request_uri_user_params` such as `;tgrp=` unless you also change the dialplan). |
 | Call reaches the gateway but is rejected / no flow | Number format | The number in Tring must match the `INVITE` user exactly, including the `+`. |
-| `503 Service Unavailable` | Gateway unreachable | `TRING_FSPLUG_ENABLED=true`; `tring-gateway` running; `TRING_GATEWAY_ADVERT_IP:TRING_GATEWAY_SIP_PORT` matches the plug's listen address. Phone calls from your carrier would fail the same way. |
+| `503 Service Unavailable` | Gateway unreachable | `TRING_FSPLUG_ENABLED=true`; `tring` running; `TRING_GATEWAY_ADVERT_IP:TRING_GATEWAY_SIP_PORT` matches the plug's listen address. Phone calls from your carrier would fail the same way. |
 | Call connects, no audio either way | RTP blocked or wrong advertised IP | The `200 OK` SDP `c=` line must be `TRING_WHATSAPP_PUBLIC_IP`; UDP RTP range open to Meta; on AWS the Elastic IP is on the interface you bind. |
 | Call never ends when the WhatsApp user hangs up | In-dialog requests not reaching you | Meta sends `BYE` to the `Contact` (`…@<public IP>:5061;transport=tls`). Check the security group, and that `TRING_WHATSAPP_PUBLIC_IP` is correct. |
 | Works, then fails after ~90 days | Certificate expired | Check the renewal hook (section 5.3); `openssl x509 -enddate`. |

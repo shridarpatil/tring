@@ -169,9 +169,9 @@ npm run typecheck  # tsc --noEmit
 
 The runnable end-to-end demo lives in [`examples/demo-portal/`](../../examples/demo-portal/)
 (a small Flask app) — it exercises all three flows against a locally-running
-stack: anonymous "call us", logged-in support, and the agent CRM. Have the Tring
-API + orchestrator + gateway + FreeSWITCH up (root `docker compose up -d`, or
-`go run ./cmd/api` + `./cmd/orchestrator` + `./cmd/gateway`), then `make demo`
+stack: anonymous "call us", logged-in support, and the agent CRM. Have Tring +
+FreeSWITCH up (root `docker compose up -d`, or `go run ./cmd/tring`), then
+`make demo`
 and follow its README.
 
 ## Note: no browser WSS / cert dance

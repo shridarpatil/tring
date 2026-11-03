@@ -1,6 +1,6 @@
 package signaling
 
-// Graceful shutdown. On SIGTERM cmd/gateway calls Drain: new calls are turned
+// Graceful shutdown. On SIGTERM cmd/tring calls Drain: new calls are turned
 // away (a fresh web join into an empty room, an inbound phone call, a
 // two-number connect) while the calls already up run to their end. Joins into
 // a live call (an agent answering a ring, a page-refresh reattach) still work.

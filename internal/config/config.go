@@ -94,7 +94,7 @@ var defaults = map[string]any{
 
 	// media_grace_seconds is the room reconnect window: how long a dropped
 	// participant's slot is held for a page-refresh. The pion media-plane
-	// signaling WebSocket (/rtc) is served by cmd/gateway on gateway_addr.
+	// signaling WebSocket (/rtc) is served by the gateway role on gateway_addr.
 	"media_grace_seconds": 30,
 	// gateway_drain_seconds: on SIGTERM the gateway stops taking new calls and
 	// waits this long for live ones to end before exiting. docker-compose's

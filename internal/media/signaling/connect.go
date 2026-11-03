@@ -176,7 +176,7 @@ type controlClaims struct {
 	jwt.RegisteredClaims
 }
 
-// ControlHandler serves the API-only control endpoints. cmd/gateway serves it
+// ControlHandler serves the API-only control endpoints. cmd/tring serves it
 // on its own loopback listener (gateway_control_addr), never on the public one.
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()

@@ -1,7 +1,7 @@
 -- Tring database schema — GENERATED SNAPSHOT. NOT the source of truth.
 --
 -- The authoritative schema is internal/migrate/migrations/*.sql, applied by
--- golang-migrate on cmd/api startup (idempotent, tracked in schema_migrations).
+-- golang-migrate on tring startup (api role) (idempotent, tracked in schema_migrations).
 -- Nothing loads this file at runtime; it exists only as a human-readable
 -- reference for the schema at HEAD.
 --

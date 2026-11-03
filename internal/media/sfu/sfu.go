@@ -190,7 +190,7 @@ func (s *SFU) buildAPI() (*webrtc.API, error) {
 	se := webrtc.SettingEngine{}
 	// Bound the media UDP range when configured (firewall-able). Both zero =
 	// leave it unrestricted (OS ephemeral ports) — used by tests so rapid
-	// PC churn doesn't exhaust a narrow range. cmd/gateway always sets a range.
+	// PC churn doesn't exhaust a narrow range. cmd/tring always sets a range.
 	if cfg.UDPPortMin != 0 || cfg.UDPPortMax != 0 {
 		lo, hi := cfg.UDPPortMin, cfg.UDPPortMax
 		if lo == 0 {

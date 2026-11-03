@@ -23,6 +23,7 @@ export default defineConfig({
             { label: 'Introduction', slug: 'index' },
             { label: 'Quickstart', slug: 'getting-started/quickstart' },
             { label: 'Configuration', slug: 'getting-started/configuration' },
+            { label: 'Upgrading', slug: 'getting-started/upgrading' },
           ],
         },
         {
