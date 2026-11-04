@@ -121,7 +121,8 @@ export class Tring extends Emitter<TringEvent> {
       this.emit({ type: "unregistered" });
     });
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
-    this.agent.on("incoming", ({ from, auto }) => this.handleIncoming(from, auto));
+    this.agent.on("incoming", ({ from, auto, phone }) => this.handleIncoming(from, auto, phone));
+    this.agent.on("resume-call", ({ auto, phone }) => this.handleIncoming(undefined, auto, phone, true));
     // The server withdrew an unanswered ring (round-robin/sequential advanced to
     // the next agent, or someone else answered). End the ringing call so the UI
     // dismisses — it never connected.
@@ -148,8 +149,10 @@ export class Tring extends Emitter<TringEvent> {
 
   // handleIncoming surfaces a ringing call. On accept the agent joins the room
   // (RtcCall); call control delegates to that live call. auto marks a backend
-  // click-to-call the agent placed: it's outbound and answers itself.
-  private handleIncoming(from?: string, auto?: boolean): void {
+  // click-to-call the agent placed: it's outbound and answers itself. resume
+  // marks the agent's own call that a page reload dropped: rejoin it at once,
+  // without ringing.
+  private handleIncoming(from?: string, auto?: boolean, phone?: boolean, resume?: boolean): void {
     const label = from || "";
     let rtc: RtcCall | null = null;
     let muted = false;
@@ -157,6 +160,7 @@ export class Tring extends Emitter<TringEvent> {
     const call: Call = {
       to: label,
       direction: auto ? "outbound" : "inbound",
+      phone: phone ?? false,
       displayName: label || undefined,
       status: "ringing" as CallStatus,
       accept: async () => {
@@ -178,7 +182,8 @@ export class Tring extends Emitter<TringEvent> {
         if (!rtc) return;
         // A click-to-call leg (auto) answers itself while the customer still
         // rings, so its call starts when the gateway says the customer answered.
-        rtc.on(auto ? "answered" : "connected", () => {
+        // A resumed call was answered before the reload: it's back once connected.
+        rtc.on(auto && !resume ? "answered" : "connected", () => {
           call.status = "connected";
           this.emit({ type: "call:answered", call });
         });
@@ -230,6 +235,11 @@ export class Tring extends Emitter<TringEvent> {
       },
     };
 
+    if (resume) {
+      this.emit({ type: "call:resuming", call });
+      void call.accept().catch((err) => this.emit({ type: "error", error: err as Error }));
+      return;
+    }
     this.ringing = call;
     this.emit({ type: "call:ringing", call });
     if (this.autoAnswer || auto) {

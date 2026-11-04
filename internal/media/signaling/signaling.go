@@ -384,6 +384,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			freshJoin = false
 		}
 	}
+	// An agent rejoining the call that holds their dropped slot (a page refresh
+	// loses the session token) resumes it: the agent JWT proves who they are.
+	if p == nil && !princ.isVisitor {
+		if held := s.droppedAgentLeg(tenant, princ.sip); held != nil && held.Room().ID() == roomID {
+			if p, _ = s.rooms.Reattach(roomID, held.Token()); p != nil {
+				freshJoin = false
+			}
+		}
+	}
 	if p == nil { // fresh join, or reattach failed (expired) → new slot
 		// A fresh join may only start a new room, or — for an agent — answer a
 		// call it was rung for. Otherwise any agent who learned a room name (every
