@@ -336,6 +336,38 @@ func TestRingAgentLiveShowsAgentName(t *testing.T) {
 	}
 }
 
+// A ring_all popup is recorded (RingAgent) after it's sent, so an agent can
+// answer before another rung agent's live "ringing" event goes out. That late
+// event must not flip the answered call back to "ringing → <agent>" — prod
+// 2026-11-04. A transfer opens a new window (RingStart), which rings again.
+func TestLateRingAgentAfterAnswerKeepsTalking(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	if _, err := fx.DB.Pool.Exec(ctx,
+		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A'), ($1,'bob','x','Bob B')`,
+		fx.TenantID); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+	sink := &routingSink{}
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, sink)
+	roomID := fx.TenantID.String() + "/late-ring"
+
+	l.Started(ctx, fx.TenantID, roomID, "visitor", "Support flow", "web", "", "caller-pid")
+	l.RingStart(ctx, roomID, "Sales", "")
+	l.RingAgent(roomID, "alice")
+	l.Answered(roomID, "alice-pid", "alice")
+	l.RingAgent(roomID, "bob") // bob's ring row lands after alice answered
+	if got, _ := sink.lastTarget().(string); strings.Contains(got, "Bob B") {
+		t.Fatalf("late ring event after the answer re-published ringing → %q", got)
+	}
+
+	l.RingStart(ctx, roomID, "", "bob") // alice transfers to bob: a new ring window
+	l.RingAgent(roomID, "bob")
+	if got := sink.lastTarget(); got != "Bob B" {
+		t.Fatalf("transfer ring target = %v, want Bob B", got)
+	}
+}
+
 // TestNoRecordingWhenTenantOff: CDR still written, but no sink and no file.
 // (record_calls defaults to true in the schema, so disable it explicitly.)
 func TestNoRecordingWhenTenantOff(t *testing.T) {
