@@ -221,6 +221,7 @@ type Server struct {
 	supers       map[room.RoomID]map[room.ParticipantID]*superSession // supervisor sessions per room (supervisor.go)
 	hangupBy     map[room.RoomID]string                               // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
 	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
+	agentLegs    map[room.ParticipantID]agentLeg                      // agent call legs counted in onCall, released when the participant leaves
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
 	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
 
@@ -265,6 +266,7 @@ func New(cfg Config) *Server {
 		holds:        make(map[room.RoomID]func()),
 		transfers:    make(map[room.RoomID]context.CancelFunc),
 		invites:      make(map[room.RoomID]map[string]bool),
+		agentLegs:    make(map[room.ParticipantID]agentLeg),
 		dialing:      make(map[room.RoomID]bool),
 		agentDials:   make(map[string]int),
 	}
@@ -447,12 +449,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// Mark the agent busy (presence store + the "free" check rings and transfers
 	// use) BEFORE telling them they've joined: the SDK reacts to joined, and a
 	// transfer or ring started in that gap would otherwise pick this agent as
-	// free. No early return lies between here and the read loop, and the defer
-	// ties the clear to this socket's lifetime (handleWS returns after readLoop).
+	// free. Busy lasts as long as the PARTICIPANT, not this socket — a socket can
+	// close while the agent is still in the call — so routeEvent releases it on
+	// the participant's terminal leave, and a reattach doesn't count it again.
 	agentCallLeg := flowID == "" && !princ.isVisitor
-	if agentCallLeg {
-		s.setAgentOnCall(tenant, princ.sip, true)
-		defer s.setAgentOnCall(tenant, princ.sip, false)
+	if agentCallLeg && freshJoin {
+		s.holdAgentLeg(p, tenant, princ.sip)
 	}
 
 	// Tell the joiner who it is + how to reach ICE, then who's already here.
@@ -710,6 +712,7 @@ func (s *Server) routeEvent(e room.Event) {
 	if e.Type == room.EventParticipantLeft {
 		s.sfu.Leave(e.Room, e.Participant)
 		s.dropConn(e.Participant)
+		s.releaseAgentLeg(e.Participant)
 		// Resolve the leaver's role before clearing it: a party that left WITHOUT a
 		// bye (closed tab, network drop past the grace window) still ended the call.
 		leaverBy := s.hangupRole(e.Participant)

@@ -151,3 +151,43 @@ func TestBecomingAvailableMarksFreed(t *testing.T) {
 		t.Fatalf("repeated available reset freed-at: %v -> %v", first, again)
 	}
 }
+
+// A presence socket that reconnects mid-call (network blip, token refresh)
+// must not advertise the agent as available: team routing reads this Redis
+// status, so "online" here rings a busy agent, and the dashboard keeps the
+// published "online" until the call ends.
+func TestPresenceReconnectDuringCallStaysOnCall(t *testing.T) {
+	pres := testPresence(t)
+	ctx := context.Background()
+	tenant := "test-" + uuid.NewString()
+	sink := &captureSink{}
+	s := &Server{
+		cfg:    Config{Presence: pres, Events: sink, Availability: fakeAvailability{true}},
+		agents: map[string]map[string]*conn{},
+		onCall: map[string]int{},
+		log:    slog.Default(),
+	}
+	s.setAgentOnCall(tenant, "alice", true) // call leg up before the presence socket returns
+	sink.mu.Lock()
+	sink.statuses = nil
+	sink.mu.Unlock()
+	connectAgent(t, s, tenant)
+
+	// The connect publishes once it has written presence; wait for that.
+	var published []string
+	for deadline := time.Now().Add(2 * time.Second); len(published) == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("reconnect published no presence")
+		}
+		time.Sleep(5 * time.Millisecond)
+		sink.mu.Lock()
+		published = append([]string(nil), sink.statuses...)
+		sink.mu.Unlock()
+	}
+	if published[0] != presence.StatusOnCall {
+		t.Fatalf("reconnect published %v, want on_call", published)
+	}
+	if got := pres.Status(ctx, tenant, "alice"); got != presence.StatusOnCall {
+		t.Fatalf("presence after reconnect = %q, want on_call", got)
+	}
+}

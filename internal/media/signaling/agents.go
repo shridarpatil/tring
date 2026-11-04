@@ -54,6 +54,37 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 	s.publishPresence(tenant, sip, presence.StatusOnline, freed)
 }
 
+// agentLeg identifies the agent whose on-call count a call participant holds.
+type agentLeg struct{ tenant, sip string }
+
+// holdAgentLeg counts p as one of the agent's active call legs until
+// releaseAgentLeg runs on p's terminal leave. If p already left (the Left event
+// fired before this registration), it releases at once so the count can't leak.
+func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string) {
+	s.setAgentOnCall(tenant, sip, true)
+	s.mu.Lock()
+	gone := p.State() == room.StateLeft
+	if !gone {
+		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip}
+	}
+	s.mu.Unlock()
+	if gone {
+		s.setAgentOnCall(tenant, sip, false)
+	}
+}
+
+// releaseAgentLeg drops a left participant's hold on its agent's on-call count.
+// No-op for participants that never held one (callers, supervisors, reattaches).
+func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
+	s.mu.Lock()
+	leg, ok := s.agentLegs[pid]
+	delete(s.agentLegs, pid)
+	s.mu.Unlock()
+	if ok {
+		s.setAgentOnCall(leg.tenant, leg.sip, false)
+	}
+}
+
 // publishPresence emits an agent.presence event for the dashboard live feed.
 // Called only on actual transitions (connect / on_call flip / disconnect /
 // back from Away), never on the TTL refresh tick. A non-zero idleSince (the
@@ -102,8 +133,15 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
-		pres.MarkOnline(context.Background(), tenant, sip)
-		s.publishPresence(tenant, sip, presence.StatusOnline, time.Time{})
+		// A presence socket can reconnect mid-call (network blip, token
+		// refresh): stay on_call, or team routing rings a busy agent.
+		if s.agentOnCall(tenant, sip) {
+			pres.MarkOnCall(context.Background(), tenant, sip)
+			s.publishPresence(tenant, sip, presence.StatusOnCall, time.Time{})
+		} else {
+			pres.MarkOnline(context.Background(), tenant, sip)
+			s.publishPresence(tenant, sip, presence.StatusOnline, time.Time{})
+		}
 		stopRefresh := make(chan struct{})
 		go func() {
 			t := time.NewTicker(presence.RefreshInterval)
@@ -524,6 +562,9 @@ func (p *pionRing) cancelSips(sips []string) {
 	defer p.s.mu.Unlock()
 	for _, sip := range sips {
 		delete(p.active, sip)
+		// Revoke the invite with the popup: a late (auto-)answer from an agent
+		// the ring has moved on from must not join the call.
+		delete(p.s.invites[p.roomID], sip)
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
 		}

@@ -412,8 +412,10 @@ func TestTransferSkipsBusyAgentAndQueues(t *testing.T) {
 		}
 	}
 
-	// When alice frees up (leaves the other call), the queued caller rings her.
-	_ = busy.conn.Close()
+	// When alice frees up (hangs up the other call), the queued caller rings her.
+	// A bye, as the SDK sends: a bare socket close keeps her busy through the
+	// reconnect grace window, since she may still reattach to that call.
+	busy.send(map[string]any{"type": "bye"})
 	if inc := alice.readUntil("incoming"); inc["room"] != "call" {
 		t.Fatalf("freed agent not rung for the queued caller; incoming = %v", inc)
 	}
@@ -1019,6 +1021,46 @@ func TestOnlyRungAgentCanJoinLiveCall(t *testing.T) {
 	late.send(map[string]any{"type": "join", "room": "call", "name": "Bob"})
 	if e := late.readUntil("error"); e["reason"] != "not invited to this call" {
 		t.Fatalf("second rung agent join error = %v", e)
+	}
+}
+
+// A ring that has moved on from an agent (declined, or timed out under a
+// one-at-a-time strategy) must also revoke that agent's invite. Otherwise a late
+// auto-answer still joins — prod 2026-11-04: an agent answered a call that had
+// already advanced to someone else, 0.1s before answering a second call.
+func TestWithdrawnRingRevokesInvite(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: transferFlows{},
+		Teams: fakeTeams{
+			members:     map[string][]string{"sales": {"alice", "bob"}},
+			strategy:    "sequential",
+			ringSeconds: 20,
+			maxWait:     40,
+		},
+	})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+	bob := dial(t, ts.URL, mintToken(t, tenant, "bob"))
+	bob.send(map[string]any{"type": "register"})
+	bob.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	alice.readUntil("incoming")
+	alice.send(map[string]any{"type": "decline", "room": "call"})
+	if !sawIncoming(bob, 3*time.Second) {
+		t.Fatal("bob was not rung after alice declined")
+	}
+
+	late := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	late.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
+	if e := late.readUntil("error"); e["reason"] != "not invited to this call" {
+		t.Fatalf("withdrawn agent's late join = %v, want not invited", e)
 	}
 }
 
