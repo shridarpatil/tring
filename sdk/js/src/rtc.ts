@@ -428,7 +428,8 @@ export type RtcAgentEvent =
   | { type: "availability"; available: boolean }
   | { type: "reconnecting" }
   | { type: "offline" }
-  | { type: "incoming"; room: string; from?: string; auto?: boolean }
+  | { type: "incoming"; room: string; from?: string; auto?: boolean; phone?: boolean }
+  | { type: "resume-call"; room: string; auto?: boolean; phone?: boolean }
   | { type: "incoming-canceled"; room: string }
   | { type: "error"; error: Error };
 
@@ -488,7 +489,12 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
         this.emit({ type: "availability", available: m.available ?? true });
       } else if (m.type === ServerMsgType.Incoming) {
         this.incoming = { room: m.room ?? "", from: m.from };
-        this.emit({ type: "incoming", room: this.incoming.room, from: m.from, auto: m.auto });
+        this.emit({ type: "incoming", room: this.incoming.room, from: m.from, auto: m.auto, phone: m.phone });
+      } else if (m.type === ServerMsgType.ResumeCall) {
+        // The page reloaded mid-call: the gateway names the room still holding
+        // this agent's slot. Arm it like a ring so accept() rejoins that room.
+        this.incoming = { room: m.room ?? "" };
+        this.emit({ type: "resume-call", room: this.incoming.room, auto: m.auto, phone: m.phone });
       } else if (m.type === ServerMsgType.IncomingCancel) {
         // The server withdrew the ring (advanced to the next agent per the team
         // strategy, or someone else answered). Drop the pending ring so a later

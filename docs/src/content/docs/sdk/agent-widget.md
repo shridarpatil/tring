@@ -163,7 +163,7 @@ See [Calls API](/tring/api-reference/calls/) and [Outbound calls & masking](/tri
 
 ## Events
 
-The widget doesn't expose its `Tring` instance or any callbacks to the page. It sets `window.Tring` to the class, but calling `Tring.init` alongside the widget opens a **second** presence connection for the same agent. If you need call events in your own code (for example, to open the customer's record when a call is answered), drop the widget and build your panel on the [JavaScript API](/tring/sdk/javascript-api/#tring), which emits `registered`, `availability`, `unregistered`, `reconnecting`, `call:ringing`, `call:answered`, `call:ended`, `call:remote-video`, `call:supervisor` and `error`.
+The widget doesn't expose its `Tring` instance or any callbacks to the page. It sets `window.Tring` to the class, but calling `Tring.init` alongside the widget opens a **second** presence connection for the same agent. If you need call events in your own code (for example, to open the customer's record when a call is answered), drop the widget and build your panel on the [JavaScript API](/tring/sdk/javascript-api/#tring), which emits `registered`, `availability`, `unregistered`, `reconnecting`, `call:ringing`, `call:resuming`, `call:answered`, `call:ended`, `call:remote-video`, `call:supervisor` and `error`.
 
 ## Staying online across page navigation
 

@@ -55,7 +55,10 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 }
 
 // agentLeg identifies the agent whose on-call count a call participant holds.
-type agentLeg struct{ tenant, sip string }
+type agentLeg struct {
+	tenant, sip string
+	p           *room.Participant
+}
 
 // holdAgentLeg counts p as one of the agent's active call legs until
 // releaseAgentLeg runs on p's terminal leave. If p already left (the Left event
@@ -65,7 +68,7 @@ func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string) {
 	s.mu.Lock()
 	gone := p.State() == room.StateLeft
 	if !gone {
-		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip}
+		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip, p: p}
 	}
 	s.mu.Unlock()
 	if gone {
@@ -83,6 +86,21 @@ func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
 	if ok {
 		s.setAgentOnCall(leg.tenant, leg.sip, false)
 	}
+}
+
+// droppedAgentLeg returns the agent's call participant whose socket dropped and
+// whose slot is still held in the reconnect grace window (a page refresh), or
+// nil. Only a dropped slot qualifies: a call still live on another socket (a
+// second tab) can't be taken over, and an expired one has left agentLegs.
+func (s *Server) droppedAgentLeg(tenant, sip string) *room.Participant {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, leg := range s.agentLegs {
+		if leg.tenant == tenant && leg.sip == sip && leg.p.State() == room.StateReconnecting {
+			return leg.p
+		}
+	}
+	return nil
 }
 
 // publishPresence emits an agent.presence event for the dashboard live feed.
@@ -130,6 +148,22 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	// Read after registering above, so a change that lands meanwhile is either
 	// in this read or pushed to the socket by PushAvailability.
 	s.sendAvailability(c, tenant, sip)
+	// A refreshed page has lost its call: name the room still holding the agent's
+	// slot so the SDK rejoins it within the grace window (handleWS reattaches it).
+	// phone/auto restore what the widget showed: a phone call hides screen
+	// share, and an outbound leg means the agent placed it (keeps the keypad).
+	if p := s.droppedAgentLeg(tenant, sip); p != nil {
+		roomID := p.Room().ID()
+		s.mu.Lock()
+		_, outbound := s.outboundLegs[roomID]
+		s.mu.Unlock()
+		_ = c.send(msg{
+			Type:  msgResumeCall,
+			Room:  strings.TrimPrefix(string(roomID), tenant+"/"),
+			Phone: s.sfu.HasPort(roomID),
+			Auto:  outbound,
+		})
+	}
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
@@ -465,6 +499,9 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	p.ensureHold() // caller hears hold music from the first ring, not just once queued
 	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
 
+	// A carrier caller is the room's SFU port: tell the widget it's a phone call
+	// (no screen share). Read before p.s.mu — the SFU has its own lock.
+	phone := p.s.sfu.HasPort(p.roomID)
 	p.s.mu.Lock()
 	inSet := make(map[string]bool, len(ordered))
 	for _, sip := range ordered {
@@ -479,7 +516,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
 		if c := p.s.agents[p.tenant][sip]; c != nil {
-			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label})
+			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label, Phone: phone})
 			if p.s.invites[p.roomID] == nil {
 				p.s.invites[p.roomID] = map[string]bool{}
 			}
