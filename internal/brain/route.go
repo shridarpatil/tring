@@ -129,6 +129,12 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 	}
 
 	rc := routing.RouteConfig{TenantID: tenant}
+	if t.AgentSIP != "" {
+		// Callers waiting for one agent queue only behind each other: on the shared
+		// no-team line, a transfer to a busy agent would block one to a free agent.
+		// Team lines key by team name; the "@agent/" prefix keeps these apart.
+		rc.Line = "@agent/" + t.AgentSIP
+	}
 	var moh string // resolved team hold music, played to the caller while queued/ringing
 	var sla int    // resolved team SLA seconds, snapshotted on the stint
 	if !ringAll && t.Team != "" && a.teams != nil {

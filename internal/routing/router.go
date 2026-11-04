@@ -37,6 +37,7 @@ func NewRouter(q Queue, res Reservations, rr RRCounter, pres *presence.Store, c 
 type RouteConfig struct {
 	TenantID    string
 	Team        string        // depth key + logging; "" → non-team (no depth published)
+	Line        string        // queue line callers wait in; "" → Team's line
 	Source      string        // queuekeys source (SourcePhone / SourceWeb); "" → no depth
 	Strategy    string        // ring_all | round_robin | sequential | longest_wait
 	RingSeconds time.Duration // per ring attempt (0 → default)
@@ -71,7 +72,11 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 		cfg.RingSeconds = defaultRingAttempt
 	}
 
-	qkey := QueueKey(cfg.TenantID, cfg.Team)
+	line := cfg.Line
+	if line == "" {
+		line = cfg.Team
+	}
+	qkey := QueueKey(cfg.TenantID, line)
 	waiter := r.queue.Enqueue(ctx, qkey, cfg.Priority)
 	defer func() {
 		bg := context.Background()
