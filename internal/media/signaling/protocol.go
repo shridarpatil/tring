@@ -35,7 +35,7 @@ const (
 	msgPeerJoined     = "peer-joined"     // {participant_id, name}
 	msgPeerState      = "peer-state"      // {participant_id, state}
 	msgPeerLeft       = "peer-left"       // {participant_id}
-	msgIncoming       = "incoming"        // s→agent: a call is ringing — {room, from, auto}
+	msgIncoming       = "incoming"        // s→agent: a call is ringing — {room, from, auto, phone}
 	msgCancelRing     = "incoming-cancel" // s→agent: withdraw a ring (advanced to next agent / someone answered) — {room}
 	msgReady          = "ready"           // s→agent: presence registered
 	msgAvailability   = "availability"    // s→agent: backend Away/Break toggle — {available}; sent after ready and on every change
@@ -46,6 +46,7 @@ const (
 	msgSupervisor     = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
 	msgRinging        = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
 	msgAnswered       = "answered"        // s→agent: the click-to-call customer picked up
+	msgResumeCall     = "resume-call"     // s→agent presence: a call is holding your dropped slot (page refresh) — {room, phone, auto}; join it to resume
 )
 
 // msg is the single envelope for every /rtc message.
@@ -83,6 +84,9 @@ type msg struct {
 	// (clicktocall.go)
 	From string `json:"from,omitempty"`
 	Auto bool   `json:"auto,omitempty"`
+	// incoming / resume-call (s→agent): the other party is on a phone (carrier)
+	// leg, not a browser — it can't receive a screen share.
+	Phone bool `json:"phone,omitempty"`
 
 	// transfer (agent → server): the re-route target — a team or one agent
 	ToTeam string `json:"to_team,omitempty"`

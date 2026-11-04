@@ -110,6 +110,7 @@ await tring.disconnect();
 | `reconnecting` | `{ attempt: number }` | The connection dropped unexpectedly. The SDK retries with backoff (1 s, doubling, up to 10 s) and fetches a fresh token each time. `attempt` is currently always `0`. |
 | `unregistered` | `{ reason?: string }` | The connection was closed by `disconnect()`. `reason` is currently not set. |
 | `call:ringing` | `{ call: Call }` | A call is ringing this agent. With `autoAnswer: true`, the SDK accepts it right away. |
+| `call:resuming` | `{ call: Call }` | The page was reloaded during a call, and the SDK is rejoining it on its own (no `accept()` needed). `call:answered` follows once the agent is back, or `call:ended` if the gateway already let the call go (about 30 seconds after the reload). The caller's name isn't known after a reload, so `displayName` is empty. |
 | `call:answered` | `{ call: Call }` | Audio is flowing. `call.status` is now `"connected"`. On a click-to-call (`POST /v1/calls`), this fires when the customer picks up, not when the agent's own leg answers. |
 | `call:ended` | `{ call: Call, cause?: string }` | The call ended: hung up, declined, taken by another agent, or ended by the server. `cause` is currently not set. |
 | `call:remote-video` | `{ call: Call, stream: MediaStream \| null }` | The other party started sharing their screen (`stream`) or stopped (`null`). |
@@ -134,7 +135,8 @@ The object you get in `call:ringing`, which is the same object in every later ev
 |---|---|---|
 | `to` | `string` | The label your backend set for the call, such as `agent_label` or an IVR label. **Never a phone number.** It can be `""`. |
 | `displayName` | `string \| undefined` | The same label, or `undefined` when it's empty. |
-| `direction` | `"inbound" \| "outbound"` | Currently always `"inbound"`. |
+| `direction` | `"inbound" \| "outbound"` | `"outbound"` for a call the agent placed (click-to-call), otherwise `"inbound"`. |
+| `phone` | `boolean` | `true` when the other party is on a phone line rather than a browser. Screen share can't reach them. |
 | `status` | `"ringing" \| "connected" \| "ended"` | Updated in place as the call progresses. |
 | `id` | `string \| undefined` | Declared in the type, but currently never set. |
 | `muted` | `boolean` (read-only) | Whether the agent's microphone is muted. |
@@ -452,7 +454,8 @@ new RtcAgent(opts: RtcAgentOpts)
 | `online` | `{}` |
 | `reconnecting` | `{}` |
 | `offline` | `{}`. Fires only after `goOffline()`. |
-| `incoming` | `{ room: string, from?: string }`. `from` is the call's label. |
+| `incoming` | `{ room: string, from?: string, auto?: boolean, phone?: boolean }`. `from` is the call's label, `auto` marks the agent's own click-to-call, and `phone` means the caller is on a phone line. |
+| `resume-call` | `{ room: string, auto?: boolean, phone?: boolean }`. The page reloaded mid-call and the gateway is still holding this agent's place in `room` for about 30 seconds. Call `accept()` to rejoin it. |
 | `incoming-canceled` | `{ room: string }`. The ring was withdrawn: another agent answered, or the ring moved on. |
 | `error` | `{ error: Error }` |
 
@@ -495,7 +498,7 @@ Both clients use one WebSocket to `{gatewayUrl}/rtc?token=<jwt>` (`ws://` or `ws
 - **The gateway makes the WebRTC offer.** The client answers with `answer` and exchanges `ice` candidates as they're found, in both directions.
 - **In-call messages** from the client: `dtmf`, `hold`, `resume`, `transfer`, `publish` / `unpublish` (screen sharing), and `bye`. From the server: `peer-joined`, `peer-left`, `peer-state`, `ended`, `supervisor`, `transfer-failed` and `error`.
 - **Agent-only messages.** `hold`, `resume`, `transfer` and `dial` are accepted only on an agent's call connection. Sent with a visitor token they're ignored and the gateway replies `error` ("only an agent can hold" / "only an agent can resume"), `transfer-failed` for `transfer`, or `error` for `dial`. A visitor may send `dtmf`, `publish` / `unpublish` (screen sharing its own screen) and `bye`.
-- **Who can join a call.** A `join` to a room that already has a call in it is only accepted from an agent that was rung for it (`incoming`), and only the first of them to answer; anyone else gets `error` "not invited to this call". Joining a new, empty room is always allowed. A `session_token` rejoin is unaffected.
+- **Who can join a call.** A `join` to a room that already has a call in it is only accepted from an agent that was rung for it (`incoming`), and only the first of them to answer; anyone else gets `error` "not invited to this call". Joining a new, empty room is always allowed. A `session_token` rejoin is unaffected, and so is an agent rejoining the call the gateway is holding for them after a page reload (`resume-call`).
 - **Limits.** The first message must arrive within 10 seconds of connecting. A single message over 64 KB closes the socket.
 - **Keepalive.** The gateway drops a socket that has been silent for about 90 seconds, so the SDK sends a `ping` (calls) or a repeated `register` (presence) every 25 seconds.
 - **Rejoining.** `joined` returns a `session_token`. After a drop, the client sends it in its next `join` to get its place in the call back within the gateway's grace period.

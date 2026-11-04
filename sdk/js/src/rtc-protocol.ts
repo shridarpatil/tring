@@ -13,7 +13,7 @@
 //                     `error` / `transfer-failed` and the message is ignored)
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
 //                     | incoming | incoming-cancel | ready | availability | error
-//                     | supervisor | transfer-failed
+//                     | supervisor | transfer-failed | resume-call
 // Trickle ICE rides `ice` both ways. Resumption: the client stores
 // `session_token` from `joined` and re-sends it in a later `join`.
 
@@ -49,6 +49,9 @@ export const ServerMsgType = {
   Supervisor: "supervisor",
   TransferFailed: "transfer-failed",
   Answered: "answered",
+  // agent presence: a page refresh dropped this agent's call, and the gateway is
+  // holding their slot for the grace window — `join` {room} to resume it.
+  ResumeCall: "resume-call",
 } as const;
 
 /** Browser-facing STUN/TURN entry sent in `joined` (shape matches RTCIceServer). */
@@ -92,6 +95,9 @@ export interface RtcMessage {
   // without asking
   from?: string;
   auto?: boolean;
+  // incoming / resume-call: the other party is on a phone (carrier) leg, not a
+  // browser — it can't receive a screen share
+  phone?: boolean;
 
   // transfer (agent → server): re-route target
   to_team?: string;
