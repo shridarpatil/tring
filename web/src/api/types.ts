@@ -53,6 +53,9 @@ export interface Agent {
   // Live effective state, populated on list responses: combines connection
   // presence with available_for_calls ("away" = connected but unavailable).
   status?: "online" | "offline" | "on_call" | "away" | "unknown";
+  // When an online agent last became free (call ended, connected, or back from
+  // Away); drives the dashboard's idle timer. Absent when unknown.
+  idle_since?: string;
 }
 
 // Ring strategies a team can use (mirrors the API's teamStrategies + the

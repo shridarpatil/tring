@@ -39,33 +39,38 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 		delete(s.onCall, k)
 	}
 	s.mu.Unlock()
-	if pres := s.cfg.Presence; pres != nil {
-		if n > 0 {
-			pres.MarkOnCall(context.Background(), tenant, sip)
-		} else {
-			pres.MarkOnline(context.Background(), tenant, sip)
-			// longest_wait orders ring candidates by this stamp.
-			pres.MarkFreed(context.Background(), tenant, sip)
-		}
-	}
 	if n > 0 {
-		s.publishPresence(tenant, sip, presence.StatusOnCall)
-	} else {
-		s.publishPresence(tenant, sip, presence.StatusOnline)
+		if pres := s.cfg.Presence; pres != nil {
+			pres.MarkOnCall(context.Background(), tenant, sip)
+		}
+		s.publishPresence(tenant, sip, presence.StatusOnCall, time.Time{})
+		return
 	}
+	var freed time.Time
+	if pres := s.cfg.Presence; pres != nil {
+		pres.MarkOnline(context.Background(), tenant, sip)
+		freed = pres.MarkFreed(context.Background(), tenant, sip)
+	}
+	s.publishPresence(tenant, sip, presence.StatusOnline, freed)
 }
 
 // publishPresence emits an agent.presence event for the dashboard live feed.
-// Called only on actual transitions (connect / on_call flip / disconnect), never
-// on the TTL refresh tick. Frontend matches agents by sip_username.
-func (s *Server) publishPresence(tenant, sip, status string) {
+// Called only on actual transitions (connect / on_call flip / disconnect /
+// back from Away), never on the TTL refresh tick. A non-zero idleSince (the
+// freed-at stamp) restarts the dashboard's idle timer. Frontend matches agents
+// by sip_username.
+func (s *Server) publishPresence(tenant, sip, status string, idleSince time.Time) {
 	if s.cfg.Events == nil || sip == "" {
 		return
 	}
-	s.cfg.Events.Publish(context.Background(), tenant, events.TypeAgentPresence, map[string]any{
+	data := map[string]any{
 		"sip_username": sip,
 		"status":       status,
-	})
+	}
+	if !idleSince.IsZero() {
+		data["idle_since"] = idleSince
+	}
+	s.cfg.Events.Publish(context.Background(), tenant, events.TypeAgentPresence, data)
 }
 
 // agentOnCall reports whether the agent has any active call leg (used by the
@@ -98,7 +103,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
 		pres.MarkOnline(context.Background(), tenant, sip)
-		s.publishPresence(tenant, sip, presence.StatusOnline)
+		s.publishPresence(tenant, sip, presence.StatusOnline, time.Time{})
 		stopRefresh := make(chan struct{})
 		go func() {
 			t := time.NewTicker(presence.RefreshInterval)
@@ -121,7 +126,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		defer func() {
 			close(stopRefresh)
 			pres.Offline(context.Background(), tenant, sip)
-			s.publishPresence(tenant, sip, presence.StatusOffline)
+			s.publishPresence(tenant, sip, presence.StatusOffline, time.Time{})
 		}()
 	}
 
@@ -220,21 +225,33 @@ func (s *Server) PushAvailability(tenant, sip string, available bool) {
 // candidates skip them (the team lookup already filters on available_for_calls;
 // ring-all and direct-agent targets come from the live socket registry instead).
 // It reports false, changing nothing, when c is no longer the agent's socket.
+//
+// Away -> available (back from a break, or connecting as available: agents
+// register as Away until their flag is read) restarts the idle clock.
 func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.agents[tenant][sip] != c {
+		s.mu.Unlock()
 		return false
 	}
 	k := tenant + "|" + sip
-	if !away {
-		delete(s.away, k)
+	if away {
+		if s.away == nil {
+			s.away = map[string]bool{}
+		}
+		s.away[k] = true
+		s.mu.Unlock()
 		return true
 	}
-	if s.away == nil {
-		s.away = map[string]bool{}
+	wasAway := s.away[k]
+	delete(s.away, k)
+	busy := s.onCall[k] > 0
+	s.mu.Unlock()
+	// A busy agent's clock starts when the call ends (setAgentOnCall).
+	if wasAway && !busy && s.cfg.Presence != nil {
+		freed := s.cfg.Presence.MarkFreed(context.Background(), tenant, sip)
+		s.publishPresence(tenant, sip, presence.StatusOnline, freed)
 	}
-	s.away[k] = true
 	return true
 }
 

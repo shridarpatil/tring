@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // AgentBoard — agents grouped by live state, with a name search and a team
 // filter. Each group shows its first 8 until "Show all N" is pressed. An on-call
-// agent's row ticks its call time (from the live calls + the page clock).
+// agent's row ticks its call time (from the live calls + the page clock), an
+// available agent's row its idle time.
 import { computed, reactive, ref } from "vue";
 import type { Agent, Call, QueueDepth } from "../../api/types";
-import { agentTeams, fmtMMSS } from "../../lib/liveDashboard";
+import { agentTeams, fmtMMSS, idleLabel } from "../../lib/liveDashboard";
 import { Panel, SignalDot } from "../ui";
 
 // teams carries each team's member SIP usernames (queues[].agents).
@@ -85,6 +86,7 @@ function onCallLabel(a: Agent): string {
           <span class="ab-name">
             {{ a.display_name || a.sip_username }}
             <span v-if="g.key === 'on_call'" class="ab-meta mono">{{ onCallLabel(a) }}</span>
+            <span v-else-if="idleLabel(a, nowMs)" class="ab-meta mono">{{ idleLabel(a, nowMs) }}</span>
           </span>
           <span class="ab-team">{{ teamsOf.get(a.sip_username)?.join(", ") || "—" }}</span>
         </div>
