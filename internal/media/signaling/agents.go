@@ -102,8 +102,15 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
-		pres.MarkOnline(context.Background(), tenant, sip)
-		s.publishPresence(tenant, sip, presence.StatusOnline, time.Time{})
+		// A presence socket can reconnect mid-call (network blip, token
+		// refresh): stay on_call, or team routing rings a busy agent.
+		if s.agentOnCall(tenant, sip) {
+			pres.MarkOnCall(context.Background(), tenant, sip)
+			s.publishPresence(tenant, sip, presence.StatusOnCall, time.Time{})
+		} else {
+			pres.MarkOnline(context.Background(), tenant, sip)
+			s.publishPresence(tenant, sip, presence.StatusOnline, time.Time{})
+		}
 		stopRefresh := make(chan struct{})
 		go func() {
 			t := time.NewTicker(presence.RefreshInterval)
