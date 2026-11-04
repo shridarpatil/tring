@@ -105,6 +105,13 @@ export function fmtMMSS(secs: number): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
+// "idle · 4:12" for an available agent with a known idle_since (the gateway's
+// freed-at stamp: last call ended, connected, or back from Away); "" otherwise.
+export function idleLabel(a: { status?: string; idle_since?: string }, nowMs: number): string {
+  if (a.status !== "online" || !a.idle_since) return "";
+  return `idle · ${fmtMMSS(Math.max(0, (nowMs - Date.parse(a.idle_since)) / 1000))}`;
+}
+
 // "5:00" -> 300, "1:30:00" -> 5400, "300" -> 300; anything else (including "1:5") -> null.
 export function parseMMSS(s: string): number | null {
   const v = s.trim();

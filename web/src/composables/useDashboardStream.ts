@@ -101,9 +101,13 @@ function onEvent(type: string, data: unknown) {
       break;
     }
     case "agent.presence": {
-      const d = data as { sip_username: string; status: Agent["status"] };
+      // idle_since rides on the online events that restart the idle clock; other
+      // presence events omit it and keep the last one.
+      const d = data as { sip_username: string; status: Agent["status"]; idle_since?: string };
       agents.value = agents.value.map((a) =>
-        a.sip_username === d.sip_username ? { ...a, status: deriveStatus({ ...a, status: d.status }) } : a,
+        a.sip_username === d.sip_username
+          ? { ...a, status: deriveStatus({ ...a, status: d.status }), idle_since: d.idle_since ?? a.idle_since }
+          : a,
       );
       break;
     }
