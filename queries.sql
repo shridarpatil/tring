@@ -471,6 +471,12 @@ ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 -- In-progress calls for the cockpit "Live calls" panel: not yet ended, still
 -- ringing or connected. Oldest first so the longest-running call stays put at the
 -- top. Capped — active calls are naturally bounded, the LIMIT is just a backstop.
+-- The 4 h started_at window (same cap as list-open-stints) turns this into a
+-- short range scan on calls (tenant_id, started_at); without it the planner
+-- can walk the tenant's whole call history to find the few open rows (slow on a
+-- cold cache, and this runs on every dashboard connect). It also hides CDRs
+-- orphaned by a crash that never got an ended_at. A rolling window, not
+-- midnight, so a call spanning midnight stays visible.
 -- The trailing team / enqueued_at / sla_seconds are the call's open queue stint
 -- (newest, within the same 4 h cap as list-open-stints), NULL when not queued.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
@@ -486,7 +492,8 @@ LEFT JOIN LATERAL (
       AND enqueued_at > now() - interval '4 hours'
     ORDER BY enqueued_at DESC LIMIT 1
 ) qs ON true
-WHERE c.tenant_id = $1 AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
+WHERE c.tenant_id = $1 AND c.started_at > now() - interval '4 hours'
+  AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
 ORDER BY c.started_at ASC LIMIT 100;
 
 -- name: count-calls
