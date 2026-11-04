@@ -54,6 +54,9 @@ export interface Call {
    * unless autoAnswer is on, waits for `accept()`.
    */
   direction: CallDirection;
+  /** True when the other party is on a phone (carrier) line, not a browser —
+   *  screen share can't reach them. */
+  phone: boolean;
   /** Display name of the remote party, when known (e.g. "Web Caller"). */
   displayName?: string;
   /** Current state. */
@@ -94,6 +97,9 @@ export type TringEvent =
   | { type: "unregistered"; reason?: string }
   | { type: "reconnecting"; attempt: number }
   | { type: "call:ringing"; call: Call }
+  // The page reloaded mid-call and the SDK is rejoining that call on its own
+  // (no accept needed); call:answered follows once it's back, else call:ended.
+  | { type: "call:resuming"; call: Call }
   | { type: "call:answered"; call: Call }
   | { type: "call:ended"; call: Call; cause?: string }
   // The remote party's screen-share track arrived (stream) or ended (null).

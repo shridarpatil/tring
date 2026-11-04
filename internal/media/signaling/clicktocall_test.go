@@ -89,8 +89,8 @@ func (h *callHarness) readUntil(c net.Conn, typ string) msg {
 func (h *callHarness) answer() net.Conn {
 	h.t.Helper()
 	in := h.readUntil(h.pres, msgIncoming)
-	if !in.Auto || in.From != "Lead 42" {
-		h.t.Fatalf("incoming %+v, want auto with the label", in)
+	if !in.Auto || !in.Phone || in.From != "Lead 42" {
+		h.t.Fatalf("incoming %+v, want an auto phone call with the label", in)
 	}
 	c := h.dial()
 	h.send(c, msg{Type: msgJoin, Room: in.Room})

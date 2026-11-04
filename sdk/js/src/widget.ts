@@ -55,7 +55,7 @@ const WAVE_HTML = (
   .join("");
 
 // Header text for non-timer states; anything else is shown as given.
-const STATUS_TEXT: Record<string, string> = { calling: "Calling…" };
+const STATUS_TEXT: Record<string, string> = { calling: "Calling…", connecting: "Reconnecting call…" };
 
 // Transfer targets the agent can pick from (online agents by name + teams).
 interface TransferTargets {
@@ -204,6 +204,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
     if (call.direction === "inbound") panel.showIncoming(call);
     else panel.show(call, "calling");
   });
+  tring.on("call:resuming", ({ call }) => panel.show(call, "connecting"));
   tring.on("call:answered", ({ call }) => panel.setActive(call, "connected"));
   tring.on("call:remote-video", ({ stream }) => panel.setRemoteVideo(stream));
   tring.on("call:supervisor", ({ present, mode, name }) => panel.setSupervisor(present, mode, name));
@@ -363,6 +364,35 @@ function createPanel(control?: CallControl): Panel {
 
   let held = false;
 
+  // Drag: the status line and the minimized pill move the panel (their buttons
+  // still click). Once moved it's pinned by left/top instead of the bottom-right
+  // corner, clamped on screen, and stays put for later calls on this page.
+  for (const handle of root.querySelectorAll<HTMLElement>(".tring-panel-status, .tring-mini")) {
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest("button")) return;
+      const box = root.getBoundingClientRect();
+      const dx = e.clientX - box.left;
+      const dy = e.clientY - box.top;
+      handle.setPointerCapture(e.pointerId);
+      const move = (ev: PointerEvent) => {
+        const x = Math.min(Math.max(ev.clientX - dx, 0), window.innerWidth - box.width);
+        const y = Math.min(Math.max(ev.clientY - dy, 0), window.innerHeight - box.height);
+        root.style.left = `${x}px`;
+        root.style.top = `${y}px`;
+        root.style.right = "auto";
+        root.style.bottom = "auto";
+      };
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    });
+  }
+
   // setState is the only writer of data-state, so the stage always follows it.
   function setState(state: string) {
     root.setAttribute("data-state", state);
@@ -420,6 +450,13 @@ function createPanel(control?: CallControl): Panel {
       clearInterval(timerId);
       timerId = undefined;
     }
+  }
+
+  // Screen share can't reach a phone line, and an inbound caller has no menu to
+  // key into, so those controls are hidden for such calls.
+  function fitControls(call: Call) {
+    shareBtn.style.display = call.phone ? "none" : "";
+    keypadBtn.style.display = call.direction === "inbound" ? "none" : "";
   }
 
   // Reset all controls to default — called whenever a fresh call appears, since
@@ -632,6 +669,7 @@ function createPanel(control?: CallControl): Panel {
       active = call;
       stopTimer();
       resetControls();
+      fitControls(call);
       setCaller(call.to);
       subEl.textContent = STATUS_TEXT[status] ?? status;
       setState(status);
@@ -642,6 +680,7 @@ function createPanel(control?: CallControl): Panel {
       active = call;
       stopTimer();
       resetControls();
+      fitControls(call);
       setCaller(call.displayName || call.to || "Unknown caller");
       subEl.textContent = "Incoming call";
       setState("incoming");
@@ -745,7 +784,7 @@ function injectStyles(): void {
   style.textContent = `
     #${PANEL_ID} {
       position: fixed; right: 1.5rem; bottom: 1.5rem;
-      width: 360px; max-width: calc(100vw - 2rem); box-sizing: border-box;
+      width: 400px; max-width: calc(100vw - 2rem); box-sizing: border-box;
       color: #1f2420; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
       transform: translateY(180%); opacity: 0;
       transition: transform .2s ease, opacity .2s ease;
@@ -763,7 +802,9 @@ function injectStyles(): void {
       padding: 20px; display: flex; flex-direction: column; gap: 16px;
     }
     /* Status line: dot + state text, or "Live call · MM:SS" once connected. */
-    #${PANEL_ID} .tring-panel-status { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+    #${PANEL_ID} .tring-panel-status { display: flex; align-items: center; gap: 9px; min-height: 30px; }
+    /* Drag handles (see the drag wiring in createPanel). */
+    #${PANEL_ID} .tring-panel-status, #${PANEL_ID} .tring-mini { cursor: grab; touch-action: none; user-select: none; }
     #${PANEL_ID} .tring-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: #9a9c95; }
     #${PANEL_ID}[data-state="incoming"] .tring-dot,
     #${PANEL_ID}[data-state="connected"] .tring-dot { background: #0f5c46; }
@@ -773,8 +814,10 @@ function injectStyles(): void {
     #${PANEL_ID}[data-state="error"] .tring-dot { background: #c0392b; }
     /* Connecting: pulse so the wait reads as "working", not "stuck". */
     #${PANEL_ID}[data-state="connecting"] .tring-dot { animation: tring-pulse 1s ease-in-out infinite; }
+    /* Live call: a slow pulse so the card reads as on-air. Not while held. */
+    #${PANEL_ID}[data-state="connected"]:not(.tring-held) .tring-dot { animation: tring-pulse 2s ease infinite; }
     #${PANEL_ID} .tring-panel-sub {
-      flex: 1; min-width: 0; font-weight: 600; font-size: 15px;
+      flex: 1; min-width: 0; font-weight: 600; font-size: 13px; color: #3d4a44;
       font-variant-numeric: tabular-nums;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
@@ -797,7 +840,7 @@ function injectStyles(): void {
       font: 600 24px/1 Georgia, "Times New Roman", serif;
     }
     #${PANEL_ID}[data-state="ended"] .tring-panel-avatar { background: #8e918a; }
-    #${PANEL_ID} .tring-panel-to { min-width: 0; font-weight: 600; font-size: 18px; overflow-wrap: anywhere; }
+    #${PANEL_ID} .tring-panel-to { min-width: 0; font-weight: 700; font-size: 16px; overflow-wrap: anywhere; }
     /* Supervisor indicator — a console operator is monitoring/whispering/barging.
        Hidden by default; shown/hidden via panel.setSupervisor(). */
     #${PANEL_ID} .tring-panel-supervisor {

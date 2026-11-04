@@ -300,6 +300,9 @@ func TestTransferRingsAgentIntoRoom(t *testing.T) {
 	if inc["room"] != "call" {
 		t.Fatalf("incoming room = %v, want call", inc["room"])
 	}
+	if _, phone := inc["phone"]; phone {
+		t.Fatalf("incoming phone = %v for a web call, want it absent", inc["phone"])
+	}
 
 	// Agent answers by joining the room → the transfer completes and the visitor
 	// sees the agent join as a peer.
@@ -538,6 +541,9 @@ func TestInboundPhoneCallRingsAgentAndEndsOnHangup(t *testing.T) {
 	}
 	if inc["from"] != "+919900112233" {
 		t.Fatalf("incoming from = %v, want the caller id", inc["from"])
+	}
+	if inc["phone"] != true {
+		t.Fatalf("incoming phone = %v, want true for a carrier call", inc["phone"])
 	}
 
 	// Agent answers by joining the pstn room.
