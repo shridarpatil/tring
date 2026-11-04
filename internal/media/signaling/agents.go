@@ -44,6 +44,8 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 			pres.MarkOnCall(context.Background(), tenant, sip)
 		} else {
 			pres.MarkOnline(context.Background(), tenant, sip)
+			// longest_wait orders ring candidates by this stamp.
+			pres.MarkFreed(context.Background(), tenant, sip)
 		}
 	}
 	if n > 0 {
