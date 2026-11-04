@@ -19,6 +19,9 @@ services:
       - SYS_NICE
     ulimits:
       rtprio: 95
+      # Each call holds several sockets (carrier + fsplug RTP/RTCP); the
+      # default soft limit of 1024 rejects calls with 488 past ~120.
+      nofile: 65536
     # Start after the tring container so FreeSWITCH's first mod_xml_curl lookups
     # (directory/gateways/ACL against the api role on boot) are less likely to
     # race a not-yet-listening api. service_started (not _healthy) because tring
