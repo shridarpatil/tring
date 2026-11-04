@@ -22,6 +22,7 @@ import {
   sortLiveCalls,
   teamBadge,
   fmtMMSS,
+  idleLabel,
   parseMMSS,
   sortTeams,
   teamState,
@@ -327,4 +328,15 @@ test("fmtSince wording", () => {
   assert.equal(fmtSince(14 * 60 + 5), "14 min");
   assert.equal(fmtSince(80 * 60), "1h 20m");
   assert.equal(fmtSince(480 * 60), "8h");
+});
+
+test("idleLabel: ticks from idle_since for an available agent only", () => {
+  const now = Date.parse("2026-11-04T10:05:00Z");
+  const since = "2026-11-04T10:00:48Z";
+  assert.equal(idleLabel({ status: "online", idle_since: since }, now), "idle · 4:12");
+  assert.equal(idleLabel({ status: "online" }, now), ""); // unknown: no timer
+  assert.equal(idleLabel({ status: "away", idle_since: since }, now), "");
+  assert.equal(idleLabel({ status: "on_call", idle_since: since }, now), "");
+  // Clock skew (stamp slightly ahead of this browser) never shows negative time.
+  assert.equal(idleLabel({ status: "online", idle_since: "2026-11-04T10:05:03Z" }, now), "idle · 0:00");
 });

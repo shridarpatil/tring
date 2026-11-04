@@ -58,6 +58,10 @@ type Agent struct {
 	// available), or "offline". Legacy SIP transport reports "online"/"offline"
 	// from registration, or "unknown" if FreeSWITCH couldn't be reached.
 	Status string `json:"status,omitempty"`
+	// IdleSince is when an "online" agent last became free (call ended,
+	// connected, or back from Away) — the dashboard's idle timer. Gateway
+	// transport only; absent when unknown or the agent isn't idle.
+	IdleSince *time.Time `json:"idle_since,omitempty"`
 }
 
 type createAgentRequest struct {
@@ -127,6 +131,11 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 				st = "away"
 			}
 			agents[i].Status = st
+			if st == presence.StatusOnline {
+				if ts, ok := s.presence.FreedAt(ctx, t.ID.String(), agents[i].SipUsername); ok {
+					agents[i].IdleSince = &ts
+				}
+			}
 		}
 	} else {
 		regs, regErr := s.fs.RegisteredUsers(ctx)
