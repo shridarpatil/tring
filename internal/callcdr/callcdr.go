@@ -69,6 +69,7 @@ type activeCall struct {
 	recFormat  string           // tenant's recording format (record.Formats), read at call start
 	answered   bool             // an agent has joined — gates RingStop's revert-to-ivr
 	ringAgents []string         // agents rung in the current window — names the no_answer event
+	ringDone   bool             // the current ring window was answered — later ring rows stay off the live dashboard
 	endHook    uuid.UUID        // the flow's "on call end" webhook (uuid.Nil = none)
 }
 
@@ -325,6 +326,7 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	ac := l.calls[roomID]
 	if ac != nil && agentPID != ac.callerPID {
 		ac.answered = true // gate RingStop's revert-to-ivr (a late cleanup mustn't undo "talking")
+		ac.ringDone = true
 	}
 	l.mu.Unlock()
 	if ac == nil || agentPID == ac.callerPID {
@@ -381,6 +383,7 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	ac := l.calls[roomID]
 	if ac != nil {
 		ac.ringAgents = nil // new routing window — reset the per-agent ring roster
+		ac.ringDone = false
 	}
 	l.mu.Unlock()
 	if ac == nil || l.events == nil {
@@ -427,10 +430,12 @@ func (l *Log) RingAgent(roomID, sip string) {
 		name = label
 	}
 	var roster string
+	var ringDone bool
 	l.mu.Lock()
 	if cur := l.calls[roomID]; cur != nil {
 		cur.ringAgents = append(cur.ringAgents, name)
 		roster = strings.Join(cur.ringAgents, ", ")
+		ringDone = cur.ringDone
 	}
 	l.mu.Unlock()
 	detail := map[string]any{"agent": name, "sip": sip}
@@ -439,8 +444,10 @@ func (l *Log) RingAgent(roomID, sip string) {
 	}
 	l.timelineEvent(ac.tenant, ac.id, "ring", detail)
 	// Live dashboard: replace the team label with the agent(s) actually ringing —
-	// the roster grows as a ring_all pops more agents.
-	if l.events != nil {
+	// the roster grows as a ring_all pops more agents. This row is recorded after
+	// the popup is sent, so an agent may already have answered: then publishing
+	// would flip the talking call back to "ringing".
+	if l.events != nil && !ringDone {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", roster))
 	}
 }
