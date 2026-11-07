@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canManageTeam, canOpen, homeRoute, type MeUser } from "./roles.ts";
+import { canManageTeam, canOpen, guardTarget, homeRoute, type MeUser } from "./roles.ts";
 
 const mk = (role: MeUser["role"], teams: MeUser["teams"] = []): MeUser => ({
   id: "u1",
@@ -33,4 +33,12 @@ test("canManageTeam: supervisors all teams, agents only teams they manage", () =
   assert.equal(canManageTeam(a, "A"), true);
   assert.equal(canManageTeam(a, "B"), false);
   assert.equal(canManageTeam(a, "C"), false);
+});
+
+test("guardTarget: fails closed for admin routes", () => {
+  const r = { meta: { admin: true } };
+  assert.equal(guardTarget(null, r), "me");
+  assert.equal(guardTarget(mk("agent"), r), "me");
+  assert.equal(guardTarget(mk("admin"), r), "ok");
+  assert.equal(guardTarget(null, {}), "ok");
 });
