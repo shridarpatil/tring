@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { KeyRound, LogOut, Trash2 } from "lucide-vue-next";
+import { KeyRound, LogOut, Pencil, Trash2 } from "lucide-vue-next";
 import { errMessage } from "../lib/errors";
 import { useList } from "../composables/useList";
 import { usePoll } from "../composables/usePoll";
@@ -9,7 +9,7 @@ import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import { confirmDialog } from "../lib/confirm";
 import { agentSignalState } from "../lib/status";
-import { isAgentOnly, roleOptions, validateLogin, validateNewUser } from "../lib/users";
+import { buildUserPatch, isAgentOnly, roleOptions, validateLogin, validateNewUser } from "../lib/users";
 import type { Agent, AgentToken } from "../api/types";
 import {
   Button,
@@ -126,6 +126,35 @@ async function patch(u: UserRow, body: Record<string, string>, okMsg: string) {
 const roleKey = ref(0);
 async function setRole(u: UserRow, role: string) {
   if (!(await patch(u, { role }, "Role updated"))) roleKey.value++;
+}
+
+// --- edit details ---
+const editFor = ref<UserRow | null>(null);
+const editForm = ref({ display_name: "", email: "", role: "agent" });
+// Closing by any route (cancel, Esc, backdrop) drops the target so a reopen starts fresh.
+const showEdit = computed({
+  get: () => editFor.value !== null,
+  set: (v: boolean) => {
+    if (!v) editFor.value = null;
+  },
+});
+function openEdit(u: UserRow) {
+  editFor.value = u;
+  editForm.value = { display_name: u.display_name, email: u.email, role: u.role };
+}
+async function saveEdit() {
+  const u = editFor.value;
+  if (!u) return;
+  const { body, problem } = buildUserPatch(u, editForm.value);
+  if (problem) return toast.error(problem);
+  if (!Object.keys(body).length) {
+    showEdit.value = false;
+    return;
+  }
+  saving.value = true;
+  const done = await patch(u, body, "User updated");
+  saving.value = false;
+  if (done) showEdit.value = false;
 }
 
 // --- set login / reset password ---
@@ -267,6 +296,9 @@ async function mintToken(u: UserRow) {
         <template #row-actions="{ row }">
           <div class="hstack">
             <Button variant="secondary" size="sm" @click="mintToken(row)">Get token</Button>
+            <IconButton title="Edit" size="sm" @click="openEdit(row)">
+              <Pencil :size="14" />
+            </IconButton>
             <IconButton :title="row.can_login ? 'Reset password' : 'Set login'" size="sm" @click="openLogin(row)">
               <KeyRound :size="14" />
             </IconButton>
@@ -292,6 +324,26 @@ async function mintToken(u: UserRow) {
       <template #footer>
         <Button variant="ghost" @click="closeForm">Cancel</Button>
         <Button type="submit" form="user-form" :loading="saving">Create</Button>
+      </template>
+    </Modal>
+
+    <Modal v-model:open="showEdit" title="Edit user">
+      <form id="edit-form" class="vstack" @submit.prevent="saveEdit">
+        <TextField v-model="editForm.display_name" label="Display name" />
+        <TextField
+          v-model="editForm.email"
+          label="Email"
+          type="email"
+          autocomplete="off"
+          :disabled="!editFor?.can_login"
+          :hint="editFor?.can_login ? 'To remove the login, use Clear login instead' : 'No console login; use Set login to add an email and password'"
+        />
+        <Select v-model="editForm.role" label="Role" :options="roleOptions" :disabled="!!editFor && isSelf(editFor)" />
+        <TextField :model-value="editFor?.sip_username" label="SIP username" mono disabled hint="The CRM identifier; it can't be changed" />
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="showEdit = false">Cancel</Button>
+        <Button type="submit" form="edit-form" :loading="saving">Save</Button>
       </template>
     </Modal>
 
