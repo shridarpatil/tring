@@ -119,7 +119,7 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 func (s *Server) RequireFullScope(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if scope, _ := r.Context().Value(scopeCtxKey).(string); scope != scopeFull {
-			writeError(w, http.StatusForbidden, "this API key's scope does not allow this endpoint")
+			writeError(w, http.StatusForbidden, "not permitted")
 			return
 		}
 		next.ServeHTTP(w, r)

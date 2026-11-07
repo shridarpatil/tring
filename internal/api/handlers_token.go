@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -41,15 +43,25 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tok, exp, err := s.IssueAgentToken(id, t.ID, sipUsername, t.SipDomain, agentTokenTTL)
+	resp, err := s.agentTokenResponse(r.Context(), t, id, sipUsername)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue token")
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenResponse{
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// agentTokenResponse mints an agent JWT plus the gateway URL and ICE servers
+// the SDK needs, shared by the CRM-backend and /v1/me token endpoints.
+func (s *Server) agentTokenResponse(ctx context.Context, t *Tenant, agentID uuid.UUID, sip string) (tokenResponse, error) {
+	tok, exp, err := s.IssueAgentToken(agentID, t.ID, sip, t.SipDomain, agentTokenTTL)
+	if err != nil {
+		return tokenResponse{}, err
+	}
+	return tokenResponse{
 		Token:      tok,
 		ExpiresAt:  exp,
 		GatewayURL: s.gatewayPublicURL,
-		ICEServers: s.iceServersFor(sipUsername, s.turnTTLFor(r.Context(), t.ID)),
-	})
+		ICEServers: s.iceServersFor(sip, s.turnTTLFor(ctx, t.ID)),
+	}, nil
 }
