@@ -22,8 +22,14 @@ export interface NewUserForm {
   sip_username: string;
 }
 
+/** Blank email and password = a CRM-only agent (SIP identity, no console login). */
+export function isAgentOnly(f: NewUserForm): boolean {
+  return f.email.trim() === "" && f.password === "";
+}
+
 /** First problem with the create form, or "" when it can be submitted. */
 export function validateNewUser(f: NewUserForm): string {
+  if (isAgentOnly(f)) return f.sip_username.trim() ? "" : "Enter a SIP username, or an email and password";
   if (!f.email.trim().includes("@")) return "Enter a valid email";
   if (f.password.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters`;
   if (!roleOptions.some((o) => o.value === f.role)) return "Pick a role";
