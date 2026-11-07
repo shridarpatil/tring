@@ -153,3 +153,27 @@ func TestUsersClearLoginRevokesSession(t *testing.T) {
 		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestUsersPasswordWithoutEmailCannotLogin(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+
+	rec := doReq(t, h, "POST", "/v1/users", admin, `{"email":"cy@example.com","password":"correct-horse","role":"agent"}`)
+	var u userRow
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &u) != nil {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	tok := tokenFor(t, s, f, u.ID, "cy@example.com", "agent")
+	path := "/v1/users/" + u.ID.String()
+	if rec := doReq(t, h, "PATCH", path, admin, `{"email":""}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d", rec.Code)
+	}
+	if rec := doReq(t, h, "PATCH", path, admin, `{"password":"another-pass"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("password only = %d, want 400", rec.Code)
+	}
+	if rec := doReq(t, h, "GET", "/v1/me", tok, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token = %d, want 401", rec.Code)
+	}
+}
