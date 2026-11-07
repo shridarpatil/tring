@@ -903,17 +903,29 @@ WHERE id=$3;
 -- /v1/me (the logged-in agent's own view)
 -- ===========================================================================
 
--- name: get-me-stats
--- $1 tenant, $2 user, $3 window start. taken = calls the user answered;
--- missed = calls rung to the user that someone else (or no one) answered,
--- one per call however many times it rang them.
+-- name: get-me-stats-today
+-- $1 tenant, $2 user. taken = calls the user answered; missed = calls rung to
+-- the user that someone else (or no one) answered, one per call however many
+-- times it rang them. The window starts at the DB session's local midnight,
+-- like stats-today (Go-side tz math has drifted from it before).
 SELECT
   (SELECT count(*) FROM calls
-    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= $3),
+    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= date_trunc('day', now())),
   (SELECT COALESCE(sum(duration_seconds), 0)::int FROM calls
-    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= $3),
+    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= date_trunc('day', now())),
   (SELECT count(DISTINCT e.call_id) FROM call_events e
-    WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= $3
+    WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= date_trunc('day', now())
+      AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.id = e.call_id AND c.agent_id = $2));
+
+-- name: get-me-stats-7d
+-- Same as get-me-stats-today over a rolling 7 days.
+SELECT
+  (SELECT count(*) FROM calls
+    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= now() - interval '7 days'),
+  (SELECT COALESCE(sum(duration_seconds), 0)::int FROM calls
+    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= now() - interval '7 days'),
+  (SELECT count(DISTINCT e.call_id) FROM call_events e
+    WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= now() - interval '7 days'
       AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.id = e.call_id AND c.agent_id = $2));
 
 -- name: list-my-calls

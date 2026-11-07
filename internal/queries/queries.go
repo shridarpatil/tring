@@ -119,7 +119,8 @@ type Queries struct {
 	// ---- api: /v1/me ----
 	GetUserPasswordHash string `query:"get-user-password-hash"`
 	SetUserPassword     string `query:"set-user-password"`
-	GetMeStats          string `query:"get-me-stats"`
+	GetMeStatsToday     string `query:"get-me-stats-today"`
+	GetMeStats7d        string `query:"get-me-stats-7d"`
 	ListMyCalls         string `query:"list-my-calls"`
 	CountMyCalls        string `query:"count-my-calls"`
 	IsMyCall            string `query:"is-my-call"`
