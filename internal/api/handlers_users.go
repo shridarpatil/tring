@@ -204,6 +204,23 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	// A password on a user with no email would leave a half-set login that
+	// can't sign in; require the email to exist or be set in the same request.
+	if hash != nil && req.Email == nil {
+		cur, err := s.getUserRow(ctx, p.TenantID, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "load user failed")
+			return
+		}
+		if cur.Email == "" {
+			writeError(w, http.StatusBadRequest, "set an email to give this user a login")
+			return
+		}
+	}
 	var got uuid.UUID
 	if clearLogin {
 		err = s.db.Pool.QueryRow(ctx, s.q.ClearUserLogin, p.TenantID, id).Scan(&got)

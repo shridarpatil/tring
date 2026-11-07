@@ -532,7 +532,7 @@ SELECT u.role, u.sip_username, COALESCE(u.email, ''), COALESCE(u.display_name, '
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[]
 FROM users u
 LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
-WHERE u.id = $1 AND u.tenant_id = $2 AND u.password_hash IS NOT NULL
+WHERE u.id = $1 AND u.tenant_id = $2 AND u.password_hash IS NOT NULL AND u.email IS NOT NULL
 GROUP BY u.id;
 
 -- name: get-user-password-hash
