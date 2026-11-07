@@ -16,13 +16,10 @@ import (
 // long enough to open the /rtc socket, short enough that a leak expires fast.
 const supervisorTokenTTL = 2 * time.Minute
 
-// consoleCtxKey stashes *ConsoleClaims for ConsoleAuthRequired-gated routes.
-// tenantCtxKey=0 and agentCtxKey=1 already exist in auth.go.
-const consoleCtxKey ctxKey = 2
-
 // ConsoleAuthRequired gates a route on a CONSOLE JWT specifically (not an API
-// key): the supervise permission is per-user, and an API key has no user
-// identity. It stashes the console claims (user id + tenant) for the handler.
+// key): supervise is authorized per user, and an API key has no user
+// identity. It stashes the console claims (user id + tenant) and the user's
+// Principal, reloaded from the DB so a revoked login is refused.
 func (s *Server) ConsoleAuthRequired(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
@@ -31,11 +28,17 @@ func (s *Server) ConsoleAuthRequired(next http.Handler) http.Handler {
 			return
 		}
 		claims, err := s.parseConsoleToken(token)
-		if err != nil || !s.consoleUserExists(r.Context(), claims) {
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid console session")
+			return
+		}
+		principal, err := s.loadPrincipal(r.Context(), claims)
+		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid console session")
 			return
 		}
 		ctx := context.WithValue(r.Context(), consoleCtxKey, claims)
+		ctx = context.WithValue(ctx, principalCtxKey, principal)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -55,9 +58,11 @@ type superviseResponse struct {
 }
 
 // handleSupervise mints a supervisor RTC token for a live call with a media
-// room — web, phone or WhatsApp. The console operator must have can_supervise;
-// the call must be live (ringing/answered) with a resolvable pion room (calls
-// placed over ESL with POST /calls have none). The returned token pins that room.
+// room — web, phone or WhatsApp. Admins and supervisors may supervise any
+// call in the tenant; a team manager only calls belonging to a team they
+// manage (call-in-teams); anyone else is refused. The call must be live
+// (ringing/answered) with a resolvable pion room (calls placed over ESL with
+// POST /calls have none). The returned token pins that room.
 func (s *Server) handleSupervise(w http.ResponseWriter, r *http.Request) {
 	claims := consoleFromCtx(r.Context())
 	if claims == nil {
@@ -75,16 +80,26 @@ func (s *Server) handleSupervise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Permission gate.
-	var canSupervise bool
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetUserSupervise, userID, claims.TenantID).Scan(&canSupervise)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !canSupervise) {
-		writeError(w, http.StatusForbidden, "not permitted to supervise")
+	// Permission gate, before the call lookup so a refused user can't probe
+	// which call ids exist.
+	p := principalFromCtx(r.Context())
+	if p == nil {
+		writeError(w, http.StatusUnauthorized, "no console session")
 		return
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "permission lookup failed")
-		return
+	if all, teams := p.SupervisableTeams(); !all {
+		var inTeams bool
+		if len(teams) > 0 {
+			err = s.db.Pool.QueryRow(r.Context(), s.q.CallInTeams, claims.TenantID, callID, teams).Scan(&inTeams)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "permission lookup failed")
+				return
+			}
+		}
+		if !inTeams {
+			writeError(w, http.StatusForbidden, "not permitted to supervise")
+			return
+		}
 	}
 
 	// Resolve the live call → pion room.

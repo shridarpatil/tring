@@ -58,11 +58,22 @@ type queuesResponse struct {
 // staffing unknown), and waits/breaches from queue_stints.
 // The endpoint and the SSE recompute share it.
 func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) (queuesResponse, error) {
-	now := time.Now()
-	var onCall int
-	_ = s.db.Pool.QueryRow(ctx, s.q.CountActiveAgentCalls, t.ID).Scan(&onCall)
+	out, err := s.queuesSnapshotFor(ctx, t, agents, nil)
+	if err != nil {
+		return out, err
+	}
+	_ = s.db.Pool.QueryRow(ctx, s.q.CountActiveAgentCalls, t.ID).Scan(&out.OnCall)
+	return out, nil
+}
 
-	out := queuesResponse{OnCall: onCall, Queues: []queueDepth{}}
+// queuesSnapshotFor is queuesSnapshot limited to the teams include accepts (nil
+// = all). Skipped teams are left out entirely, so agents need only cover the
+// included teams' members and the below-minimum clock of the others is never
+// fed partial staffing. OnCall is left 0: the tenant-wide count is
+// queuesSnapshot's, and a scoped caller must not see it.
+func (s *Server) queuesSnapshotFor(ctx context.Context, t *Tenant, agents []Agent, include func(team string) bool) (queuesResponse, error) {
+	now := time.Now()
+	out := queuesResponse{Queues: []queueDepth{}}
 	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamLiveConfig, t.ID)
 	if err != nil {
 		return queuesResponse{}, err
@@ -74,6 +85,9 @@ func (s *Server) queuesSnapshot(ctx context.Context, t *Tenant, agents []Agent) 
 		var h json.RawMessage
 		if err := rows.Scan(&q.Team, &q.MinLive, &q.SLASeconds, &h); err != nil {
 			return queuesResponse{}, err
+		}
+		if include != nil && !include(q.Team) {
+			continue
 		}
 		q.WaitingSince = []time.Time{}
 		q.Agents = []string{}

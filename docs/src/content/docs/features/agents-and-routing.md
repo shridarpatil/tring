@@ -14,10 +14,42 @@ An agent is a person who takes calls in the browser through the [agent widget](/
 | `id` | Agent UUID. |
 | `sip_username` | Your identifier for the agent, unique per tenant. Use your own CRM user id here: every `/v1/agents/{id}` path accepts either the UUID or the `sip_username`. It is also what a Transfer node's `agent_sip` names. |
 | `display_name` | Name shown in the console, transfer pickers and call logs. |
+| `role` | `admin`, `supervisor` or `agent`. See [Roles](#roles-and-logins). |
 | `available_for_calls` | Your Away/Break switch, controlled from your backend. |
 | `status` | Live state on list responses: `online`, `on_call`, `away` or `offline`. |
 
 Create agents in the console (**Agents**) or with `POST /v1/agents` (`sip_username` required, `display_name` optional). See the [Agents API](/tring/api-reference/agents/).
+
+To fix a mistyped `sip_username`, an admin can edit it on the console's **Users** page (or `PATCH /v1/users/{id}`). This is not allowed while the agent is on a call. The agent's widget reconnects under the new name. Your CRM and any Transfer nodes that use the old name must be updated. The console lists those flows after the save. See [PATCH /v1/users/{id}](/tring/api-reference/users/#patch-v1usersid).
+
+## Roles and logins
+
+Agents and console users are the same thing: one **user** with a `role`.
+
+| Role | Console access |
+|---|---|
+| `agent` | Their own view at `/agent`: their calls and stats, take calls in the browser, their teams. |
+| `supervisor` | Every team's live state and calls, and can supervise any live call. |
+| `admin` | Everything, including the admin API and managing users. |
+
+Team **manager** is not a role. It is a flag on a user's membership of one team (`is_manager`), so the same person can manage one team and be an ordinary member of another. A manager sees that team's live state and calls, can add and remove its members (but not other managers), and can supervise calls that belong to it. Only a supervisor or admin can make someone a manager.
+
+Everyone signs in at `/login`. Admins land on the admin console at `/admin/`; supervisors and agents land on `/agent`, and team pages are at `/agent/teams/<name>`.
+
+Role has no effect on routing: anyone in a team is rung when the team rings, whatever their role.
+
+**Login.** A user signs in to the console with email and password. Email is optional and, when set, unique across tenants. A user created with `POST /v1/agents` (API key) has no email or password, so they have no console login. An admin gives them one by setting `email` and `password` with `PATCH /v1/users/{id}`, or creates a user with a login directly using `POST /v1/users`. Clearing the email removes the login. See the [Users API](/tring/api-reference/users/).
+
+The CRM integration is unchanged: your backend still mints agent tokens with `/v1/agents/{id}/token`, the widget connects with them, and `sip_username` identifies the agent. `/v1/agents` responses simply include `role` as well.
+
+### Taken and missed
+
+The agent view counts calls today and over the last 7 days:
+
+| Count | Meaning |
+|---|---|
+| **Taken** | Calls this agent answered. |
+| **Missed** | Calls that rang this agent and that they did not answer, even if a teammate answered. A call that rang them several times counts once. |
 
 ## Presence and availability
 
@@ -95,3 +127,24 @@ Presence only flips to `on_call` when an agent **answers**. Without extra care, 
 ## What the agent sees
 
 The ringing agent sees a label, never an internal id: the Transfer node's `label` if set, otherwise the caller's identity (phone number or `client_ref`), otherwise `Web Caller`. Use `label` to hide the caller's number from agents (see [Outbound calls](/tring/features/outbound-calls/#number-masking)).
+
+### Masking client numbers by role
+
+**Settings → Privacy → Mask client phone numbers for** has one checkbox per role: **Agents**, **Team managers** and **Supervisors**. They are independent, so you can, for example, mask agents and managers but let supervisors see full numbers. The same switches are `mask_numbers_agents`, `mask_numbers_managers` and `mask_numbers_supervisors` on `PATCH /v1/tenants/me`. All three are off by default.
+
+| User | Masked when |
+|---|---|
+| Agent (manages no team) | Agents is checked |
+| Team manager (an agent who manages at least one team) | Team managers is checked |
+| Supervisor | Supervisors is checked |
+| Admin | Never |
+
+Only the client's side of a call is masked: the caller on an inbound call, the person called on an outbound call, and the `client_ref` your CRM passes for a web caller. Your own numbers (the DID that was called, the caller ID you dial out from) stay visible.
+
+A masked number keeps its first 2 and last 4 digits and any leading `+`: `+919876543210` shows as `+91••••••3210`. A number that is the whole value and has 6 digits or fewer is hidden completely.
+
+Caller labels from IVR flows are masked too. If a Transfer node's `label` includes the caller's number (for example `Customer {{caller}}`), a masked agent sees `Customer +91••••••3210`: every run of 7 or more digits in the label is masked and the rest of the text is kept. A label without such a number (`Sales lead`, `ext 12`, `Web Caller`) is shown as it is. Digits the caller entered in the IVR (the call's IVR path) are not masked.
+
+Masking happens on the server, so the full number never reaches a masked user's browser. It covers the calls in the agent view and team pages (`/v1/me/calls`, `/v1/me/dashboard`, `/v1/my-teams`), a supervisor's live dashboard stream, and the caller shown on an incoming ring. That ring is also what your CRM's embedded widget shows, so a masked agent sees the masked number there too. Admins on the same dashboard still see full numbers. If the gateway can't tell whether an agent should be masked (for example it can't reach the database), it masks.
+
+API keys and webhooks are never masked: your backend always gets the full number. A change applies to new rings and page loads straight away; an open supervisor dashboard picks it up within about 20 seconds.

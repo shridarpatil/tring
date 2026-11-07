@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -112,21 +111,24 @@ func (s *Server) handleSdkTransferTargets(w http.ResponseWriter, r *http.Request
 	if rows, err := s.db.Pool.Query(r.Context(), s.q.ListAgents, claims.TenantID); err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var id, tid uuid.UUID
-			var sip, name string
-			var avail bool
-			var created time.Time
-			if err := rows.Scan(&id, &tid, &sip, &name, &avail, &created); err != nil {
+			var a Agent
+			if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role); err != nil {
+				// Logged, not skipped silently: a column drift here once
+				// emptied the picker without a trace.
+				s.log.Error("transfer targets: scan agent", "err", err)
 				continue
 			}
-			if id == selfID || !avail || !s.agentReachable(r.Context(), claims.TenantID, sip) {
+			if a.ID == selfID || !a.AvailableForCalls || !s.agentReachable(r.Context(), claims.TenantID, a.SipUsername) {
 				continue
 			}
+			name := a.DisplayName
 			if name == "" {
-				name = sip
+				name = a.SipUsername
 			}
-			agents = append(agents, agentTarget{Sip: sip, Name: name})
+			agents = append(agents, agentTarget{Sip: a.SipUsername, Name: name})
 		}
+	} else {
+		s.log.Error("transfer targets: list agents", "err", err)
 	}
 
 	teams := []string{}

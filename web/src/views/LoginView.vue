@@ -3,22 +3,19 @@ import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
+import { homeRoute, safeRedirect, type MeUser } from "../lib/roles";
 import { Button, TextField } from "../components/ui";
 
 interface LoginResponse {
   token: string;
   expires_at: string;
   tenant: { id: string; name: string; sip_domain: string };
+  user: MeUser;
 }
 
 const router = useRouter();
 const route = useRoute();
 
-// Only same-app paths: "/calls/…" yes; "//evil.example" or "https://…" no.
-function safeRedirect(): string | null {
-  const r = route.query.redirect;
-  return typeof r === "string" && r.startsWith("/") && !r.startsWith("//") ? r : null;
-}
 const email = ref("");
 const password = ref("");
 const error = ref("");
@@ -32,10 +29,10 @@ async function submit() {
       email: email.value.trim(),
       password: password.value,
     });
-    auth.setSession(res.token, res.tenant);
-    const next = safeRedirect();
+    auth.setSession(res.token, res.tenant, res.user);
+    const next = safeRedirect(route.query.redirect);
     if (next) router.replace(next);
-    else router.push({ name: "dashboard" });
+    else router.push({ name: homeRoute(res.user) });
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "sign-in failed";
   } finally {

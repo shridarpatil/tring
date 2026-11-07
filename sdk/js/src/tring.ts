@@ -120,6 +120,18 @@ export class Tring extends Emitter<TringEvent> {
       this.online = false;
       this.emit({ type: "unregistered" });
     });
+    this.agent.on("superseded", () => {
+      this.online = false;
+      // A ring this tab hadn't answered can't be answered here any more (the
+      // gateway's incoming-cancel would go to the new socket): dismiss it.
+      const call = this.ringing;
+      if (call?.status === "ringing") {
+        this.ringing = null;
+        call.status = "ended";
+        this.emit({ type: "call:ended", call });
+      }
+      this.emit({ type: "superseded" });
+    });
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
     this.agent.on("incoming", ({ from, auto, phone }) => this.handleIncoming(from, auto, phone));
     this.agent.on("resume-call", ({ auto, phone }) => this.handleIncoming(undefined, auto, phone, true));
@@ -139,6 +151,13 @@ export class Tring extends Emitter<TringEvent> {
   }
 
   private async connect(): Promise<void> {
+    await this.agent.goOnline();
+  }
+
+  /** takeOver makes this tab/device the one that rings again after a
+   *  `superseded` event (which in turn supersedes the other one). Call from a
+   *  user gesture so the mic can be captured. */
+  async takeOver(): Promise<void> {
     await this.agent.goOnline();
   }
 

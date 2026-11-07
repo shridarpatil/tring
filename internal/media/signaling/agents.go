@@ -10,6 +10,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/events"
+	"github.com/shridarpatil/tring/internal/mask"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/presence"
@@ -135,6 +136,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	if s.agents[tenant] == nil {
 		s.agents[tenant] = make(map[string]*conn)
 	}
+	prev := s.agents[tenant][sip]
 	s.agents[tenant][sip] = c
 	// Away until sendAvailability has read the backend flag, so a ring in that
 	// gap can't reach an agent the backend set Away.
@@ -143,6 +145,14 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	}
 	s.away[tenant+"|"+sip] = true
 	s.mu.Unlock()
+	// The newest socket (another tab/device) owns ringing. Tell the old one so
+	// it shows that and doesn't reconnect to steal it back — two sockets doing
+	// that would flap forever. It stays open: old SDKs ignore the message, and
+	// its defer won't deregister the new socket. Sent outside s.mu as a write
+	// can block on a slow peer.
+	if prev != nil && prev != c {
+		_ = prev.send(msg{Type: msgSuperseded})
+	}
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
 	// Read after registering above, so a change that lands meanwhile is either
@@ -164,6 +174,11 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 			Auto:  outbound,
 		})
 	}
+	// superseded is set on disconnect when a newer, still-live socket (another
+	// tab/device) replaced this one: that socket owns the agent's presence, so
+	// this one must not mark them offline. Deferred funcs run LIFO, so the
+	// registry defer below sets it before the presence defer reads it.
+	var superseded bool
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
@@ -185,6 +200,15 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 				case <-stopRefresh:
 					return
 				case <-t.C:
+					// A superseded socket (kept open by an old SDK) must not
+					// re-assert presence: if the newer socket has since closed,
+					// that would hold an unringable agent online.
+					s.mu.Lock()
+					owner := s.agents[tenant][sip] == c
+					s.mu.Unlock()
+					if !owner {
+						continue
+					}
 					// Preserve on_call across TTL re-asserts — don't flip a busy
 					// agent back to available every 10s.
 					if s.agentOnCall(tenant, sip) {
@@ -197,6 +221,9 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		}()
 		defer func() {
 			close(stopRefresh)
+			if superseded {
+				return
+			}
 			pres.Offline(context.Background(), tenant, sip)
 			s.publishPresence(tenant, sip, presence.StatusOffline, time.Time{})
 		}()
@@ -207,6 +234,10 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		if s.agents[tenant][sip] == c {
 			delete(s.agents[tenant], sip)
 			delete(s.away, tenant+"|"+sip)
+		} else {
+			// Only a live replacement owns presence. If it has already gone
+			// (the newer tab closed first), nobody does: mark offline here.
+			superseded = s.agents[tenant][sip] != nil
 		}
 		s.mu.Unlock()
 		_ = c.Close()
@@ -273,6 +304,19 @@ func (s *Server) lookupAvailability(tenant, sip string) (available, ok bool) {
 	}
 	s.cfg.Presence.FillAvailability(ctx, tenant, sip, available)
 	return available, true
+}
+
+// kickAgent closes the agent's presence socket; handleAgentPresence's read
+// then fails and its deferred cleanup deregisters them and marks them offline.
+func (s *Server) kickAgent(tenant, sip string) {
+	s.mu.Lock()
+	c := s.agents[tenant][sip]
+	s.mu.Unlock()
+	if c == nil {
+		return
+	}
+	_ = c.Close()
+	s.log.Info("agent kicked", "tenant", tenant, "sip", sip)
 }
 
 // PushAvailability forwards a backend availability change (the API's
@@ -443,6 +487,11 @@ type pionRing struct {
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
+	// labels memoizes the caller label as each agent may see it (masked or not),
+	// so the router's repeated Ring calls look an agent up once. Only Ring
+	// touches it, and the router calls Ring serially.
+	labels map[string]string
+
 	holdOnce sync.Once // starts hold music at most once per transfer
 	holdStop func()    // stops it; set by ensureHold, called by stopHold/cleanup
 }
@@ -502,6 +551,16 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	// A carrier caller is the room's SFU port: tell the widget it's a phone call
 	// (no screen share). Read before p.s.mu — the SFU has its own lock.
 	phone := p.s.sfu.HasPort(p.roomID)
+	// Resolve each agent's view of the caller label before p.s.mu: the masking
+	// verdict may need a Redis/DB read.
+	if p.labels == nil {
+		p.labels = map[string]string{}
+	}
+	for _, sip := range ordered {
+		if _, ok := p.labels[sip]; !ok {
+			p.labels[sip] = p.s.callerLabelFor(p.tenant, sip, p.label)
+		}
+	}
 	p.s.mu.Lock()
 	inSet := make(map[string]bool, len(ordered))
 	for _, sip := range ordered {
@@ -516,7 +575,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
 		if c := p.s.agents[p.tenant][sip]; c != nil {
-			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label, Phone: phone})
+			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.labels[sip], Phone: phone})
 			if p.s.invites[p.roomID] == nil {
 				p.s.invites[p.roomID] = map[string]bool{}
 			}
@@ -705,3 +764,31 @@ func (s *Server) takeInvite(roomID room.RoomID, sip string) bool {
 // ensure the server satisfies the brain's ring-transport + handoff-wait seams.
 var _ brain.RingTransport = (*Server)(nil)
 var _ brain.HandoffWaiter = (*Server)(nil)
+
+// callerLabelFor returns the caller label as sip may see it: with every phone
+// number in it masked (mask.InText — a flow's Transfer label may embed
+// {{caller}}) when the tenant masks numbers for sip's role, so the full number
+// never reaches a masked agent's widget. It fails closed — masks — when the
+// verdict can't be read, including a gateway started without a DB (nil
+// NumberMask). A label with no number in it is returned as is.
+func (s *Server) callerLabelFor(tenant, sip, label string) string {
+	masked := mask.InText(label)
+	if masked == label || s.cfg.NumberMask == nil {
+		return masked
+	}
+	tid, err := uuid.Parse(tenant)
+	if err != nil {
+		return masked
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	on, err := s.cfg.NumberMask.MaskNumbers(ctx, tid, sip)
+	if err != nil {
+		s.log.Warn("number mask lookup failed; masking", "tenant", tenant, "sip", sip, "err", err)
+		return masked
+	}
+	if on {
+		return masked
+	}
+	return label
+}

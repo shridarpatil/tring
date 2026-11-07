@@ -238,7 +238,7 @@ a no-media call never shows a dead play button. S3 upload (date-wise key) +
 | 1 | **Tenant API key** `tk_live_…` | integrator backend | full tenant; never in a browser |
 | 2 | **Agent JWT** (aud `tring.sdk`, 5 min) | agent browser | `/rtc` agent WS + `/v1/sdk/*` |
 | 3 | **Gateway call token** (aud `tring.gateway`, ~2 min, **single-use**) | visitor browser | one `/rtc` visitor call; flow pinned server-side; jti burned via Redis `SetNX` (fail-closed) |
-| 4 | **Console JWT** (aud `tring.console`, 12 h) | operators | admin UI `/v1/…` |
+| 4 | **Console JWT** (aud `tring.console`, 12 h) | operators | admin UI `/v1/…`; role-scoped: admin sessions get the full API, supervisor/agent sessions only `/v1/me*`, `/v1/my-teams*` and supervise (role loaded from the DB per request) |
 | 5 | **FS Basic Auth** | FreeSWITCH | `/fs/*` mod_xml_curl callbacks |
 
 The only token mint is server-side: `POST /v1/guest-credentials` (tenant API

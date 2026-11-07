@@ -19,6 +19,7 @@ Wherever a path has `{id}` on this page, you can pass either the agent's UUID **
 | `tenant_id` | UUID | Owning tenant. |
 | `sip_username` | string | The agent's username, unique in the tenant. Typically your CRM user ID. |
 | `display_name` | string | Name shown to supervisors and in the console. Left out when empty. |
+| `role` | string | `admin`, `supervisor` or `agent`. See [Users](/tring/api-reference/users/). |
 | `available_for_calls` | boolean | Your backend's availability flag (your "Away" / "Break" button). Tring rings an agent only when they're connected **and** available. |
 | `created_at` | timestamp | When the agent was created. |
 | `status` | string | Live status. **Only in the list response.** See below. |

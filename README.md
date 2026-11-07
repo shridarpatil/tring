@@ -52,7 +52,7 @@ $EDITOR .env            # network IPs, TZ
 docker compose pull && docker compose up -d
 ```
 
-Go to `http://localhost:8085/admin/` and log in with `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` from `.env`.
+Go to `http://localhost:8085/login` and log in with `TRING_ADMIN_EMAIL` / `TRING_ADMIN_PASSWORD` from `.env`.
 
 __________________
 

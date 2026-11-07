@@ -14,7 +14,7 @@ Every key has a scope. Give each backend the narrowest one it needs: a leaked `f
 | `calls` | `POST /v1/calls`, `POST /v1/calls/connect`, `GET /v1/calls[/{id}[/events\|/recording]]`, `POST /v1/calls/{id}/hold\|resume`, `POST /v1/guest-credentials`, `POST /v1/agents`, `GET /v1/agents[/{id}]`, `POST /v1/agents/{id}/availability`, `GET /v1/agents/{id}/token`, `GET /v1/teams[/{name}]`, `GET /v1/queues`, `GET /v1/stats/overview`, `GET /v1/numbers`, `GET /v1/flows[/{id}]`, `GET /v1/stream/dashboard` |
 | `full` | Everything above, plus API keys, trunks, webhooks, tenant settings and guest config, sounds, number/flow/team changes, and the flow simulator. |
 
-Any other endpoint called with a `calls` key returns `403` `this API key's scope does not allow this endpoint`. Keys created before scopes existed are `full`. A console session always has full access.
+Any other endpoint called with a `calls` key returns `403` `not permitted`. Keys created before scopes existed are `full`. A console session always has full access.
 
 ### The API key object
 

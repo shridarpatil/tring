@@ -89,8 +89,37 @@ func TestCreateAgentOmitsSipPassword(t *testing.T) {
 	}
 	var stored string
 	if err := f.DB.Pool.QueryRow(context.Background(),
-		`SELECT sip_password FROM agents WHERE tenant_id = $1 AND sip_username = 'alice'`, f.TenantID,
+		`SELECT sip_password FROM users WHERE tenant_id = $1 AND sip_username = 'alice'`, f.TenantID,
 	).Scan(&stored); err != nil || stored == "" {
 		t.Errorf("stored sip_password = %q (err %v), want a generated password", stored, err)
+	}
+}
+
+// The unified users table carries a role: API-created agents are 'agent', the
+// fixture console admin shows up as 'admin'.
+func TestListAgentsIncludesRole(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+
+	if rec := serve(t, s, f, http.MethodPost, "/v1/agents", `{"sip_username":"alice"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("create: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	rec := serve(t, s, f, http.MethodGet, "/v1/agents", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var list []struct {
+		SipUsername string `json:"sip_username"`
+		Role        string `json:"role"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+	roles := map[string]string{}
+	for _, a := range list {
+		roles[a.SipUsername] = a.Role
+	}
+	if roles["alice"] != "agent" || roles["dbtest@tring.local"] != "admin" {
+		t.Errorf("roles = %v, want alice=agent and the fixture admin=admin", roles)
 	}
 }

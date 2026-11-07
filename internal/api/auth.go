@@ -15,9 +15,12 @@ const (
 	tenantCtxKey ctxKey = iota
 	agentCtxKey
 	scopeCtxKey
+	consoleCtxKey   // *ConsoleClaims, set by ConsoleAuthRequired
+	principalCtxKey // *Principal, set for console sessions
 )
 
-// API key scopes (api_keys.scope). Console sessions always act as scopeFull.
+// API key scopes (api_keys.scope). Admin console sessions act as scopeFull,
+// other console sessions as scopeSelf (principal.go).
 const (
 	scopeFull  = "full"
 	scopeCalls = "calls"
@@ -48,12 +51,18 @@ type Tenant struct {
 	// RecordingFormat is the finished recording's format: ogg, mp3 or wav.
 	// Populated only by the tenant settings handlers.
 	RecordingFormat string `json:"recording_format"`
+	// MaskNumbers* mask client phone numbers for each non-admin role
+	// (internal/mask). Populated only by the tenant settings handlers.
+	MaskNumbersAgents      bool `json:"mask_numbers_agents"`
+	MaskNumbersManagers    bool `json:"mask_numbers_managers"`
+	MaskNumbersSupervisors bool `json:"mask_numbers_supervisors"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API
 // key (`tk_live_…`, for server-to-server CRM backends) or a console JWT
 // issued by /v1/console/login (for the admin console). Both resolve to the
-// owning tenant, stashed in the request context.
+// owning tenant, stashed in the request context. A console session also
+// stashes its Principal, reloaded from the DB here on every request.
 func (s *Server) AuthRequired(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
@@ -62,7 +71,10 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 			return
 		}
 
-		var tenantID uuid.UUID
+		var (
+			tenantID  uuid.UUID
+			principal *Principal
+		)
 		scope := scopeFull
 		if strings.HasPrefix(token, "tk_") {
 			// Tenant API key: look up its hash; reject if unknown/revoked.
@@ -74,11 +86,19 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 			tenantID, scope = id, keyScope
 		} else {
 			claims, err := s.parseConsoleToken(token)
-			if err != nil || !s.consoleUserExists(r.Context(), claims) {
+			if err != nil {
+				writeError(w, http.StatusUnauthorized, "invalid credentials")
+				return
+			}
+			principal, err = s.loadPrincipal(r.Context(), claims)
+			if err != nil {
 				writeError(w, http.StatusUnauthorized, "invalid credentials")
 				return
 			}
 			tenantID = claims.TenantID
+			if !principal.IsAdmin() {
+				scope = scopeSelf
+			}
 		}
 
 		var t Tenant
@@ -90,36 +110,25 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), tenantCtxKey, &t)
 		ctx = context.WithValue(ctx, scopeCtxKey, scope)
+		if principal != nil {
+			ctx = context.WithValue(ctx, principalCtxKey, principal)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// RequireFullScope admits only full-access callers (console sessions and
-// 'full' API keys) to the admin routes it wraps; a 'calls' key gets 403.
+// RequireFullScope admits only full-access callers (admin console sessions
+// and 'full' API keys) to the admin routes it wraps; a 'calls' key or a
+// non-admin console session gets 403.
 // Mount it inside the AuthRequired group.
 func (s *Server) RequireFullScope(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if scope, _ := r.Context().Value(scopeCtxKey).(string); scope != scopeFull {
-			writeError(w, http.StatusForbidden, "this API key's scope does not allow this endpoint")
+			writeError(w, http.StatusForbidden, "not permitted")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// consoleUserExists reports whether a console token's user still exists in
-// its tenant. Console JWTs are stateless, so without this a deleted user's
-// session would stay valid until expiry. Fails closed on a DB error.
-func (s *Server) consoleUserExists(ctx context.Context, c *ConsoleClaims) bool {
-	userID, err := uuid.Parse(c.Subject)
-	if err != nil {
-		return false
-	}
-	var ok bool
-	if err := s.db.Pool.QueryRow(ctx, s.q.UserExists, userID, c.TenantID).Scan(&ok); err != nil {
-		return false
-	}
-	return ok
 }
 
 // tenantForAPIKey resolves a presented API key to its tenant and scope by

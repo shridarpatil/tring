@@ -68,7 +68,7 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	}
 	var agentID uuid.UUID
 	if err := fx.DB.Pool.QueryRow(ctx,
-		`INSERT INTO agents (tenant_id, sip_username, sip_password) VALUES ($1, 'alice', 'x') RETURNING id`,
+		`INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'alice', 'x') RETURNING id`,
 		fx.TenantID).Scan(&agentID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestTimelineEvents(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestRingAgentLiveShowsAgentName(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestLateRingAgentAfterAnswerKeepsTalking(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A'), ($1,'bob','x','Bob B')`,
+		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A'), ($1,'bob','x','Bob B')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agents: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestAgentLookupThroughCache(t *testing.T) {
 		t.Fatalf("disable recording: %v", err)
 	}
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO agents (tenant_id, sip_username, sip_password, display_name) VALUES ($1, 'carol', 'x', 'Carol A')`,
+		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1, 'carol', 'x', 'Carol A')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -587,10 +587,57 @@ func TestAgentLookupThroughCache(t *testing.T) {
 	if got := ringName(1); got != "Carol A" {
 		t.Fatalf("cold ring named %q, want Carol A", got)
 	}
-	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE agents SET display_name = 'Carol B' WHERE sip_username = 'carol'`); err != nil {
+	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE users SET display_name = 'Carol B' WHERE sip_username = 'carol'`); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
 	if got := ringName(2); got != "Carol A" {
 		t.Errorf("warm ring named %q, want cached Carol A", got)
 	}
+}
+
+// TestRingStartStampsCallTeam: a team ring window attributes the call to that
+// team (calls.team), even with the events sink off, and the last team wins.
+// The write is asynchronous, so the test polls for it.
+func TestRingStartStampsCallTeam(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil) // nil events sink
+	roomID := fx.TenantID.String() + "/team-stamp"
+	l.Started(ctx, fx.TenantID, roomID, "+15551230000", "Support flow", "web", "", "caller-pid")
+
+	team := func() string {
+		t.Helper()
+		var got *string
+		if err := fx.DB.Pool.QueryRow(ctx, `SELECT team FROM calls WHERE tenant_id = $1`, fx.TenantID).Scan(&got); err != nil {
+			t.Fatalf("read team: %v", err)
+		}
+		if got == nil {
+			return "<nil>"
+		}
+		return *got
+	}
+	waitTeam := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		got := team()
+		for got != want && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			got = team()
+		}
+		if got != want {
+			t.Fatalf("team = %q, want %q", got, want)
+		}
+	}
+
+	l.RingStart(ctx, roomID, "", "alice") // direct-agent ring: no team, no write
+	if got := team(); got != "<nil>" {
+		t.Fatalf("team after agent ring = %q, want NULL", got)
+	}
+	l.RingStart(ctx, roomID, "sales", "")
+	waitTeam("sales")
+	// Back-to-back transfers: the latest team must land last.
+	l.RingStart(ctx, roomID, "billing", "")
+	l.RingStart(ctx, roomID, "support", "")
+	waitTeam("support")
+	l.Ended(roomID, "caller_hangup")
 }

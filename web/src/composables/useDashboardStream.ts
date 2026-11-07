@@ -2,7 +2,7 @@ import { ref, onMounted, onUnmounted } from "vue";
 import { streamEvents } from "../lib/sse";
 import type { Call, Agent, Queues, StatsOverview } from "../api/types";
 
-interface Snapshot {
+export interface Snapshot {
   calls: Call[];
   agents: Agent[];
   queues: Queues;
@@ -23,7 +23,7 @@ let consumers = 0;
 
 // Gateway publishes raw presence (online/on_call/offline); fold in the backend
 // availability flag so connected-but-unavailable reads "away".
-function deriveStatus(a: Agent): Agent["status"] {
+export function deriveStatus(a: Agent): Agent["status"] {
   const raw = a.status === "away" ? "online" : a.status;
   if (raw === "online" && a.available_for_calls === false) return "away";
   return raw;

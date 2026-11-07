@@ -316,6 +316,49 @@ func TestTransferRingsAgentIntoRoom(t *testing.T) {
 	}
 }
 
+// TestPresenceSupersededNotifiesOldSocket: an agent opening a second presence
+// socket (another tab/device) takes over ringing; the old socket is told so it
+// stops claiming to ring and doesn't reconnect-flap, and rings reach only the new one.
+func TestPresenceSupersededNotifiesOldSocket(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{Flows: transferFlows{}})
+	tenant := uuid.New()
+
+	first := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	first.send(map[string]any{"type": "register"})
+	first.readUntil("ready")
+
+	second := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	second.send(map[string]any{"type": "register"})
+	second.readUntil("ready")
+
+	first.readUntil("superseded")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	if inc := second.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("incoming room = %v, want call", inc["room"])
+	}
+	// The superseded socket stays open (old SDKs ignore the message) but must
+	// not be rung.
+	_ = first.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	for {
+		data, err := wsutil.ReadServerText(first.conn)
+		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				break
+			}
+			t.Fatalf("superseded socket closed: %v", err)
+		}
+		var m map[string]any
+		if json.Unmarshal(data, &m) == nil && m["type"] == "incoming" {
+			t.Fatalf("superseded socket was rung: %s", data)
+		}
+	}
+}
+
 // fakeTeams resolves a fixed team membership (no DB). strategy/ringSeconds/maxWait
 // are optional — zero values give a ring-all team with routing defaults.
 type fakeTeams struct {
@@ -515,13 +558,19 @@ func (f fakeDIDs) ResolveDID(_ context.Context, _ string) (uuid.UUID, string, er
 // TestInboundPhoneCallRingsAgentAndEndsOnHangup is the 4c end-to-end (no SIP,
 // no media): a phone call arrives via the plug → the IVR transfers → an agent
 // is rung and joins → the carrier hangs up → the agent's call is ended.
+// noMask is a NumberMaskResolver under which nobody is masked.
+type noMask struct{}
+
+func (noMask) MaskNumbers(context.Context, uuid.UUID, string) (bool, error) { return false, nil }
+
 func TestInboundPhoneCallRingsAgentAndEndsOnHangup(t *testing.T) {
 	tenant := uuid.New()
 	s, err := sfu.New(sfu.Config{})
 	if err != nil {
 		t.Fatalf("sfu: %v", err)
 	}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}})
+	// NumberMask says "not masked": with none the gateway fails closed and masks.
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, NumberMask: noMask{}})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 	fp := newFakePstn()

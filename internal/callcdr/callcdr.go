@@ -71,6 +71,8 @@ type activeCall struct {
 	ringAgents []string         // agents rung in the current window — names the no_answer event
 	ringDone   bool             // the current ring window was answered — later ring rows stay off the live dashboard
 	endHook    uuid.UUID        // the flow's "on call end" webhook (uuid.Nil = none)
+	team       string           // latest team rung (guarded by Log.mu); the value setCallTeam writes
+	teamMu     sync.Mutex       // serializes calls.team writes so the latest team lands last
 }
 
 // Webhooks delivers registered webhooks; *webhook.Notifier implements it.
@@ -285,12 +287,13 @@ func (l *Log) recordingPolicy(ctx context.Context, tenant uuid.UUID) (recordingP
 	return p, nil
 }
 
-// agentCacheTTL bounds a cached agent lookup. No api endpoint edits or deletes
-// an agent's id or display name today, so nothing invalidates it; an endpoint
-// that does must delete agentCacheKey.
+// agentCacheTTL bounds a cached agent lookup. The api deletes AgentCacheKey
+// when it renames a user's SIP username or changes their display name.
 const agentCacheTTL = time.Hour
 
-func agentCacheKey(tenant uuid.UUID, sip string) string {
+// AgentCacheKey is the cache key for an agent's id + label by SIP username.
+// Exported so the api can invalidate it.
+func AgentCacheKey(tenant uuid.UUID, sip string) string {
 	return "agent:sip:" + tenant.String() + ":" + sip
 }
 
@@ -302,7 +305,7 @@ type agentEntry struct {
 // agentBySIP resolves an agent's id + display label (falling back to the SIP
 // username), from the cache when warm. An unknown SIP errors and isn't cached.
 func (l *Log) agentBySIP(ctx context.Context, tenant uuid.UUID, sip string) (uuid.UUID, string, error) {
-	key := agentCacheKey(tenant, sip)
+	key := AgentCacheKey(tenant, sip)
 	var e agentEntry
 	if b, ok := l.cache.Get(ctx, key); ok && json.Unmarshal(b, &e) == nil {
 		return e.ID, e.Label, nil
@@ -376,17 +379,29 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 // instead of the stale IVR label. Called when a transfer node starts routing.
 // The target label is resolved for humans: a team by its name, a single agent by
 // their display name (falling back to the SIP username), or "Available agents"
-// for a ring-all. Best-effort + dashboard-only (no calls.status change); a nil
-// events sink or unknown room is a no-op.
+// for a ring-all. A team ring also attributes the call to that team
+// (calls.team, last team wins), which scopes team managers' access to it.
+// Best-effort, no calls.status change; an unknown room is a no-op, and a nil
+// events sink skips only the dashboard publish.
 func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
 	if ac != nil {
 		ac.ringAgents = nil // new routing window — reset the per-agent ring roster
 		ac.ringDone = false
+		if team != "" {
+			ac.team = team
+		}
 	}
 	l.mu.Unlock()
-	if ac == nil || l.events == nil {
+	if ac == nil {
+		return
+	}
+	if team != "" && l.db != nil {
+		// Off the routing path: attribution must never delay ringing.
+		go l.setCallTeam(roomID, ac)
+	}
+	if l.events == nil {
 		return
 	}
 	// Live dashboard label only: the team name (or a single agent's name / "Available
@@ -404,6 +419,22 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 		}
 	}
 	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", target))
+}
+
+// setCallTeam writes the call's latest team to calls.team. Each write reads
+// ac.team under teamMu, so with back-to-back transfers whichever goroutine
+// writes last still writes the latest team. Best-effort with its own deadline.
+func (l *Log) setCallTeam(roomID string, ac *activeCall) {
+	ac.teamMu.Lock()
+	defer ac.teamMu.Unlock()
+	l.mu.Lock()
+	team := ac.team
+	l.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallTeam, ac.tenant, ac.id, team); err != nil {
+		l.log.Warn("cdr: set call team failed", "room", roomID, "call", ac.id, "team", team, "err", err)
+	}
 }
 
 // RingAgent records that a SPECIFIC agent is now being rung — resolving their id +
