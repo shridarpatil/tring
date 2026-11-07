@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gobwas/ws/wsutil"
 	"github.com/google/uuid"
 
 	"github.com/shridarpatil/tring/internal/cache"
@@ -189,5 +190,62 @@ func TestPresenceReconnectDuringCallStaysOnCall(t *testing.T) {
 	}
 	if got := pres.Status(ctx, tenant, "alice"); got != presence.StatusOnCall {
 		t.Fatalf("presence after reconnect = %q, want on_call", got)
+	}
+}
+
+// Closing a superseded presence socket (the agent closes the older tab) must
+// not mark the agent offline: the newer socket still owns their presence, and
+// team routing reads this Redis status.
+func TestSupersededSocketCloseKeepsAgentOnline(t *testing.T) {
+	pres := testPresence(t)
+	ctx := context.Background()
+	tenant := "test-" + uuid.NewString()
+	sink := &captureSink{}
+	s := &Server{
+		cfg:    Config{Presence: pres, Events: sink, Availability: fakeAvailability{true}},
+		agents: map[string]map[string]*conn{},
+		onCall: map[string]int{},
+		log:    slog.Default(),
+	}
+	open := func() (net.Conn, chan struct{}) {
+		srv, cli := net.Pipe()
+		done := make(chan struct{})
+		go func() { s.handleAgentPresence(&conn{Conn: srv}, tenant, "alice"); close(done) }()
+		t.Cleanup(func() { _ = cli.Close() })
+		return cli, done
+	}
+	old, oldDone := open()
+	if m := readMsg(t, old); m.Type != msgReady {
+		t.Fatalf("first message = %+v, want ready", m)
+	}
+	newer, _ := open()
+	for m := readMsg(t, old); m.Type != msgSuperseded; m = readMsg(t, old) {
+	}
+	if m := readMsg(t, newer); m.Type != msgReady {
+		t.Fatalf("newer first message = %+v, want ready", m)
+	}
+	go func() { // keep the newer socket's writes from blocking the pipe
+		for {
+			if _, err := wsutil.ReadServerText(newer); err != nil {
+				return
+			}
+		}
+	}()
+
+	_ = old.Close()
+	select {
+	case <-oldDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("old presence handler did not exit")
+	}
+	if got := pres.Status(ctx, tenant, "alice"); got != presence.StatusOnline {
+		t.Fatalf("presence after closing the superseded socket = %q, want online", got)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, st := range sink.statuses {
+		if st == presence.StatusOffline {
+			t.Fatalf("published %v, want no offline", sink.statuses)
+		}
 	}
 }

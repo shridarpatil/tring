@@ -135,6 +135,7 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	if s.agents[tenant] == nil {
 		s.agents[tenant] = make(map[string]*conn)
 	}
+	prev := s.agents[tenant][sip]
 	s.agents[tenant][sip] = c
 	// Away until sendAvailability has read the backend flag, so a ring in that
 	// gap can't reach an agent the backend set Away.
@@ -143,6 +144,14 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	}
 	s.away[tenant+"|"+sip] = true
 	s.mu.Unlock()
+	// The newest socket (another tab/device) owns ringing. Tell the old one so
+	// it shows that and doesn't reconnect to steal it back — two sockets doing
+	// that would flap forever. It stays open: old SDKs ignore the message, and
+	// its defer won't deregister the new socket. Sent outside s.mu as a write
+	// can block on a slow peer.
+	if prev != nil && prev != c {
+		_ = prev.send(msg{Type: msgSuperseded})
+	}
 	_ = c.send(msg{Type: msgReady})
 	s.log.Info("agent online", "tenant", tenant, "sip", sip)
 	// Read after registering above, so a change that lands meanwhile is either
@@ -164,6 +173,11 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 			Auto:  outbound,
 		})
 	}
+	// superseded is set on disconnect when a newer socket (another tab/device)
+	// replaced this one: that socket owns the agent's presence, so this one must
+	// not mark them offline. Deferred funcs run LIFO, so the registry defer below
+	// sets it before the presence defer reads it.
+	var superseded bool
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
 	if pres := s.cfg.Presence; pres != nil {
@@ -197,6 +211,9 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		}()
 		defer func() {
 			close(stopRefresh)
+			if superseded {
+				return
+			}
 			pres.Offline(context.Background(), tenant, sip)
 			s.publishPresence(tenant, sip, presence.StatusOffline, time.Time{})
 		}()
@@ -207,6 +224,8 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 		if s.agents[tenant][sip] == c {
 			delete(s.agents[tenant], sip)
 			delete(s.away, tenant+"|"+sip)
+		} else {
+			superseded = true
 		}
 		s.mu.Unlock()
 		_ = c.Close()

@@ -30,6 +30,10 @@
 //
 // Call buttons: onclick="Tring.startCall('/crm/call?id=abc')" POSTs to YOUR endpoint,
 // which originates the call (see Tring.startCall in tring.ts).
+//
+// Manual mount: `data-manual` skips the auto-start and exposes
+// `TringWidget.bootstrap(opts)` for a host that supplies its own options —
+// e.g. a `credentials` function that mints tokens its own way (the console).
 
 import { bootstrap } from "./widget";
 import { Tring } from "./tring";
@@ -40,13 +44,17 @@ function findOwnScript(): HTMLScriptElement | null {
   if (cs && cs.tagName === "SCRIPT") return cs;
   // Fallback: last <script> with the expected data attributes.
   const candidates = document.querySelectorAll(
-    "script[data-token], script[data-token-url]",
+    "script[data-token], script[data-token-url], script[data-manual]",
   );
   return (candidates[candidates.length - 1] as HTMLScriptElement) ?? null;
 }
 
+// Resolved now, while the script runs: document.currentScript is only set
+// during that synchronous execution, not at DOMContentLoaded.
+const ownScript = findOwnScript();
+
 function readOpts() {
-  const s = findOwnScript();
+  const s = ownScript;
   if (!s) {
     throw new Error(
       "tring widget: could not find own <script> tag — add data-token or data-token-url",
@@ -78,7 +86,9 @@ function start() {
   bootstrap(opts).catch((e) => console.error("[tring] bootstrap failed:", e));
 }
 
-if (document.readyState === "loading") {
+if (ownScript?.hasAttribute("data-manual")) {
+  (globalThis as any).TringWidget = { bootstrap };
+} else if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", start);
 } else {
   start();
