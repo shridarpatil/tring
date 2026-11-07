@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { useRouter } from "vue-router";
 import {
   LayoutDashboard,
   Headset,
@@ -26,7 +25,6 @@ import LiveStatusStrip from "../components/shell/LiveStatusStrip.vue";
 import IconButton from "../components/ui/IconButton.vue";
 import Toaster from "../components/ui/Toaster.vue";
 
-const router = useRouter();
 const tenant = ref<Tenant | null>(null);
 const version = ref("…");
 
@@ -75,8 +73,7 @@ onMounted(async () => {
 });
 
 function logout() {
-  auth.logout();
-  router.push({ name: "login" });
+  auth.signOut();
 }
 </script>
 

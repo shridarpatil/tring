@@ -31,8 +31,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     } catch {
       /* non-JSON error body */
     }
-    // Auto-logout on auth failure so the guard kicks the user to /login.
-    if (res.status === 401) auth.logout();
+    // An expired or revoked session signs out. Only when a token was sent: a
+    // wrong password on the login form is a 401 too and must stay on the form.
+    if (res.status === 401 && token) auth.signOut(true);
     throw new ApiError(res.status, msg);
   }
 
@@ -60,7 +61,7 @@ async function uploadFile<T>(path: string, file: File, fields?: Record<string, s
     } catch {
       /* non-JSON error body */
     }
-    if (res.status === 401) auth.logout();
+    if (res.status === 401 && token) auth.signOut(true);
     throw new ApiError(res.status, msg);
   }
   if (res.status === 204) return undefined as T;
