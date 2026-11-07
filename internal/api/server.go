@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -610,7 +609,11 @@ func (s *Server) Router() http.Handler {
 			http.Redirect(w, req, withQuery("/agent", req), http.StatusFound)
 		})
 		admin.Get("/admin/me/teams/{name}", func(w http.ResponseWriter, req *http.Request) {
-			http.Redirect(w, req, withQuery("/agent/teams/"+url.PathEscape(chi.URLParam(req, "name")), req), http.StatusFound)
+			// The escaped path, not the URL param: chi's param is already
+			// escaped when the request has a RawPath, so escaping it again
+			// would turn R%26D into R%2526D.
+			name := strings.TrimPrefix(req.URL.EscapedPath(), "/admin/me/teams/")
+			http.Redirect(w, req, withQuery("/agent/teams/"+name, req), http.StatusFound)
 		})
 		// Catch-all: any /admin/* path that doesn't match a static file
 		// falls back to index.html so the Vue router (history mode) can

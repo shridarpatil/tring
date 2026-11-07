@@ -18,7 +18,7 @@ Trunks are configured in the database per tenant, but they are all loaded into t
 | Credential | Looks like | Issued by | Lifetime | Accepted by | Grants |
 |---|---|---|---|---|---|
 | **API key** | `tk_live_…` | Console (**API keys**) or `POST /v1/api-keys` | Until revoked | The api (`/v1/*`) | Full access to the tenant's API |
-| **Console session** | JWT, `aud: tring.console` | `POST /v1/console/login` (email + password) | 12 hours | The api (`/v1/*`) | Admin: same as an API key, plus supervision. Supervisor and agent: their own `/me` and team views, scoped by role |
+| **Console session** | JWT, `aud: tring.console` | `POST /v1/console/login` (email + password) | 12 hours | The api (`/v1/*`) | Admin: same as an API key, plus supervision. Supervisor and agent: their own `/agent` page and team views, scoped by role |
 | **Agent token** | JWT, `aud: tring.sdk` | `GET /v1/agents/{id}/token` (API key) | 5 minutes | Gateway `/rtc`; api `/v1/sdk/*` | Go online as that agent, take calls, control the agent's own call |
 | **Visitor call token** | JWT, `aud: tring.gateway` | `POST /v1/guest-credentials` (API key) | 2 minutes, single use | Gateway `/rtc` | Join one call pinned to one flow |
 | **Supervisor token** | JWT, `aud: tring.supervisor` | `POST /v1/calls/{id}/supervise` (console session only) | 2 minutes, single use | Gateway `/rtc` | Listen to, whisper on or barge into one live call |

@@ -284,6 +284,7 @@ func TestConsoleSPAPaths(t *testing.T) {
 		"/admin/login?redirect=%2Fadmin%2Fcalls": "/login?redirect=%2Fadmin%2Fcalls",
 		"/admin/me":                              "/agent",
 		"/admin/me/teams/sales%20east":           "/agent/teams/sales%20east",
+		"/admin/me/teams/R%26D":                  "/agent/teams/R%26D", // RawPath set: must not double-escape
 	} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
