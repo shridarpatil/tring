@@ -534,10 +534,11 @@ SELECT id, tenant_id, password_hash FROM users WHERE lower(email) = $1 AND passw
 -- name: get-console-principal
 -- A console session's user, reloaded every request: role and team memberships
 -- drive authorization, and no row (deleted, moved tenant, login removed)
--- revokes the session. Empty arrays, never NULL, for a user in no team.
+-- revokes the session, as does a session_epoch newer than the token's. Empty arrays, never NULL, for a user in no team.
 SELECT u.role, u.sip_username, COALESCE(u.email, ''), COALESCE(u.display_name, ''),
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
-       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[]
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[],
+       u.session_epoch
 FROM users u
 LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
 WHERE u.id = $1 AND u.tenant_id = $2 AND u.password_hash IS NOT NULL AND u.email IS NOT NULL
@@ -547,7 +548,10 @@ GROUP BY u.id;
 SELECT password_hash FROM users WHERE tenant_id = $1 AND id = $2 AND password_hash IS NOT NULL;
 
 -- name: set-user-password
-UPDATE users SET password_hash = $3 WHERE tenant_id = $1 AND id = $2;
+-- Bumps session_epoch so other sessions die; the caller gets a fresh token.
+UPDATE users SET password_hash = $3, session_epoch = session_epoch + 1
+WHERE tenant_id = $1 AND id = $2
+RETURNING session_epoch;
 
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
@@ -986,16 +990,20 @@ RETURNING id;
 
 -- name: update-user
 -- NULL parameter = leave unchanged. Clearing a login is clear-user-login.
+-- A new password or a changed email revokes the user's sessions (epoch bump);
+-- SET expressions see the old row, so the email comparison is old vs new.
 UPDATE users SET
     display_name  = COALESCE($3, display_name),
     email         = COALESCE(lower($4), email),
     role          = COALESCE($5, role),
-    password_hash = COALESCE($6, password_hash)
+    password_hash = COALESCE($6, password_hash),
+    session_epoch = session_epoch +
+        CASE WHEN $6 IS NOT NULL OR ($4 IS NOT NULL AND lower($4) IS DISTINCT FROM email) THEN 1 ELSE 0 END
 WHERE tenant_id = $1 AND id = $2
 RETURNING id;
 
 -- name: clear-user-login
-UPDATE users SET email = NULL, password_hash = NULL
+UPDATE users SET email = NULL, password_hash = NULL, session_epoch = session_epoch + 1
 WHERE tenant_id = $1 AND id = $2
 RETURNING id;
 

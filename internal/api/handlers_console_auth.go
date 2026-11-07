@@ -34,6 +34,9 @@ type ConsoleClaims struct {
 	// Role is a UI hint only (which console to render); authorization always
 	// reloads the role from the DB (loadPrincipal).
 	Role string `json:"role,omitempty"`
+	// Epoch is users.session_epoch at issue time; a credential change bumps
+	// the row's epoch, which revokes this token (loadPrincipal).
+	Epoch int `json:"ep"`
 	jwt.RegisteredClaims
 }
 
@@ -154,7 +157,7 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signed, exp, err := s.IssueConsoleToken(userID, tenantID, email, principal.Role, consoleTokenTTL)
+	signed, exp, err := s.IssueConsoleToken(userID, tenantID, email, principal.Role, principal.Epoch, consoleTokenTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue token")
 		return
@@ -170,13 +173,14 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 
 // IssueConsoleToken signs a console-audience JWT. Exported so tests can
 // mint authenticated requests without going through /v1/console/login.
-func (s *Server) IssueConsoleToken(userID, tenantID uuid.UUID, email, role string, ttl time.Duration) (string, time.Time, error) {
+func (s *Server) IssueConsoleToken(userID, tenantID uuid.UUID, email, role string, epoch int, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(ttl)
 	claims := ConsoleClaims{
 		TenantID: tenantID,
 		Email:    email,
 		Role:     role,
+		Epoch:    epoch,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
 			IssuedAt:  jwt.NewNumericDate(now),

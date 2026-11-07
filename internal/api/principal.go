@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"slices"
 
@@ -24,6 +25,7 @@ type Principal struct {
 	DisplayName      string
 	Teams            []string // team names the user is a member of
 	ManagedTeams     []string // subset where the user is the team's manager
+	Epoch            int      // users.session_epoch; tokens from older epochs are revoked
 }
 
 // IsAdmin reports whether the user administers the tenant.
@@ -61,19 +63,29 @@ func principalFromCtx(ctx context.Context) *Principal {
 // loadPrincipal resolves a console token's user. Console JWTs are stateless,
 // so this is also the revocation check: a deleted user, one moved out of the
 // tenant, or one whose login was removed (password_hash NULL) gets
-// pgx.ErrNoRows. Callers fail closed on any error.
+// pgx.ErrNoRows, and a token minted before the user's last credential change
+// (session_epoch bump) gets errStaleSession. Callers fail closed on any error.
 func (s *Server) loadPrincipal(ctx context.Context, c *ConsoleClaims) (*Principal, error) {
 	userID, err := uuid.Parse(c.Subject)
 	if err != nil {
 		return nil, err
 	}
-	return s.principalFor(ctx, userID, c.TenantID)
+	p, err := s.principalFor(ctx, userID, c.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	if p.Epoch != c.Epoch {
+		return nil, errStaleSession
+	}
+	return p, nil
 }
+
+var errStaleSession = errors.New("console session revoked")
 
 func (s *Server) principalFor(ctx context.Context, userID, tenantID uuid.UUID) (*Principal, error) {
 	p := &Principal{UserID: userID, TenantID: tenantID}
 	err := s.db.Pool.QueryRow(ctx, s.q.GetConsolePrincipal, userID, tenantID).
-		Scan(&p.Role, &p.SipUsername, &p.Email, &p.DisplayName, &p.Teams, &p.ManagedTeams)
+		Scan(&p.Role, &p.SipUsername, &p.Email, &p.DisplayName, &p.Teams, &p.ManagedTeams, &p.Epoch)
 	if err != nil {
 		return nil, err
 	}
