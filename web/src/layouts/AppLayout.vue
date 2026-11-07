@@ -32,7 +32,7 @@ const version = ref("…");
 
 const adminNav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/agents", label: "Agents", icon: Headset },
+  { to: "/users", label: "Users", icon: Headset },
   { to: "/teams", label: "Teams", icon: UsersRound },
   { to: "/sounds", label: "Sounds", icon: Music },
   { to: "/numbers", label: "Numbers", icon: Hash },
