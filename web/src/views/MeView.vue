@@ -43,6 +43,9 @@ const widgetReady = ref(false);
 const widgetError = ref("");
 const savingAvail = ref(false);
 let offAvail: (() => void) | undefined;
+// The widget mount is async: a late resolve must not register a listener (or
+// touch state) after the view is gone.
+let unmounted = false;
 
 async function setAvailable(v: boolean) {
   const prev = available.value;
@@ -132,13 +135,15 @@ onMounted(() => {
   poll = setInterval(loadTeams, 5000);
   mountAgentWidget()
     .then((w) => {
+      if (unmounted) return;
       available.value = w.available;
       offAvail = w.on("availability", (e) => (available.value = e.available));
       widgetReady.value = true;
     })
-    .catch((e) => (widgetError.value = errMessage(e, "call panel unavailable")));
+    .catch((e) => !unmounted && (widgetError.value = errMessage(e, "call panel unavailable")));
 });
 onUnmounted(() => {
+  unmounted = true;
   clearInterval(poll);
   offAvail?.();
   Object.values(recUrl.value).forEach((u) => URL.revokeObjectURL(u));
