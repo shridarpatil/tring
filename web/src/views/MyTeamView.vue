@@ -10,7 +10,7 @@ import { callStatusTone } from "../lib/status";
 import { fmtTalk, memberTone } from "../lib/me";
 import { SupervisorSession, type SuperviseMode } from "../lib/supervisor";
 import type { Call } from "../api/types";
-import { Badge, Button, Select } from "../components/ui";
+import { Badge, Button, CallsTable, Select } from "../components/ui";
 
 interface Member {
   user_id: string;
@@ -163,31 +163,6 @@ function stopSupervise() {
   active.value = null;
 }
 
-// --- recordings (Bearer blob fetch) -----------------------------------------
-const recUrl = ref<Record<string, string>>({});
-async function playRecording(c: Call) {
-  if (!c.recording_url || recUrl.value[c.id]) return;
-  const token = auth.token();
-  const res = await fetch(c.recording_url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!res.ok) {
-    toast.error("recording not available yet");
-    return;
-  }
-  const url = URL.createObjectURL(await res.blob());
-  if (unmounted) {
-    URL.revokeObjectURL(url);
-    return;
-  }
-  recUrl.value = { ...recUrl.value, [c.id]: url };
-}
-function revokeRecordings() {
-  Object.values(recUrl.value).forEach((u) => URL.revokeObjectURL(u));
-  recUrl.value = {};
-}
-
-function fmt(d?: string) {
-  return d ? new Date(d).toLocaleString() : "—";
-}
 function who(c: Call) {
   return c.client_ref || c.from_number;
 }
@@ -195,7 +170,6 @@ function who(c: Call) {
 // --- lifecycle ---------------------------------------------------------------
 function reset() {
   stopSupervise();
-  revokeRecordings();
   team.value = null;
   notFound.value = false;
   candidates.value = [];
@@ -222,7 +196,6 @@ onUnmounted(() => {
   unmounted = true;
   clearInterval(poll);
   stopSupervise();
-  revokeRecordings();
 });
 </script>
 
@@ -340,37 +313,7 @@ onUnmounted(() => {
       </div>
 
       <div v-if="manages" class="card" style="padding: 0">
-        <div class="table">
-          <table>
-            <thead>
-              <tr>
-                <th>From</th>
-                <th>Agent</th>
-                <th>Status</th>
-                <th>Started</th>
-                <th class="align-right">Dur</th>
-                <th>Recording</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="c in team.calls ?? []" :key="c.id">
-                <td class="mono">{{ who(c) }}</td>
-                <td>{{ c.agent_name || "—" }}</td>
-                <td><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
-                <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
-                <td class="align-right mono">{{ c.duration_seconds != null ? fmtTalk(c.duration_seconds) : "—" }}</td>
-                <td>
-                  <audio v-if="recUrl[c.id]" :src="recUrl[c.id]" controls autoplay style="height: 2rem"></audio>
-                  <button v-else-if="c.recording_url" type="button" class="plain" style="color: var(--primary)" @click="playRecording(c)">Play</button>
-                  <span v-else class="text-lighter">—</span>
-                </td>
-              </tr>
-              <tr v-if="(team.calls ?? []).length === 0">
-                <td colspan="6" class="align-center text-lighter">No calls today</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <CallsTable :calls="team.calls ?? []" />
       </div>
     </template>
   </div>
