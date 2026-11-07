@@ -37,5 +37,5 @@ async function load(): Promise<AgentWidget> {
     });
   }
   if (!g.TringWidget) throw new Error("agent widget did not initialise");
-  return g.TringWidget.bootstrap({ apiBase: "", credentials: () => api.post("/v1/me/token") });
+  return g.TringWidget.bootstrap({ apiBase: location.origin, credentials: () => api.post("/v1/me/token") });
 }
