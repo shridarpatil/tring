@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -11,9 +14,13 @@ import (
 	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
-// seedCall inserts a call started `ago` before now and returns its id.
+// seedCall inserts a call started at the SQL timestamp expression `at` and returns its id.
 // agent may be uuid.Nil (unanswered); answered calls get duration 60.
-func seedCall(t *testing.T, f *dbtest.Fixture, agent uuid.UUID, answered bool, ago string) uuid.UUID {
+// todayAt is just after the DB's local midnight, so seeded calls are "today"
+// whenever the test runs and the window boundary can't race the clock.
+const todayAt = "date_trunc('day', now()) + interval '1 second'"
+
+func seedCall(t *testing.T, f *dbtest.Fixture, agent uuid.UUID, answered bool, at string) uuid.UUID {
 	t.Helper()
 	var agentArg any
 	if agent != uuid.Nil {
@@ -24,12 +31,12 @@ func seedCall(t *testing.T, f *dbtest.Fixture, agent uuid.UUID, answered bool, a
 		INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id,
 			agent_id, started_at, answered_at, ended_at, duration_seconds, recording_url)
 		VALUES ($1, 'inbound', 'ended', '+919800000001', '+919800000089', $2, $3,
-			now() - $4::interval,
-			CASE WHEN $5 THEN now() - $4::interval END,
-			now() - $4::interval + interval '60 seconds',
-			CASE WHEN $5 THEN 60 ELSE 0 END,
+			`+at+`,
+			CASE WHEN $4 THEN `+at+` END,
+			`+at+` + interval '60 seconds',
+			CASE WHEN $4 THEN 60 ELSE 0 END,
 			'/v1/calls/x/recording')
-		RETURNING id`, f.TenantID, uuid.NewString(), agentArg, ago, answered).Scan(&id)
+		RETURNING id`, f.TenantID, uuid.NewString(), agentArg, answered).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed call: %v", err)
 	}
@@ -130,14 +137,14 @@ func TestMeStatsTakenAndMissed(t *testing.T) {
 	x := f.AddUser(t, "agent", "x@example.com")
 	tok := tokenFor(t, s, f, me, "a@example.com", "agent")
 
-	seedCall(t, f, me, true, "1 second")              // C1: taken by me
-	c2 := seedCall(t, f, x, true, "1 second")         // C2: rung me, X answered
-	c3 := seedCall(t, f, uuid.Nil, false, "1 second") // C3: rung me, nobody answered
+	seedCall(t, f, me, true, todayAt)              // C1: taken by me
+	c2 := seedCall(t, f, x, true, todayAt)         // C2: rung me, X answered
+	c3 := seedCall(t, f, uuid.Nil, false, todayAt) // C3: rung me, nobody answered
 	seedRing(t, f, c2, me)
 	seedRing(t, f, c3, me)
 	seedRing(t, f, c3, me) // re-ring must not double count
 	// Yesterday's call is outside range=today.
-	old := seedCall(t, f, me, true, "2 days")
+	old := seedCall(t, f, me, true, "date_trunc('day', now()) - interval '1 hour'")
 	seedRing(t, f, old, me)
 
 	get := func(q string) meStats {
@@ -151,7 +158,7 @@ func TestMeStatsTakenAndMissed(t *testing.T) {
 		}
 		return st
 	}
-	// "1 second" ago can cross midnight only in the first second of the day;
+	// todayAt ago can cross midnight only in the first second of the day;
 	// accept that flake window rather than complicate the seed.
 	if st := get(""); st.Taken != 1 || st.Missed != 2 || st.TalkSeconds != 60 || st.AvgTalkSeconds != 60 {
 		t.Fatalf("today = %+v", st)
@@ -166,12 +173,25 @@ func TestMeStatsTakenAndMissed(t *testing.T) {
 
 func TestMeCallsOnlyOwn(t *testing.T) {
 	f := dbtest.Setup(t)
-	s := newTestServer(f)
+	dir := t.TempDir()
+	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", GatewayPublicURL: "http://gw.test", RecordingsDir: dir})
 	me := f.AddUser(t, "agent", "a@example.com")
 	x := f.AddUser(t, "agent", "x@example.com")
 	tok := tokenFor(t, s, f, me, "a@example.com", "agent")
-	mine := seedCall(t, f, me, true, "1 hour")
-	theirs := seedCall(t, f, x, true, "1 hour")
+	mine := seedCall(t, f, me, true, "now() - interval '1 hour'")
+	theirs := seedCall(t, f, x, true, "now() - interval '1 hour'")
+
+	// Both recordings exist on disk, so a 404 for the other agent's can only
+	// come from the ownership check.
+	for _, id := range []uuid.UUID{mine, theirs} {
+		var leg string
+		if err := f.DB.Pool.QueryRow(context.Background(), `SELECT leg_id FROM calls WHERE id = $1`, id).Scan(&leg); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, leg+".wav"), []byte("RIFF"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	rec := doReq(t, s.Router(), "GET", "/v1/me/calls", tok, "")
 	if rec.Code != http.StatusOK {
@@ -190,8 +210,12 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 	if got := *page.Items[0].RecordingURL; got != "/v1/me/calls/"+mine.String()+"/recording" {
 		t.Fatalf("recording_url = %q", got)
 	}
-	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+theirs.String()+"/recording", tok, ""); rec.Code != http.StatusNotFound {
-		t.Fatalf("other's recording: %d, want 404", rec.Code)
+	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+mine.String()+"/recording", tok, ""); rec.Code != http.StatusOK {
+		t.Fatalf("own recording: %d, want 200", rec.Code)
+	}
+	rec = doReq(t, s.Router(), "GET", "/v1/me/calls/"+theirs.String()+"/recording", tok, "")
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "call not found") {
+		t.Fatalf("other's recording: %d %s, want 404 call not found", rec.Code, rec.Body)
 	}
 }
 

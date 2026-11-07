@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -101,19 +100,18 @@ type meStats struct {
 
 func (s *Server) handleMeStats(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	// Server-local day boundary, same convention as stats-today.
-	since := time.Now().AddDate(0, 0, -7)
+	var q string
 	switch r.URL.Query().Get("range") {
 	case "", "today":
-		y, m, d := time.Now().Date()
-		since = time.Date(y, m, d, 0, 0, 0, 0, time.Now().Location())
+		q = s.q.GetMeStatsToday
 	case "7d":
+		q = s.q.GetMeStats7d
 	default:
 		writeError(w, http.StatusBadRequest, "range must be today or 7d")
 		return
 	}
 	var st meStats
-	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetMeStats, p.TenantID, p.UserID, since).
+	if err := s.db.Pool.QueryRow(r.Context(), q, p.TenantID, p.UserID).
 		Scan(&st.Taken, &st.TalkSeconds, &st.Missed); err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
