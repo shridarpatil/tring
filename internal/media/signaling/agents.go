@@ -173,10 +173,10 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 			Auto:  outbound,
 		})
 	}
-	// superseded is set on disconnect when a newer socket (another tab/device)
-	// replaced this one: that socket owns the agent's presence, so this one must
-	// not mark them offline. Deferred funcs run LIFO, so the registry defer below
-	// sets it before the presence defer reads it.
+	// superseded is set on disconnect when a newer, still-live socket (another
+	// tab/device) replaced this one: that socket owns the agent's presence, so
+	// this one must not mark them offline. Deferred funcs run LIFO, so the
+	// registry defer below sets it before the presence defer reads it.
 	var superseded bool
 	// Publish to the shared Redis presence store the API + admin console read, and
 	// refresh its TTL while the socket is up (mirrors the legacy /agent/ws).
@@ -199,6 +199,15 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 				case <-stopRefresh:
 					return
 				case <-t.C:
+					// A superseded socket (kept open by an old SDK) must not
+					// re-assert presence: if the newer socket has since closed,
+					// that would hold an unringable agent online.
+					s.mu.Lock()
+					owner := s.agents[tenant][sip] == c
+					s.mu.Unlock()
+					if !owner {
+						continue
+					}
 					// Preserve on_call across TTL re-asserts — don't flip a busy
 					// agent back to available every 10s.
 					if s.agentOnCall(tenant, sip) {
@@ -225,7 +234,9 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 			delete(s.agents[tenant], sip)
 			delete(s.away, tenant+"|"+sip)
 		} else {
-			superseded = true
+			// Only a live replacement owns presence. If it has already gone
+			// (the newer tab closed first), nobody does: mark offline here.
+			superseded = s.agents[tenant][sip] != nil
 		}
 		s.mu.Unlock()
 		_ = c.Close()
