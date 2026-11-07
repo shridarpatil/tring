@@ -1177,7 +1177,7 @@ WHERE tenant_id = $1
 ORDER BY name;
 
 -- name: delete-user
-DELETE FROM users WHERE tenant_id = $1 AND id = $2;
+DELETE FROM users WHERE tenant_id = $1 AND id = $2 RETURNING sip_username;
 
 -- ===========================================================================
 -- team views (/v1/my-teams)
