@@ -45,3 +45,27 @@ export function guardTarget(u: MeUser | null, route: { meta?: { admin?: boolean 
 export function safeRedirect(r: unknown): string | null {
   return typeof r === "string" && /^\/(admin|agent)(\/|\?|$)/.test(r) ? r : null;
 }
+
+/**
+ * What the /agent dashboard shows: supervisors everything (the tenant-wide
+ * stream), team managers their managed teams, plain agents their own teams and
+ * calls. The server scopes the data the same way; this only picks the source
+ * and the controls.
+ */
+export type DashboardScope = "all" | "managed" | "own";
+
+export function dashboardScope(u: MeUser): DashboardScope {
+  if (u.role === "admin" || u.role === "supervisor") return "all";
+  return (u.teams ?? []).some((t) => t.is_manager) ? "managed" : "own";
+}
+
+/**
+ * Whether to offer Listen on a live call. A manager is sent only managed teams'
+ * calls plus their own, and can't supervise a call they are on; the server
+ * re-checks every supervise request.
+ */
+export function canSuperviseCall(u: MeUser, c: { agent_id?: string }): boolean {
+  const scope = dashboardScope(u);
+  if (scope === "all") return true;
+  return scope === "managed" && c.agent_id !== u.id;
+}
