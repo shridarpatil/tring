@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -565,32 +566,18 @@ func (s *Server) Router() http.Handler {
 		})
 	}
 
-	// Admin console (embedded Vue dist). Mounted only if the Vue app was
-	// actually built — backend-only deployments get a UI-less binary
-	// automatically (no flag needed, just don't run `npm run build`).
+	// Console (embedded Vue dist). Mounted only if the Vue app was actually
+	// built — backend-only deployments get a UI-less binary automatically (no
+	// flag needed, just don't run `npm run build`). One SPA owns three URL
+	// spaces: /login (everyone), /agent (non-admin users) and /admin (the admin
+	// console). Built assets live only under /admin/assets; index.html links
+	// them by absolute path, so it works from any of these pages.
 	if uiFS, ok := webui.FS(); ok {
 		admin := r.With(adminHeaders(adminCSP(s.gatewayPublicURL)), staticCompress)
-		fileServer := http.FileServer(http.FS(uiFS))
 		// Strip "/admin" prefix so requests for /admin/assets/foo.js
 		// resolve to "assets/foo.js" within the embedded FS.
-		stripped := http.StripPrefix("/admin", fileServer)
-		// Catch-all: any /admin/* path that doesn't match a static file
-		// falls back to index.html so the Vue router (history mode) can
-		// own the URL space client-side.
-		admin.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
-			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
-		})
-		admin.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
-			// If it's a known asset (has a file extension), serve it
-			// directly; otherwise serve index.html for SPA routing.
-			path := strings.TrimPrefix(req.URL.Path, "/admin/")
-			if path != "" {
-				// Directories fall through to index.html — never a listing.
-				if st, err := fs.Stat(uiFS, path); err == nil && !st.IsDir() {
-					stripped.ServeHTTP(w, req)
-					return
-				}
-			}
+		stripped := http.StripPrefix("/admin", http.FileServer(http.FS(uiFS)))
+		index := func(w http.ResponseWriter, req *http.Request) {
 			indexHTML, err := uiFS.Open("index.html")
 			if err != nil {
 				http.Error(w, "UI not available", http.StatusNotFound)
@@ -606,10 +593,49 @@ func (s *Server) Router() http.Handler {
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.Copy(w, indexHTML)
+		}
+		admin.Get("/login", index)
+		admin.Get("/agent", index)
+		admin.Get("/agent/*", index)
+		admin.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+		})
+		// Old URLs from before /login and /agent existed (bookmarks, links
+		// already shared). Fixed targets only — never an open redirect.
+		admin.Get("/admin/login", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, withQuery("/login", req), http.StatusFound)
+		})
+		admin.Get("/admin/me", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, withQuery("/agent", req), http.StatusFound)
+		})
+		admin.Get("/admin/me/teams/{name}", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, withQuery("/agent/teams/"+url.PathEscape(chi.URLParam(req, "name")), req), http.StatusFound)
+		})
+		// Catch-all: any /admin/* path that doesn't match a static file
+		// falls back to index.html so the Vue router (history mode) can
+		// own the URL space client-side.
+		admin.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+			path := strings.TrimPrefix(req.URL.Path, "/admin/")
+			if path != "" {
+				// Directories fall through to index.html — never a listing.
+				if st, err := fs.Stat(uiFS, path); err == nil && !st.IsDir() {
+					stripped.ServeHTTP(w, req)
+					return
+				}
+			}
+			index(w, req)
 		})
 	}
 
 	return r
+}
+
+// withQuery appends the request's query string to a fixed redirect path.
+func withQuery(path string, req *http.Request) string {
+	if req.URL.RawQuery == "" {
+		return path
+	}
+	return path + "?" + req.URL.RawQuery
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

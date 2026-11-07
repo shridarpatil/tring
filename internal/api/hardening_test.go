@@ -10,6 +10,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/shridarpatil/tring/internal/webui"
 )
 
 // An oversized body on the unauthenticated login route is refused before the
@@ -244,5 +246,57 @@ func TestStaticCompress(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/sdk/app.js", nil))
 	if rec.Header().Get("Content-Encoding") != "" || rec.Body.String() != js {
 		t.Errorf("no Accept-Encoding: got encoding %q, want the plain file", rec.Header().Get("Content-Encoding"))
+	}
+}
+
+// /login and /agent serve the same SPA as /admin, with the console headers;
+// the pre-/agent URLs redirect to fixed targets, and nothing else outside the
+// mounted prefixes is caught by the SPA.
+func TestConsoleSPAPaths(t *testing.T) {
+	if _, ok := webui.FS(); !ok {
+		t.Skip("web console not built (run npm run build in web/)")
+	}
+	s := NewServer(Config{JWTSecret: "test-secret", GatewayPublicURL: "https://gw.example.com"})
+	r := s.Router()
+
+	for _, p := range []string{"/login", "/login?redirect=%2Fadmin%2Fcalls", "/agent", "/agent/", "/agent/teams/x", "/admin/", "/admin/calls"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", p, rec.Code)
+			continue
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("GET %s Content-Type = %q", p, ct)
+		}
+		if !strings.Contains(rec.Body.String(), "/admin/assets/") {
+			t.Errorf("GET %s body is not the SPA index", p)
+		}
+		if rec.Header().Get("Content-Security-Policy") != adminCSP("https://gw.example.com") {
+			t.Errorf("GET %s missing the console CSP", p)
+		}
+		if rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("GET %s Cache-Control = %q", p, rec.Header().Get("Cache-Control"))
+		}
+	}
+
+	for p, want := range map[string]string{
+		"/admin/login?redirect=%2Fadmin%2Fcalls": "/login?redirect=%2Fadmin%2Fcalls",
+		"/admin/me":                              "/agent",
+		"/admin/me/teams/sales%20east":           "/agent/teams/sales%20east",
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+			t.Errorf("GET %s = %d Location %q, want 302 %q", p, rec.Code, rec.Header().Get("Location"), want)
+		}
+	}
+
+	for _, p := range []string{"/agents", "/loginx", "/nope", "/assets/x.js"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", p, rec.Code)
+		}
 	}
 }

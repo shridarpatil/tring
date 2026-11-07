@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canManageTeam, canOpen, guardTarget, homeRoute, type MeUser } from "./roles.ts";
+import { canManageTeam, canOpen, guardTarget, homeRoute, safeRedirect, type MeUser } from "./roles.ts";
 
 const mk = (role: MeUser["role"], teams: MeUser["teams"] = []): MeUser => ({
   id: "u1",
@@ -11,7 +11,7 @@ const mk = (role: MeUser["role"], teams: MeUser["teams"] = []): MeUser => ({
   teams,
 });
 
-test("homeRoute: admin -> dashboard, others -> me", () => {
+test("homeRoute: admin -> dashboard (/admin/), others -> me (/agent)", () => {
   assert.equal(homeRoute(mk("admin")), "dashboard");
   assert.equal(homeRoute(mk("agent")), "me");
   assert.equal(homeRoute(mk("supervisor")), "me");
@@ -41,4 +41,13 @@ test("guardTarget: fails closed for admin routes", () => {
   assert.equal(guardTarget(mk("agent"), r), "me");
   assert.equal(guardTarget(mk("admin"), r), "ok");
   assert.equal(guardTarget(null, {}), "ok");
+});
+
+test("safeRedirect: only pages of this app", () => {
+  for (const ok of ["/admin/", "/admin/calls/abc?view=log", "/agent", "/agent?x=1", "/agent/teams/sales"]) {
+    assert.equal(safeRedirect(ok), ok);
+  }
+  for (const bad of ["//evil.example", "https://evil.example", "/login", "/", "/administrator", "/agents", "", undefined, ["/agent"]]) {
+    assert.equal(safeRedirect(bad), null);
+  }
 });

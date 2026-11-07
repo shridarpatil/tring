@@ -1,5 +1,5 @@
 import { reactive } from "vue";
-import type { MeUser } from "../lib/roles";
+import { safeRedirect, type MeUser } from "../lib/roles";
 
 // The console authenticates with email + password against
 // POST /v1/console/login, which returns a JWT. The JWT is the only
@@ -8,8 +8,8 @@ import type { MeUser } from "../lib/roles";
 // (server-side TTL == 12h); after that, /v1/* returns 401 and the api
 // client clears the token, sending the user back to /login.
 //
-// Same-origin only: the Vue console is embedded in the Go binary at
-// /admin/, so all API calls use relative paths and hit the backend
+// Same-origin only: the Vue console is embedded in the Go binary (at
+// /login, /agent and /admin), so all API calls use relative paths and hit the backend
 // that served the bundle. No base-URL field on the login form.
 
 const KEY_TOKEN = "tring_console_token";
@@ -78,12 +78,8 @@ export const auth = {
   // (an expired session), as the router guard does for a signed-out visit.
   signOut(keepPlace = false) {
     auth.logout();
-    const base = import.meta.env.BASE_URL; // "/admin/" embedded, "/" in dev
-    let q = "";
-    if (keepPlace && location.pathname.startsWith(base)) {
-      const here = "/" + location.pathname.slice(base.length) + location.search;
-      if (here !== "/" && !here.startsWith("/login")) q = "?redirect=" + encodeURIComponent(here);
-    }
-    location.assign(base + "login" + q);
+    const here = location.pathname + location.search;
+    const q = keepPlace && safeRedirect(here) ? "?redirect=" + encodeURIComponent(here) : "";
+    location.assign("/login" + q);
   },
 };
