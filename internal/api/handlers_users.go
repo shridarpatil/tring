@@ -197,12 +197,18 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.SipUsername != nil {
-		sip := strings.ToLower(strings.TrimSpace(*req.SipUsername))
+		// Case is kept: POST /v1/agents stores CRM ids case-preserved, and
+		// lowercasing here would rename one on any edit.
+		sip := strings.TrimSpace(*req.SipUsername)
 		if !validSipUsername(sip) {
 			writeError(w, http.StatusBadRequest, "sip_username may only contain letters, digits and . _ @ + - (max 64)")
 			return
 		}
 		req.SipUsername = &sip
+	}
+	if clearLogin && req.SipUsername != nil {
+		writeError(w, http.StatusBadRequest, "cannot change sip_username while clearing the login")
+		return
 	}
 	var hash *string
 	if req.Password != nil {
@@ -332,29 +338,15 @@ func (s *Server) userOnCall(ctx context.Context, tenantID, id uuid.UUID, sip str
 	return on, err
 }
 
-// afterSipRename retires the old SIP username everywhere outside the users
-// row: the gateway's caches and presence keys, the agent's live presence
-// socket (kicked so the SDK reconnects under the new name), and dashboards.
-// All best-effort — the rename is already committed. Returns the flows still
-// pinned to the old name.
+// afterSipRename moves the agent's gateway state to the new name and retires
+// the old one (retireSip). Best-effort: the rename is already committed.
+// Returns the flows still pinned to the old name.
 func (s *Server) afterSipRename(ctx context.Context, tenantID uuid.UUID, u userRow, oldSip string) []flowRef {
 	tenant := tenantID.String()
-	s.invalidateAgentCache(ctx, tenantID, oldSip)
 	// The new name may hold a stale entry from a deleted user who had it.
 	s.invalidateAgentCache(ctx, tenantID, u.SipUsername)
 	s.presence.SetAvailability(ctx, tenant, u.SipUsername, u.AvailableForCalls)
-	if s.gatewayControlURL != "" {
-		if err := s.gatewayControl(ctx, tenantID, "/control/agent-kick", map[string]string{"sip": oldSip}); err != nil {
-			// The socket stays up under the old name until it next drops.
-			s.log.Warn("agent kick failed", "sip", oldSip, "err", err)
-		}
-	}
-	// After the kick, so a presence refresh racing it can't leave a marker.
-	s.presence.Forget(ctx, tenant, oldSip)
-	s.events.Publish(ctx, tenant, events.TypeAgentPresence, map[string]any{
-		"sip_username": oldSip,
-		"status":       presence.StatusOffline,
-	})
+	s.retireSip(ctx, tenantID, oldSip)
 	s.events.Publish(ctx, tenant, events.TypeAgentStatus, map[string]any{
 		"agent_id":            u.ID,
 		"sip_username":        u.SipUsername,
@@ -371,6 +363,27 @@ func (s *Server) afterSipRename(ctx context.Context, tenantID uuid.UUID, u userR
 		s.log.Warn("list flows by agent sip failed", "err", err)
 	}
 	return refs
+}
+
+// retireSip clears a SIP username that no longer names a user (renamed or
+// deleted) out of the gateway: its cached lookup and presence keys, and the
+// live presence socket, kicked so a renamed agent's SDK reconnects under the
+// new name. Dashboards see the name go offline. Best-effort.
+func (s *Server) retireSip(ctx context.Context, tenantID uuid.UUID, sip string) {
+	tenant := tenantID.String()
+	s.invalidateAgentCache(ctx, tenantID, sip)
+	if s.gatewayControlURL != "" {
+		if err := s.gatewayControl(ctx, tenantID, "/control/agent-kick", map[string]string{"sip": sip}); err != nil {
+			// The socket stays up under the old name until it next drops.
+			s.log.Warn("agent kick failed", "sip", sip, "err", err)
+		}
+	}
+	// After the kick, so a presence refresh racing it can't leave a marker.
+	s.presence.Forget(ctx, tenant, sip)
+	s.events.Publish(ctx, tenant, events.TypeAgentPresence, map[string]any{
+		"sip_username": sip,
+		"status":       presence.StatusOffline,
+	})
 }
 
 // invalidateAgentCache drops the gateway's cached id + label for an agent's
@@ -392,14 +405,16 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "you cannot delete yourself")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteUser, p.TenantID, id)
+	var sip string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.DeleteUser, p.TenantID, id).Scan(&sip)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete user failed")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "user not found")
-		return
-	}
+	s.retireSip(r.Context(), p.TenantID, sip)
 	w.WriteHeader(http.StatusNoContent)
 }

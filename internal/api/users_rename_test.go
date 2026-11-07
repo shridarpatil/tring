@@ -57,7 +57,7 @@ func TestUsersRenameSip(t *testing.T) {
 	if rec := doReq(t, h, "PATCH", path, admin, `{"sip_username":"bad name!"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("invalid sip = %d, want 400", rec.Code)
 	}
-	rec := doReq(t, h, "PATCH", path, admin, `{"sip_username":" Bob ","display_name":"Bob"}`)
+	rec := doReq(t, h, "PATCH", path, admin, `{"sip_username":" bob ","display_name":"Bob"}`)
 	var got renameResponse
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
 		t.Fatalf("rename: %d %s", rec.Code, rec.Body)
@@ -151,6 +151,136 @@ func TestUsersRenameSipReportsFlows(t *testing.T) {
 	}
 	if len(got.FlowsReferencingOld) != 1 || got.FlowsReferencingOld[0].ID != pinned || got.FlowsReferencingOld[0].Name != "pinned" {
 		t.Errorf("flows_referencing_old = %+v, want only pinned", got.FlowsReferencingOld)
+	}
+}
+
+// kickRecorder stands in for the gateway control listener and records the
+// SIP usernames it was asked to kick.
+func kickRecorder(t *testing.T, s *Server) *[]string {
+	t.Helper()
+	var kicked []string
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			SIP string `json:"sip"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if r.URL.Path == "/control/agent-kick" {
+			kicked = append(kicked, body.SIP)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(gw.Close)
+	s.gatewayControlURL = gw.URL
+	return &kicked
+}
+
+// SIP usernames are case-preserved (POST /v1/agents keeps case), so an edit
+// that doesn't change the name, case included, never renames.
+func TestUsersRenameSipPreservesCase(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	kicked := kickRecorder(t, s)
+	rec := doReq(t, h, "POST", "/v1/agents", admin, `{"sip_username":"CRM_User42","display_name":"Old"}`)
+	var a struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &a) != nil {
+		t.Fatalf("create agent: %d %s", rec.Code, rec.Body)
+	}
+	path := "/v1/users/" + a.ID.String()
+	sipNow := func() string {
+		u, err := s.getUserRow(context.Background(), f.TenantID, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u.SipUsername
+	}
+
+	for _, body := range []string{`{"display_name":"New"}`, `{"sip_username":"CRM_User42"}`, `{"sip_username":" CRM_User42 "}`} {
+		if rec := doReq(t, h, "PATCH", path, admin, body); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s = %d %s", body, rec.Code, rec.Body)
+		}
+		if got := sipNow(); got != "CRM_User42" || len(*kicked) != 0 {
+			t.Fatalf("PATCH %s: sip = %q, kicked %v; want unchanged, no kick", body, got, *kicked)
+		}
+	}
+	// A case-only change is a real rename.
+	if rec := doReq(t, h, "PATCH", path, admin, `{"sip_username":"crm_user42"}`); rec.Code != http.StatusOK {
+		t.Fatalf("case rename = %d %s", rec.Code, rec.Body)
+	}
+	if got := sipNow(); got != "crm_user42" || len(*kicked) != 1 || (*kicked)[0] != "CRM_User42" {
+		t.Errorf("after case rename: sip = %q, kicked %v", got, *kicked)
+	}
+}
+
+// Clearing a login ignores every other field, so it can't carry a rename.
+func TestUsersRenameSipWithClearLogin(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	id := createAgentUser(t, h, admin, "hank")
+	rec := doReq(t, h, "PATCH", "/v1/users/"+id.String(), admin, `{"email":"","sip_username":"hank2"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("clear login + rename = %d %s, want 400", rec.Code, rec.Body)
+	}
+	if u, _ := s.getUserRow(context.Background(), f.TenantID, id); u.SipUsername != "hank" || !u.CanLogin {
+		t.Errorf("row changed: %+v", u)
+	}
+}
+
+// The gateway's on_call marker blocks a rename before the CDR is answered.
+func TestUsersRenameSipOnCallPresence(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, c := cachedTestServer(t, f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	id := createAgentUser(t, h, admin, "ivy")
+	ctx := context.Background()
+	pres := presence.New(c)
+	pres.MarkOnCall(ctx, f.TenantID.String(), "ivy")
+	t.Cleanup(func() { pres.Forget(ctx, f.TenantID.String(), "ivy") })
+	if rec := doReq(t, h, "PATCH", "/v1/users/"+id.String(), admin, `{"sip_username":"ivy2"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("on_call presence = %d %s, want 409", rec.Code, rec.Body)
+	}
+}
+
+// Deleting a user retires their SIP username like a rename does: cached
+// lookup and presence keys dropped, live presence socket kicked.
+func TestUsersDeleteCleansUp(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, c := cachedTestServer(t, f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	kicked := kickRecorder(t, s)
+	id := createAgentUser(t, h, admin, "jill")
+	ctx := context.Background()
+	tenant := f.TenantID.String()
+	pres := presence.New(c)
+	pres.MarkOnline(ctx, tenant, "jill")
+	pres.MarkFreed(ctx, tenant, "jill")
+	pres.SetAvailability(ctx, tenant, "jill", true)
+	c.Set(ctx, callcdr.AgentCacheKey(f.TenantID, "jill"), []byte(`{}`), 0)
+
+	if rec := doReq(t, h, "DELETE", "/v1/users/"+id.String(), admin, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body)
+	}
+	if _, ok := c.Get(ctx, callcdr.AgentCacheKey(f.TenantID, "jill")); ok {
+		t.Error("agent cache entry survived")
+	}
+	if pres.IsOnline(ctx, tenant, "jill") {
+		t.Error("presence marker survived")
+	}
+	if _, ok := pres.FreedAt(ctx, tenant, "jill"); ok {
+		t.Error("freed stamp survived")
+	}
+	if _, ok := pres.CachedAvailability(ctx, tenant, "jill"); ok {
+		t.Error("availability survived")
+	}
+	if len(*kicked) != 1 || (*kicked)[0] != "jill" {
+		t.Errorf("kicked %v, want [jill]", *kicked)
 	}
 }
 

@@ -49,9 +49,14 @@ test("buildUserPatch", () => {
 test("buildUserPatch sip_username", () => {
   const cur = { display_name: "Al", email: "a@example.com", role: "agent", sip_username: "al", can_login: true };
   const same = { display_name: "Al", email: "a@example.com", role: "agent", sip_username: "al" };
-  // Sent only when it changes; the server lowercases and trims, so compare that way.
-  assert.deepEqual(buildUserPatch(cur, { ...same, sip_username: " AL " }).body, {});
-  assert.deepEqual(buildUserPatch(cur, { ...same, sip_username: " Alan " }).body, { sip_username: "alan" });
+  // Sent only when the trimmed value differs; case is significant.
+  assert.deepEqual(buildUserPatch(cur, { ...same, sip_username: " al " }).body, {});
+  assert.deepEqual(buildUserPatch(cur, { ...same, sip_username: " Alan " }).body, { sip_username: "Alan" });
+  const mixed = { ...cur, sip_username: "CRM_User42" };
+  const mixedSame = { ...same, sip_username: "CRM_User42" };
+  assert.deepEqual(buildUserPatch(mixed, mixedSame), { body: {}, problem: "" });
+  assert.deepEqual(buildUserPatch(mixed, { ...mixedSame, display_name: "Bo" }).body, { display_name: "Bo" });
+  assert.deepEqual(buildUserPatch(mixed, { ...mixedSame, sip_username: "crm_user42" }).body, { sip_username: "crm_user42" });
   assert.match(buildUserPatch(cur, { ...same, sip_username: "" }).problem, /SIP username/);
   assert.match(buildUserPatch(cur, { ...same, sip_username: "bad name" }).problem, /SIP username/);
   assert.match(buildUserPatch(cur, { ...same, sip_username: "x".repeat(65) }).problem, /SIP username/);
@@ -59,6 +64,8 @@ test("buildUserPatch sip_username", () => {
 });
 
 test("sipChanged", () => {
-  assert.equal(sipChanged("al", " AL "), false);
+  assert.equal(sipChanged("al", " al "), false);
   assert.equal(sipChanged("al", "alan"), true);
+  assert.equal(sipChanged("CRM_User42", "CRM_User42"), false);
+  assert.equal(sipChanged("CRM_User42", "crm_user42"), true);
 });
