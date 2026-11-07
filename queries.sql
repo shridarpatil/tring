@@ -523,10 +523,17 @@ SELECT id, sip_password FROM users WHERE tenant_id = $1 AND sip_username = $2;
 -- name: get-user-by-email
 SELECT id, tenant_id, password_hash FROM users WHERE lower(email) = $1 AND password_hash IS NOT NULL;
 
--- name: user-exists
--- Console-session revocation check: a JWT for a deleted user (or one moved
--- out of the tenant) must stop working. Primary-key point read.
-SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 AND password_hash IS NOT NULL);
+-- name: get-console-principal
+-- A console session's user, reloaded every request: role and team memberships
+-- drive authorization, and no row (deleted, moved tenant, login removed)
+-- revokes the session. Empty arrays, never NULL, for a user in no team.
+SELECT u.role, u.sip_username, COALESCE(u.display_name, ''),
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[]
+FROM users u
+LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
+WHERE u.id = $1 AND u.tenant_id = $2 AND u.password_hash IS NOT NULL
+GROUP BY u.id;
 
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.

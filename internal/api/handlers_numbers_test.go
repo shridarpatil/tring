@@ -47,7 +47,7 @@ func newTestServer(f *dbtest.Fixture) *Server {
 // boilerplate so individual tests focus on the behaviour under test.
 func authedRequest(t *testing.T, s *Server, f *dbtest.Fixture, method, target, body string) *http.Request {
 	t.Helper()
-	tok, _, err := s.IssueConsoleToken(f.UserID, f.TenantID, f.UserEmail, time.Hour)
+	tok, _, err := s.IssueConsoleToken(f.UserID, f.TenantID, f.UserEmail, "admin", time.Hour)
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}

@@ -112,9 +112,9 @@ type Queries struct {
 	GetAgentCredentials    string `query:"get-agent-credentials"`
 
 	// ---- api: console auth ----
-	GetUserByEmail string `query:"get-user-by-email"`
-	UserExists     string `query:"user-exists"`
-	GetTenant      string `query:"get-tenant"`
+	GetUserByEmail      string `query:"get-user-by-email"`
+	GetConsolePrincipal string `query:"get-console-principal"`
+	GetTenant           string `query:"get-tenant"`
 
 	// ---- api: guest web-calling ----
 	FlowUsable        string `query:"flow-usable"`
