@@ -1046,6 +1046,17 @@ SELECT count(*),
 FROM queue_stints
 WHERE tenant_id = $1 AND team = $2 AND enqueued_at >= date_trunc('day', now());
 
+-- name: remove-team-agent-nonmanager
+-- remove-team-agent for a team manager: a manager can't remove a manager
+-- (themselves included), or they could strip and re-add a co-manager as a
+-- plain member. 0 rows: not a member, or a manager (see get-team-member-manager).
+DELETE FROM team_agents
+WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3 AND NOT is_manager;
+
+-- name: get-team-member-manager
+-- A member's manager flag; no row when the user isn't in the team.
+SELECT is_manager FROM team_agents WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3;
+
 -- name: set-team-agent-manager
 -- Set or clear a member's manager flag; 0 rows when the user isn't a member.
 UPDATE team_agents SET is_manager = $4

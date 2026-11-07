@@ -134,11 +134,13 @@ type Queries struct {
 	IsMyCall            string `query:"is-my-call"`
 
 	// ---- api: /v1/my-teams + gateway team attribution ----
-	SetCallTeam         string `query:"set-call-team"`
-	ListTeamMemberships string `query:"list-team-memberships"`
-	ListTeamCallsToday  string `query:"list-team-calls-today"`
-	TeamStatsToday      string `query:"team-stats-today"`
-	SetTeamAgentManager string `query:"set-team-agent-manager"`
+	SetCallTeam               string `query:"set-call-team"`
+	ListTeamMemberships       string `query:"list-team-memberships"`
+	ListTeamCallsToday        string `query:"list-team-calls-today"`
+	TeamStatsToday            string `query:"team-stats-today"`
+	SetTeamAgentManager       string `query:"set-team-agent-manager"`
+	RemoveTeamAgentNonManager string `query:"remove-team-agent-nonmanager"`
+	GetTeamMemberManager      string `query:"get-team-member-manager"`
 
 	// ---- api: guest web-calling ----
 	FlowUsable        string `query:"flow-usable"`

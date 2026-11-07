@@ -105,7 +105,8 @@ func TestManagerMembership(t *testing.T) {
 	m := f.AddUser(t, "agent", "m@example.com")
 	u := f.AddUser(t, "agent", "u@example.com")
 	sup := f.AddUser(t, "supervisor", "s@example.com")
-	f.AddTeam(t, "A", map[uuid.UUID]bool{m: true})
+	n := f.AddUser(t, "agent", "n@example.com")
+	f.AddTeam(t, "A", map[uuid.UUID]bool{m: true, n: true})
 	f.AddTeam(t, "B", map[uuid.UUID]bool{m: false})
 	mtok := tokenFor(t, s, f, m, "m@example.com", "agent")
 	body := `{"user_id":"` + u.String() + `"}`
@@ -128,8 +129,34 @@ func TestManagerMembership(t *testing.T) {
 	if rec := doReq(t, s.Router(), "PUT", "/v1/my-teams/A/members/"+m.String()+"/manager", mtok, `{"is_manager":false}`); rec.Code != http.StatusForbidden {
 		t.Fatalf("manager toggles manager: %d %s, want 403", rec.Code, rec.Body)
 	}
+	if rec := doReq(t, s.Router(), "DELETE", "/v1/my-teams/A/members/"+uuid.NewString(), mtok, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("remove non-member: %d %s, want 404", rec.Code, rec.Body)
+	}
+
+	// Removing a co-manager (or oneself) would strip the manager flag on re-add.
+	isManager := func(team string, id uuid.UUID) bool {
+		t.Helper()
+		var v bool
+		if err := f.DB.Pool.QueryRow(context.Background(),
+			`SELECT is_manager FROM team_agents WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3`,
+			f.TenantID, team, id).Scan(&v); err != nil {
+			t.Fatalf("read is_manager: %v", err)
+		}
+		return v
+	}
+	for _, target := range []uuid.UUID{n, m} {
+		if rec := doReq(t, s.Router(), "DELETE", "/v1/my-teams/A/members/"+target.String(), mtok, ""); rec.Code != http.StatusForbidden {
+			t.Fatalf("manager removes manager %s: %d %s, want 403", target, rec.Code, rec.Body)
+		}
+		if !isManager("A", target) {
+			t.Fatalf("%s lost manager flag", target)
+		}
+	}
 
 	stok := tokenFor(t, s, f, sup, "s@example.com", "supervisor")
+	if rec := doReq(t, s.Router(), "DELETE", "/v1/my-teams/A/members/"+n.String(), stok, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("supervisor removes manager: %d %s, want 204", rec.Code, rec.Body)
+	}
 	if rec := doReq(t, s.Router(), "PUT", "/v1/my-teams/B/members/"+m.String()+"/manager", stok, `{"is_manager":true}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("supervisor toggles manager: %d %s, want 204", rec.Code, rec.Body)
 	}
