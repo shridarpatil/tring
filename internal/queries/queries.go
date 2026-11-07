@@ -93,7 +93,7 @@ type Queries struct {
 	SetCallRecordingS3      string `query:"set-call-recording-s3"`
 	GetAgentBySIP           string `query:"get-agent-by-sip"`
 	GetSuperviseTarget      string `query:"get-supervise-target"`
-	GetUserSupervise        string `query:"get-user-supervise"`
+	CallInTeams             string `query:"call-in-teams"`
 	CreateSupervisorSession string `query:"create-supervisor-session"`
 	EndSupervisorSession    string `query:"end-supervisor-session"`
 
@@ -132,6 +132,13 @@ type Queries struct {
 	ListMyCalls         string `query:"list-my-calls"`
 	CountMyCalls        string `query:"count-my-calls"`
 	IsMyCall            string `query:"is-my-call"`
+
+	// ---- api: /v1/my-teams + gateway team attribution ----
+	SetCallTeam         string `query:"set-call-team"`
+	ListTeamMemberships string `query:"list-team-memberships"`
+	ListTeamCallsToday  string `query:"list-team-calls-today"`
+	TeamStatsToday      string `query:"team-stats-today"`
+	SetTeamAgentManager string `query:"set-team-agent-manager"`
 
 	// ---- api: guest web-calling ----
 	FlowUsable        string `query:"flow-usable"`

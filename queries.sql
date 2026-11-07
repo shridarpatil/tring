@@ -376,9 +376,17 @@ RETURNING id;
 SELECT COALESCE(room_id, ''), status::text
 FROM calls WHERE id = $1 AND tenant_id = $2;
 
--- name: get-user-supervise
--- The supervise permission for a console user, scoped to the tenant.
-SELECT role IN ('admin','supervisor') FROM users WHERE id = $1 AND tenant_id = $2;
+-- name: call-in-teams
+-- Whether a call belongs to any of the teams in $3: it was last rung via one
+-- (calls.team) or it waited in one's queue (a queue_stints row). Gates a
+-- manager's supervise and recording access; membership of the answering agent
+-- deliberately doesn't count.
+SELECT EXISTS (
+  SELECT 1 FROM calls c
+  WHERE c.tenant_id = $1 AND c.id = $2
+    AND (c.team = ANY($3::text[])
+         OR EXISTS (SELECT 1 FROM queue_stints qs
+                    WHERE qs.tenant_id = $1 AND qs.call_id = $2 AND qs.team = ANY($3::text[]))));
 
 -- name: create-supervisor-session
 INSERT INTO supervisor_sessions (tenant_id, call_id, supervisor_user_id, started_at, modes_used)
@@ -993,3 +1001,52 @@ RETURNING id;
 
 -- name: delete-user
 DELETE FROM users WHERE tenant_id = $1 AND id = $2;
+
+-- ===========================================================================
+-- team views (/v1/my-teams)
+-- ===========================================================================
+
+-- name: set-call-team
+-- Attribute a call to the team now ringing it; the last team wins on transfer
+-- (queue_stints keeps the full history).
+UPDATE calls SET team = $3 WHERE id = $2 AND tenant_id = $1;
+
+-- name: list-team-memberships
+-- Every team membership with the member's identity and manager flag, for the
+-- team views; live status is joined from presence by the caller.
+SELECT ta.team_name, u.id, u.sip_username, COALESCE(u.display_name, ''), ta.is_manager
+FROM team_agents ta JOIN users u ON u.id = ta.agent_id
+WHERE ta.tenant_id = $1
+ORDER BY ta.team_name, ta.position, u.sip_username;
+
+-- name: list-team-calls-today
+-- Same columns as list-calls: today's calls belonging to team $2 (same
+-- predicate as call-in-teams). The LIMIT is a backstop for a very busy team.
+SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
+       c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, '')
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now())
+  AND (c.team = $2
+       OR EXISTS (SELECT 1 FROM queue_stints qs
+                  WHERE qs.tenant_id = $1 AND qs.call_id = c.id AND qs.team = $2))
+ORDER BY c.started_at DESC LIMIT 500;
+
+-- name: team-stats-today
+-- Today's queue stints for team $2: offered (stints entered), answered,
+-- abandoned (caller hung up or the max wait ran out) and average wait over
+-- answered stints (0 when none). Same wait measure as stats-queue-today.
+SELECT count(*),
+       count(*) FILTER (WHERE outcome = 'answered'),
+       count(*) FILTER (WHERE outcome IN ('abandoned', 'timeout')),
+       COALESCE(avg(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)))
+                  FILTER (WHERE outcome = 'answered'), 0)::float8
+FROM queue_stints
+WHERE tenant_id = $1 AND team = $2 AND enqueued_at >= date_trunc('day', now());
+
+-- name: set-team-agent-manager
+-- Set or clear a member's manager flag; 0 rows when the user isn't a member.
+UPDATE team_agents SET is_manager = $4
+WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3;
