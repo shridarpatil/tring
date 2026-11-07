@@ -5,8 +5,9 @@ import { writeFileSync } from "node:fs";
 
 // Build output goes into the Go module's embed source dir so the API
 // binary picks it up via //go:embed at compile time. The Tring API
-// serves the SPA at /admin/* — base must match for asset URLs to
-// resolve correctly when loaded via the embedded mount.
+// serves the bundles under /admin/assets, so the build's base is
+// "/admin/" (absolute asset URLs that work from /login and /agent too).
+// Dev uses "/" so Vite's SPA fallback serves every app path.
 // emptyOutDir nukes the dist directory before each build, including the
 // .gitkeep that the Go `//go:embed all:dist` pattern relies on for
 // backend-only builds (no `npm run build`). Re-create it as part of
@@ -22,9 +23,9 @@ const preserveGitkeep = {
   },
 };
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [vue(), preserveGitkeep],
-  base: "/admin/",
+  base: command === "build" ? "/admin/" : "/",
   build: {
     outDir: resolve(__dirname, "../internal/webui/dist"),
     emptyOutDir: true,
@@ -42,4 +43,4 @@ export default defineConfig({
       "/healthz": process.env.TRING_DEV_API_URL || "http://localhost:8085",
     },
   },
-});
+}));

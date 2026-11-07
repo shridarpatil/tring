@@ -39,7 +39,7 @@ Create keys in the console under **API keys**, or with [`POST /v1/api-keys`](/tr
 
 ## Console sessions
 
-The admin console signs in with email and password and gets back a JWT. The console then uses that token exactly like an API key. You can do the same from a script if you need to act as a console user.
+Any console user signs in with email and password and gets back a JWT. What the token may do depends on the user's `role`: admin sessions can use the whole API, while supervisor and agent sessions get `403` on the admin routes and can use only `/v1/me*`, `/v1/my-teams*` and supervision. The console then uses that token exactly like an API key. You can do the same from a script if you need to act as a console user.
 
 ### POST /v1/console/login
 
@@ -58,7 +58,7 @@ curl -sS -X POST "$TRING_URL/v1/console/login" \
   -d "{\"email\":\"admin@example.com\",\"password\":\"$TRING_ADMIN_PASSWORD\"}"
 ```
 
-**Response** `200 OK`
+**Response** `200 OK`. Besides `token`, `expires_at` and `tenant`, it includes a `user` object (`id`, `display_name`, `email`, `role`, `sip_username` and `teams` as `{name, is_manager}`) so the console can pick the right view. Only the `user` field is omitted below.
 
 ```json
 {
@@ -105,7 +105,7 @@ A few routes act on behalf of a specific console **user**, so they reject API ke
 
 | Route | Notes |
 |---|---|
-| `POST /v1/calls/{id}/supervise` | Join a live call as a supervisor. The user also needs the supervise permission, or gets `403 not permitted to supervise`. See [Calls](/tring/api-reference/calls/). |
+| `POST /v1/calls/{id}/supervise` | Join a live call as a supervisor. The user must be an admin or supervisor (any live call), or a manager of a team the call belongs to; otherwise `403 not permitted to supervise`. See [Calls](/tring/api-reference/calls/). |
 
 Sending an API key to one of these returns `401 console session required`. An invalid or expired token, or one whose user has been deleted, returns `401 invalid console session`.
 
@@ -152,7 +152,9 @@ The API itself never accepts a visitor token. Only the media gateway does. There
 |---|---|---|---|
 | `POST /v1/console/login` | no auth | no auth | no auth |
 | All other `/v1/*` (tenant, API keys, agents, teams, queues, stats, stream, audio, numbers, calls, flows, trunks, webhooks, guest credentials) | yes | yes | no |
-| `POST /v1/calls/{id}/supervise` | no | yes | no |
+| `POST /v1/calls/{id}/supervise` | no | yes (admin, supervisor, or a manager of the call's team) | no |
+| `/v1/users*` | no | admin only | no |
+| `/v1/me*`, `/v1/my-teams*` | no | yes (any role) | no |
 | `/v1/sdk/*` | no | no | yes |
 | `GET /healthz` | no auth | no auth | no auth |
 

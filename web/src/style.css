@@ -207,3 +207,5 @@ html[data-theme="dark"] {
     }
   }
 }
+
+.kpi-num { font-size: 1.75rem; line-height: 1.1; font-weight: 600; font-variant-numeric: tabular-nums; }

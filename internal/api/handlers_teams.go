@@ -238,6 +238,12 @@ func (s *Server) invalidateTeam(ctx context.Context, tenantID uuid.UUID, team st
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	name := chi.URLParam(r, "name")
+	// Read before the delete: its managers may manage no team afterwards.
+	members, err := s.listTeamMembers(r, t.ID, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
 	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteTeam, t.ID, name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
@@ -248,6 +254,9 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.invalidateTeam(r.Context(), t.ID, name)
+	for _, m := range members {
+		s.invalidateAgentCache(r.Context(), t.ID, m.SipUsername)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -312,6 +321,7 @@ func (s *Server) handleRemoveTeamAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not in team")
 		return
 	}
+	s.invalidateUserAgentCache(r.Context(), t.ID, agentID) // may no longer manage a team
 	w.WriteHeader(http.StatusNoContent)
 }
 

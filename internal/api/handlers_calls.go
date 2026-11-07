@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -125,20 +126,11 @@ func (s *Server) writePlacedCall(w http.ResponseWriter, r *http.Request, tenantI
 // The gateway's own 4xx (bad number, no trunk, agent offline) pass through;
 // anything else is a 502.
 func (s *Server) gatewayPlace(ctx context.Context, tenantID uuid.UUID, path string, req any) (uuid.UUID, int, string) {
-	tok, err := s.issueControlToken(tenantID)
-	if err != nil {
-		s.log.Error("place call: sign control token", "err", err)
-		return uuid.Nil, http.StatusInternalServerError, "internal error"
-	}
-	body, _ := json.Marshal(req)
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayControlURL+path, bytes.NewReader(body))
-	if err != nil {
+	resp, err := s.gatewayPost(ctx, tenantID, path, req)
+	if errors.Is(err, errControlRequest) {
 		s.log.Error("place call: build gateway request", "err", err)
 		return uuid.Nil, http.StatusInternalServerError, "internal error"
 	}
-	hreq.Header.Set("Authorization", "Bearer "+tok)
-	hreq.Header.Set("Content-Type", "application/json")
-	resp, err := s.gatewayHTTP.Do(hreq)
 	if err != nil {
 		s.log.Error("place call: gateway unreachable", "url", s.gatewayControlURL, "err", err)
 		return uuid.Nil, http.StatusBadGateway, "media gateway unavailable"
@@ -158,6 +150,41 @@ func (s *Server) gatewayPlace(ctx context.Context, tenantID uuid.UUID, path stri
 		s.log.Error("place call: gateway refused", "path", path, "status", resp.StatusCode, "error", out.Error)
 		return uuid.Nil, http.StatusBadGateway, "call not placed"
 	}
+}
+
+// errControlRequest wraps a failure to build a control request (our fault, not
+// the gateway's).
+var errControlRequest = errors.New("build control request")
+
+// gatewayPost sends one control request to the gateway, authenticated by a
+// fresh control token for the tenant. The caller closes the response body.
+func (s *Server) gatewayPost(ctx context.Context, tenantID uuid.UUID, path string, req any) (*http.Response, error) {
+	tok, err := s.issueControlToken(tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: sign token: %w", errControlRequest, err)
+	}
+	body, _ := json.Marshal(req)
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.gatewayControlURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errControlRequest, err)
+	}
+	hreq.Header.Set("Authorization", "Bearer "+tok)
+	hreq.Header.Set("Content-Type", "application/json")
+	return s.gatewayHTTP.Do(hreq)
+}
+
+// gatewayControl sends a control request that answers with no body; any
+// non-2xx status is an error.
+func (s *Server) gatewayControl(ctx context.Context, tenantID uuid.UUID, path string, req any) error {
+	resp, err := s.gatewayPost(ctx, tenantID, path, req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("gateway %s: status %d", path, resp.StatusCode)
+	}
+	return nil
 }
 
 const (
@@ -260,11 +287,17 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	s.serveCallRecording(w, r, t.ID, id)
+}
+
+// serveCallRecording streams the recording of a call already authorized by
+// the caller; the lookup is still tenant-filtered.
+func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tenantID, id uuid.UUID) {
 	var (
 		fsUUID string
 		s3Key  *string
 	)
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallRecording, id, t.ID).Scan(&fsUUID, &s3Key)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetCallRecording, id, tenantID).Scan(&fsUUID, &s3Key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return

@@ -101,6 +101,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 	var webhooks signaling.Webhooks
 	var didResolver signaling.DIDResolver
 	var availability signaling.AvailabilityResolver
+	var numberMask signaling.NumberMaskResolver
 	var trunkRes *outboundtrunks.Resolver
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
@@ -109,6 +110,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		flows, teams, holdMusic, didResolver = store, store, store, store
 		transferMessage = store
 		availability = store
+		numberMask = store
 		trunkRes = outboundtrunks.New(database)
 		// One *callcdr.Log satisfies both CallLog and SupervisorLog; assign it into
 		// each interface-typed var from its concrete type so a nil DB leaves BOTH
@@ -151,6 +153,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		HTTP:            ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes
 		Webhooks:        webhooks,     // IVR node webhooks (nil without a DB)
 		Availability:    availability, // agent's Away flag sent on connect (nil without a DB)
+		NumberMask:      numberMask,   // masks the caller number on masked agents' rings (nil without a DB)
 		Logger:          logger,
 	})
 	g.sig = sig

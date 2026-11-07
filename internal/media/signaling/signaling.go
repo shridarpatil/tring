@@ -110,7 +110,16 @@ type Config struct {
 	// socket connects (internal/flowstore implements it). nil → the agent is
 	// told nothing and the SDK shows plain Online.
 	Availability AvailabilityResolver
-	Logger       *slog.Logger
+	// NumberMask reports whether an agent sees client numbers masked
+	// (tenants.mask_numbers_*; internal/flowstore implements it). nil → never
+	// masked.
+	NumberMask NumberMaskResolver
+	Logger     *slog.Logger
+}
+
+// NumberMaskResolver reports whether the agent behind sip sees masked numbers.
+type NumberMaskResolver interface {
+	MaskNumbers(ctx context.Context, tenantID uuid.UUID, sip string) (bool, error)
 }
 
 // AvailabilityResolver reads an agent's available_for_calls by SIP username.

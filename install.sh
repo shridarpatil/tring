@@ -130,6 +130,6 @@ Next steps:
   docker compose pull        # pull the shridh0r/tring images + Postgres/Redis
   docker compose up -d
 
-Then open http://<server>:8085/admin/ and sign in with the
+Then open http://<server>:8085/login and sign in with the
 TRING_ADMIN_EMAIL / TRING_ADMIN_PASSWORD from .env.
 EOF

@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { ref, computed, onMounted } from "vue";
 import {
   LayoutDashboard,
   Headset,
@@ -13,6 +12,7 @@ import {
   Webhook,
   KeyRound,
   Settings,
+  Phone,
   Sun,
   Moon,
 } from "lucide-vue-next";
@@ -25,25 +25,42 @@ import LiveStatusStrip from "../components/shell/LiveStatusStrip.vue";
 import IconButton from "../components/ui/IconButton.vue";
 import Toaster from "../components/ui/Toaster.vue";
 
-const router = useRouter();
 const tenant = ref<Tenant | null>(null);
 const version = ref("…");
 
-const nav = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/agents", label: "Agents", icon: Headset },
-  { to: "/teams", label: "Teams", icon: UsersRound },
-  { to: "/sounds", label: "Sounds", icon: Music },
-  { to: "/numbers", label: "Numbers", icon: Hash },
-  { to: "/trunks", label: "Trunks", icon: Cable },
-  { to: "/calls", label: "Calls", icon: PhoneCall },
-  { to: "/flows", label: "IVR Flows", icon: Workflow },
-  { to: "/webhooks", label: "Webhooks", icon: Webhook },
-  { to: "/api-keys", label: "API keys", icon: KeyRound },
-  { to: "/settings", label: "Settings", icon: Settings },
+const adminNav = [
+  { to: "/admin/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/admin/users", label: "Users", icon: Headset },
+  { to: "/admin/teams", label: "Teams", icon: UsersRound },
+  { to: "/admin/sounds", label: "Sounds", icon: Music },
+  { to: "/admin/numbers", label: "Numbers", icon: Hash },
+  { to: "/admin/trunks", label: "Trunks", icon: Cable },
+  { to: "/admin/calls", label: "Calls", icon: PhoneCall },
+  { to: "/admin/flows", label: "IVR Flows", icon: Workflow },
+  { to: "/admin/webhooks", label: "Webhooks", icon: Webhook },
+  { to: "/admin/api-keys", label: "API keys", icon: KeyRound },
+  { to: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
+// Supervisors see every team, others only their own: /v1/my-teams answers both.
+const myTeams = ref<{ name: string }[]>([]);
+const nav = computed(() => {
+  const myCalls = { to: "/agent/calls", label: "My calls", icon: Phone };
+  if (auth.isAdmin()) return [...adminNav, myCalls]; // admins have their own Dashboard
+  const teams = myTeams.value.map((t) => ({ to: "/agent/teams/" + encodeURIComponent(t.name), label: t.name, icon: UsersRound }));
+  return [{ to: "/agent", label: "Dashboard", icon: LayoutDashboard }, myCalls, ...teams];
+});
+
 onMounted(async () => {
+  // Admin API routes 403 for other roles, so they only load their own data.
+  if (!auth.isAdmin()) {
+    try {
+      myTeams.value = await api.get<{ name: string }[]>("/v1/my-teams");
+    } catch {
+      /* nav falls back to Dashboard and My calls */
+    }
+    return;
+  }
   try {
     tenant.value = await api.get<Tenant>("/v1/tenants/me");
   } catch {
@@ -57,8 +74,7 @@ onMounted(async () => {
 });
 
 function logout() {
-  auth.logout();
-  router.push({ name: "login" });
+  auth.signOut();
 }
 </script>
 
@@ -70,15 +86,16 @@ function logout() {
         <span class="brand-name">Tring</span>
       </div>
       <SidebarNav :items="nav" />
-      <div class="sidebar-foot">{{ version }} console</div>
+      <div v-if="auth.isAdmin()" class="sidebar-foot">{{ version }} console</div>
     </aside>
 
     <div class="main-col">
       <header class="topbar">
-        <LiveStatusStrip />
+        <LiveStatusStrip v-if="auth.isAdmin()" />
+        <span v-else></span>
         <div class="topbar-right">
           <div class="tenant">
-            <span>{{ tenant?.name || "…" }}</span>
+            <span>{{ tenant?.name || auth.state.tenant?.name || "…" }}</span>
             <span v-if="tenant" class="sep">·</span>
             <span v-if="tenant" class="sip">{{ tenant.sip_domain }}</span>
           </div>

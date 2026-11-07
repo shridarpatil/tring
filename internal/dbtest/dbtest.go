@@ -97,7 +97,7 @@ func Setup(t *testing.T) *Fixture {
 	// flushes everything that FKs into tenants too.
 	// `users` joins this list so the seeded console user gets cleared too.
 	_, err = d.Pool.Exec(ctx, `
-		TRUNCATE tenants, agents, numbers, calls, webhooks, webhook_deliveries, users, flows, trunks
+		TRUNCATE tenants, numbers, calls, webhooks, webhook_deliveries, users, flows, trunks
 		RESTART IDENTITY CASCADE;
 	`)
 	if err != nil {
@@ -126,8 +126,8 @@ func Setup(t *testing.T) *Fixture {
 	const bcryptSentinel = "$2a$10$dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest"
 	var userID uuid.UUID
 	err = d.Pool.QueryRow(ctx, `
-		INSERT INTO users (tenant_id, email, password_hash)
-		VALUES ($1, $2, $3)
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
+		VALUES ($1, $2, $3, $2, 'x', 'admin')
 		RETURNING id
 	`, tenantID, dbtestUserEmail, bcryptSentinel).Scan(&userID)
 	if err != nil {
@@ -140,5 +140,42 @@ func Setup(t *testing.T) *Fixture {
 		SIPDomain: sipDomain,
 		UserID:    userID,
 		UserEmail: dbtestUserEmail,
+	}
+}
+
+// AddUser inserts a user in the fixture tenant with the given role and email
+// (also its sip_username). password_hash is a non-bcrypt placeholder: it only
+// has to be non-NULL for console tokens to be honoured; tests that log in set
+// a real hash themselves.
+func (f *Fixture) AddUser(t *testing.T, role, email string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	err := f.DB.Pool.QueryRow(context.Background(), `
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
+		VALUES ($1, $2, 'x', $2, 'x', $3)
+		RETURNING id
+	`, f.TenantID, email, role).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	return id
+}
+
+// AddTeam creates a team in the fixture tenant with the given members; the
+// map value marks a member as the team's manager.
+func (f *Fixture) AddTeam(t *testing.T, name string, members map[uuid.UUID]bool) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := f.DB.Pool.Exec(ctx,
+		`INSERT INTO teams (tenant_id, name) VALUES ($1, $2)`, f.TenantID, name); err != nil {
+		t.Fatalf("insert team: %v", err)
+	}
+	for id, isManager := range members {
+		if _, err := f.DB.Pool.Exec(ctx, `
+			INSERT INTO team_agents (tenant_id, team_name, agent_id, is_manager)
+			VALUES ($1, $2, $3, $4)
+		`, f.TenantID, name, id, isManager); err != nil {
+			t.Fatalf("insert team member: %v", err)
+		}
 	}
 }

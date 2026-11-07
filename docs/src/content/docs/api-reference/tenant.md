@@ -22,6 +22,9 @@ All endpoints on this page act on the tenant the credential belongs to. They acc
 | `transfer_failed_message` | string | What a caller hears when a transfer finds no one available. |
 | `recording_sample_rate` | integer | Sample rate, in Hz, that call recordings are encoded at. Default `8000`. |
 | `recording_format` | string | Format of call recordings: `ogg` (default), `mp3` or `wav`. |
+| `mask_numbers_agents` | boolean | Mask client phone numbers (the caller on inbound calls, the callee on outbound calls, and `client_ref`) for agents who manage no team. Default `false`. |
+| `mask_numbers_managers` | boolean | Mask client phone numbers for team managers. Default `false`. |
+| `mask_numbers_supervisors` | boolean | Mask client phone numbers for supervisors. Default `false`. Admins, API keys and webhooks are never masked; see [masking client numbers by role](/tring/features/agents-and-routing/#masking-client-numbers-by-role). |
 
 The default `failover_causes` are `NETWORK_OUT_OF_ORDER`, `GATEWAY_DOWN`, `USER_NOT_REGISTERED`, `SUBSCRIBER_ABSENT`, `NORMAL_TEMPORARY_FAILURE`, `RECOVERY_ON_TIMER_EXPIRE` and `NO_ROUTE_DESTINATION`.
 
@@ -58,7 +61,10 @@ curl -sS "$TRING_URL/v1/tenants/me" \
   "max_call_seconds": 14400,
   "transfer_failed_message": "Sorry, no one is available to take your call right now. Please try again later.",
   "recording_sample_rate": 8000,
-  "recording_format": "ogg"
+  "recording_format": "ogg",
+  "mask_numbers_agents": false,
+  "mask_numbers_managers": false,
+  "mask_numbers_supervisors": false
 }
 ```
 
@@ -82,6 +88,9 @@ Update one or more tenant settings. Fields you leave out keep their current valu
 | `transfer_failed_message` | string | no | Text played when a transfer finds no one available. It's turned into speech when you save it. Sending `""` makes that moment silent. |
 | `recording_sample_rate` | integer | no | Recording sample rate in Hz: `8000`, `12000`, `16000`, `24000` or `48000`. Applies to calls that start after the change. |
 | `recording_format` | string | no | Recording format: `ogg`, `mp3` or `wav`. Applies to calls that start after the change. |
+| `mask_numbers_agents` | boolean | no | Mask client numbers for agents. |
+| `mask_numbers_managers` | boolean | no | Mask client numbers for team managers. |
+| `mask_numbers_supervisors` | boolean | no | Mask client numbers for supervisors. |
 
 ```bash
 curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
@@ -102,7 +111,7 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 | Status | `error` |
 |---|---|
 | `400` | `invalid JSON body` |
-| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate or recording_format is required` |
+| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format or mask_numbers_* is required` |
 | `400` | `recording_sample_rate must be one of 8000, 12000, 16000, 24000, 48000` |
 | `400` | `recording_format must be one of ogg, mp3, wav` |
 | `400` | `max_call_seconds must be between 60 and 86400 (1 min–24 h)` |

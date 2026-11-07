@@ -70,8 +70,17 @@ func (s *Server) handleDashboardStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // disable nginx proxy buffering
 
+	// Masking is per connection: a supervisor the tenant masks gets masked
+	// numbers while an admin on the same tenant stream sees them in full.
+	// Re-read on every keepalive so a settings change reaches open streams.
+	p := principalFromCtx(r.Context())
+	masked := s.masksNumbers(r.Context(), p)
 	if t != nil {
-		if snap, err := json.Marshal(s.buildDashboardSnapshot(r.Context(), t)); err == nil {
+		snapshot := s.buildDashboardSnapshot(r.Context(), t)
+		if masked {
+			maskCalls(snapshot.Calls)
+		}
+		if snap, err := json.Marshal(snapshot); err == nil {
 			_, _ = w.Write(events.Frame(events.TypeSnapshot, snap))
 			flusher.Flush()
 		}
@@ -95,11 +104,17 @@ func (s *Server) handleDashboardStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return // hub dropped us (slow); client reconnects + re-snapshots
 			}
+			if masked {
+				if frame = maskFrame(frame); frame == nil {
+					continue
+				}
+			}
 			if _, err := w.Write(frame); err != nil {
 				return
 			}
 			flusher.Flush()
 		case <-ping.C:
+			masked = s.masksNumbers(ctx, p)
 			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
 				return
 			}

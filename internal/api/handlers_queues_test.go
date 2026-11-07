@@ -171,7 +171,7 @@ func TestQueuesSnapshotAgents(t *testing.T) {
 	seedTeam(t, f, "support", 0, 0, "[]")
 	for _, sip := range []string{"zoe", "amy", "max"} {
 		var id uuid.UUID
-		if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO agents (tenant_id, sip_username, sip_password)
+		if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO users (tenant_id, sip_username, sip_password)
 			VALUES ($1, $2, 'pw') RETURNING id`, f.TenantID, sip).Scan(&id); err != nil {
 			t.Fatalf("seed agent: %v", err)
 		}

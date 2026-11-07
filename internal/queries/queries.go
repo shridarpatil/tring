@@ -31,6 +31,7 @@ type Queries struct {
 	GetAgent             string `query:"get-agent"`
 	SetAgentAvailability string `query:"set-agent-availability"`
 	GetAgentAvailability string `query:"get-agent-availability"` // gateway: Away badge on connect
+	GetAgentMaskRole     string `query:"get-agent-mask-role"`    // gateway: masked caller number on ring
 
 	// ---- api: teams (GetTeam + ListTeamAgentSips also used by orchestrator) ----
 	CreateTeam               string `query:"create-team"`
@@ -65,6 +66,7 @@ type Queries struct {
 	GetTenantSettings       string `query:"get-tenant-settings"`
 	GetTenantRecordCalls    string `query:"get-tenant-record-calls"`
 	GetTenantMaxCallSeconds string `query:"get-tenant-max-call-seconds"`
+	GetTenantMaskNumbers    string `query:"get-tenant-mask-numbers"`
 
 	// ---- api: audio library (sound assets) ----
 	CreateAudio string `query:"create-audio"`
@@ -93,7 +95,7 @@ type Queries struct {
 	SetCallRecordingS3      string `query:"set-call-recording-s3"`
 	GetAgentBySIP           string `query:"get-agent-by-sip"`
 	GetSuperviseTarget      string `query:"get-supervise-target"`
-	GetUserSupervise        string `query:"get-user-supervise"`
+	CallInTeams             string `query:"call-in-teams"`
 	CreateSupervisorSession string `query:"create-supervisor-session"`
 	EndSupervisorSession    string `query:"end-supervisor-session"`
 
@@ -112,9 +114,45 @@ type Queries struct {
 	GetAgentCredentials    string `query:"get-agent-credentials"`
 
 	// ---- api: console auth ----
-	GetUserByEmail string `query:"get-user-by-email"`
-	UserExists     string `query:"user-exists"`
-	GetTenant      string `query:"get-tenant"`
+	GetUserByEmail      string `query:"get-user-by-email"`
+	GetConsolePrincipal string `query:"get-console-principal"`
+	GetTenant           string `query:"get-tenant"`
+
+	// ---- api: /v1/users (admin) ----
+	ListUsers       string `query:"list-users"`
+	GetUser         string `query:"get-user"`
+	CreateUser      string `query:"create-user"`
+	UpdateUser      string `query:"update-user"`
+	ClearUserLogin  string `query:"clear-user-login"`
+	RenameUserSip   string `query:"rename-user-sip"`
+	UserOnCall      string `query:"user-on-call"`
+	FlowsByAgentSip string `query:"flows-by-agent-sip"`
+	DeleteUser      string `query:"delete-user"`
+
+	// ---- api: /v1/me ----
+	GetUserPasswordHash string `query:"get-user-password-hash"`
+	SetUserPassword     string `query:"set-user-password"`
+	GetMeStatsToday     string `query:"get-me-stats-today"`
+	GetMeStats7d        string `query:"get-me-stats-7d"`
+	ListMyCalls         string `query:"list-my-calls"`
+	CountMyCalls        string `query:"count-my-calls"`
+	IsMyCall            string `query:"is-my-call"`
+
+	// ---- api: /v1/me/dashboard (role-scoped dashboard snapshot) ----
+	ListActiveCallsScoped string `query:"list-active-calls-scoped"`
+	StatsMeToday          string `query:"stats-me-today"`
+	StatsQueueTodayTeams  string `query:"stats-queue-today-teams"`
+	StatsMeHourly         string `query:"stats-me-hourly"`
+
+	// ---- api: /v1/my-teams + gateway team attribution ----
+	SetCallTeam               string `query:"set-call-team"`
+	ListTeamMemberships       string `query:"list-team-memberships"`
+	ListTeamCandidates        string `query:"list-team-candidates"`
+	ListTeamCallsToday        string `query:"list-team-calls-today"`
+	TeamStatsToday            string `query:"team-stats-today"`
+	SetTeamAgentManager       string `query:"set-team-agent-manager"`
+	RemoveTeamAgentNonManager string `query:"remove-team-agent-nonmanager"`
+	GetTeamMemberManager      string `query:"get-team-member-manager"`
 
 	// ---- api: guest web-calling ----
 	FlowUsable        string `query:"flow-usable"`

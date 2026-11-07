@@ -31,7 +31,8 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// the auth context (hold music, record toggle) so the Settings page sees the
 	// current selection.
 	t := *tenantFromCtx(r.Context())
-	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat)
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat,
+		&t.MaskNumbersAgents, &t.MaskNumbersManagers, &t.MaskNumbersSupervisors)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -52,6 +53,8 @@ type Agent struct {
 	// rings an agent only when they're BOTH connected AND available_for_calls.
 	AvailableForCalls bool      `json:"available_for_calls"`
 	CreatedAt         time.Time `json:"created_at"`
+	// Role is admin | supervisor | agent (the unified users table).
+	Role string `json:"role"`
 	// Status is the agent's live EFFECTIVE state, populated on list responses.
 	// It combines Redis presence with available_for_calls: "on_call" (busy),
 	// "away" (connected but marked unavailable), "online" (connected and
@@ -94,7 +97,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
 		t.ID, req.SipUsername, s.sealSecret(sipPassword), req.DisplayName).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
+		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -111,7 +114,17 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 // list endpoint and the SSE snapshot share it. Needs the Tenant (SipDomain) for
 // the legacy SIP-registration fallback.
 func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
-	rows, err := s.db.Pool.Query(ctx, s.q.ListAgents, t.ID)
+	agents, err := s.loadAgents(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.fillAgentStatus(ctx, t, agents)
+	return agents, nil
+}
+
+// loadAgents reads a tenant's agents from the DB, without presence.
+func (s *Server) loadAgents(ctx context.Context, tenantID uuid.UUID) ([]Agent, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListAgents, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,11 +132,18 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 	agents := []Agent{}
 	for rows.Next() {
 		var a Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role); err != nil {
 			return nil, err
 		}
 		agents = append(agents, a)
 	}
+	return agents, rows.Err()
+}
+
+// fillAgentStatus sets each agent's live Status (and IdleSince) from presence,
+// or from SIP registrations when the gateway transport isn't in use. Presence
+// costs a lookup per agent, so callers pass only the agents they will show.
+func (s *Server) fillAgentStatus(ctx context.Context, t *Tenant, agents []Agent) {
 	if s.agentTransport == "gateway" && s.presence.Enabled() {
 		for i := range agents {
 			st := s.presence.Status(ctx, t.ID.String(), agents[i].SipUsername)
@@ -152,7 +172,6 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 			}
 		}
 	}
-	return agents, nil
 }
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +218,7 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgent,
-		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt)
+		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -238,10 +257,7 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	var a Agent
-	err = s.db.Pool.QueryRow(r.Context(), s.q.SetAgentAvailability, req.Available, id, t.ID).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
-	)
+	a, err := s.applyAgentAvailability(r.Context(), t.ID, id, req.Available)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -250,15 +266,28 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+// applyAgentAvailability persists the flag, refreshes the gateway's cached copy
+// and publishes agent.status; shared by the backend and /v1/me endpoints.
+func (s *Server) applyAgentAvailability(ctx context.Context, tenantID, agentID uuid.UUID, available bool) (Agent, error) {
+	var a Agent
+	err := s.db.Pool.QueryRow(ctx, s.q.SetAgentAvailability, available, agentID, tenantID).Scan(
+		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
+	)
+	if err != nil {
+		return Agent{}, err
+	}
 	// Overwrite the gateway's cached flag so a reconnecting agent reads the new
 	// one (a write, not a delete: see presence.FillAvailability).
-	s.presence.SetAvailability(r.Context(), t.ID.String(), a.SipUsername, a.AvailableForCalls)
-	s.events.Publish(r.Context(), t.ID.String(), events.TypeAgentStatus, map[string]any{
+	s.presence.SetAvailability(ctx, tenantID.String(), a.SipUsername, a.AvailableForCalls)
+	s.events.Publish(ctx, tenantID.String(), events.TypeAgentStatus, map[string]any{
 		"agent_id":            a.ID,
 		"sip_username":        a.SipUsername,
 		"available_for_calls": a.AvailableForCalls,
 	})
-	writeJSON(w, http.StatusOK, a)
+	return a, nil
 }
 
 // ---- Numbers ------------------------------------------------------------
@@ -591,6 +620,10 @@ type patchTenantRequest struct {
 	// RecordingFormat sets the recording format (one of recordingFormats).
 	// nil = unchanged.
 	RecordingFormat *string `json:"recording_format,omitempty"`
+	// MaskNumbers* toggle masking client numbers per role. nil = unchanged.
+	MaskNumbersAgents      *bool `json:"mask_numbers_agents,omitempty"`
+	MaskNumbersManagers    *bool `json:"mask_numbers_managers,omitempty"`
+	MaskNumbersSupervisors *bool `json:"mask_numbers_supervisors,omitempty"`
 }
 
 // recordingSampleRates are the rates libopus can encode at (the recording is
@@ -611,8 +644,9 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil && req.RecordingFormat == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate or recording_format is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil && req.RecordingFormat == nil &&
+		req.MaskNumbersAgents == nil && req.MaskNumbersManagers == nil && req.MaskNumbersSupervisors == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format or mask_numbers_* is required")
 		return
 	}
 	if req.RecordingSampleRate != nil && !slices.Contains(recordingSampleRates, *req.RecordingSampleRate) {
@@ -687,16 +721,18 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
 		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
-		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat)
+		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat,
+		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat,
+			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	// Drop the gateway's cached tenant settings (recording; hold music + transfer
-	// prompt) so the change applies to the next call instead of after the TTL.
-	// Best-effort.
-	for _, key := range []string{callrow.RecordingCacheKey(t.ID), flowstore.TenantAudioCacheKey(t.ID)} {
+	// prompt; number masking) so the change applies to the next call instead of
+	// after the TTL. Best-effort.
+	for _, key := range []string{callrow.RecordingCacheKey(t.ID), flowstore.TenantAudioCacheKey(t.ID), flowstore.MaskCacheKey(t.ID)} {
 		if err := s.cache.Delete(r.Context(), key); err != nil {
 			s.log.Warn("tenant settings cache invalidate failed", "key", key, "err", err)
 		}

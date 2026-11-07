@@ -32,7 +32,7 @@ Put TLS in front of the API before it leaves localhost. API keys and console tok
 | `GET /healthz` | none | Returns `{"status":"ok"}`, or `503` with `{"error":"db unreachable"}` when Postgres is down. Use it for load balancer health checks. |
 | `/fs/*` | HTTP Basic (`TRING_FS_BASIC_AUTH`) | Used by FreeSWITCH only, on the loopback listener `TRING_FS_ADDR` (not the public api port). Not for integrators. |
 | `/sdk/*` | none | Browser widget bundles (`voice.js`, `agent.js`, `tring.js`). |
-| `/admin/*` | none (the console signs in through the API) | The admin console. Served with a strict `Content-Security-Policy` that forbids framing; its `connect-src` allows the WebSocket origin of `TRING_GATEWAY_PUBLIC_URL` so supervisors can monitor calls. |
+| `/login`, `/agent/*`, `/admin/*` | none (the console signs in through the API) | The console: the sign-in page, the agent view and the admin console. Served with a strict `Content-Security-Policy` that forbids framing; its `connect-src` allows the WebSocket origin of `TRING_GATEWAY_PUBLIC_URL` so supervisors can monitor calls. |
 
 ## Authentication
 

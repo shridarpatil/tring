@@ -382,10 +382,17 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.AuthRequired)
 
 			// Long-lived SSE: must NOT inherit the 30s request timeout.
-			r.Get("/stream/dashboard", s.handleDashboardStream)
+			// Tenant-wide live feed: admins, API keys and supervisors only.
+			r.With(s.AllowDashboardStream).Get("/stream/dashboard", s.handleDashboardStream)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Timeout(30 * time.Second))
+
+				// Every route in this group was written for tenant-wide callers
+				// (API keys, admins). Non-admin console sessions are refused
+				// here by default and only reach routes that check the
+				// Principal themselves.
+				r.Use(s.RejectSelfScope)
 
 				// ── Any caller, including a 'calls'-scoped API key: what a CRM
 				// backend needs to place and handle calls, plus read-only lookups.
@@ -470,13 +477,56 @@ func (s *Server) Router() http.Handler {
 					r.Patch("/trunks/{id}", s.handlePatchTrunk)
 					r.Delete("/trunks/{id}", s.handleDeleteTrunk)
 					r.Post("/trunks/reload", s.handleReloadTrunks)
+
+					// Console logins and roles: admin sessions only. API keys have
+					// no principal, so a leaked full key can't mint admin logins.
+					r.Group(func(r chi.Router) {
+						r.Use(s.RequirePrincipal)
+						r.Get("/users", s.handleListUsers)
+						r.Post("/users", s.handleCreateUser)
+						r.Patch("/users/{id}", s.handlePatchUser)
+						r.Delete("/users/{id}", s.handleDeleteUser)
+					})
 				})
 			})
 		})
 
+		// The logged-in user's own surface. Inside AuthRequired but outside
+		// RejectSelfScope on purpose: non-admin console sessions land here, and
+		// every handler is scoped to the Principal's own user id.
+		r.Group(func(r chi.Router) {
+			r.Use(s.AuthRequired)
+			r.Use(middleware.Timeout(30 * time.Second))
+			r.Use(s.RequirePrincipal)
+			r.Get("/me", s.handleGetMe)
+			r.Post("/me/token", s.handleMeToken)
+			r.Post("/me/availability", s.handleMeAvailability)
+			r.Post("/me/password", s.handleMePassword)
+			r.Get("/me/stats", s.handleMeStats)
+			r.Get("/me/dashboard", s.handleMeDashboard)
+			r.Get("/me/calls", s.handleMeCalls)
+			r.Get("/me/calls/{id}/recording", s.handleMeCallRecording)
+		})
+
+		// Team views for any console user, scoped per handler by the
+		// Principal's role and team memberships (handlers_my_teams.go). Also
+		// outside RejectSelfScope on purpose.
+		r.Group(func(r chi.Router) {
+			r.Use(s.AuthRequired)
+			r.Use(middleware.Timeout(30 * time.Second))
+			r.Use(s.RequirePrincipal)
+			r.Get("/my-teams", s.handleListMyTeams)
+			r.Get("/my-teams/{name}", s.handleGetMyTeam)
+			r.Get("/my-teams/{name}/calls/{id}/recording", s.handleMyTeamCallRecording)
+			r.Get("/my-teams/{name}/candidates", s.handleMyTeamCandidates)
+			r.Post("/my-teams/{name}/members", s.handleAddMyTeamMember)
+			r.Delete("/my-teams/{name}/members/{userID}", s.handleRemoveMyTeamMember)
+			r.Put("/my-teams/{name}/members/{userID}/manager", s.handleSetMyTeamManager)
+		})
+
 		// Console-only: supervise a live web call. Separate from AuthRequired
-		// because the supervise permission is per-user and an API key has no
-		// user identity to check it against.
+		// because supervise is authorized by the user's role and managed teams,
+		// and an API key has no user identity to check it against.
 		r.Group(func(r chi.Router) {
 			r.Use(s.ConsoleAuthRequired)
 			r.Post("/calls/{id}/supervise", s.handleSupervise)
@@ -516,32 +566,18 @@ func (s *Server) Router() http.Handler {
 		})
 	}
 
-	// Admin console (embedded Vue dist). Mounted only if the Vue app was
-	// actually built — backend-only deployments get a UI-less binary
-	// automatically (no flag needed, just don't run `npm run build`).
+	// Console (embedded Vue dist). Mounted only if the Vue app was actually
+	// built — backend-only deployments get a UI-less binary automatically (no
+	// flag needed, just don't run `npm run build`). One SPA owns three URL
+	// spaces: /login (everyone), /agent (non-admin users) and /admin (the admin
+	// console). Built assets live only under /admin/assets; index.html links
+	// them by absolute path, so it works from any of these pages.
 	if uiFS, ok := webui.FS(); ok {
 		admin := r.With(adminHeaders(adminCSP(s.gatewayPublicURL)), staticCompress)
-		fileServer := http.FileServer(http.FS(uiFS))
 		// Strip "/admin" prefix so requests for /admin/assets/foo.js
 		// resolve to "assets/foo.js" within the embedded FS.
-		stripped := http.StripPrefix("/admin", fileServer)
-		// Catch-all: any /admin/* path that doesn't match a static file
-		// falls back to index.html so the Vue router (history mode) can
-		// own the URL space client-side.
-		admin.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
-			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
-		})
-		admin.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
-			// If it's a known asset (has a file extension), serve it
-			// directly; otherwise serve index.html for SPA routing.
-			path := strings.TrimPrefix(req.URL.Path, "/admin/")
-			if path != "" {
-				// Directories fall through to index.html — never a listing.
-				if st, err := fs.Stat(uiFS, path); err == nil && !st.IsDir() {
-					stripped.ServeHTTP(w, req)
-					return
-				}
-			}
+		stripped := http.StripPrefix("/admin", http.FileServer(http.FS(uiFS)))
+		index := func(w http.ResponseWriter, req *http.Request) {
 			indexHTML, err := uiFS.Open("index.html")
 			if err != nil {
 				http.Error(w, "UI not available", http.StatusNotFound)
@@ -557,10 +593,53 @@ func (s *Server) Router() http.Handler {
 			w.Header().Set("Cache-Control", "no-cache")
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.Copy(w, indexHTML)
+		}
+		admin.Get("/login", index)
+		admin.Get("/agent", index)
+		admin.Get("/agent/*", index)
+		admin.Get("/admin", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, "/admin/", http.StatusMovedPermanently)
+		})
+		// Old URLs from before /login and /agent existed (bookmarks, links
+		// already shared). Fixed targets only — never an open redirect.
+		admin.Get("/admin/login", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, withQuery("/login", req), http.StatusFound)
+		})
+		admin.Get("/admin/me", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, withQuery("/agent", req), http.StatusFound)
+		})
+		admin.Get("/admin/me/teams/{name}", func(w http.ResponseWriter, req *http.Request) {
+			// The escaped path, not the URL param: chi's param is already
+			// escaped when the request has a RawPath, so escaping it again
+			// would turn R%26D into R%2526D.
+			name := strings.TrimPrefix(req.URL.EscapedPath(), "/admin/me/teams/")
+			http.Redirect(w, req, withQuery("/agent/teams/"+name, req), http.StatusFound)
+		})
+		// Catch-all: any /admin/* path that doesn't match a static file
+		// falls back to index.html so the Vue router (history mode) can
+		// own the URL space client-side.
+		admin.Get("/admin/*", func(w http.ResponseWriter, req *http.Request) {
+			path := strings.TrimPrefix(req.URL.Path, "/admin/")
+			if path != "" {
+				// Directories fall through to index.html — never a listing.
+				if st, err := fs.Stat(uiFS, path); err == nil && !st.IsDir() {
+					stripped.ServeHTTP(w, req)
+					return
+				}
+			}
+			index(w, req)
 		})
 	}
 
 	return r
+}
+
+// withQuery appends the request's query string to a fixed redirect path.
+func withQuery(path string, req *http.Request) string {
+	if req.URL.RawQuery == "" {
+		return path
+	}
+	return path + "?" + req.URL.RawQuery
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {

@@ -147,7 +147,7 @@ func TestAgentPasswordSealedAtRestPlaintextInDirectory(t *testing.T) {
 	}
 	var raw string
 	if err := f.DB.Pool.QueryRow(context.Background(),
-		`SELECT sip_password FROM agents WHERE tenant_id = $1 AND sip_username = 'alice'`, f.TenantID,
+		`SELECT sip_password FROM users WHERE tenant_id = $1 AND sip_username = 'alice'`, f.TenantID,
 	).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestSealLegacySecretsIsIdempotent(t *testing.T) {
 	box := testBox(t, 1)
 	trunkID := insertRegisterTrunk(t, f, "legacy-trunk-pw")
 	if _, err := f.DB.Pool.Exec(ctx, `
-		INSERT INTO agents (tenant_id, sip_username, sip_password) VALUES ($1, 'bob', 'legacy-agent-pw')
+		INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'bob', 'legacy-agent-pw')
 	`, f.TenantID); err != nil {
 		t.Fatal(err)
 	}
@@ -187,21 +187,22 @@ func TestSealLegacySecretsIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// trunk + bob + the fixture admin (a users row with a plaintext sip_password).
 	sealed, plain, err := countStoredSecrets(ctx, f.DB)
-	if err != nil || sealed != 0 || plain != 2 {
-		t.Fatalf("before: sealed=%d plain=%d err=%v; want 0, 2", sealed, plain, err)
+	if err != nil || sealed != 0 || plain != 3 {
+		t.Fatalf("before: sealed=%d plain=%d err=%v; want 0, 3", sealed, plain, err)
 	}
 
 	n, err := sealLegacySecrets(ctx, f.DB, box)
-	if err != nil || n != 2 {
-		t.Fatalf("first pass sealed %d (err %v), want 2", n, err)
+	if err != nil || n != 3 {
+		t.Fatalf("first pass sealed %d (err %v), want 3", n, err)
 	}
 	first := rawTrunkPassword(t, f, trunkID)
 	if got, err := box.Open(first); err != nil || got != "legacy-trunk-pw" {
 		t.Fatalf("trunk after seal: Open = %q, %v", got, err)
 	}
 	var agentRaw string
-	_ = f.DB.Pool.QueryRow(ctx, `SELECT sip_password FROM agents WHERE sip_username = 'bob'`).Scan(&agentRaw)
+	_ = f.DB.Pool.QueryRow(ctx, `SELECT sip_password FROM users WHERE sip_username = 'bob'`).Scan(&agentRaw)
 	if got, err := box.Open(agentRaw); !secretbox.IsSealed(agentRaw) || err != nil || got != "legacy-agent-pw" {
 		t.Fatalf("agent after seal: %q → %q, %v", agentRaw, got, err)
 	}
@@ -214,8 +215,8 @@ func TestSealLegacySecretsIsIdempotent(t *testing.T) {
 		t.Fatal("second pass re-sealed an already-sealed value")
 	}
 	sealed, plain, _ = countStoredSecrets(ctx, f.DB)
-	if sealed != 2 || plain != 0 {
-		t.Fatalf("after: sealed=%d plain=%d; want 2, 0", sealed, plain)
+	if sealed != 3 || plain != 0 {
+		t.Fatalf("after: sealed=%d plain=%d; want 3, 0", sealed, plain)
 	}
 }
 

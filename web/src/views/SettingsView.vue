@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { Building2, PhoneCall, Mic, Route, Globe } from "lucide-vue-next";
+import { Building2, PhoneCall, Mic, Route, Globe, EyeOff } from "lucide-vue-next";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
@@ -23,6 +23,9 @@ const form = ref({
   recordingSampleRate: "8000", // a string because <Select> emits one
   maxCallMinutes: 240, // stored as seconds on the tenant
   transferFailedMessage: "",
+  maskAgents: false,
+  maskManagers: false,
+  maskSupervisors: false,
   defaultFlowId: "", // guest web calling
 });
 const saved = ref("");
@@ -80,6 +83,9 @@ function fromTenant(t: Tenant) {
     recordingSampleRate: String(t.recording_sample_rate ?? 8000),
     maxCallMinutes: Math.round((t.max_call_seconds ?? 14400) / 60),
     transferFailedMessage: t.transfer_failed_message || "",
+    maskAgents: t.mask_numbers_agents ?? false,
+    maskManagers: t.mask_numbers_managers ?? false,
+    maskSupervisors: t.mask_numbers_supervisors ?? false,
   });
 }
 
@@ -119,6 +125,9 @@ async function save() {
       recording_sample_rate: Number(f.recordingSampleRate),
       max_call_seconds: Math.round(f.maxCallMinutes * 60),
       transfer_failed_message: f.transferFailedMessage,
+      mask_numbers_agents: f.maskAgents,
+      mask_numbers_managers: f.maskManagers,
+      mask_numbers_supervisors: f.maskSupervisors,
     });
     fromTenant(tenant.value);
     if (guest.value && guestDirty()) {
@@ -251,6 +260,31 @@ onMounted(load);
           </div>
         </div>
         <p class="section-note">Changes apply to calls that start after you save.</p>
+      </Card>
+
+      <!-- Privacy -->
+      <Card class="section">
+        <header>
+          <span class="section-icon"><EyeOff :size="16" /></span>
+          <div>
+            <h2>Privacy</h2>
+            <p>Who sees callers' full phone numbers.</p>
+          </div>
+        </header>
+        <div class="srow">
+          <div>
+            <div class="srow-label">Mask client phone numbers for</div>
+            <p class="srow-desc">
+              Shows only the first 2 and last 4 digits. Admins always see full numbers. Masking happens
+              on the server; the API and webhooks are never masked.
+            </p>
+          </div>
+          <div class="vstack gap-2" role="group" aria-label="Mask client phone numbers for">
+            <label class="hstack gap-2"><input v-model="form.maskAgents" type="checkbox" /> Agents</label>
+            <label class="hstack gap-2"><input v-model="form.maskManagers" type="checkbox" /> Team managers</label>
+            <label class="hstack gap-2"><input v-model="form.maskSupervisors" type="checkbox" /> Supervisors</label>
+          </div>
+        </div>
       </Card>
 
       <!-- Outbound routing -->

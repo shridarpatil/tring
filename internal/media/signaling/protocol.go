@@ -47,6 +47,7 @@ const (
 	msgRinging        = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
 	msgAnswered       = "answered"        // s→agent: the click-to-call customer picked up
 	msgResumeCall     = "resume-call"     // s→agent presence: a call is holding your dropped slot (page refresh) — {room, phone, auto}; join it to resume
+	msgSuperseded     = "superseded"      // s→agent presence: another tab/device took over this agent's ringing; don't reconnect
 )
 
 // msg is the single envelope for every /rtc message.

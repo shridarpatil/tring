@@ -41,7 +41,7 @@ export function streamEvents(path: string, h: SSEHandlers): () => void {
       });
       if (!res.ok || !res.body) {
         if (res.status === 401) {
-          auth.logout();
+          auth.signOut(true);
           stopped = true;
           return;
         }
