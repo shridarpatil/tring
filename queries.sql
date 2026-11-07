@@ -964,7 +964,10 @@ SELECT
 
 -- name: list-my-calls
 -- Same columns as list-calls, restricted to calls this user answered (same
--- ownership rule as get-me-stats-today, so a handed-off call stays listed).
+-- ownership rule as get-me-stats-today, so a handed-off call stays listed)
+-- that started within $5 days before the DB session's local midnight (0 =
+-- today). An answered event follows its call's start, so the same bound keeps
+-- the event lookup on the (tenant, type, at) index.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
@@ -972,15 +975,20 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        COALESCE(c.room_id, '')
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id AND a.tenant_id = c.tenant_id
 WHERE c.tenant_id = $1
+  AND c.started_at >= date_trunc('day', now()) - make_interval(days => $5::int)
   AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
-         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text))
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text
+           AND e.at >= date_trunc('day', now()) - make_interval(days => $5::int)))
 ORDER BY c.started_at DESC LIMIT $3 OFFSET $4;
 
 -- name: count-my-calls
+-- list-my-calls' total; $3 = days, as list-my-calls' $5.
 SELECT count(*) FROM calls c
 WHERE c.tenant_id = $1
+  AND c.started_at >= date_trunc('day', now()) - make_interval(days => $3::int)
   AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
-         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text));
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text
+           AND e.at >= date_trunc('day', now()) - make_interval(days => $3::int)));
 
 -- name: list-active-calls-scoped
 -- list-active-calls for a non-admin's dashboard ($2 user, $3 teams): calls the

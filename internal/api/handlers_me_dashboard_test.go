@@ -203,3 +203,36 @@ func TestSupervisorGetsDashboardStream(t *testing.T) {
 		t.Fatalf("supervisor stream: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// stats=0 is the cheap poll: live panels only, no stats queries.
+func TestMeDashboardWithoutStats(t *testing.T) {
+	f := dbtest.Setup(t)
+	dir := t.TempDir()
+	s := newMyTeamsServer(f, dir)
+	a := f.AddUser(t, "agent", "a@example.com")
+	f.AddTeam(t, "A", map[uuid.UUID]bool{a: false})
+	mine := insertTeamCall(t, f, dir, a, "A")
+	tok := tokenFor(t, s, f, a, "a@example.com", "agent")
+
+	rec := doReq(t, s.Router(), "GET", "/v1/me/dashboard?stats=0", tok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stats=0: %d %s", rec.Code, rec.Body)
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["stats"]; ok {
+		t.Fatalf("stats=0 still sent stats: %s", rec.Body)
+	}
+	var snap dashboardSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if got := snapCallIDs(snap); !sameIDs(got, []uuid.UUID{mine}) || len(snap.Queues.Queues) != 1 {
+		t.Fatalf("stats=0 snapshot = %+v", snap)
+	}
+	if full := getMeDashboard(t, s, tok); len(full.Stats.Hourly) != 12 {
+		t.Fatalf("default still includes stats: %+v", full.Stats)
+	}
+}

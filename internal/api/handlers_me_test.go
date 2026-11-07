@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -238,7 +239,7 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 		Total int    `json:"total"`
 	}
 	list := func(tok string) callsPage {
-		rec := doReq(t, s.Router(), "GET", "/v1/me/calls", tok, "")
+		rec := doReq(t, s.Router(), "GET", "/v1/me/calls?range=7d", tok, "")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("calls: %d %s", rec.Code, rec.Body)
 		}
@@ -312,5 +313,47 @@ func TestMePasswordReturnsFreshToken(t *testing.T) {
 	}
 	if rec := doReq(t, h, "GET", "/v1/me", resp.Token, ""); rec.Code != http.StatusOK {
 		t.Fatalf("fresh token = %d, want 200", rec.Code)
+	}
+}
+
+// range picks the window by days back from the DB's local midnight: today
+// (the default), 7d (today and the 6 days before) or 30d.
+func TestMeCallsRange(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	me := f.AddUser(t, "agent", "a@example.com")
+	tok := tokenFor(t, s, f, me, "a@example.com", "agent")
+	today := seedCall(t, f, me, true, todayAt)
+	threeDays := seedCall(t, f, me, true, "date_trunc('day', now()) - interval '3 days'")
+	tenDays := seedCall(t, f, me, true, "date_trunc('day', now()) - interval '10 days'")
+	seedCall(t, f, me, true, "date_trunc('day', now()) - interval '40 days'")
+
+	for q, want := range map[string][]uuid.UUID{
+		"":             {today},
+		"?range=today": {today},
+		"?range=7d":    {today, threeDays},
+		"?range=30d":   {today, threeDays, tenDays},
+	} {
+		rec := doReq(t, s.Router(), "GET", "/v1/me/calls"+q, tok, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: %d %s", q, rec.Code, rec.Body)
+		}
+		var page struct {
+			Items []Call `json:"items"`
+			Total int    `json:"total"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		got := []uuid.UUID{}
+		for _, c := range page.Items {
+			got = append(got, c.ID)
+		}
+		if page.Total != len(want) || !slices.Equal(got, want) {
+			t.Fatalf("%q: total %d items %v, want %v", q, page.Total, got, want)
+		}
+	}
+	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls?range=1y", tok, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("range=1y: %d, want 400", rec.Code)
 	}
 }

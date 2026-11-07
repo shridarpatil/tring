@@ -132,6 +132,19 @@ func (s *Server) handleMeStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
+	// Days before today's local midnight: "7d" is today and the 6 days before.
+	var days int
+	switch r.URL.Query().Get("range") {
+	case "", "today":
+		days = 0
+	case "7d":
+		days = 6
+	case "30d":
+		days = 29
+	default:
+		writeError(w, http.StatusBadRequest, "range must be today, 7d or 30d")
+		return
+	}
 	limit, offset := meCallsDefault, 0
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
 		limit = min(n, meCallsMax)
@@ -140,11 +153,11 @@ func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 		offset = n
 	}
 	var total int
-	if err := s.db.Pool.QueryRow(r.Context(), s.q.CountMyCalls, p.TenantID, p.UserID).Scan(&total); err != nil {
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.CountMyCalls, p.TenantID, p.UserID, days).Scan(&total); err != nil {
 		writeError(w, http.StatusInternalServerError, "count failed")
 		return
 	}
-	rows, err := s.db.Pool.Query(r.Context(), s.q.ListMyCalls, p.TenantID, p.UserID, limit, offset)
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListMyCalls, p.TenantID, p.UserID, limit, offset, days)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return

@@ -11,10 +11,20 @@ import (
 	"github.com/shridarpatil/tring/internal/callrow"
 )
 
+// meDashboard is dashboardSnapshot with optional stats: the console polls the
+// live panels every few seconds but the day's stats far less often.
+type meDashboard struct {
+	Calls  []Call         `json:"calls"`
+	Agents []Agent        `json:"agents"`
+	Queues queuesResponse `json:"queues"`
+	Stats  *statsOverview `json:"stats,omitempty"`
+}
+
 // handleMeDashboard is the dashboard for a non-admin console user: the same
 // shape as the stream's snapshot event, scoped to what the caller may see.
-// Supervisors (and admins) get the tenant-wide snapshot, so a client can use
-// this one endpoint for every role; the console uses the live stream for them.
+// ?stats=0 skips the stats queries (and the field). Supervisors (and admins)
+// get the full tenant-wide snapshot, so a client can use this one endpoint for
+// every role; the console uses the live stream for them.
 func (s *Server) handleMeDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	p := principalFromCtx(ctx)
@@ -23,7 +33,7 @@ func (s *Server) handleMeDashboard(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.buildDashboardSnapshot(ctx, t))
 		return
 	}
-	snap, err := s.scopedDashboardSnapshot(ctx, t, p)
+	snap, err := s.scopedDashboardSnapshot(ctx, t, p, r.URL.Query().Get("stats") != "0")
 	if err != nil {
 		s.log.Error("me dashboard failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "query failed")
@@ -37,7 +47,7 @@ func (s *Server) handleMeDashboard(w http.ResponseWriter, r *http.Request) {
 // Live calls are the caller's own plus, for a manager, their managed teams'
 // calls: a plain agent never receives another caller's number. Trend stats are
 // the caller's own calls; queue figures cover the included teams.
-func (s *Server) scopedDashboardSnapshot(ctx context.Context, t *Tenant, p *Principal) (dashboardSnapshot, error) {
+func (s *Server) scopedDashboardSnapshot(ctx context.Context, t *Tenant, p *Principal, withStats bool) (meDashboard, error) {
 	teams := p.Teams
 	if len(p.ManagedTeams) > 0 {
 		teams = p.ManagedTeams
@@ -51,7 +61,7 @@ func (s *Server) scopedDashboardSnapshot(ctx context.Context, t *Tenant, p *Prin
 	}
 	include := func(team string) bool { return slices.Contains(teams, team) }
 
-	snap := dashboardSnapshot{}
+	snap := meDashboard{}
 	var err error
 	if snap.Calls, err = s.scopedActiveCalls(ctx, t.ID, p.UserID, callTeams); err != nil {
 		return snap, err
@@ -62,15 +72,18 @@ func (s *Server) scopedDashboardSnapshot(ctx context.Context, t *Tenant, p *Prin
 	if snap.Queues, err = s.queuesSnapshotFor(ctx, t, snap.Agents, include); err != nil {
 		return snap, err
 	}
-	// queuesSnapshotFor's on_call is tenant-wide; count only the calls shown.
-	snap.Queues.OnCall = 0
+	// on_call counts only the calls shown (queuesSnapshotFor leaves it 0).
 	for _, c := range snap.Calls {
 		if c.Status == "answered" {
 			snap.Queues.OnCall++
 		}
 	}
-	if snap.Stats, err = s.personalStats(ctx, t.ID, p.UserID, teams); err != nil {
-		return snap, err
+	if withStats {
+		st, err := s.personalStats(ctx, t.ID, p.UserID, teams)
+		if err != nil {
+			return snap, err
+		}
+		snap.Stats = &st
 	}
 	return snap, nil
 }
