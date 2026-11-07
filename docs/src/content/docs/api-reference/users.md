@@ -43,7 +43,23 @@ Returns the user object. `409` if the email or `sip_username` is taken; `400` on
 
 ### PATCH /v1/users/{id}
 
-Change any of `display_name`, `email`, `role` and `password`. Giving an agent created with `POST /v1/agents` an `email` and `password` gives them a login. Setting `email` to `""` removes the login. You cannot change your own role, remove your own login, or set a password while clearing the login. `404` for an unknown user, `409` if the email is taken.
+Change any of `display_name`, `email`, `role`, `password` and `sip_username`. Giving an agent created with `POST /v1/agents` an `email` and `password` gives them a login. Setting `email` to `""` removes the login. You cannot change your own role, remove your own login, or set a password while clearing the login. `404` for an unknown user, `409` if the email or SIP username is taken.
+
+Changing `sip_username` renames the agent, for example to fix a typo. It follows the same rules as on create and is stored lowercased. A rename returns `409` (`user is on a call`) while the agent is on a live call. If the agent is connected, their widget reconnects under the new name. Tring does not update anything outside its own records, so:
+
+- your CRM must mint tokens for the new name, and
+- IVR flows whose Transfer node names the old `agent_sip` keep pointing at it. The response lists those flows so you can fix them:
+
+```json
+{
+  "id": "…",
+  "sip_username": "alice",
+  "…": "…",
+  "flows_referencing_old": [{ "id": "…", "name": "Support line" }]
+}
+```
+
+`flows_referencing_old` is present only when a rename leaves such flows.
 
 ### DELETE /v1/users/{id}
 

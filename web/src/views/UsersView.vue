@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { RouterLink } from "vue-router";
 import { KeyRound, LogOut, Pencil, Trash2 } from "lucide-vue-next";
 import { errMessage } from "../lib/errors";
 import { useList } from "../composables/useList";
@@ -9,7 +10,7 @@ import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import { confirmDialog } from "../lib/confirm";
 import { agentSignalState } from "../lib/status";
-import { buildUserPatch, isAgentOnly, roleOptions, validateLogin, validateNewUser } from "../lib/users";
+import { buildUserPatch, isAgentOnly, roleOptions, sipChanged, validateLogin, validateNewUser } from "../lib/users";
 import type { Agent, AgentToken } from "../api/types";
 import {
   Button,
@@ -35,6 +36,16 @@ interface UserRow {
   teams: { name: string; is_manager: boolean }[];
   can_login: boolean;
   created_at: string;
+}
+
+interface FlowRef {
+  id: string;
+  name: string;
+}
+
+// PATCH /v1/users/{id}: after a SIP rename, the flows still pinned to the old name.
+interface PatchedUser extends UserRow {
+  flows_referencing_old?: FlowRef[];
 }
 
 const { items: users, loading, load } = useList<UserRow>("/v1/users");
@@ -108,17 +119,17 @@ async function create() {
   }
 }
 
-async function patch(u: UserRow, body: Record<string, string>, okMsg: string) {
+async function patch(u: UserRow, body: Record<string, string>, okMsg: string): Promise<PatchedUser | null> {
   try {
-    const updated = await api.patch<UserRow>(`/v1/users/${u.id}`, body);
+    const { flows_referencing_old, ...updated } = await api.patch<PatchedUser>(`/v1/users/${u.id}`, body);
     const i = users.value.findIndex((x) => x.id === u.id);
     if (i >= 0) users.value[i] = updated;
     toast.success(okMsg);
-    return true;
+    return { ...updated, flows_referencing_old };
   } catch (e) {
     toast.error(errMessage(e, "update failed"));
     await load({ silent: true }); // resync a role select that already moved
-    return false;
+    return null;
   }
 }
 
@@ -130,7 +141,11 @@ async function setRole(u: UserRow, role: string) {
 
 // --- edit details ---
 const editFor = ref<UserRow | null>(null);
-const editForm = ref({ display_name: "", email: "", role: "agent" });
+const editForm = ref({ display_name: "", email: "", role: "agent", sip_username: "" });
+const editRenamesSip = computed(() => !!editFor.value && sipChanged(editFor.value.sip_username, editForm.value.sip_username));
+// Flows still transferring to a renamed user's old SIP username; the server
+// doesn't rewrite them, so list them until dismissed.
+const staleFlows = ref<{ oldSip: string; flows: FlowRef[] } | null>(null);
 // Closing by any route (cancel, Esc, backdrop) drops the target so a reopen starts fresh.
 const showEdit = computed({
   get: () => editFor.value !== null,
@@ -140,7 +155,7 @@ const showEdit = computed({
 });
 function openEdit(u: UserRow) {
   editFor.value = u;
-  editForm.value = { display_name: u.display_name, email: u.email, role: u.role };
+  editForm.value = { display_name: u.display_name, email: u.email, role: u.role, sip_username: u.sip_username };
 }
 async function saveEdit() {
   const u = editFor.value;
@@ -152,9 +167,12 @@ async function saveEdit() {
     return;
   }
   saving.value = true;
-  const done = await patch(u, body, "User updated");
+  const updated = await patch(u, body, "User updated");
   saving.value = false;
-  if (done) showEdit.value = false;
+  if (!updated) return;
+  showEdit.value = false;
+  const flows = updated.flows_referencing_old ?? [];
+  if (flows.length) staleFlows.value = { oldSip: u.sip_username, flows };
 }
 
 // --- set login / reset password ---
@@ -244,6 +262,20 @@ async function mintToken(u: UserRow) {
         </div>
       </div>
       <code class="mono reveal-code">{{ token.token }}</code>
+    </div>
+
+    <div v-if="staleFlows" role="alert" data-variant="warning">
+      <div class="hstack justify-between">
+        <div>
+          These IVR flows still transfer to the old SIP username
+          <span class="mono">{{ staleFlows.oldSip }}</span>; update them:
+          <template v-for="(f, i) in staleFlows.flows" :key="f.id">
+            <template v-if="i">, </template>
+            <RouterLink :to="{ name: 'flow-editor', params: { id: f.id } }">{{ f.name }}</RouterLink>
+          </template>
+        </div>
+        <Button variant="ghost" size="sm" @click="staleFlows = null">Dismiss</Button>
+      </div>
     </div>
 
     <Panel>
@@ -339,7 +371,10 @@ async function mintToken(u: UserRow) {
           :hint="editFor?.can_login ? 'To remove the login, use Clear login instead' : 'No console login; use Set login to add an email and password'"
         />
         <Select v-model="editForm.role" label="Role" :options="roleOptions" :disabled="!!editFor && isSelf(editFor)" />
-        <TextField :model-value="editFor?.sip_username" label="SIP username" mono disabled hint="The CRM identifier; it can't be changed" />
+        <TextField v-model="editForm.sip_username" label="SIP username" mono autocomplete="off" hint="The CRM identifier" />
+        <div v-if="editRenamesSip" role="alert" data-variant="warning">
+          The CRM and any IVR flows that use the old name must be updated. The agent's call panel will reconnect.
+        </div>
       </form>
       <template #footer>
         <Button variant="ghost" @click="showEdit = false">Cancel</Button>

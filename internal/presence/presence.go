@@ -175,6 +175,18 @@ func (s *Store) Offline(ctx context.Context, tenant, sip string) {
 	_ = s.c.Delete(ctx, key(tenant, sip))
 }
 
+// Forget drops every key held for an agent's SIP username (online marker,
+// freed-at stamp, cached availability) once that name no longer exists — a
+// rename — so nothing reads a ghost agent under it. Best-effort.
+func (s *Store) Forget(ctx context.Context, tenant, sip string) {
+	if !s.Enabled() {
+		return
+	}
+	for _, k := range []string{key(tenant, sip), freedKey(tenant, sip), availabilityKey(tenant, sip)} {
+		_ = s.c.Delete(ctx, k)
+	}
+}
+
 // Status returns "online", "on_call", or "offline". Only meaningful when Enabled().
 func (s *Store) Status(ctx context.Context, tenant, sip string) string {
 	if !s.Enabled() {

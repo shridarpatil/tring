@@ -287,12 +287,13 @@ func (l *Log) recordingPolicy(ctx context.Context, tenant uuid.UUID) (recordingP
 	return p, nil
 }
 
-// agentCacheTTL bounds a cached agent lookup. No api endpoint edits or deletes
-// an agent's id or display name today, so nothing invalidates it; an endpoint
-// that does must delete agentCacheKey.
+// agentCacheTTL bounds a cached agent lookup. The api deletes AgentCacheKey
+// when it renames a user's SIP username or changes their display name.
 const agentCacheTTL = time.Hour
 
-func agentCacheKey(tenant uuid.UUID, sip string) string {
+// AgentCacheKey is the cache key for an agent's id + label by SIP username.
+// Exported so the api can invalidate it.
+func AgentCacheKey(tenant uuid.UUID, sip string) string {
 	return "agent:sip:" + tenant.String() + ":" + sip
 }
 
@@ -304,7 +305,7 @@ type agentEntry struct {
 // agentBySIP resolves an agent's id + display label (falling back to the SIP
 // username), from the cache when warm. An unknown SIP errors and isn't cached.
 func (l *Log) agentBySIP(ctx context.Context, tenant uuid.UUID, sip string) (uuid.UUID, string, error) {
-	key := agentCacheKey(tenant, sip)
+	key := AgentCacheKey(tenant, sip)
 	var e agentEntry
 	if b, ok := l.cache.Get(ctx, key); ok && json.Unmarshal(b, &e) == nil {
 		return e.ID, e.Label, nil

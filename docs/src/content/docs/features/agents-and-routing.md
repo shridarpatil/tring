@@ -20,6 +20,8 @@ An agent is a person who takes calls in the browser through the [agent widget](/
 
 Create agents in the console (**Agents**) or with `POST /v1/agents` (`sip_username` required, `display_name` optional). See the [Agents API](/tring/api-reference/agents/).
 
+To fix a mistyped `sip_username`, an admin can edit it on the console's **Users** page (or `PATCH /v1/users/{id}`). This is not allowed while the agent is on a call. The agent's widget reconnects under the new name. Your CRM and any Transfer nodes that use the old name must be updated. The console lists those flows after the save. See [PATCH /v1/users/{id}](/tring/api-reference/users/#patch-v1usersid).
+
 ## Roles and logins
 
 Agents and console users are the same thing: one **user** with a `role`.
