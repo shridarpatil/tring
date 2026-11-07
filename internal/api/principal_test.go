@@ -74,11 +74,17 @@ func doReq(t *testing.T, h http.Handler, method, path, tok, body string) *httpte
 // assertAllLegacyRoutesDenied walks every registered route and asserts a
 // console session for the given role is refused outside the allowlist, so a
 // route added later without a principal check fails here by default.
-func assertAllLegacyRoutesDenied(t *testing.T, role string) {
+// A manager is an agent with is_manager on a team. Supervisors get exactly one
+// pre-existing route, the tenant-wide dashboard stream.
+func assertAllLegacyRoutesDenied(t *testing.T, role string, manager bool) {
 	f := dbtest.Setup(t)
 	s := newTestServer(f)
 	email := role + "@example.com"
-	tok := tokenFor(t, s, f, f.AddUser(t, role, email), email, role)
+	id := f.AddUser(t, role, email)
+	if manager {
+		f.AddTeam(t, "managed", map[uuid.UUID]bool{id: true})
+	}
+	tok := tokenFor(t, s, f, id, email, role)
 	h := s.Router()
 
 	checked := 0
@@ -95,6 +101,9 @@ func assertAllLegacyRoutesDenied(t *testing.T, role string) {
 		if strings.HasPrefix(route, "/v1/sdk/") {
 			want = http.StatusUnauthorized
 		}
+		if role == "supervisor" && method == "GET" && route == "/v1/stream/dashboard" {
+			want = http.StatusOK
+		}
 		if rec.Code != want {
 			t.Errorf("%s session: %s %s = %d, want %d", role, method, route, rec.Code, want)
 		}
@@ -110,8 +119,9 @@ func assertAllLegacyRoutesDenied(t *testing.T, role string) {
 }
 
 func TestNonAdminConsoleDeniedOnLegacyRoutes(t *testing.T) {
-	t.Run("agent", func(t *testing.T) { assertAllLegacyRoutesDenied(t, "agent") })
-	t.Run("supervisor", func(t *testing.T) { assertAllLegacyRoutesDenied(t, "supervisor") })
+	t.Run("agent", func(t *testing.T) { assertAllLegacyRoutesDenied(t, "agent", false) })
+	t.Run("manager", func(t *testing.T) { assertAllLegacyRoutesDenied(t, "agent", true) })
+	t.Run("supervisor", func(t *testing.T) { assertAllLegacyRoutesDenied(t, "supervisor", false) })
 }
 
 func TestAdminConsoleKeepsFullAccess(t *testing.T) {

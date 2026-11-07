@@ -982,6 +982,101 @@ WHERE c.tenant_id = $1
   AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
          WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text));
 
+-- name: list-active-calls-scoped
+-- list-active-calls for a non-admin's dashboard ($2 user, $3 teams): calls the
+-- user is on (agent_id) plus calls belonging to the teams in $3 (same rule as
+-- call-in-teams: last rung via one, or queued in one). A plain agent passes no
+-- teams, so they never see another caller's number. Same 4 h window as
+-- list-active-calls, which also bounds the stint lookup.
+SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
+       c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, ''),
+       qs.team, qs.enqueued_at, qs.sla_seconds
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+LEFT JOIN LATERAL (
+    SELECT team, enqueued_at, sla_seconds FROM queue_stints
+    WHERE tenant_id = c.tenant_id AND call_id = c.id AND ended_at IS NULL
+      AND enqueued_at > now() - interval '4 hours'
+    ORDER BY enqueued_at DESC LIMIT 1
+) qs ON true
+WHERE c.tenant_id = $1 AND c.started_at > now() - interval '4 hours'
+  AND c.ended_at IS NULL AND c.status IN ('ringing','answered')
+  AND (c.agent_id = $2
+       OR c.team = ANY($3::text[])
+       OR EXISTS (SELECT 1 FROM queue_stints s
+                  WHERE s.tenant_id = $1 AND s.call_id = c.id AND s.team = ANY($3::text[])
+                    AND s.enqueued_at > now() - interval '4 hours'))
+ORDER BY c.started_at ASC LIMIT 100;
+
+-- name: stats-me-today
+-- stats-today for one user ($2): calls started today that rang them or that
+-- they answered. took/missed use get-me-stats-today's ownership rules (an
+-- 'answered' event naming them or calls.agent_id; missed = rang them, ended,
+-- never answered by them). Columns: total, took, missed, avg wait (start to
+-- answer) and avg talk (answer to end) over the calls they took.
+WITH ev AS (
+  SELECT e.call_id, e.type FROM call_events e
+  WHERE e.tenant_id = $1 AND e.type IN ('ring', 'answered')
+    AND e.detail->>'agent_id' = $2::uuid::text AND e.at >= date_trunc('day', now())
+)
+SELECT count(*),
+       count(*) FILTER (WHERE took),
+       count(*) FILTER (WHERE missed),
+       COALESCE(avg(EXTRACT(EPOCH FROM (answered_at - started_at))) FILTER (WHERE took), 0)::float8,
+       COALESCE(avg(EXTRACT(EPOCH FROM (ended_at - answered_at))) FILTER (WHERE took AND ended_at IS NOT NULL), 0)::float8
+FROM (
+  SELECT c.started_at, c.answered_at, c.ended_at,
+         c.answered_at IS NOT NULL
+           AND (c.agent_id = $2 OR c.id IN (SELECT call_id FROM ev WHERE type = 'answered')) AS took,
+         c.ended_at IS NOT NULL AND c.agent_id IS DISTINCT FROM $2
+           AND c.id IN (SELECT call_id FROM ev WHERE type = 'ring')
+           AND c.id NOT IN (SELECT call_id FROM ev WHERE type = 'answered') AS missed
+  FROM calls c
+  WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now())
+    AND (c.agent_id = $2 OR c.id IN (SELECT call_id FROM ev))
+) m;
+
+-- name: stats-queue-today-teams
+-- stats-queue-today limited to the teams in $2.
+SELECT
+  count(*) FILTER (WHERE sla_seconds > 0
+                     AND EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)) > sla_seconds),
+  COALESCE(avg(EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)))
+             FILTER (WHERE outcome = 'answered'), 0)::float8
+FROM queue_stints
+WHERE tenant_id = $1 AND team = ANY($2::text[]) AND enqueued_at >= date_trunc('day', now());
+
+-- name: stats-me-hourly
+-- stats-hourly for one user ($2): their calls (as in stats-me-today) per hour
+-- over the last 12 h, and SLA breaches of the teams in $3. Always 12 rows.
+SELECT g.hour, COALESCE(c.n, 0), COALESCE(b.n, 0)
+FROM generate_series(
+       date_trunc('hour', now()) - interval '11 hours',
+       date_trunc('hour', now()),
+       interval '1 hour'
+     ) AS g(hour)
+LEFT JOIN (
+  SELECT date_trunc('hour', c.started_at) AS hour, count(*) AS n
+  FROM calls c
+  WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('hour', now()) - interval '11 hours'
+    AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+           WHERE e.tenant_id = $1 AND e.type IN ('ring', 'answered') AND e.detail->>'agent_id' = $2::text
+             AND e.at >= date_trunc('hour', now()) - interval '11 hours'))
+  GROUP BY 1
+) c ON c.hour = g.hour
+LEFT JOIN (
+  SELECT date_trunc('hour', enqueued_at) AS hour, count(*) AS n
+  FROM queue_stints
+  WHERE tenant_id = $1 AND team = ANY($3::text[])
+    AND enqueued_at >= date_trunc('hour', now()) - interval '11 hours'
+    AND sla_seconds > 0
+    AND EXTRACT(EPOCH FROM (COALESCE(ended_at, now()) - enqueued_at)) > sla_seconds
+  GROUP BY 1
+) b ON b.hour = g.hour
+ORDER BY g.hour;
+
 -- name: is-my-call
 SELECT EXISTS (SELECT 1 FROM calls c WHERE c.tenant_id = $1 AND c.id = $2
   AND (c.agent_id = $3 OR c.id IN (SELECT e.call_id FROM call_events e
