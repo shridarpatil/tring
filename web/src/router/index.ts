@@ -31,11 +31,12 @@ const routes: RouteRecordRaw[] = [
   // Nothing lives at the site root; the login page sends a signed-in user home.
   { path: "/", redirect: { name: "login" } },
   {
-    // The agent view: open to every role (admins reach it as "My calls").
+    // The agent view: open to every role (admins reach it through "My calls").
     path: "/agent",
     component: () => import("../layouts/AppLayout.vue"),
     children: [
       { path: "", name: "me", component: () => import("../views/MeView.vue") },
+      { path: "calls", name: "my-calls", component: () => import("../views/MyCallsView.vue") },
       { path: "teams/:name", name: "my-team", component: () => import("../views/MyTeamView.vue") },
     ],
   },
