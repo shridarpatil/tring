@@ -113,7 +113,17 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 // list endpoint and the SSE snapshot share it. Needs the Tenant (SipDomain) for
 // the legacy SIP-registration fallback.
 func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
-	rows, err := s.db.Pool.Query(ctx, s.q.ListAgents, t.ID)
+	agents, err := s.loadAgents(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	s.fillAgentStatus(ctx, t, agents)
+	return agents, nil
+}
+
+// loadAgents reads a tenant's agents from the DB, without presence.
+func (s *Server) loadAgents(ctx context.Context, tenantID uuid.UUID) ([]Agent, error) {
+	rows, err := s.db.Pool.Query(ctx, s.q.ListAgents, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +136,13 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 		}
 		agents = append(agents, a)
 	}
+	return agents, rows.Err()
+}
+
+// fillAgentStatus sets each agent's live Status (and IdleSince) from presence,
+// or from SIP registrations when the gateway transport isn't in use. Presence
+// costs a lookup per agent, so callers pass only the agents they will show.
+func (s *Server) fillAgentStatus(ctx context.Context, t *Tenant, agents []Agent) {
 	if s.agentTransport == "gateway" && s.presence.Enabled() {
 		for i := range agents {
 			st := s.presence.Status(ctx, t.ID.String(), agents[i].SipUsername)
@@ -154,7 +171,6 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 			}
 		}
 	}
-	return agents, nil
 }
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {

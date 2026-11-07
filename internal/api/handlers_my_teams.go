@@ -47,15 +47,50 @@ type teamStats struct {
 	AvgWaitSeconds float64 `json:"avg_wait_seconds"`
 }
 
-// myTeams builds the live view of every team the caller can see, by name.
-func (s *Server) myTeams(r *http.Request, p *Principal) ([]myTeam, error) {
+// myTeams builds the live view of the teams include accepts (all of them
+// visible to the caller), by name. /v1/my-teams is polled by every agent, so
+// presence is read only for members of those teams, never the whole tenant.
+func (s *Server) myTeams(r *http.Request, p *Principal, include func(team string) bool) ([]myTeam, error) {
 	ctx := r.Context()
 	t := tenantFromCtx(ctx)
-	agents, err := s.agentsList(ctx, t)
+
+	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamMemberships, t.ID)
 	if err != nil {
-		s.log.Warn("my-teams: agents", "err", err) // statuses read unknown; queues still serve
+		return nil, err
 	}
-	snap, err := s.queuesSnapshot(ctx, t, agents)
+	defer rows.Close()
+	members := map[string][]myTeamMember{}
+	shown := map[string]bool{} // sip usernames whose presence we need
+	for rows.Next() {
+		var team string
+		var m myTeamMember
+		if err := rows.Scan(&team, &m.UserID, &m.SipUsername, &m.DisplayName, &m.IsManager); err != nil {
+			return nil, err
+		}
+		if !include(team) {
+			continue
+		}
+		members[team] = append(members[team], m)
+		shown[m.SipUsername] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// nil agents (load failed) makes staffing read unknown; queues still serve.
+	var agents []Agent
+	if all, err := s.loadAgents(ctx, t.ID); err != nil {
+		s.log.Warn("my-teams: agents", "err", err)
+	} else {
+		agents = make([]Agent, 0, len(shown))
+		for _, a := range all {
+			if shown[a.SipUsername] {
+				agents = append(agents, a)
+			}
+		}
+		s.fillAgentStatus(ctx, t, agents)
+	}
+	snap, err := s.queuesSnapshotFor(ctx, t, agents, include)
 	if err != nil {
 		return nil, err
 	}
@@ -64,33 +99,8 @@ func (s *Server) myTeams(r *http.Request, p *Principal) ([]myTeam, error) {
 		status[a.SipUsername] = a.Status
 	}
 
-	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamMemberships, t.ID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	members := map[string][]myTeamMember{}
-	for rows.Next() {
-		var team string
-		var m myTeamMember
-		if err := rows.Scan(&team, &m.UserID, &m.SipUsername, &m.DisplayName, &m.IsManager); err != nil {
-			return nil, err
-		}
-		m.Status = status[m.SipUsername]
-		if m.Status == "" {
-			m.Status = "unknown"
-		}
-		members[team] = append(members[team], m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
 	out := []myTeam{}
 	for _, q := range snap.Queues {
-		if !p.CanViewTeam(q.Team) {
-			continue
-		}
 		mt := myTeam{
 			Name:      q.Team,
 			IsManager: slices.Contains(p.ManagedTeams, q.Team),
@@ -100,13 +110,20 @@ func (s *Server) myTeams(r *http.Request, p *Principal) ([]myTeam, error) {
 		if mt.Members == nil {
 			mt.Members = []myTeamMember{}
 		}
+		for i := range mt.Members {
+			mt.Members[i].Status = status[mt.Members[i].SipUsername]
+			if mt.Members[i].Status == "" {
+				mt.Members[i].Status = "unknown"
+			}
+		}
 		out = append(out, mt)
 	}
 	return out, nil
 }
 
 func (s *Server) handleListMyTeams(w http.ResponseWriter, r *http.Request) {
-	teams, err := s.myTeams(r, principalFromCtx(r.Context()))
+	p := principalFromCtx(r.Context())
+	teams, err := s.myTeams(r, p, p.CanViewTeam)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
@@ -123,17 +140,16 @@ func (s *Server) handleGetMyTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
 	}
-	teams, err := s.myTeams(r, p)
+	teams, err := s.myTeams(r, p, func(team string) bool { return team == name })
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	i := slices.IndexFunc(teams, func(t myTeam) bool { return t.Name == name })
-	if i < 0 {
+	if len(teams) == 0 {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
 	}
-	mt := teams[i]
+	mt := teams[0]
 	if p.ManagesTeam(name) {
 		var st teamStats
 		if err := s.db.Pool.QueryRow(r.Context(), s.q.TeamStatsToday, p.TenantID, name).

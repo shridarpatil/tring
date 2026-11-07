@@ -347,3 +347,40 @@ func TestCandidatesRequiresManager(t *testing.T) {
 		t.Fatalf("supervisor: %d %s, want 200", rec.Code, rec.Body)
 	}
 }
+
+func TestMyTeamsShowsOnlyVisibleTeamsWithMemberStatus(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	me := f.AddUser(t, "agent", "a@example.com")
+	mate := f.AddUser(t, "agent", "m@example.com")
+	other := f.AddUser(t, "agent", "o@example.com")
+	f.AddTeam(t, "A", map[uuid.UUID]bool{me: false, mate: false})
+	f.AddTeam(t, "B", map[uuid.UUID]bool{other: false})
+	tok := tokenFor(t, s, f, me, "a@example.com", "agent")
+
+	rec := doReq(t, s.Router(), "GET", "/v1/my-teams", tok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("my-teams: %d %s", rec.Code, rec.Body)
+	}
+	var teams []myTeam
+	if err := json.Unmarshal(rec.Body.Bytes(), &teams); err != nil {
+		t.Fatal(err)
+	}
+	if len(teams) != 1 || teams[0].Name != "A" || len(teams[0].Members) != 2 {
+		t.Fatalf("teams = %+v", teams)
+	}
+	for _, m := range teams[0].Members {
+		if m.Status == "" {
+			t.Fatalf("member %s has no status", m.SipUsername)
+		}
+	}
+
+	rec = doReq(t, s.Router(), "GET", "/v1/my-teams/A", tok, "")
+	var one myTeam
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &one) != nil || len(one.Members) != 2 {
+		t.Fatalf("my-teams/A: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doReq(t, s.Router(), "GET", "/v1/my-teams/B", tok, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("my-teams/B = %d, want 404", rec.Code)
+	}
+}
