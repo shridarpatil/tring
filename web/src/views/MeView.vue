@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
-import { RouterLink } from "vue-router";
 import { Phone } from "lucide-vue-next";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
 import { canManageTeam } from "../lib/roles";
 import { errMessage } from "../lib/errors";
 import { toast } from "../lib/toast";
-import { callStatusTone } from "../lib/status";
 import { mountAgentWidget } from "../lib/widget";
-import { fmtTalk, longestWaitSeconds, memberTone, queueSummary } from "../lib/me";
-import type { Call, Paginated } from "../api/types";
-import { Toggle, Badge, Button, KpiCard } from "../components/ui";
+import { fmtTalk } from "../lib/me";
+import type { Call, Paginated, QueueDepth } from "../api/types";
+import { Toggle, Button, KpiCard, CallsTable, Pagination } from "../components/ui";
+import TeamBoard from "../components/dashboard/TeamBoard.vue";
 
 interface Stats {
   taken: number;
@@ -19,18 +18,10 @@ interface Stats {
   talk_seconds: number;
   avg_talk_seconds: number;
 }
-interface Member {
-  user_id: string;
-  sip_username: string;
-  display_name?: string;
-  is_manager: boolean;
-  status: string;
-}
+// /v1/my-teams items carry the dashboard's QueueDepth under `queue`.
 interface MyTeam {
   name: string;
-  is_manager: boolean;
-  queue: { waiting: number; waiting_since: string[] | null };
-  members: Member[];
+  queue: QueueDepth;
 }
 
 const me = computed(() => auth.state.user);
@@ -86,8 +77,10 @@ async function loadTeams() {
   }
   now.value = Date.now();
 }
-function canOpenTeam(name: string): boolean {
-  return !!me.value && canManageTeam(me.value, name);
+const queues = computed(() => teams.value.map((t) => t.queue));
+// Only teams the user may open get a link; the rest show none.
+function teamLink(t: QueueDepth) {
+  return me.value && canManageTeam(me.value, t.team) ? { name: "my-team", params: { name: t.team } } : null;
 }
 
 // --- recent calls -----------------------------------------------------------
@@ -108,25 +101,10 @@ async function loadCalls() {
     loadingCalls.value = false;
   }
 }
-function pageCalls(delta: number) {
-  offset.value = Math.max(0, offset.value + delta * PAGE);
+const page = computed(() => Math.floor(offset.value / PAGE) + 1);
+function setPage(n: number) {
+  offset.value = (n - 1) * PAGE;
   loadCalls();
-}
-
-// Recordings sit behind auth: fetch as a blob, bind to an inline player.
-const recUrl = ref<Record<string, string>>({});
-async function playRecording(c: Call) {
-  if (!c.recording_url || recUrl.value[c.id]) return;
-  const token = auth.token();
-  const res = await fetch(c.recording_url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!res.ok) {
-    toast.error("recording not available yet");
-    return;
-  }
-  recUrl.value = { ...recUrl.value, [c.id]: URL.createObjectURL(await res.blob()) };
-}
-function fmt(d?: string) {
-  return d ? new Date(d).toLocaleString() : "—";
 }
 
 onMounted(() => {
@@ -147,7 +125,6 @@ onUnmounted(() => {
   unmounted = true;
   clearInterval(poll);
   offAvail?.();
-  Object.values(recUrl.value).forEach((u) => URL.revokeObjectURL(u));
 });
 </script>
 
@@ -184,66 +161,16 @@ onUnmounted(() => {
       <KpiCard class="col-3" :value="fmtTalk(stats?.avg_talk_seconds ?? 0)" label="Avg talk" sub="per call" />
     </div>
 
-    <div class="card vstack">
-      <h2>My teams</h2>
-      <p v-if="teams.length === 0" class="text-lighter">You are not on any team.</p>
-      <div v-for="t in teams" :key="t.name" class="vstack">
-        <div class="row-between">
-          <strong>
-            <RouterLink v-if="canOpenTeam(t.name)" :to="{ name: 'my-team', params: { name: t.name } }">{{ t.name }}</RouterLink>
-            <template v-else>{{ t.name }}</template>
-          </strong>
-          <small class="text-light">{{ queueSummary(t.queue.waiting, longestWaitSeconds(t.queue.waiting_since, now)) }}</small>
-        </div>
-        <div class="hstack">
-          <Badge v-for="m in t.members" :key="m.user_id" :tone="memberTone(m.status)">
-            {{ m.display_name || m.sip_username }} · {{ m.status }}
-          </Badge>
+    <div class="row">
+      <div class="col-7">
+        <div class="card" style="padding: 0">
+          <CallsTable :calls="calls" :loading="loadingCalls" hide-agent />
+          <Pagination :page="page" :page-size="PAGE" :total="total" label="calls" @update:page="setPage" />
         </div>
       </div>
-    </div>
-
-    <div class="card" style="padding: 0">
-      <div class="table">
-        <table>
-          <thead>
-            <tr>
-              <th>From</th>
-              <th>To</th>
-              <th>Status</th>
-              <th>Started</th>
-              <th class="align-right">Dur</th>
-              <th>Recording</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="c in calls" :key="c.id">
-              <td class="mono">{{ c.client_ref || c.from_number }}</td>
-              <td class="mono">{{ c.to_number }}</td>
-              <td><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
-              <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
-              <td class="align-right mono">{{ c.duration_seconds != null ? fmtTalk(c.duration_seconds) : "—" }}</td>
-              <td>
-                <audio v-if="recUrl[c.id]" :src="recUrl[c.id]" controls autoplay style="height: 2rem"></audio>
-                <button v-else-if="c.recording_url" type="button" class="plain" style="color: var(--primary)" @click="playRecording(c)">Play</button>
-                <span v-else class="text-lighter">—</span>
-              </td>
-            </tr>
-            <tr v-if="!loadingCalls && calls.length === 0">
-              <td colspan="6" class="align-center text-lighter">No calls yet</td>
-            </tr>
-            <tr v-if="loadingCalls">
-              <td colspan="6" class="align-center text-lighter">Loading…</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div v-if="total > PAGE" class="row-between" style="padding: 0.75rem">
-        <small class="text-light">{{ offset + 1 }}–{{ Math.min(offset + PAGE, total) }} of {{ total }}</small>
-        <div class="hstack">
-          <Button size="sm" variant="secondary" :disabled="offset === 0" @click="pageCalls(-1)">Previous</Button>
-          <Button size="sm" variant="secondary" :disabled="offset + PAGE >= total" @click="pageCalls(1)">Next</Button>
-        </div>
+      <div class="col-5">
+        <p v-if="!teams.length" class="card text-lighter">You are not on any team.</p>
+        <TeamBoard v-else :teams="queues" :now-ms="now" :team-link="teamLink" card-class="col-6" />
       </div>
     </div>
   </div>

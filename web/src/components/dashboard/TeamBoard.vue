@@ -3,7 +3,7 @@
 // for up to CARDS_MAX_TEAMS teams and a table beyond that; Cards/Rows force one.
 import { computed, ref, watch } from "vue";
 import { vPulse } from "../../lib/pulse";
-import { RouterLink } from "vue-router";
+import { RouterLink, type RouteLocationRaw } from "vue-router";
 import { Settings } from "lucide-vue-next";
 import type { QueueDepth } from "../../api/types";
 import {
@@ -23,7 +23,18 @@ import {
 } from "../../lib/liveDashboard";
 import { Panel, SignalDot } from "../ui";
 
-const props = defineProps<{ teams: QueueDepth[]; nowMs: number }>();
+const props = withDefaults(
+  defineProps<{
+    teams: QueueDepth[];
+    nowMs: number;
+    // Replaces the admin Settings link (null hides it); the agent page points
+    // at the team page it may open instead. Unset keeps the dashboard's link.
+    teamLink?: (team: QueueDepth) => RouteLocationRaw | null;
+    // Grid width of a team card; a narrow host (agent page) wants wider cards.
+    cardClass?: string;
+  }>(),
+  { teamLink: undefined, cardClass: "col-3" },
+);
 
 // The chosen view survives reloads; storage may be unavailable (private mode).
 const VIEW_KEY = "tring.dashboard.teamView";
@@ -73,7 +84,8 @@ const SEG_STYLE: Record<StaffSegment["kind"], { bg: string; opacity?: number; ti
 };
 const segStyle = (g: StaffSegment) =>
   `width: ${g.pct}%; background: ${SEG_STYLE[g.kind].bg};` + (SEG_STYLE[g.kind].opacity ? ` opacity: ${SEG_STYLE[g.kind].opacity}` : "");
-const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team } });
+const settingsLink = (t: QueueDepth): RouteLocationRaw | null =>
+  props.teamLink ? props.teamLink(t) : { name: "team", params: { name: t.team } };
 </script>
 
 <template>
@@ -104,11 +116,11 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
     <div v-if="!sorted.length" class="text-lighter p-4"><small>No teams</small></div>
 
     <div v-else-if="view === 'cards'" class="row teams">
-      <div v-for="t in sorted" :key="t.team" class="card vstack team col-3" :class="{ 'text-lighter': compact(t) }">
+      <div v-for="t in sorted" :key="t.team" class="card vstack team" :class="[cardClass, { 'text-lighter': compact(t) }]">
         <div class="hstack gap-2">
           <strong class="name">{{ t.team }}</strong>
           <span class="badge" :data-variant="badge(t).variant">{{ badge(t).text }}</span>
-          <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings"><Settings :size="14" /></RouterLink>
+          <RouterLink v-if="settingsLink(t)" :to="settingsLink(t)!" class="unstyled" :aria-label="`${t.team} settings`" title="Settings"><Settings :size="14" /></RouterLink>
         </div>
         <div class="sub text-lighter">{{ hours(t) }}<template v-if="!compact(t)"> · SLA&nbsp;{{ slaLabel(t) }}</template></div>
 
@@ -207,7 +219,7 @@ const settingsLink = (t: QueueDepth) => ({ name: "team", params: { name: t.team 
             </template>
             <td v-else colspan="8"></td>
             <td>
-              <RouterLink :to="settingsLink(t)" class="unstyled" :aria-label="`${t.team} settings`" title="Settings"><Settings :size="14" /></RouterLink>
+              <RouterLink v-if="settingsLink(t)" :to="settingsLink(t)!" class="unstyled" :aria-label="`${t.team} settings`" title="Settings"><Settings :size="14" /></RouterLink>
             </td>
           </tr>
         </tbody>
