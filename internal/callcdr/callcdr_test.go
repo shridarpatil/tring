@@ -597,6 +597,7 @@ func TestAgentLookupThroughCache(t *testing.T) {
 
 // TestRingStartStampsCallTeam: a team ring window attributes the call to that
 // team (calls.team), even with the events sink off, and the last team wins.
+// The write is asynchronous, so the test polls for it.
 func TestRingStartStampsCallTeam(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
@@ -615,18 +616,28 @@ func TestRingStartStampsCallTeam(t *testing.T) {
 		}
 		return *got
 	}
+	waitTeam := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		got := team()
+		for got != want && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			got = team()
+		}
+		if got != want {
+			t.Fatalf("team = %q, want %q", got, want)
+		}
+	}
 
-	l.RingStart(ctx, roomID, "", "alice") // direct-agent ring: no team
+	l.RingStart(ctx, roomID, "", "alice") // direct-agent ring: no team, no write
 	if got := team(); got != "<nil>" {
 		t.Fatalf("team after agent ring = %q, want NULL", got)
 	}
 	l.RingStart(ctx, roomID, "sales", "")
-	if got := team(); got != "sales" {
-		t.Fatalf("team = %q, want sales", got)
-	}
-	l.RingStart(ctx, roomID, "support", "") // transfer to another team
-	if got := team(); got != "support" {
-		t.Fatalf("team after transfer = %q, want support", got)
-	}
+	waitTeam("sales")
+	// Back-to-back transfers: the latest team must land last.
+	l.RingStart(ctx, roomID, "billing", "")
+	l.RingStart(ctx, roomID, "support", "")
+	waitTeam("support")
 	l.Ended(roomID, "caller_hangup")
 }

@@ -71,6 +71,8 @@ type activeCall struct {
 	ringAgents []string         // agents rung in the current window — names the no_answer event
 	ringDone   bool             // the current ring window was answered — later ring rows stay off the live dashboard
 	endHook    uuid.UUID        // the flow's "on call end" webhook (uuid.Nil = none)
+	team       string           // latest team rung (guarded by Log.mu); the value setCallTeam writes
+	teamMu     sync.Mutex       // serializes calls.team writes so the latest team lands last
 }
 
 // Webhooks delivers registered webhooks; *webhook.Notifier implements it.
@@ -386,18 +388,17 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	if ac != nil {
 		ac.ringAgents = nil // new routing window — reset the per-agent ring roster
 		ac.ringDone = false
+		if team != "" {
+			ac.team = team
+		}
 	}
 	l.mu.Unlock()
 	if ac == nil {
 		return
 	}
 	if team != "" && l.db != nil {
-		// Own deadline: attribution must not stall routing on a slow DB.
-		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		if _, err := l.db.Pool.Exec(tctx, l.q.SetCallTeam, ac.tenant, ac.id, team); err != nil {
-			l.log.Warn("cdr: set call team failed", "room", roomID, "call", ac.id, "team", team, "err", err)
-		}
-		cancel()
+		// Off the routing path: attribution must never delay ringing.
+		go l.setCallTeam(roomID, ac)
 	}
 	if l.events == nil {
 		return
@@ -417,6 +418,22 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 		}
 	}
 	l.events.Publish(ctx, ac.tenant.String(), events.TypeCallRouting, routingEvent(ac.id, "ringing", target))
+}
+
+// setCallTeam writes the call's latest team to calls.team. Each write reads
+// ac.team under teamMu, so with back-to-back transfers whichever goroutine
+// writes last still writes the latest team. Best-effort with its own deadline.
+func (l *Log) setCallTeam(roomID string, ac *activeCall) {
+	ac.teamMu.Lock()
+	defer ac.teamMu.Unlock()
+	l.mu.Lock()
+	team := ac.team
+	l.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallTeam, ac.tenant, ac.id, team); err != nil {
+		l.log.Warn("cdr: set call team failed", "room", roomID, "call", ac.id, "team", team, "err", err)
+	}
 }
 
 // RingAgent records that a SPECIFIC agent is now being rung — resolving their id +

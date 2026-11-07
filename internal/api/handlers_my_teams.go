@@ -2,12 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // ---- Team views (/v1/my-teams) ------------------------------------------
@@ -235,6 +237,8 @@ func (s *Server) handleAddMyTeamMember(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRemoveMyTeamMember removes a member from a team the caller manages.
+// A manager can't remove a manager (themselves included): removing and
+// re-adding would strip the flag, which only supervisors and admins change.
 func (s *Server) handleRemoveMyTeamMember(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
 	name := chi.URLParam(r, "name")
@@ -247,13 +251,29 @@ func (s *Server) handleRemoveMyTeamMember(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(), s.q.RemoveTeamAgent, p.TenantID, name, userID)
+	// The NOT is_manager guard sits in the DELETE itself, so a concurrent
+	// promotion can't slip between a check and the delete.
+	q := s.q.RemoveTeamAgentNonManager
+	if p.SeesAllTeams() {
+		q = s.q.RemoveTeamAgent
+	}
+	tag, err := s.db.Pool.Exec(r.Context(), q, p.TenantID, name, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "remove failed")
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeError(w, http.StatusNotFound, "user not in team")
+		// Nothing removed: tell "not a member" (404) from "is a manager" (403).
+		var isManager bool
+		err := s.db.Pool.QueryRow(r.Context(), s.q.GetTeamMemberManager, p.TenantID, name, userID).Scan(&isManager)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			writeError(w, http.StatusNotFound, "user not in team")
+		case err != nil:
+			writeError(w, http.StatusInternalServerError, "remove failed")
+		default:
+			writeError(w, http.StatusForbidden, "only a supervisor can remove a team manager")
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
