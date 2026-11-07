@@ -311,3 +311,43 @@ func (s *Server) handleSetMyTeamManager(w http.ResponseWriter, r *http.Request) 
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// handleMyTeamCandidates lists tenant users not yet in the team, for the
+// manager's add-member picker (non-admins can't call GET /v1/users).
+func (s *Server) handleMyTeamCandidates(w http.ResponseWriter, r *http.Request) {
+	p := principalFromCtx(r.Context())
+	name := chi.URLParam(r, "name")
+	if !p.CanViewTeam(name) {
+		writeError(w, http.StatusNotFound, "team not found")
+		return
+	}
+	if !p.ManagesTeam(name) {
+		writeError(w, http.StatusForbidden, "not permitted")
+		return
+	}
+	rows, err := s.db.Pool.Query(r.Context(), s.q.ListTeamCandidates, p.TenantID, name)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	defer rows.Close()
+	type candidate struct {
+		ID          uuid.UUID `json:"id"`
+		DisplayName string    `json:"display_name,omitempty"`
+		SipUsername string    `json:"sip_username"`
+	}
+	out := []candidate{}
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.ID, &c.DisplayName, &c.SipUsername); err != nil {
+			writeError(w, http.StatusInternalServerError, "query failed")
+			return
+		}
+		out = append(out, c)
+	}
+	if rows.Err() != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

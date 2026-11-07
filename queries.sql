@@ -1019,6 +1019,15 @@ FROM team_agents ta JOIN users u ON u.id = ta.agent_id
 WHERE ta.tenant_id = $1
 ORDER BY ta.team_name, ta.position, u.sip_username;
 
+-- name: list-team-candidates
+-- Tenant users not yet in team $2: who a team manager can add.
+SELECT u.id, COALESCE(u.display_name, ''), u.sip_username
+FROM users u
+WHERE u.tenant_id = $1
+  AND NOT EXISTS (SELECT 1 FROM team_agents ta
+                  WHERE ta.tenant_id = u.tenant_id AND ta.team_name = $2 AND ta.agent_id = u.id)
+ORDER BY u.sip_username;
+
 -- name: list-team-calls-today
 -- Same columns as list-calls: today's calls belonging to team $2 (same
 -- predicate as call-in-teams). The LIMIT is a backstop for a very busy team.

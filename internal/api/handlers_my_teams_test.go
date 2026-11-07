@@ -310,3 +310,40 @@ func TestManagerTeamCallsAndStats(t *testing.T) {
 		t.Fatalf("calls = %v, want %s and %s", ids, inA, queuedA)
 	}
 }
+
+func TestCandidatesRequiresManager(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newMyTeamsServer(f, t.TempDir())
+	mgr := f.AddUser(t, "agent", "m@example.com")
+	member := f.AddUser(t, "agent", "a@example.com")
+	outsider := f.AddUser(t, "agent", "o@example.com")
+	sup := f.AddUser(t, "supervisor", "s@example.com")
+	f.AddTeam(t, "A", map[uuid.UUID]bool{mgr: true, member: false})
+	atok := tokenFor(t, s, f, member, "a@example.com", "agent")
+	mtok := tokenFor(t, s, f, mgr, "m@example.com", "agent")
+	stok := tokenFor(t, s, f, sup, "s@example.com", "supervisor")
+
+	if rec := doReq(t, s.Router(), "GET", "/v1/my-teams/A/candidates", atok, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("member: %d %s, want 403", rec.Code, rec.Body)
+	}
+	rec := doReq(t, s.Router(), "GET", "/v1/my-teams/A/candidates", mtok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manager: %d %s, want 200", rec.Code, rec.Body)
+	}
+	var got []struct {
+		ID uuid.UUID `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	ids := map[uuid.UUID]bool{}
+	for _, c := range got {
+		ids[c.ID] = true
+	}
+	if !ids[outsider] || !ids[sup] || ids[mgr] || ids[member] {
+		t.Fatalf("candidates = %v, want outsider+supervisor, no members", got)
+	}
+	if rec := doReq(t, s.Router(), "GET", "/v1/my-teams/A/candidates", stok, ""); rec.Code != http.StatusOK {
+		t.Fatalf("supervisor: %d %s, want 200", rec.Code, rec.Body)
+	}
+}
