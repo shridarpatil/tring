@@ -228,7 +228,7 @@ func TestMaskNumbersSupervisorsStream(t *testing.T) {
 	endAdm := openStream(t, s, tokenFor(t, s, f, adm, "admin@example.com", "admin"))
 	time.Sleep(300 * time.Millisecond) // both snapshots written, both subscribed
 	frame := events.Frame(events.TypeCallRinging, []byte(
-		`{"id":"c1","direction":"inbound","from_number":"+919811112222","to_number":"+918000001234","client_ref":"Lead +919811112222","source":"phone"}`))
+		`{"id":"c1","direction":"inbound","from_number":"+919811112222","to_number":"+918000001234","client_ref":"+919811112222","source":"phone"}`))
 	hub.DispatchForTest(f.TenantID.String(), frame)
 	hub.DispatchForTest(f.TenantID.String(), events.Frame(events.TypeCallRinging, []byte(`not json`)))
 	time.Sleep(100 * time.Millisecond)
@@ -245,7 +245,7 @@ func TestMaskNumbersSupervisorsStream(t *testing.T) {
 			t.Fatalf("supervisor stream leaks %q:\n%s", leak, supBody)
 		}
 	}
-	for _, want := range []string{maskedFrom, `"from_number":"+91••••••2222"`, `"client_ref":"Lead +91••••••2222"`, `"to_number":"+918000001234"`} {
+	for _, want := range []string{maskedFrom, `"from_number":"+91••••••2222"`, `"client_ref":"+91••••••2222"`, `"to_number":"+918000001234"`} {
 		if !strings.Contains(supBody, want) {
 			t.Fatalf("supervisor stream missing %s:\n%s", want, supBody)
 		}
@@ -392,5 +392,26 @@ func TestMaskCacheInvalidation(t *testing.T) {
 	do("PATCH", "/v1/tenants/me", `{"mask_numbers_supervisors":true}`)
 	if !masked("x@example.com") {
 		t.Fatal("role or tenant switch change not seen through the cache")
+	}
+}
+
+// maskFrame masks only values that are themselves numbers, and call.transferred's
+// target when it is an external number (an agent or team name passes).
+func TestMaskFrame(t *testing.T) {
+	for _, tc := range []struct{ typ, in, want string }{
+		{events.TypeCallTransferred, `{"room":"r","to":"+919833334444"}`, `"to":"+91••••••4444"`},
+		{events.TypeCallTransferred, `{"room":"r","to":"agent2"}`, `"to":"agent2"`},
+		{events.TypeCallTransferred, `{"room":"r","to":"Sales"}`, `"to":"Sales"`},
+		{events.TypeCallRinging, `{"direction":"inbound","client_ref":"Order 2026-11-07"}`, `"client_ref":"Order 2026-11-07"`},
+		{events.TypeCallRinging, `{"direction":"inbound","client_ref":"12345"}`, `"client_ref":"12345"`},
+		{events.TypeCallRinging, `{"direction":"inbound","from_number":"(022) 2345 6789"}`, `"from_number":"(02•) •••• 6789"`},
+	} {
+		got := string(maskFrame(events.Frame(tc.typ, []byte(tc.in))))
+		if !strings.Contains(got, tc.want) || !strings.HasPrefix(got, "event: "+tc.typ+"\n") {
+			t.Errorf("maskFrame(%s %s) = %q, want it to contain %s", tc.typ, tc.in, got, tc.want)
+		}
+	}
+	if maskFrame(events.Frame(events.TypeCallTransferred, []byte("not json"))) != nil {
+		t.Error("unparsable transferred frame not dropped")
 	}
 }

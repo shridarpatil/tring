@@ -800,6 +800,35 @@ func TestTransferLabelOverridesCallerRef(t *testing.T) {
 	}
 }
 
+// A masked agent's label is the flow's label rendered with {{caller}} masked:
+// the rest of it (an order date) stays as written, and without a label the
+// caller ref is masked as a whole.
+func TestTransferMaskedLabelMasksOnlyCaller(t *testing.T) {
+	for _, tc := range []struct {
+		label, ref, wantLabel, wantMasked string
+	}{
+		{"Customer {{caller}} order 2026-11-07", "+919812345678", "Customer +919812345678 order 2026-11-07", "Customer +91••••••5678 order 2026-11-07"},
+		{"", "+919812345678", "+919812345678", "+91••••••5678"},
+		{"", "", "Web Caller", "Web Caller"},
+	} {
+		fake := &fakePrompts{played: make(chan string, 16)}
+		agents := &fakeAgents{outcome: "completed"}
+		d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Agents: agents, Room: "r", ClientRef: tc.ref,
+			Vars: map[string]string{"caller": "+919812345678"}})
+		cfg := map[string]interface{}{"team": "sales"}
+		if tc.label != "" {
+			cfg["label"] = tc.label
+		}
+		runFlow(t, d, fake, dialFlow(cfg), nil)
+		if agents.gotTgt.Label != tc.wantLabel || agents.gotTgt.MaskedLabel != tc.wantMasked {
+			t.Errorf("label %q: got %q / %q, want %q / %q", tc.label, agents.gotTgt.Label, agents.gotTgt.MaskedLabel, tc.wantLabel, tc.wantMasked)
+		}
+		if d.Vars()["caller"] != "+919812345678" {
+			t.Errorf("flow var caller changed to %q", d.Vars()["caller"])
+		}
+	}
+}
+
 func TestSeededVarsAreAvailableToTheFlow(t *testing.T) {
 	fake := &fakePrompts{played: make(chan string, 16)}
 	dialer := &fakeDialer{outcome: "completed"}
