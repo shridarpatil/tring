@@ -45,9 +45,10 @@ const adminNav = [
 // Supervisors see every team, others only their own: /v1/my-teams answers both.
 const myTeams = ref<{ name: string }[]>([]);
 const nav = computed(() => {
-  const mine = [{ to: "/agent", label: "My calls", icon: Phone }];
+  const myCalls = { to: "/agent/calls", label: "My calls", icon: Phone };
+  if (auth.isAdmin()) return [...adminNav, myCalls]; // admins have their own Dashboard
   const teams = myTeams.value.map((t) => ({ to: "/agent/teams/" + encodeURIComponent(t.name), label: t.name, icon: UsersRound }));
-  return auth.isAdmin() ? [...adminNav, ...mine] : [...mine, ...teams];
+  return [{ to: "/agent", label: "Dashboard", icon: LayoutDashboard }, myCalls, ...teams];
 });
 
 onMounted(async () => {
@@ -56,7 +57,7 @@ onMounted(async () => {
     try {
       myTeams.value = await api.get<{ name: string }[]>("/v1/my-teams");
     } catch {
-      /* nav falls back to My calls only */
+      /* nav falls back to Dashboard and My calls */
     }
     return;
   }

@@ -23,3 +23,19 @@ export function memberTone(status: string): "success" | "live" | "warning" | "ne
       return "neutral";
   }
 }
+
+/**
+ * The agent dashboard polls its live panels every 5 s but the day's stats only
+ * every `every`th poll (30 s); poll 0, the first load, always includes them.
+ */
+export function pollWantsStats(n: number, every = 6): boolean {
+  return n % every === 0;
+}
+
+/** My calls range filter: the /v1/me/calls `range` values, today first (the default). */
+export const CALL_RANGES = [
+  { key: "today", label: "Today" },
+  { key: "7d", label: "7 days" },
+  { key: "30d", label: "30 days" },
+] as const;
+export type CallRange = (typeof CALL_RANGES)[number]["key"];

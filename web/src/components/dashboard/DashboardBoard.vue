@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onUnmounted } from "vue";
 import { usePoll } from "../../composables/usePoll";
 import type { RouteLocationRaw } from "vue-router";
 import type { Agent, Call, QueueDepth, Queues, StatsOverview } from "../../api/types";
@@ -41,8 +41,10 @@ const props = withDefaults(
     canSupervise?: (c: Call) => boolean;
     // Passed through to TeamBoard; unset keeps the admin Settings link.
     teamLink?: (team: QueueDepth) => RouteLocationRaw | null;
+    // Trend-strip label for stats.abandoned_today ("Missed" on a personal view).
+    abandonedLabel?: string;
   }>(),
-  { showAlerts: true, canSupervise: () => true, teamLink: undefined },
+  { showAlerts: true, canSupervise: () => true, teamLink: undefined, abandonedLabel: "Abandoned" },
 );
 
 // Ticking clock: drives live call/agent durations between server updates. Durations
@@ -114,6 +116,10 @@ function stopSupervise(): void {
   active.value = null;
 }
 
+// Leaving the page must not leave a supervise session (socket, peer
+// connection, mic) running in the background.
+onUnmounted(stopSupervise);
+
 // Clock tick for live call/agent durations — pure local UI, no network.
 usePoll(() => (now.value = Date.now()), 1000);
 </script>
@@ -147,7 +153,7 @@ usePoll(() => (now.value = Date.now()), 1000);
             <div class="trend-num" :style="{ color: (stats?.abandoned_today ?? 0) > 0 ? 'var(--warning)' : undefined }">
               {{ stats?.abandoned_today ?? 0 }}
             </div>
-            <small class="text-light">Abandoned</small>
+            <small class="text-light">{{ abandonedLabel }}</small>
           </div>
         </div>
       </div>
