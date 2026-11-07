@@ -199,6 +199,8 @@ export interface Call {
   duration_seconds?: number;
   hangup_cause?: string;
   recording_url?: string;
+  // /v1/me/calls only: the call rang the viewer and they never answered it.
+  missed?: boolean;
   ivr_path?: IvrStep[];
   room_id?: string;
   supervised?: string;

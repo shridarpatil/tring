@@ -66,6 +66,14 @@ func ScanActive(scanner interface{ Scan(...interface{}) error }) (Call, error) {
 	return c, scan(scanner, &c, &c.QueueTeam, &c.QueuedAt, &c.QueueSLASeconds)
 }
 
+// ScanWith reads a row of the Scan columns followed by query-specific ones
+// into extra, for lists that add a column without widening Call (the webhook
+// contract).
+func ScanWith(scanner interface{ Scan(...interface{}) error }, extra ...interface{}) (Call, error) {
+	var c Call
+	return c, scan(scanner, &c, extra...)
+}
+
 func scan(scanner interface{ Scan(...interface{}) error }, c *Call, extra ...interface{}) error {
 	// Scan the jsonb ivr_path into a plain []byte, then hand it to the
 	// RawMessage field — pgx returns jsonb as raw bytes and we pass them

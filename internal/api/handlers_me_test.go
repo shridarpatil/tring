@@ -221,10 +221,15 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 	theirs := seedCall(t, f, x, true, "now() - interval '1 hour'")
 	// I answered, then transferred to X: it is in both histories.
 	handedOff := seedTransferred(t, f, me, x, "now() - interval '2 hours'")
+	// It rang me, I didn't pick up, X did: listed for me as missed, for X as answered.
+	missed := seedCall(t, f, x, true, "now() - interval '3 hours'")
+	seedRing(t, f, missed, me)
+	seedRing(t, f, missed, x)
+	seedAnswered(t, f, missed, x)
 
 	// Both recordings exist on disk, so a 404 for the other agent's can only
 	// come from the ownership check.
-	for _, id := range []uuid.UUID{mine, theirs, handedOff} {
+	for _, id := range []uuid.UUID{mine, theirs, handedOff, missed} {
 		var leg string
 		if err := f.DB.Pool.QueryRow(context.Background(), `SELECT leg_id FROM calls WHERE id = $1`, id).Scan(&leg); err != nil {
 			t.Fatal(err)
@@ -235,8 +240,8 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 	}
 
 	type callsPage struct {
-		Items []Call `json:"items"`
-		Total int    `json:"total"`
+		Items []myCall `json:"items"`
+		Total int      `json:"total"`
 	}
 	list := func(tok string) callsPage {
 		rec := doReq(t, s.Router(), "GET", "/v1/me/calls?range=7d", tok, "")
@@ -250,12 +255,24 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 		return page
 	}
 	page := list(tok)
-	if page.Total != 2 || len(page.Items) != 2 || page.Items[0].ID != mine || page.Items[1].ID != handedOff {
+	if page.Total != 3 || len(page.Items) != 3 || page.Items[0].ID != mine || page.Items[1].ID != handedOff || page.Items[2].ID != missed {
 		t.Fatalf("page = %+v", page)
 	}
+	if page.Items[0].Missed || page.Items[1].Missed || !page.Items[2].Missed {
+		t.Fatalf("missed flags = %v %v %v, want only the third", page.Items[0].Missed, page.Items[1].Missed, page.Items[2].Missed)
+	}
+	if page.Items[2].RecordingURL != nil {
+		t.Fatalf("missed call carries a recording link: %q", *page.Items[2].RecordingURL)
+	}
+	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+missed.String()+"/recording", tok, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("missed call recording: %d, want 404", rec.Code)
+	}
 	xPage := list(tokenFor(t, s, f, x, "x@example.com", "agent"))
-	if xPage.Total != 2 || len(xPage.Items) != 2 || xPage.Items[0].ID != theirs || xPage.Items[1].ID != handedOff {
+	if xPage.Total != 3 || len(xPage.Items) != 3 || xPage.Items[0].ID != theirs || xPage.Items[1].ID != handedOff || xPage.Items[2].ID != missed {
 		t.Fatalf("x page = %+v", xPage)
+	}
+	if xPage.Items[2].Missed {
+		t.Fatal("x answered the call: not missed for x")
 	}
 	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+handedOff.String()+"/recording", tok, ""); rec.Code != http.StatusOK {
 		t.Fatalf("handed-off recording: %d, want 200", rec.Code)
@@ -324,15 +341,18 @@ func TestMeCallsRange(t *testing.T) {
 	me := f.AddUser(t, "agent", "a@example.com")
 	tok := tokenFor(t, s, f, me, "a@example.com", "agent")
 	today := seedCall(t, f, me, true, todayAt)
+	// Rang me today, nobody answered: listed (as missed) in every range.
+	missedToday := seedCall(t, f, uuid.Nil, false, "date_trunc('day', now()) + interval '2 seconds'")
+	seedRing(t, f, missedToday, me)
 	threeDays := seedCall(t, f, me, true, "date_trunc('day', now()) - interval '3 days'")
 	tenDays := seedCall(t, f, me, true, "date_trunc('day', now()) - interval '10 days'")
 	seedCall(t, f, me, true, "date_trunc('day', now()) - interval '40 days'")
 
 	for q, want := range map[string][]uuid.UUID{
-		"":             {today},
-		"?range=today": {today},
-		"?range=7d":    {today, threeDays},
-		"?range=30d":   {today, threeDays, tenDays},
+		"":             {missedToday, today},
+		"?range=today": {missedToday, today},
+		"?range=7d":    {missedToday, today, threeDays},
+		"?range=30d":   {missedToday, today, threeDays, tenDays},
 	} {
 		rec := doReq(t, s.Router(), "GET", "/v1/me/calls"+q, tok, "")
 		if rec.Code != http.StatusOK {
