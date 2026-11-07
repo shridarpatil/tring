@@ -166,13 +166,14 @@ func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "count failed")
 		return
 	}
+	// Before opening rows: no second pool query while a result set is open.
+	masked := s.masksNumbers(r.Context(), p)
 	rows, err := s.db.Pool.Query(r.Context(), s.q.ListMyCalls, p.TenantID, p.UserID, limit, offset, days)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
 	defer rows.Close()
-	masked := s.masksNumbers(r.Context(), p)
 	out := []myCall{}
 	for rows.Next() {
 		var c myCall

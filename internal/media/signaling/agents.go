@@ -765,14 +765,16 @@ func (s *Server) takeInvite(roomID room.RoomID, sip string) bool {
 var _ brain.RingTransport = (*Server)(nil)
 var _ brain.HandoffWaiter = (*Server)(nil)
 
-// callerLabelFor returns the caller label as sip may see it: with the number
-// masked when the tenant masks numbers for sip's role (internal/mask), so the
-// full number never reaches a masked agent's widget. It fails closed — masks —
-// when the verdict can't be read. A label that isn't a number is returned as is.
+// callerLabelFor returns the caller label as sip may see it: with every phone
+// number in it masked (mask.InText — a flow's Transfer label may embed
+// {{caller}}) when the tenant masks numbers for sip's role, so the full number
+// never reaches a masked agent's widget. It fails closed — masks — when the
+// verdict can't be read, including a gateway started without a DB (nil
+// NumberMask). A label with no number in it is returned as is.
 func (s *Server) callerLabelFor(tenant, sip, label string) string {
-	masked := mask.Number(label)
-	if s.cfg.NumberMask == nil || masked == label {
-		return label
+	masked := mask.InText(label)
+	if masked == label || s.cfg.NumberMask == nil {
+		return masked
 	}
 	tid, err := uuid.Parse(tenant)
 	if err != nil {

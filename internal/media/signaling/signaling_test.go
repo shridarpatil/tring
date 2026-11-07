@@ -558,13 +558,19 @@ func (f fakeDIDs) ResolveDID(_ context.Context, _ string) (uuid.UUID, string, er
 // TestInboundPhoneCallRingsAgentAndEndsOnHangup is the 4c end-to-end (no SIP,
 // no media): a phone call arrives via the plug → the IVR transfers → an agent
 // is rung and joins → the carrier hangs up → the agent's call is ended.
+// noMask is a NumberMaskResolver under which nobody is masked.
+type noMask struct{}
+
+func (noMask) MaskNumbers(context.Context, uuid.UUID, string) (bool, error) { return false, nil }
+
 func TestInboundPhoneCallRingsAgentAndEndsOnHangup(t *testing.T) {
 	tenant := uuid.New()
 	s, err := sfu.New(sfu.Config{})
 	if err != nil {
 		t.Fatalf("sfu: %v", err)
 	}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}})
+	// NumberMask says "not masked": with none the gateway fails closed and masks.
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, NumberMask: noMask{}})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 	fp := newFakePstn()

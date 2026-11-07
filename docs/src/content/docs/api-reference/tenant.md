@@ -22,7 +22,7 @@ All endpoints on this page act on the tenant the credential belongs to. They acc
 | `transfer_failed_message` | string | What a caller hears when a transfer finds no one available. |
 | `recording_sample_rate` | integer | Sample rate, in Hz, that call recordings are encoded at. Default `8000`. |
 | `recording_format` | string | Format of call recordings: `ogg` (default), `mp3` or `wav`. |
-| `mask_numbers_agents` | boolean | Mask client phone numbers for agents who manage no team. Default `false`. |
+| `mask_numbers_agents` | boolean | Mask client phone numbers (the caller on inbound calls, the callee on outbound calls, and `client_ref`) for agents who manage no team. Default `false`. |
 | `mask_numbers_managers` | boolean | Mask client phone numbers for team managers. Default `false`. |
 | `mask_numbers_supervisors` | boolean | Mask client phone numbers for supervisors. Default `false`. Admins, API keys and webhooks are never masked; see [masking client numbers by role](/tring/features/agents-and-routing/#masking-client-numbers-by-role). |
 
