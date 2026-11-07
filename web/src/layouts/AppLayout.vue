@@ -29,24 +29,24 @@ const tenant = ref<Tenant | null>(null);
 const version = ref("…");
 
 const adminNav = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/users", label: "Users", icon: Headset },
-  { to: "/teams", label: "Teams", icon: UsersRound },
-  { to: "/sounds", label: "Sounds", icon: Music },
-  { to: "/numbers", label: "Numbers", icon: Hash },
-  { to: "/trunks", label: "Trunks", icon: Cable },
-  { to: "/calls", label: "Calls", icon: PhoneCall },
-  { to: "/flows", label: "IVR Flows", icon: Workflow },
-  { to: "/webhooks", label: "Webhooks", icon: Webhook },
-  { to: "/api-keys", label: "API keys", icon: KeyRound },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/admin/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/admin/users", label: "Users", icon: Headset },
+  { to: "/admin/teams", label: "Teams", icon: UsersRound },
+  { to: "/admin/sounds", label: "Sounds", icon: Music },
+  { to: "/admin/numbers", label: "Numbers", icon: Hash },
+  { to: "/admin/trunks", label: "Trunks", icon: Cable },
+  { to: "/admin/calls", label: "Calls", icon: PhoneCall },
+  { to: "/admin/flows", label: "IVR Flows", icon: Workflow },
+  { to: "/admin/webhooks", label: "Webhooks", icon: Webhook },
+  { to: "/admin/api-keys", label: "API keys", icon: KeyRound },
+  { to: "/admin/settings", label: "Settings", icon: Settings },
 ];
 
 // Supervisors see every team, others only their own: /v1/my-teams answers both.
 const myTeams = ref<{ name: string }[]>([]);
 const nav = computed(() => {
-  const mine = [{ to: "/me", label: "My calls", icon: Phone }];
-  const teams = myTeams.value.map((t) => ({ to: "/me/teams/" + encodeURIComponent(t.name), label: t.name, icon: UsersRound }));
+  const mine = [{ to: "/agent", label: "My calls", icon: Phone }];
+  const teams = myTeams.value.map((t) => ({ to: "/agent/teams/" + encodeURIComponent(t.name), label: t.name, icon: UsersRound }));
   return auth.isAdmin() ? [...adminNav, ...mine] : [...mine, ...teams];
 });
 

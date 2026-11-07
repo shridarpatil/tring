@@ -3,7 +3,7 @@ import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
-import { homeRoute, type MeUser } from "../lib/roles";
+import { homeRoute, safeRedirect, type MeUser } from "../lib/roles";
 import { Button, TextField } from "../components/ui";
 
 interface LoginResponse {
@@ -16,11 +16,6 @@ interface LoginResponse {
 const router = useRouter();
 const route = useRoute();
 
-// Only same-app paths: "/calls/…" yes; "//evil.example" or "https://…" no.
-function safeRedirect(): string | null {
-  const r = route.query.redirect;
-  return typeof r === "string" && r.startsWith("/") && !r.startsWith("//") ? r : null;
-}
 const email = ref("");
 const password = ref("");
 const error = ref("");
@@ -35,7 +30,7 @@ async function submit() {
       password: password.value,
     });
     auth.setSession(res.token, res.tenant, res.user);
-    const next = safeRedirect();
+    const next = safeRedirect(route.query.redirect);
     if (next) router.replace(next);
     else router.push({ name: homeRoute(res.user) });
   } catch (e) {

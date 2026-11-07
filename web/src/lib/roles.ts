@@ -12,7 +12,7 @@ export interface MeUser {
   teams: { name: string; is_manager: boolean }[];
 }
 
-/** Where a user lands after sign-in: admins get the dashboard, others their own page. */
+/** Where a user lands after sign-in: admins the dashboard (/admin/), others their own page (/agent). */
 export function homeRoute(u: MeUser): "dashboard" | "me" {
   return u.role === "admin" ? "dashboard" : "me";
 }
@@ -35,4 +35,13 @@ export function canManageTeam(u: MeUser, team: string): boolean {
 export function guardTarget(u: MeUser | null, route: { meta?: { admin?: boolean } }): "ok" | "me" {
   if (!route.meta?.admin) return "ok";
   return u && canOpen(u, route) ? "ok" : "me";
+}
+
+/**
+ * The post-login redirect target, if it is a page of this app (/admin or
+ * /agent). Anything else — "//evil.example", "https://…", the login page
+ * itself — is dropped so the login form can't be turned into an open redirect.
+ */
+export function safeRedirect(r: unknown): string | null {
+  return typeof r === "string" && /^\/(admin|agent)(\/|\?|$)/.test(r) ? r : null;
 }

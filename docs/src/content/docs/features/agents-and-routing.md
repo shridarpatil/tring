@@ -26,11 +26,13 @@ Agents and console users are the same thing: one **user** with a `role`.
 
 | Role | Console access |
 |---|---|
-| `agent` | Their own view at `/me`: their calls and stats, take calls in the browser, their teams. |
+| `agent` | Their own view at `/agent`: their calls and stats, take calls in the browser, their teams. |
 | `supervisor` | Every team's live state and calls, and can supervise any live call. |
 | `admin` | Everything, including the admin API and managing users. |
 
 Team **manager** is not a role. It is a flag on a user's membership of one team (`is_manager`), so the same person can manage one team and be an ordinary member of another. A manager sees that team's live state and calls, can add and remove its members (but not other managers), and can supervise calls that belong to it. Only a supervisor or admin can make someone a manager.
+
+Everyone signs in at `/login`. Admins land on the admin console at `/admin/`; supervisors and agents land on `/agent`, and team pages are at `/agent/teams/<name>`.
 
 Role has no effect on routing: anyone in a team is rung when the team rings, whatever their role.
 

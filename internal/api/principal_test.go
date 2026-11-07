@@ -25,7 +25,7 @@ func selfScopeAllowed(route string) bool {
 	case "/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise", "/healthz":
 		return true
 	}
-	for _, p := range []string{"/v1/me/", "/v1/my-teams/", "/sdk/", "/admin"} {
+	for _, p := range []string{"/v1/me/", "/v1/my-teams/", "/sdk/", "/admin", "/login", "/agent"} {
 		if strings.HasPrefix(route, p) {
 			return true
 		}

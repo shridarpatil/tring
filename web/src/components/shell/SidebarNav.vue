@@ -6,7 +6,8 @@ defineProps<{ items: { to: string; label: string; icon: Component }[] }>();
 const route = useRoute();
 
 function isActive(to: string): boolean {
-  return to === "/" ? route.path === "/" : route.path.startsWith(to);
+  // Home pages are prefixes of every page under them, so only an exact match counts.
+  return to === "/admin/" || to === "/agent" ? route.path === to : route.path.startsWith(to);
 }
 </script>
 
