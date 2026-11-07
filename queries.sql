@@ -1053,7 +1053,7 @@ UPDATE calls SET team = $3 WHERE id = $2 AND tenant_id = $1;
 -- Every team membership with the member's identity and manager flag, for the
 -- team views; live status is joined from presence by the caller.
 SELECT ta.team_name, u.id, u.sip_username, COALESCE(u.display_name, ''), ta.is_manager
-FROM team_agents ta JOIN users u ON u.id = ta.agent_id
+FROM team_agents ta JOIN users u ON u.id = ta.agent_id AND u.tenant_id = ta.tenant_id
 WHERE ta.tenant_id = $1
 ORDER BY ta.team_name, ta.position, u.sip_username;
 
@@ -1068,7 +1068,9 @@ ORDER BY u.sip_username;
 
 -- name: list-team-calls-today
 -- Same columns as list-calls: today's calls belonging to team $2 (same
--- predicate as call-in-teams). The LIMIT is a backstop for a very busy team.
+-- predicate as call-in-teams). A stint for a call started today is enqueued
+-- today, so the stint subquery is bounded the same way and evaluated once
+-- rather than per call. The LIMIT is a backstop for a very busy team.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
@@ -1077,8 +1079,8 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id
 WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now())
   AND (c.team = $2
-       OR EXISTS (SELECT 1 FROM queue_stints qs
-                  WHERE qs.tenant_id = $1 AND qs.call_id = c.id AND qs.team = $2))
+       OR c.id IN (SELECT call_id FROM queue_stints
+                   WHERE tenant_id = $1 AND team = $2 AND enqueued_at >= date_trunc('day', now())))
 ORDER BY c.started_at DESC LIMIT 500;
 
 -- name: team-stats-today
