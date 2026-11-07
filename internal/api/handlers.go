@@ -31,7 +31,8 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// the auth context (hold music, record toggle) so the Settings page sees the
 	// current selection.
 	t := *tenantFromCtx(r.Context())
-	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat)
+	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat,
+		&t.MaskNumbersAgents, &t.MaskNumbersManagers, &t.MaskNumbersSupervisors)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -619,6 +620,10 @@ type patchTenantRequest struct {
 	// RecordingFormat sets the recording format (one of recordingFormats).
 	// nil = unchanged.
 	RecordingFormat *string `json:"recording_format,omitempty"`
+	// MaskNumbers* toggle masking client numbers per role. nil = unchanged.
+	MaskNumbersAgents      *bool `json:"mask_numbers_agents,omitempty"`
+	MaskNumbersManagers    *bool `json:"mask_numbers_managers,omitempty"`
+	MaskNumbersSupervisors *bool `json:"mask_numbers_supervisors,omitempty"`
 }
 
 // recordingSampleRates are the rates libopus can encode at (the recording is
@@ -639,8 +644,9 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil && req.RecordingFormat == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate or recording_format is required")
+	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil && req.RecordingFormat == nil &&
+		req.MaskNumbersAgents == nil && req.MaskNumbersManagers == nil && req.MaskNumbersSupervisors == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format or mask_numbers_* is required")
 		return
 	}
 	if req.RecordingSampleRate != nil && !slices.Contains(recordingSampleRates, *req.RecordingSampleRate) {
@@ -715,16 +721,18 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	var out Tenant
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
 		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
-		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat)
+		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat,
+		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors).
+		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat,
+			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
 	// Drop the gateway's cached tenant settings (recording; hold music + transfer
-	// prompt) so the change applies to the next call instead of after the TTL.
-	// Best-effort.
-	for _, key := range []string{callrow.RecordingCacheKey(t.ID), flowstore.TenantAudioCacheKey(t.ID)} {
+	// prompt; number masking) so the change applies to the next call instead of
+	// after the TTL. Best-effort.
+	for _, key := range []string{callrow.RecordingCacheKey(t.ID), flowstore.TenantAudioCacheKey(t.ID), flowstore.MaskCacheKey(t.ID)} {
 		if err := s.cache.Delete(r.Context(), key); err != nil {
 			s.log.Warn("tenant settings cache invalidate failed", "key", key, "err", err)
 		}

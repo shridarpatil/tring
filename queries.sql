@@ -33,6 +33,14 @@ RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for
 -- shows Away for an agent the backend already marked unavailable.
 SELECT available_for_calls FROM users WHERE tenant_id = $1 AND sip_username = $2;
 
+-- name: get-agent-mask-role
+-- An agent's role and whether they manage any team, by SIP username: what the
+-- gateway needs to decide whether their ring shows a masked caller number.
+SELECT u.role,
+       EXISTS (SELECT 1 FROM team_agents ta
+               WHERE ta.tenant_id = u.tenant_id AND ta.agent_id = u.id AND ta.is_manager)
+FROM users u WHERE u.tenant_id = $1 AND u.sip_username = $2;
+
 -- ===========================================================================
 -- teams (tenant-scoped agent groups; identified by name)
 -- ===========================================================================
@@ -207,13 +215,24 @@ SET outbound_strategy       = COALESCE($1, outbound_strategy),
     transfer_failed_message = COALESCE($7, transfer_failed_message),
     transfer_failed_audio   = COALESCE($8, transfer_failed_audio),
     recording_sample_rate   = COALESCE($9, recording_sample_rate),
-    recording_format        = COALESCE($10, recording_format)
+    recording_format        = COALESCE($10, recording_format),
+    mask_numbers_agents      = COALESCE($11, mask_numbers_agents),
+    mask_numbers_managers    = COALESCE($12, mask_numbers_managers),
+    mask_numbers_supervisors = COALESCE($13, mask_numbers_supervisors)
 WHERE id = $3
-RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format;
+RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
+          mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors;
 
 -- name: get-tenant-settings
 -- Tenant-level settings the Settings page reads (not carried in the auth context).
-SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format FROM tenants WHERE id = $1;
+SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
+       mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors
+FROM tenants WHERE id = $1;
+
+-- name: get-tenant-mask-numbers
+-- Which roles see masked client numbers (internal/mask): read by the api per
+-- scoped request and by the gateway (cached) when it rings an agent.
+SELECT mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors FROM tenants WHERE id = $1;
 
 -- name: get-tenant-max-call-seconds
 -- Tenant's max call duration — the ephemeral TURN credential lifetime basis.

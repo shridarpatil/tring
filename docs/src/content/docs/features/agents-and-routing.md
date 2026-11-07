@@ -127,3 +127,20 @@ Presence only flips to `on_call` when an agent **answers**. Without extra care, 
 ## What the agent sees
 
 The ringing agent sees a label, never an internal id: the Transfer node's `label` if set, otherwise the caller's identity (phone number or `client_ref`), otherwise `Web Caller`. Use `label` to hide the caller's number from agents (see [Outbound calls](/tring/features/outbound-calls/#number-masking)).
+
+### Masking client numbers by role
+
+**Settings → Privacy → Mask client phone numbers for** has one checkbox per role: **Agents**, **Team managers** and **Supervisors**. They are independent, so you can, for example, mask agents and managers but let supervisors see full numbers. The same switches are `mask_numbers_agents`, `mask_numbers_managers` and `mask_numbers_supervisors` on `PATCH /v1/tenants/me`. All three are off by default.
+
+| User | Masked when |
+|---|---|
+| Agent (manages no team) | Agents is checked |
+| Team manager (an agent who manages at least one team) | Team managers is checked |
+| Supervisor | Supervisors is checked |
+| Admin | Never |
+
+A masked number keeps its first 2 and last 4 digits and any leading `+`: `+919876543210` shows as `+91••••••3210`. A number with 6 digits or fewer is hidden completely. Labels that are not numbers (a Transfer node's `label`, `Web Caller`, a name) are shown as they are.
+
+Masking happens on the server, so the full number never reaches a masked user's browser. It covers the calls in the agent view and team pages (`/v1/me/calls`, `/v1/me/dashboard`, `/v1/my-teams`), a supervisor's live dashboard stream, and the caller shown on an incoming ring. That ring is also what your CRM's embedded widget shows, so a masked agent sees the masked number there too. Admins on the same dashboard still see full numbers.
+
+API keys and webhooks are never masked: your backend always gets the full number. A change applies to new rings and page loads straight away; an open supervisor dashboard picks it up within about 20 seconds.

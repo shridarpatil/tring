@@ -16,6 +16,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/callcdr"
 	"github.com/shridarpatil/tring/internal/events"
+	"github.com/shridarpatil/tring/internal/flowstore"
 	"github.com/shridarpatil/tring/internal/presence"
 )
 
@@ -283,8 +284,8 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	resp := patchUserResponse{userRow: u}
 	if oldSip != "" {
 		resp.FlowsReferencingOld = s.afterSipRename(ctx, p.TenantID, u, oldSip)
-	} else if req.DisplayName != nil {
-		s.invalidateAgentCache(ctx, p.TenantID, u.SipUsername) // CDR agent label
+	} else if req.DisplayName != nil || req.Role != nil {
+		s.invalidateAgentCache(ctx, p.TenantID, u.SipUsername) // CDR agent label, masking role
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -386,12 +387,26 @@ func (s *Server) retireSip(ctx context.Context, tenantID uuid.UUID, sip string) 
 	})
 }
 
-// invalidateAgentCache drops the gateway's cached id + label for an agent's
-// SIP username (callcdr), so the next CDR reads the current row.
+// invalidateAgentCache drops the gateway's cached reads of an agent by SIP
+// username — id + label (callcdr) and role + manager flag (flowstore, for
+// number masking) — so the next call reads the current row.
 func (s *Server) invalidateAgentCache(ctx context.Context, tenantID uuid.UUID, sip string) {
-	if err := s.cache.Delete(ctx, callcdr.AgentCacheKey(tenantID, sip)); err != nil {
-		s.log.Warn("agent cache invalidate failed", "sip", sip, "err", err)
+	for _, key := range []string{callcdr.AgentCacheKey(tenantID, sip), flowstore.AgentRoleCacheKey(tenantID, sip)} {
+		if err := s.cache.Delete(ctx, key); err != nil {
+			s.log.Warn("agent cache invalidate failed", "sip", sip, "err", err)
+		}
 	}
+}
+
+// invalidateUserAgentCache is invalidateAgentCache by user id, for writes
+// that change whether the user manages a team. Best-effort.
+func (s *Server) invalidateUserAgentCache(ctx context.Context, tenantID, userID uuid.UUID) {
+	u, err := s.getUserRow(ctx, tenantID, userID)
+	if err != nil {
+		s.log.Warn("agent cache invalidate: user lookup failed", "user", userID, "err", err)
+		return
+	}
+	s.invalidateAgentCache(ctx, tenantID, u.SipUsername)
 }
 
 func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {

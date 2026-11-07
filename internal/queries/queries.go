@@ -31,6 +31,7 @@ type Queries struct {
 	GetAgent             string `query:"get-agent"`
 	SetAgentAvailability string `query:"set-agent-availability"`
 	GetAgentAvailability string `query:"get-agent-availability"` // gateway: Away badge on connect
+	GetAgentMaskRole     string `query:"get-agent-mask-role"`    // gateway: masked caller number on ring
 
 	// ---- api: teams (GetTeam + ListTeamAgentSips also used by orchestrator) ----
 	CreateTeam               string `query:"create-team"`
@@ -65,6 +66,7 @@ type Queries struct {
 	GetTenantSettings       string `query:"get-tenant-settings"`
 	GetTenantRecordCalls    string `query:"get-tenant-record-calls"`
 	GetTenantMaxCallSeconds string `query:"get-tenant-max-call-seconds"`
+	GetTenantMaskNumbers    string `query:"get-tenant-mask-numbers"`
 
 	// ---- api: audio library (sound assets) ----
 	CreateAudio string `query:"create-audio"`

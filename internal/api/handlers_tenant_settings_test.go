@@ -18,14 +18,14 @@ func TestTenantTransferMessageRoundTrip(t *testing.T) {
 	s := newTestServer(f)
 
 	msg := "Nobody home, please retry."
-	_, err := f.DB.Pool.Exec(ctx, s.q.UpdateTenant, nil, nil, f.TenantID, nil, nil, nil, &msg, nil, nil, nil)
+	_, err := f.DB.Pool.Exec(ctx, s.q.UpdateTenant, nil, nil, f.TenantID, nil, nil, nil, &msg, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	var got, hm, format string
 	var rec bool
 	var mx, rate int
-	if err := f.DB.Pool.QueryRow(ctx, s.q.GetTenantSettings, f.TenantID).Scan(&hm, &rec, &mx, &got, &rate, &format); err != nil {
+	if err := f.DB.Pool.QueryRow(ctx, s.q.GetTenantSettings, f.TenantID).Scan(&hm, &rec, &mx, &got, &rate, &format, new(bool), new(bool), new(bool)); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if got != msg {
