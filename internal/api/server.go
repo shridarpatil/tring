@@ -383,8 +383,8 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.AuthRequired)
 
 			// Long-lived SSE: must NOT inherit the 30s request timeout.
-			// Tenant-wide live feed, so not for non-admin console sessions.
-			r.With(s.RejectSelfScope).Get("/stream/dashboard", s.handleDashboardStream)
+			// Tenant-wide live feed: admins, API keys and supervisors only.
+			r.With(s.AllowDashboardStream).Get("/stream/dashboard", s.handleDashboardStream)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Timeout(30 * time.Second))
@@ -504,6 +504,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/me/availability", s.handleMeAvailability)
 			r.Post("/me/password", s.handleMePassword)
 			r.Get("/me/stats", s.handleMeStats)
+			r.Get("/me/dashboard", s.handleMeDashboard)
 			r.Get("/me/calls", s.handleMeCalls)
 			r.Get("/me/calls/{id}/recording", s.handleMeCallRecording)
 		})

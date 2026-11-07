@@ -133,6 +133,12 @@ type Queries struct {
 	CountMyCalls        string `query:"count-my-calls"`
 	IsMyCall            string `query:"is-my-call"`
 
+	// ---- api: /v1/me/dashboard (role-scoped dashboard snapshot) ----
+	ListActiveCallsScoped string `query:"list-active-calls-scoped"`
+	StatsMeToday          string `query:"stats-me-today"`
+	StatsQueueTodayTeams  string `query:"stats-queue-today-teams"`
+	StatsMeHourly         string `query:"stats-me-hourly"`
+
 	// ---- api: /v1/my-teams + gateway team attribution ----
 	SetCallTeam               string `query:"set-call-team"`
 	ListTeamMemberships       string `query:"list-team-memberships"`

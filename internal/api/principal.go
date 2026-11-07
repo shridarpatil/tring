@@ -104,6 +104,20 @@ func (s *Server) RejectSelfScope(next http.Handler) http.Handler {
 	})
 }
 
+// AllowDashboardStream guards the tenant-wide dashboard stream: like
+// RejectSelfScope, plus supervisors, whose role spans the whole tenant. It
+// wraps that one route only; supervisors stay out of every other admin route.
+func (s *Server) AllowDashboardStream(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope, _ := r.Context().Value(scopeCtxKey).(string)
+		if p := principalFromCtx(r.Context()); scope == scopeSelf && (p == nil || p.Role != "supervisor") {
+			writeError(w, http.StatusForbidden, "not permitted")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequirePrincipal admits only console sessions (API keys have no user), for
 // routes that authorize by the Principal. Mount it inside AuthRequired.
 func (s *Server) RequirePrincipal(next http.Handler) http.Handler {
