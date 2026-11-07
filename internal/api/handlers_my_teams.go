@@ -162,6 +162,9 @@ func (s *Server) handleGetMyTeam(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "calls failed")
 			return
 		}
+		if s.masksNumbers(r.Context(), p) {
+			maskCalls(mt.Calls)
+		}
 	}
 	writeJSON(w, http.StatusOK, mt)
 }
@@ -292,6 +295,7 @@ func (s *Server) handleRemoveMyTeamMember(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
+	s.invalidateUserAgentCache(r.Context(), p.TenantID, userID) // may no longer manage a team
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -325,6 +329,7 @@ func (s *Server) handleSetMyTeamManager(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotFound, "user not in team")
 		return
 	}
+	s.invalidateUserAgentCache(r.Context(), p.TenantID, userID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

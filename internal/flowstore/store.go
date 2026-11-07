@@ -23,6 +23,7 @@ import (
 	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/mask"
 	"github.com/shridarpatil/tring/internal/queries"
 	"github.com/shridarpatil/tring/internal/routing"
 )
@@ -49,6 +50,16 @@ func TeamCacheKey(tenantID uuid.UUID, team string) string {
 // failed prompt. Exported so the api can invalidate it on a settings change.
 func TenantAudioCacheKey(tenantID uuid.UUID) string { return "tenant:audio:" + tenantID.String() }
 
+// MaskCacheKey is the cache key for a tenant's number-masking switches.
+// Exported so the api can invalidate it on a settings change.
+func MaskCacheKey(tenantID uuid.UUID) string { return "tenant:mask:" + tenantID.String() }
+
+// AgentRoleCacheKey is the cache key for an agent's role + manager flag by SIP
+// username. Exported so the api can invalidate it when either changes.
+func AgentRoleCacheKey(tenantID uuid.UUID, sip string) string {
+	return "agent:role:" + tenantID.String() + ":" + sip
+}
+
 type flowEntry struct {
 	TenantID   uuid.UUID `json:"tenant_id"`
 	Name       string    `json:"name"`
@@ -58,6 +69,11 @@ type flowEntry struct {
 type didEntry struct {
 	TenantID uuid.UUID `json:"tenant_id"`
 	FlowID   string    `json:"flow_id"`
+}
+
+type agentRole struct {
+	Role    string `json:"role"`
+	Manager bool   `json:"manager"`
 }
 
 type tenantAudio struct {
@@ -236,4 +252,27 @@ func (s *Store) AgentAvailable(ctx context.Context, tenantID uuid.UUID, sip stri
 		return false, err
 	}
 	return available, nil
+}
+
+// MaskNumbers reports whether the agent behind sip sees masked client numbers
+// (tenants.mask_numbers_* applied to their role and managed teams). The agent
+// isn't looked up when the tenant masks nobody; an unknown SIP errors then.
+func (s *Store) MaskNumbers(ctx context.Context, tenantID uuid.UUID, sip string) (bool, error) {
+	ms, err := cached(ctx, s.cache, MaskCacheKey(tenantID), func() (mask.Settings, error) {
+		var ms mask.Settings
+		err := s.db.Pool.QueryRow(ctx, s.q.GetTenantMaskNumbers, tenantID).Scan(&ms.Agents, &ms.Managers, &ms.Supervisors)
+		return ms, err
+	})
+	if err != nil || !ms.Any() {
+		return false, err
+	}
+	r, err := cached(ctx, s.cache, AgentRoleCacheKey(tenantID, sip), func() (agentRole, error) {
+		var r agentRole
+		err := s.db.Pool.QueryRow(ctx, s.q.GetAgentMaskRole, tenantID, sip).Scan(&r.Role, &r.Manager)
+		return r, err
+	})
+	if err != nil {
+		return false, err
+	}
+	return ms.For(r.Role, r.Manager), nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/events"
+	"github.com/shridarpatil/tring/internal/mask"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/presence"
@@ -486,6 +487,11 @@ type pionRing struct {
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
+	// labels memoizes the caller label as each agent may see it (masked or not),
+	// so the router's repeated Ring calls look an agent up once. Only Ring
+	// touches it, and the router calls Ring serially.
+	labels map[string]string
+
 	holdOnce sync.Once // starts hold music at most once per transfer
 	holdStop func()    // stops it; set by ensureHold, called by stopHold/cleanup
 }
@@ -545,6 +551,16 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	// A carrier caller is the room's SFU port: tell the widget it's a phone call
 	// (no screen share). Read before p.s.mu — the SFU has its own lock.
 	phone := p.s.sfu.HasPort(p.roomID)
+	// Resolve each agent's view of the caller label before p.s.mu: the masking
+	// verdict may need a Redis/DB read.
+	if p.labels == nil {
+		p.labels = map[string]string{}
+	}
+	for _, sip := range ordered {
+		if _, ok := p.labels[sip]; !ok {
+			p.labels[sip] = p.s.callerLabelFor(p.tenant, sip, p.label)
+		}
+	}
 	p.s.mu.Lock()
 	inSet := make(map[string]bool, len(ordered))
 	for _, sip := range ordered {
@@ -559,7 +575,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
 		if c := p.s.agents[p.tenant][sip]; c != nil {
-			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.label, Phone: phone})
+			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.labels[sip], Phone: phone})
 			if p.s.invites[p.roomID] == nil {
 				p.s.invites[p.roomID] = map[string]bool{}
 			}
@@ -748,3 +764,29 @@ func (s *Server) takeInvite(roomID room.RoomID, sip string) bool {
 // ensure the server satisfies the brain's ring-transport + handoff-wait seams.
 var _ brain.RingTransport = (*Server)(nil)
 var _ brain.HandoffWaiter = (*Server)(nil)
+
+// callerLabelFor returns the caller label as sip may see it: with the number
+// masked when the tenant masks numbers for sip's role (internal/mask), so the
+// full number never reaches a masked agent's widget. It fails closed — masks —
+// when the verdict can't be read. A label that isn't a number is returned as is.
+func (s *Server) callerLabelFor(tenant, sip, label string) string {
+	masked := mask.Number(label)
+	if s.cfg.NumberMask == nil || masked == label {
+		return label
+	}
+	tid, err := uuid.Parse(tenant)
+	if err != nil {
+		return masked
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	on, err := s.cfg.NumberMask.MaskNumbers(ctx, tid, sip)
+	if err != nil {
+		s.log.Warn("number mask lookup failed; masking", "tenant", tenant, "sip", sip, "err", err)
+		return masked
+	}
+	if on {
+		return masked
+	}
+	return label
+}

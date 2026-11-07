@@ -172,6 +172,7 @@ func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+	masked := s.masksNumbers(r.Context(), p)
 	out := []myCall{}
 	for rows.Next() {
 		var c myCall
@@ -187,6 +188,9 @@ func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 			// Point at the /me route: the tenant-wide one rejects this session.
 			u := "/v1/me/calls/" + c.ID.String() + "/recording"
 			c.RecordingURL = &u
+		}
+		if masked {
+			maskCall(&c.Call)
 		}
 		out = append(out, c)
 	}

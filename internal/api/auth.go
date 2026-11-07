@@ -51,6 +51,11 @@ type Tenant struct {
 	// RecordingFormat is the finished recording's format: ogg, mp3 or wav.
 	// Populated only by the tenant settings handlers.
 	RecordingFormat string `json:"recording_format"`
+	// MaskNumbers* mask client phone numbers for each non-admin role
+	// (internal/mask). Populated only by the tenant settings handlers.
+	MaskNumbersAgents      bool `json:"mask_numbers_agents"`
+	MaskNumbersManagers    bool `json:"mask_numbers_managers"`
+	MaskNumbersSupervisors bool `json:"mask_numbers_supervisors"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API

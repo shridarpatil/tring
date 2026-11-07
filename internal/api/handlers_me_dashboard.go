@@ -29,8 +29,13 @@ func (s *Server) handleMeDashboard(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	p := principalFromCtx(ctx)
 	t := tenantFromCtx(ctx)
+	masked := s.masksNumbers(ctx, p)
 	if p.SeesAllTeams() {
-		writeJSON(w, http.StatusOK, s.buildDashboardSnapshot(ctx, t))
+		snap := s.buildDashboardSnapshot(ctx, t)
+		if masked {
+			maskCalls(snap.Calls)
+		}
+		writeJSON(w, http.StatusOK, snap)
 		return
 	}
 	snap, err := s.scopedDashboardSnapshot(ctx, t, p, r.URL.Query().Get("stats") != "0")
@@ -38,6 +43,9 @@ func (s *Server) handleMeDashboard(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("me dashboard failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
+	}
+	if masked {
+		maskCalls(snap.Calls)
 	}
 	writeJSON(w, http.StatusOK, snap)
 }

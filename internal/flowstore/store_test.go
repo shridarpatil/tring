@@ -222,3 +222,44 @@ func TestTeamConfigThroughCache(t *testing.T) {
 		t.Error("unknown team was cached")
 	}
 }
+
+// MaskNumbers applies the tenant's per-role switches to the agent behind a SIP
+// username: a plain agent, a team manager, a supervisor, an admin.
+func TestMaskNumbers(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	s := New(f.DB)
+	a := f.AddUser(t, "agent", "a@example.com")
+	m := f.AddUser(t, "agent", "m@example.com")
+	f.AddUser(t, "supervisor", "s@example.com")
+	f.AddUser(t, "admin", "admin@example.com")
+	f.AddTeam(t, "A", map[uuid.UUID]bool{a: false, m: true})
+
+	set := func(agents, managers, supervisors bool) {
+		t.Helper()
+		if _, err := f.DB.Pool.Exec(ctx, `UPDATE tenants SET mask_numbers_agents = $2,
+			mask_numbers_managers = $3, mask_numbers_supervisors = $4 WHERE id = $1`,
+			f.TenantID, agents, managers, supervisors); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(want map[string]bool) {
+		t.Helper()
+		for sip, w := range want {
+			got, err := s.MaskNumbers(ctx, f.TenantID, sip)
+			if err != nil || got != w {
+				t.Errorf("MaskNumbers(%s) = %v, %v; want %v", sip, got, err, w)
+			}
+		}
+	}
+	check(map[string]bool{"a@example.com": false, "m@example.com": false, "s@example.com": false, "admin@example.com": false})
+	set(true, false, false)
+	check(map[string]bool{"a@example.com": true, "m@example.com": false, "s@example.com": false, "admin@example.com": false})
+	set(false, true, false)
+	check(map[string]bool{"a@example.com": false, "m@example.com": true, "s@example.com": false})
+	set(true, true, true)
+	check(map[string]bool{"s@example.com": true, "admin@example.com": false})
+	if _, err := s.MaskNumbers(ctx, f.TenantID, "nobody"); err == nil {
+		t.Error("unknown SIP with masking on: want an error (the gateway masks on error)")
+	}
+}
