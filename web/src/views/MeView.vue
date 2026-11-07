@@ -11,7 +11,7 @@ import { callStatusTone } from "../lib/status";
 import { mountAgentWidget } from "../lib/widget";
 import { fmtTalk, longestWaitSeconds, memberTone, queueSummary } from "../lib/me";
 import type { Call, Paginated } from "../api/types";
-import { Toggle, Badge, Button } from "../components/ui";
+import { Toggle, Badge, Button, KpiCard } from "../components/ui";
 
 interface Stats {
   taken: number;
@@ -72,6 +72,7 @@ async function loadStats() {
   }
 }
 watch(range, loadStats);
+const rangeLabel = computed(() => (range.value === "today" ? "today" : "last 7 days"));
 
 // --- my teams (polled) ------------------------------------------------------
 const teams = ref<MyTeam[]>([]);
@@ -169,32 +170,18 @@ onUnmounted(() => {
       <span v-else class="text-light">Call panel ready. Use the floating panel to answer and place calls.</span>
     </div>
 
-    <div class="card vstack">
-      <div class="row-between">
-        <h2>My stats</h2>
-        <div class="hstack">
-          <Button size="sm" :variant="range === 'today' ? 'primary' : 'secondary'" @click="range = 'today'">Today</Button>
-          <Button size="sm" :variant="range === '7d' ? 'primary' : 'secondary'" @click="range = '7d'">7 days</Button>
-        </div>
-      </div>
+    <div class="row-between">
+      <h2>My stats</h2>
       <div class="hstack">
-        <div style="flex: 1">
-          <div class="trend-num">{{ stats?.taken ?? 0 }}</div>
-          <small class="text-light">Taken</small>
-        </div>
-        <div style="flex: 1">
-          <div class="trend-num">{{ stats?.missed ?? 0 }}</div>
-          <small class="text-light">Missed</small>
-        </div>
-        <div style="flex: 1">
-          <div class="trend-num">{{ fmtTalk(stats?.talk_seconds ?? 0) }}</div>
-          <small class="text-light">Talk time</small>
-        </div>
-        <div style="flex: 1">
-          <div class="trend-num">{{ fmtTalk(stats?.avg_talk_seconds ?? 0) }}</div>
-          <small class="text-light">Avg talk</small>
-        </div>
+        <Button size="sm" :variant="range === 'today' ? 'primary' : 'secondary'" @click="range = 'today'">Today</Button>
+        <Button size="sm" :variant="range === '7d' ? 'primary' : 'secondary'" @click="range = '7d'">7 days</Button>
       </div>
+    </div>
+    <div class="row">
+      <KpiCard class="col-3" :value="stats?.taken ?? 0" label="Taken" :sub="rangeLabel" />
+      <KpiCard class="col-3" :value="stats?.missed ?? 0" label="Missed" :sub="rangeLabel" :tone="(stats?.missed ?? 0) > 0 ? 'danger' : undefined" />
+      <KpiCard class="col-3" :value="fmtTalk(stats?.talk_seconds ?? 0)" label="Talk time" :sub="rangeLabel" />
+      <KpiCard class="col-3" :value="fmtTalk(stats?.avg_talk_seconds ?? 0)" label="Avg talk" sub="per call" />
     </div>
 
     <div class="card vstack">

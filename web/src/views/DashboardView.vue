@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { usePoll } from "../composables/usePoll";
 import { useDashboardStream } from "../composables/useDashboardStream";
 import type { Call } from "../api/types";
-import { Panel, LevelMeter } from "../components/ui";
+import { Panel, LevelMeter, KpiCard } from "../components/ui";
 import MiniBarChart from "../components/MiniBarChart.vue";
 import DashAlerts from "../components/dashboard/DashAlerts.vue";
 import TeamBoard from "../components/dashboard/TeamBoard.vue";
@@ -145,31 +145,16 @@ usePoll(() => (now.value = Date.now()), 1000);
 
       <!-- Headline numbers -->
       <div class="row">
-        <div class="card p-4 col-3 vstack gap-1">
-          <div class="kpi-num">{{ queues.on_call }}</div>
-          <small class="text-light">On call</small>
-          <small class="text-lighter">{{ calls.length }} incl. IVR/ringing</small>
-        </div>
-        <div class="card p-4 col-3 vstack gap-1">
-          <div class="kpi-num" :style="{ color: waitingNow > 0 ? 'var(--danger)' : undefined }">{{ waitingNow }}</div>
-          <small class="text-light">Waiting now</small>
+        <KpiCard class="col-3" :value="queues.on_call" label="On call" :sub="`${calls.length} incl. IVR/ringing`" />
+        <KpiCard class="col-3" :value="waitingNow" label="Waiting now" :tone="waitingNow > 0 ? 'danger' : undefined">
           <small v-if="waitingNow" class="text-lighter">longest <span style="color: var(--danger)">{{ fmtMMSS(longestNow) }}</span></small>
           <small v-else class="text-lighter">no queue</small>
-        </div>
-        <div class="card p-4 col-3 vstack gap-1">
-          <div class="kpi-num" :style="{ color: (stats?.sla_breaches_today ?? 0) > 0 ? 'var(--danger)' : undefined }">
-            {{ stats?.sla_breaches_today ?? 0 }}
-          </div>
-          <small class="text-light">SLA breaches</small>
+        </KpiCard>
+        <KpiCard class="col-3" :value="stats?.sla_breaches_today ?? 0" label="SLA breaches" :tone="(stats?.sla_breaches_today ?? 0) > 0 ? 'danger' : undefined">
           <small v-if="breachingNow > 0"><strong style="color: var(--danger)">{{ breachingNow }} breaching now</strong></small>
           <small v-else class="text-lighter">none breaching now</small>
-        </div>
-        <div class="card p-4 col-3 vstack gap-1">
-          <div class="kpi-num">{{ fmtMMSS(stats?.avg_queue_wait_seconds ?? 0) }}</div>
-          <small class="text-light">Avg queue wait</small>
-          <small v-if="slaLimit" class="text-lighter">SLA limit {{ fmtMMSS(slaLimit) }}</small>
-          <small v-else class="text-lighter">no SLA limit</small>
-        </div>
+        </KpiCard>
+        <KpiCard class="col-3" :value="fmtMMSS(stats?.avg_queue_wait_seconds ?? 0)" label="Avg queue wait" :sub="slaLimit ? `SLA limit ${fmtMMSS(slaLimit)}` : 'no SLA limit'" />
       </div>
 
       <TeamBoard :teams="teams" :now-ms="now" />
@@ -289,8 +274,6 @@ usePoll(() => (now.value = Date.now()), 1000);
 .trend-num { font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
 .trend-label { font-size: var(--text-8); color: var(--muted-foreground); margin-top: 0.25rem; }
 .trend-divider { width: 1px; align-self: stretch; background: var(--border); }
-
-.kpi-num { font-size: 1.75rem; line-height: 1.1; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .dash-main { display: grid; grid-template-columns: 1.6fr 1fr; gap: 1rem; align-items: start; }
 @media (max-width: 900px) {
