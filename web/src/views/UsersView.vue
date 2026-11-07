@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { KeyRound, LogOut, Trash2 } from "lucide-vue-next";
 import { errMessage } from "../lib/errors";
 import { useList } from "../composables/useList";
@@ -9,7 +9,7 @@ import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
 import { confirmDialog } from "../lib/confirm";
 import { agentSignalState } from "../lib/status";
-import { roleOptions, validateLogin, validateNewUser } from "../lib/users";
+import { isAgentOnly, roleOptions, validateLogin, validateNewUser } from "../lib/users";
 import type { Agent, AgentToken } from "../api/types";
 import {
   Button,
@@ -54,8 +54,10 @@ usePoll(
     await Promise.all([load({ silent: true }), loadPresence()]);
   },
   10_000,
-  { immediate: true },
+  { immediate: false },
 );
+// useList loads the users on mount; presence is the only extra first fetch.
+onMounted(loadPresence);
 
 const selfId = computed(() => auth.state.user?.id ?? "");
 const isSelf = (u: UserRow) => u.id === selfId.value;
@@ -77,18 +79,28 @@ const blank = () => ({ email: "", password: "", role: "agent", display_name: "",
 const form = ref(blank());
 const saving = ref(false);
 
+function closeForm() {
+  showForm.value = false;
+  form.value.password = "";
+}
+
 async function create() {
   const problem = validateNewUser(form.value);
   if (problem) return toast.error(problem);
   saving.value = true;
   try {
-    const body: Record<string, string> = { ...form.value };
-    if (!body.sip_username.trim()) delete body.sip_username;
-    await api.post("/v1/users", body);
+    const f = form.value;
+    if (isAgentOnly(f)) {
+      await api.post("/v1/agents", { sip_username: f.sip_username.trim(), display_name: f.display_name });
+    } else {
+      const body: Record<string, string> = { ...f };
+      if (!body.sip_username.trim()) delete body.sip_username;
+      await api.post("/v1/users", body);
+    }
     form.value = blank();
-    showForm.value = false;
+    closeForm();
     await load();
-    toast.success("User created");
+    toast.success(isAgentOnly(f) ? "Agent created" : "User created");
   } catch (e) {
     toast.error(errMessage(e, "create failed"));
   } finally {
@@ -110,7 +122,11 @@ async function patch(u: UserRow, body: Record<string, string>, okMsg: string) {
   }
 }
 
-const setRole = (u: UserRow, role: string) => patch(u, { role }, "Role updated");
+// Bumped on a failed change so the native select re-renders with the persisted role.
+const roleKey = ref(0);
+async function setRole(u: UserRow, role: string) {
+  if (!(await patch(u, { role }, "Role updated"))) roleKey.value++;
+}
 
 // --- set login / reset password ---
 const loginFor = ref<UserRow | null>(null);
@@ -118,7 +134,10 @@ const loginForm = ref({ email: "", password: "" });
 const showLogin = computed({
   get: () => loginFor.value !== null,
   set: (v: boolean) => {
-    if (!v) loginFor.value = null;
+    if (!v) {
+      loginFor.value = null;
+      loginForm.value.password = "";
+    }
   },
 });
 function openLogin(u: UserRow) {
@@ -133,7 +152,7 @@ async function saveLogin() {
   saving.value = true;
   const done = await patch(u, { ...loginForm.value }, u.can_login ? "Password reset" : "Login set");
   saving.value = false;
-  if (done) loginFor.value = null;
+  if (done) showLogin.value = false;
 }
 
 async function clearLogin(u: UserRow) {
@@ -190,7 +209,10 @@ async function mintToken(u: UserRow) {
             · expires {{ new Date(token.expires_at).toLocaleTimeString() }}</span
           >
         </div>
-        <CopyButton :value="token.token" label="Copy token" />
+        <div class="hstack">
+          <CopyButton :value="token.token" label="Copy token" />
+          <Button variant="ghost" size="sm" @click="token = null">Dismiss</Button>
+        </div>
       </div>
       <code class="mono reveal-code">{{ token.token }}</code>
     </div>
@@ -214,6 +236,7 @@ async function mintToken(u: UserRow) {
         </template>
         <template #cell-role="{ row }">
           <Select
+            :key="`${row.id}-${roleKey}`"
             :model-value="row.role"
             :options="roleOptions"
             :disabled="isSelf(row)"
@@ -260,14 +283,14 @@ async function mintToken(u: UserRow) {
 
     <Modal v-model:open="showForm" title="New user">
       <form id="user-form" class="vstack" @submit.prevent="create">
-        <TextField v-model="form.email" label="Email" type="email" required placeholder="alice@example.com" autocomplete="off" />
+        <TextField v-model="form.email" label="Email" type="email" placeholder="alice@example.com" autocomplete="off" hint="Leave email and password empty for a CRM-only agent (no Tring login)" />
         <TextField v-model="form.display_name" label="Display name" placeholder="Alice" />
-        <Select v-model="form.role" label="Role" :options="roleOptions" required />
-        <TextField v-model="form.password" label="Password" type="password" required hint="At least 8 characters" autocomplete="new-password" />
-        <TextField v-model="form.sip_username" label="SIP username" mono hint="Optional; defaults to the email" />
+        <Select v-model="form.role" label="Role" :options="roleOptions" :disabled="isAgentOnly(form)" />
+        <TextField v-model="form.password" label="Password" type="password" hint="At least 8 characters" autocomplete="new-password" />
+        <TextField v-model="form.sip_username" label="SIP username" mono :required="isAgentOnly(form)" hint="Required for a CRM-only agent; otherwise defaults to the email" />
       </form>
       <template #footer>
-        <Button variant="ghost" @click="showForm = false">Cancel</Button>
+        <Button variant="ghost" @click="closeForm">Cancel</Button>
         <Button type="submit" form="user-form" :loading="saving">Create</Button>
       </template>
     </Modal>
