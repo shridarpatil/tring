@@ -8,6 +8,7 @@ export { default as DataTable } from "./DataTable.vue";
 export type { Column } from "./DataTable.vue";
 export { default as EmptyState } from "./EmptyState.vue";
 export { default as IconButton } from "./IconButton.vue";
+export { default as KpiCard } from "./KpiCard.vue";
 export { default as LevelMeter } from "./LevelMeter.vue";
 export { default as Modal } from "./Modal.vue";
 export { default as Pagination } from "./Pagination.vue";
