@@ -23,11 +23,14 @@ function loadUser(): MeUser | null {
   }
 }
 
-interface TenantSummary {
+export interface TenantSummary {
   id: string;
   name: string;
   sip_domain: string;
 }
+
+/** GET /v1/me: the user plus their tenant. */
+export type MeResponse = MeUser & { tenant?: TenantSummary };
 
 const state = reactive({
   token: localStorage.getItem(KEY_TOKEN) || "",
@@ -55,9 +58,12 @@ export const auth = {
   // handled by the api client (logout); other errors keep the cached copy.
   // The fetch is injected so this module doesn't import the api client
   // (which imports this store).
-  async refreshMe(fetchMe: () => Promise<MeUser>) {
+  // /v1/me also carries the tenant, the only source of its name for
+  // non-admins (GET /v1/tenants/me is admin-only) once the page reloads.
+  async refreshMe(fetchMe: () => Promise<MeResponse>) {
     try {
-      const u = await fetchMe();
+      const { tenant, ...u } = await fetchMe();
+      if (tenant) state.tenant = tenant;
       state.user = u;
       localStorage.setItem(KEY_USER, JSON.stringify(u));
     } catch {

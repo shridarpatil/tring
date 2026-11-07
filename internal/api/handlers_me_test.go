@@ -377,3 +377,25 @@ func TestMeCallsRange(t *testing.T) {
 		t.Fatalf("range=1y: %d, want 400", rec.Code)
 	}
 }
+
+// Every role gets its tenant's name from /v1/me: only admins can read
+// /v1/tenants/me, and the console's top bar needs it after a reload.
+func TestGetMeIncludesTenant(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", GatewayPublicURL: "http://gw.test"})
+	a := f.AddUser(t, "agent", "a@example.com")
+	rec := doReq(t, s.Router(), "GET", "/v1/me", tokenFor(t, s, f, a, "a@example.com", "agent"), "")
+	var me struct {
+		Role   string `json:"role"`
+		Tenant struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"tenant"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("%d %s: %v", rec.Code, rec.Body, err)
+	}
+	if me.Role != "agent" || me.Tenant.ID != f.TenantID.String() || me.Tenant.Name == "" {
+		t.Fatalf("me = %+v, want the agent with its tenant", me)
+	}
+}
