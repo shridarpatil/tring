@@ -403,7 +403,7 @@ curl -sS -X POST "$TRING_URL/v1/calls/c0ffee00-6666-4a00-8f00-000000000003/resum
 
 Get a short-lived token for a supervisor to join a live call through the media gateway.
 
-**Auth:** **console session only**. API keys are rejected, because the permission is per user. The signed-in user must have the supervise permission.
+**Auth:** **console session only**. API keys are rejected, because permission depends on the user. The signed-in user must be an admin or supervisor (any live call), or a manager of a team the call belongs to.
 
 Any call that is `ringing` or `answered` and has a media room can be supervised: web, phone and WhatsApp calls. Calls placed with `POST /v1/calls` have no media room.
 

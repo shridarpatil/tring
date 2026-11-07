@@ -86,7 +86,9 @@ On a phone call, a supervisor can listen from the IVR onwards, before any agent 
 
 Barge on a phone call needs the gateway to mix the agent's and the supervisor's audio into the one stream the caller receives. The `tring` image does this: it is built with libopus (`-tags opus`). A binary built without it, such as `go run ./cmd/tring`, logs a warning on barge, and the caller hears one of them at a time.
 
-Every session is audited (who, which call, when, which modes) and appears on the call's timeline. ### Who can supervise
+Every session is audited (who, which call, when, which modes) and appears on the call's timeline.
+
+### Who can supervise
 
 | Role | Can supervise |
 |---|---|

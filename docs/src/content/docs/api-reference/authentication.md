@@ -105,7 +105,7 @@ A few routes act on behalf of a specific console **user**, so they reject API ke
 
 | Route | Notes |
 |---|---|
-| `POST /v1/calls/{id}/supervise` | Join a live call as a supervisor. The user also needs the supervise permission, or gets `403 not permitted to supervise`. See [Calls](/tring/api-reference/calls/). |
+| `POST /v1/calls/{id}/supervise` | Join a live call as a supervisor. The user must be an admin or supervisor (any live call), or a manager of a team the call belongs to; otherwise `403 not permitted to supervise`. See [Calls](/tring/api-reference/calls/). |
 
 Sending an API key to one of these returns `401 console session required`. An invalid or expired token, or one whose user has been deleted, returns `401 invalid console session`.
 
