@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -30,6 +31,9 @@ const (
 type ConsoleClaims struct {
 	TenantID uuid.UUID `json:"tenant"`
 	Email    string    `json:"email"`
+	// Role is a UI hint only (which console to render); authorization always
+	// reloads the role from the DB (loadPrincipal).
+	Role string `json:"role,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -42,6 +46,39 @@ type consoleLoginResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 	Tenant    Tenant    `json:"tenant"`
+	User      meUser    `json:"user"`
+}
+
+// meUser is the logged-in console user as the console sees it: login returns
+// it so the console can pick its view without a second round-trip.
+type meUser struct {
+	ID          string      `json:"id"`
+	DisplayName string      `json:"display_name"`
+	Email       string      `json:"email"`
+	Role        string      `json:"role"`
+	SipUsername string      `json:"sip_username"`
+	Teams       []myTeamRef `json:"teams"`
+}
+
+type myTeamRef struct {
+	Name      string `json:"name"`
+	IsManager bool   `json:"is_manager"`
+}
+
+func newMeUser(p *Principal, email string) meUser {
+	// Non-nil so a user in no team serialises as [] rather than null.
+	teams := make([]myTeamRef, 0, len(p.Teams))
+	for _, name := range p.Teams {
+		teams = append(teams, myTeamRef{Name: name, IsManager: slices.Contains(p.ManagedTeams, name)})
+	}
+	return meUser{
+		ID:          p.UserID.String(),
+		DisplayName: p.DisplayName,
+		Email:       email,
+		Role:        p.Role,
+		SipUsername: p.SipUsername,
+		Teams:       teams,
+	}
 }
 
 // handleConsoleLogin authenticates an email+password against the users
@@ -111,7 +148,13 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signed, exp, err := s.IssueConsoleToken(userID, tenantID, email, consoleTokenTTL)
+	principal, err := s.principalFor(r.Context(), userID, tenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load user")
+		return
+	}
+
+	signed, exp, err := s.IssueConsoleToken(userID, tenantID, email, principal.Role, consoleTokenTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "issue token")
 		return
@@ -121,17 +164,19 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		Token:     signed,
 		ExpiresAt: exp,
 		Tenant:    t,
+		User:      newMeUser(principal, email),
 	})
 }
 
 // IssueConsoleToken signs a console-audience JWT. Exported so tests can
 // mint authenticated requests without going through /v1/console/login.
-func (s *Server) IssueConsoleToken(userID, tenantID uuid.UUID, email string, ttl time.Duration) (string, time.Time, error) {
+func (s *Server) IssueConsoleToken(userID, tenantID uuid.UUID, email, role string, ttl time.Duration) (string, time.Time, error) {
 	now := time.Now()
 	exp := now.Add(ttl)
 	claims := ConsoleClaims{
 		TenantID: tenantID,
 		Email:    email,
+		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
 			IssuedAt:  jwt.NewNumericDate(now),

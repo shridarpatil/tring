@@ -382,10 +382,17 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.AuthRequired)
 
 			// Long-lived SSE: must NOT inherit the 30s request timeout.
-			r.Get("/stream/dashboard", s.handleDashboardStream)
+			// Tenant-wide live feed, so not for non-admin console sessions.
+			r.With(s.RejectSelfScope).Get("/stream/dashboard", s.handleDashboardStream)
 
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Timeout(30 * time.Second))
+
+				// Every route in this group was written for tenant-wide callers
+				// (API keys, admins). Non-admin console sessions are refused
+				// here by default and only reach routes that check the
+				// Principal themselves.
+				r.Use(s.RejectSelfScope)
 
 				// ── Any caller, including a 'calls'-scoped API key: what a CRM
 				// backend needs to place and handle calls, plus read-only lookups.
