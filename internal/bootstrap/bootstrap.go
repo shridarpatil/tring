@@ -15,6 +15,8 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -81,7 +83,13 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 		return fmt.Errorf("bootstrap: insert tenant: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash), true); err != nil {
+	// The admin is also a users row with a SIP identity; its password is
+	// random and unused, and is sealed by the api's startup pass.
+	var sipPw [16]byte
+	if _, err := rand.Read(sipPw[:]); err != nil {
+		return fmt.Errorf("bootstrap: sip password: %w", err)
+	}
+	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash), hex.EncodeToString(sipPw[:])); err != nil {
 		return fmt.Errorf("bootstrap: insert user: %w", err)
 	}
 

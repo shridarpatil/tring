@@ -52,6 +52,8 @@ type Agent struct {
 	// rings an agent only when they're BOTH connected AND available_for_calls.
 	AvailableForCalls bool      `json:"available_for_calls"`
 	CreatedAt         time.Time `json:"created_at"`
+	// Role is admin | supervisor | agent (the unified users table).
+	Role string `json:"role"`
 	// Status is the agent's live EFFECTIVE state, populated on list responses.
 	// It combines Redis presence with available_for_calls: "on_call" (busy),
 	// "away" (connected but marked unavailable), "online" (connected and
@@ -94,7 +96,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
 		t.ID, req.SipUsername, s.sealSecret(sipPassword), req.DisplayName).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
+		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -119,7 +121,7 @@ func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 	agents := []Agent{}
 	for rows.Next() {
 		var a Agent
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role); err != nil {
 			return nil, err
 		}
 		agents = append(agents, a)
@@ -199,7 +201,7 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgent,
-		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt)
+		id, t.ID).Scan(&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -240,7 +242,7 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 	}
 	var a Agent
 	err = s.db.Pool.QueryRow(r.Context(), s.q.SetAgentAvailability, req.Available, id, t.ID).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt,
+		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")

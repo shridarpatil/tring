@@ -97,7 +97,7 @@ func Setup(t *testing.T) *Fixture {
 	// flushes everything that FKs into tenants too.
 	// `users` joins this list so the seeded console user gets cleared too.
 	_, err = d.Pool.Exec(ctx, `
-		TRUNCATE tenants, agents, numbers, calls, webhooks, webhook_deliveries, users, flows, trunks
+		TRUNCATE tenants, numbers, calls, webhooks, webhook_deliveries, users, flows, trunks
 		RESTART IDENTITY CASCADE;
 	`)
 	if err != nil {
@@ -126,8 +126,8 @@ func Setup(t *testing.T) *Fixture {
 	const bcryptSentinel = "$2a$10$dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest"
 	var userID uuid.UUID
 	err = d.Pool.QueryRow(ctx, `
-		INSERT INTO users (tenant_id, email, password_hash)
-		VALUES ($1, $2, $3)
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
+		VALUES ($1, $2, $3, $2, 'x', 'admin')
 		RETURNING id
 	`, tenantID, dbtestUserEmail, bcryptSentinel).Scan(&userID)
 	if err != nil {

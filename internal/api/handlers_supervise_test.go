@@ -33,8 +33,8 @@ func insertSuperviseCall(t *testing.T, f *dbtest.Fixture, source, status, roomID
 func TestSuperviseMintsToken(t *testing.T) {
 	f := dbtest.Setup(t)
 	ctx := context.Background()
-	if _, err := f.DB.Pool.Exec(ctx, "UPDATE users SET can_supervise=true WHERE id=$1", f.UserID); err != nil {
-		t.Fatalf("grant can_supervise: %v", err)
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE users SET role='admin' WHERE id=$1", f.UserID); err != nil {
+		t.Fatalf("grant supervise role: %v", err)
 	}
 	callID := insertSuperviseCall(t, f, "web", "answered", f.TenantID.String()+"/room-42")
 	s := newTestServer(f)
@@ -61,16 +61,13 @@ func TestSuperviseMintsToken(t *testing.T) {
 	}
 }
 
-// TestSuperviseDeniedWithoutPermission relies on the fixture user's default
-// can_supervise being false — see dbtest.Setup, which inserts the console
-// user via inline SQL that omits can_supervise, so it takes the migration
-// column default (false). Explicitly set it anyway so the test doesn't
-// silently depend on that default staying put.
+// TestSuperviseDeniedWithoutPermission sets the role explicitly (rather than
+// relying on the fixture default) so a plain agent is denied.
 func TestSuperviseDeniedWithoutPermission(t *testing.T) {
 	f := dbtest.Setup(t)
 	ctx := context.Background()
-	if _, err := f.DB.Pool.Exec(ctx, "UPDATE users SET can_supervise=false WHERE id=$1", f.UserID); err != nil {
-		t.Fatalf("revoke can_supervise: %v", err)
+	if _, err := f.DB.Pool.Exec(ctx, "UPDATE users SET role='agent' WHERE id=$1", f.UserID); err != nil {
+		t.Fatalf("revoke supervise role: %v", err)
 	}
 	callID := insertSuperviseCall(t, f, "web", "answered", f.TenantID.String()+"/room-9")
 	s := newTestServer(f)
@@ -102,8 +99,8 @@ func TestSuperviseRejectsAPIKey(t *testing.T) {
 // supervise, returning the HTTP status.
 func superviseStatus(t *testing.T, f *dbtest.Fixture, callID uuid.UUID) (int, string) {
 	t.Helper()
-	if _, err := f.DB.Pool.Exec(context.Background(), "UPDATE users SET can_supervise=true WHERE id=$1", f.UserID); err != nil {
-		t.Fatalf("grant can_supervise: %v", err)
+	if _, err := f.DB.Pool.Exec(context.Background(), "UPDATE users SET role='admin' WHERE id=$1", f.UserID); err != nil {
+		t.Fatalf("grant supervise role: %v", err)
 	}
 	s := newTestServer(f)
 	req := authedRequest(t, s, f, "POST", "/v1/calls/"+callID.String()+"/supervise", "")

@@ -8,30 +8,30 @@
 -- ===========================================================================
 
 -- name: create-agent
-INSERT INTO agents (tenant_id, sip_username, sip_password, display_name)
+INSERT INTO users (tenant_id, sip_username, sip_password, display_name)
 VALUES ($1, $2, $3, NULLIF($4, ''))
-RETURNING id, tenant_id, sip_username, sip_password, COALESCE(display_name, ''), available_for_calls, created_at;
+RETURNING id, tenant_id, sip_username, sip_password, COALESCE(display_name, ''), available_for_calls, created_at, role;
 
 -- name: list-agents
-SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at
-FROM agents
+SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at, role
+FROM users
 WHERE tenant_id = $1
 ORDER BY created_at DESC;
 
 -- name: get-agent
-SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at
-FROM agents
+SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at, role
+FROM users
 WHERE id = $1 AND tenant_id = $2;
 
 -- name: set-agent-availability
-UPDATE agents SET available_for_calls = $1
+UPDATE users SET available_for_calls = $1
 WHERE id = $2 AND tenant_id = $3
-RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at;
+RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at, role;
 
 -- name: get-agent-availability
 -- The gateway reads this when an agent's presence socket connects, so the SDK
 -- shows Away for an agent the backend already marked unavailable.
-SELECT available_for_calls FROM agents WHERE tenant_id = $1 AND sip_username = $2;
+SELECT available_for_calls FROM users WHERE tenant_id = $1 AND sip_username = $2;
 
 -- ===========================================================================
 -- teams (tenant-scoped agent groups; identified by name)
@@ -80,7 +80,7 @@ DELETE FROM teams WHERE tenant_id = $1 AND name = $2;
 -- name: list-team-agents
 -- Members of a team with their membership position, for the console editor.
 SELECT a.id, a.sip_username, COALESCE(a.display_name, ''), a.available_for_calls, ta.position
-FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+FROM team_agents ta JOIN users a ON a.id = ta.agent_id
 WHERE ta.tenant_id = $1 AND ta.team_name = $2
 ORDER BY ta.position, a.sip_username;
 
@@ -89,7 +89,7 @@ ORDER BY ta.position, a.sip_username;
 -- the agent belongs to this tenant (cross-tenant add inserts nothing → 0 rows).
 INSERT INTO team_agents (tenant_id, team_name, agent_id, position)
 SELECT $1, $2, $3, $4
-WHERE EXISTS (SELECT 1 FROM agents WHERE id = $3 AND tenant_id = $1)
+WHERE EXISTS (SELECT 1 FROM users WHERE id = $3 AND tenant_id = $1)
 ON CONFLICT (tenant_id, team_name, agent_id) DO UPDATE SET position = EXCLUDED.position;
 
 -- name: remove-team-agent
@@ -99,7 +99,7 @@ DELETE FROM team_agents WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $
 -- Ring targets for a team: members the backend hasn't marked unavailable,
 -- ordered by membership position (used directly by the `sequential` strategy).
 SELECT a.sip_username, ta.position
-FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+FROM team_agents ta JOIN users a ON a.id = ta.agent_id
 WHERE ta.tenant_id = $1 AND ta.team_name = $2 AND a.available_for_calls
 ORDER BY ta.position, a.sip_username;
 
@@ -112,7 +112,7 @@ FROM teams WHERE tenant_id = $1 ORDER BY name;
 -- Team membership (team name + agent SIP user) for the live dashboard's
 -- per-team live-agent count; presence is joined from Redis by the caller.
 SELECT ta.team_name, a.sip_username
-FROM team_agents ta JOIN agents a ON a.id = ta.agent_id
+FROM team_agents ta JOIN users a ON a.id = ta.agent_id
 WHERE ta.tenant_id = $1;
 
 -- name: insert-queue-stint
@@ -349,7 +349,7 @@ WHERE tenant_id = $1 AND enqueued_at >= date_trunc('day', now());
 -- ===========================================================================
 
 -- name: get-agent-sip-username
-SELECT sip_username FROM agents WHERE id = $1 AND tenant_id = $2;
+SELECT sip_username FROM users WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-tenant-sip-domain
 SELECT sip_domain FROM tenants WHERE id = $1;
@@ -378,7 +378,7 @@ FROM calls WHERE id = $1 AND tenant_id = $2;
 
 -- name: get-user-supervise
 -- The supervise permission for a console user, scoped to the tenant.
-SELECT can_supervise FROM users WHERE id = $1 AND tenant_id = $2;
+SELECT role IN ('admin','supervisor') FROM users WHERE id = $1 AND tenant_id = $2;
 
 -- name: create-supervisor-session
 INSERT INTO supervisor_sessions (tenant_id, call_id, supervisor_user_id, started_at, modes_used)
@@ -436,7 +436,7 @@ ORDER BY c.answered_at DESC NULLS LAST LIMIT 1;
 -- Resolve an agent id + display label from a SIP username, used to attribute
 -- the answered transfer leg. Label falls back to the SIP username.
 SELECT id, COALESCE(NULLIF(display_name, ''), sip_username)
-FROM agents WHERE tenant_id = $1 AND sip_username = $2;
+FROM users WHERE tenant_id = $1 AND sip_username = $2;
 
 -- name: get-call
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
@@ -444,7 +444,7 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, '')
-FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
 -- name: list-calls
@@ -458,7 +458,7 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, '')
-FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id
 WHERE c.tenant_id = $1
   AND ($4 = '' OR c.status::text = $4)
   AND (($5 = '' AND $6 = '')
@@ -485,7 +485,7 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, ''),
        qs.team, qs.enqueued_at, qs.sla_seconds
-FROM calls c LEFT JOIN agents a ON a.id = c.agent_id
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id
 LEFT JOIN LATERAL (
     SELECT team, enqueued_at, sla_seconds FROM queue_stints
     WHERE tenant_id = c.tenant_id AND call_id = c.id AND ended_at IS NULL
@@ -514,19 +514,19 @@ WHERE c.tenant_id = $1
 SELECT id FROM tenants WHERE sip_domain = $1;
 
 -- name: get-agent-credentials
-SELECT id, sip_password FROM agents WHERE tenant_id = $1 AND sip_username = $2;
+SELECT id, sip_password FROM users WHERE tenant_id = $1 AND sip_username = $2;
 
 -- ===========================================================================
 -- console auth
 -- ===========================================================================
 
 -- name: get-user-by-email
-SELECT id, tenant_id, password_hash FROM users WHERE email = $1;
+SELECT id, tenant_id, password_hash FROM users WHERE lower(email) = $1 AND password_hash IS NOT NULL;
 
 -- name: user-exists
 -- Console-session revocation check: a JWT for a deleted user (or one moved
 -- out of the tenant) must stop working. Primary-key point read.
-SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2);
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 AND password_hash IS NOT NULL);
 
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
@@ -735,7 +735,7 @@ DELETE FROM trunks WHERE id = $1 AND tenant_id = $2;
 -- (sealed, plaintext) SIP password counts across trunks + agents.
 SELECT count(*) FILTER (WHERE sip_password LIKE 'enc:v1:%'),
        count(*) FILTER (WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%')
-FROM (SELECT sip_password FROM trunks UNION ALL SELECT sip_password FROM agents) s;
+FROM (SELECT sip_password FROM trunks UNION ALL SELECT sip_password FROM users) s;
 
 -- name: list-plaintext-trunk-secrets
 -- Locked so concurrent api replicas starting together seal each row once.
@@ -747,12 +747,12 @@ FOR UPDATE;
 UPDATE trunks SET sip_password = $2 WHERE id = $1;
 
 -- name: list-plaintext-agent-secrets
-SELECT id, sip_password FROM agents
+SELECT id, sip_password FROM users
 WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%'
 FOR UPDATE;
 
 -- name: set-agent-secret
-UPDATE agents SET sip_password = $2 WHERE id = $1;
+UPDATE users SET sip_password = $2 WHERE id = $1;
 
 -- name: select-outbound-trunks
 -- Active outbound DIDs joined to their active trunk, priority order.
@@ -851,8 +851,8 @@ VALUES ($1, $2, $3, $4)
 RETURNING id;
 
 -- name: insert-user
-INSERT INTO users (tenant_id, email, password_hash, can_supervise)
-VALUES ($1, $2, $3, $4);
+INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
+VALUES ($1, lower($2), $3, lower($2), $4, 'admin');
 
 -- ===========================================================================
 -- webhook notifier (shared: api + orchestrator)
