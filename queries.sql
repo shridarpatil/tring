@@ -944,3 +944,52 @@ SELECT count(*) FROM calls WHERE tenant_id = $1 AND agent_id = $2;
 
 -- name: is-my-call
 SELECT EXISTS (SELECT 1 FROM calls WHERE tenant_id = $1 AND id = $2 AND agent_id = $3);
+
+-- ===========================================================================
+-- admin users API (/v1/users)
+-- ===========================================================================
+
+-- name: list-users
+-- Team arrays are empty, never NULL, for a user in no team.
+SELECT u.id, COALESCE(u.display_name, ''), COALESCE(u.email, ''), u.role, u.sip_username, u.available_for_calls,
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[],
+       (u.email IS NOT NULL AND u.password_hash IS NOT NULL), u.created_at
+FROM users u
+LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
+WHERE u.tenant_id = $1
+GROUP BY u.id
+ORDER BY u.created_at, u.id;
+
+-- name: get-user
+SELECT u.id, COALESCE(u.display_name, ''), COALESCE(u.email, ''), u.role, u.sip_username, u.available_for_calls,
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
+       COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[],
+       (u.email IS NOT NULL AND u.password_hash IS NOT NULL), u.created_at
+FROM users u
+LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
+WHERE u.tenant_id = $1 AND u.id = $2
+GROUP BY u.id;
+
+-- name: create-user
+INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, display_name, role)
+VALUES ($1, lower($2), $3, $4, $5, NULLIF($6, ''), $7)
+RETURNING id;
+
+-- name: update-user
+-- NULL parameter = leave unchanged. Clearing a login is clear-user-login.
+UPDATE users SET
+    display_name  = COALESCE($3, display_name),
+    email         = COALESCE(lower($4), email),
+    role          = COALESCE($5, role),
+    password_hash = COALESCE($6, password_hash)
+WHERE tenant_id = $1 AND id = $2
+RETURNING id;
+
+-- name: clear-user-login
+UPDATE users SET email = NULL, password_hash = NULL
+WHERE tenant_id = $1 AND id = $2
+RETURNING id;
+
+-- name: delete-user
+DELETE FROM users WHERE tenant_id = $1 AND id = $2;

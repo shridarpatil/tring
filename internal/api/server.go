@@ -477,6 +477,16 @@ func (s *Server) Router() http.Handler {
 					r.Patch("/trunks/{id}", s.handlePatchTrunk)
 					r.Delete("/trunks/{id}", s.handleDeleteTrunk)
 					r.Post("/trunks/reload", s.handleReloadTrunks)
+
+					// Console logins and roles: admin sessions only. API keys have
+					// no principal, so a leaked full key can't mint admin logins.
+					r.Group(func(r chi.Router) {
+						r.Use(s.RequirePrincipal)
+						r.Get("/users", s.handleListUsers)
+						r.Post("/users", s.handleCreateUser)
+						r.Patch("/users/{id}", s.handlePatchUser)
+						r.Delete("/users/{id}", s.handleDeleteUser)
+					})
 				})
 			})
 		})
