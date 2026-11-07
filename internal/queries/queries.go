@@ -116,6 +116,14 @@ type Queries struct {
 	GetConsolePrincipal string `query:"get-console-principal"`
 	GetTenant           string `query:"get-tenant"`
 
+	// ---- api: /v1/me ----
+	GetUserPasswordHash string `query:"get-user-password-hash"`
+	SetUserPassword     string `query:"set-user-password"`
+	GetMeStats          string `query:"get-me-stats"`
+	ListMyCalls         string `query:"list-my-calls"`
+	CountMyCalls        string `query:"count-my-calls"`
+	IsMyCall            string `query:"is-my-call"`
+
 	// ---- api: guest web-calling ----
 	FlowUsable        string `query:"flow-usable"`
 	GetGuestConfig    string `query:"get-guest-config"`

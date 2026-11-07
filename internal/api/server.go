@@ -481,6 +481,22 @@ func (s *Server) Router() http.Handler {
 			})
 		})
 
+		// The logged-in user's own surface. Inside AuthRequired but outside
+		// RejectSelfScope on purpose: non-admin console sessions land here, and
+		// every handler is scoped to the Principal's own user id.
+		r.Group(func(r chi.Router) {
+			r.Use(s.AuthRequired)
+			r.Use(middleware.Timeout(30 * time.Second))
+			r.Use(s.RequirePrincipal)
+			r.Get("/me", s.handleGetMe)
+			r.Post("/me/token", s.handleMeToken)
+			r.Post("/me/availability", s.handleMeAvailability)
+			r.Post("/me/password", s.handleMePassword)
+			r.Get("/me/stats", s.handleMeStats)
+			r.Get("/me/calls", s.handleMeCalls)
+			r.Get("/me/calls/{id}/recording", s.handleMeCallRecording)
+		})
+
 		// Console-only: supervise a live web call. Separate from AuthRequired
 		// because the supervise permission is per-user and an API key has no
 		// user identity to check it against.

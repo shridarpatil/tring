@@ -527,13 +527,19 @@ SELECT id, tenant_id, password_hash FROM users WHERE lower(email) = $1 AND passw
 -- A console session's user, reloaded every request: role and team memberships
 -- drive authorization, and no row (deleted, moved tenant, login removed)
 -- revokes the session. Empty arrays, never NULL, for a user in no team.
-SELECT u.role, u.sip_username, COALESCE(u.display_name, ''),
+SELECT u.role, u.sip_username, COALESCE(u.email, ''), COALESCE(u.display_name, ''),
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[]
 FROM users u
 LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
 WHERE u.id = $1 AND u.tenant_id = $2 AND u.password_hash IS NOT NULL
 GROUP BY u.id;
+
+-- name: get-user-password-hash
+SELECT password_hash FROM users WHERE tenant_id = $1 AND id = $2 AND password_hash IS NOT NULL;
+
+-- name: set-user-password
+UPDATE users SET password_hash = $3 WHERE tenant_id = $1 AND id = $2;
 
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
@@ -892,3 +898,37 @@ WHERE id=$2;
 UPDATE webhook_deliveries
 SET status='exhausted', response_status=NULLIF($1,0), last_error=NULLIF($2,'')
 WHERE id=$3;
+
+-- ===========================================================================
+-- /v1/me (the logged-in agent's own view)
+-- ===========================================================================
+
+-- name: get-me-stats
+-- $1 tenant, $2 user, $3 window start. taken = calls the user answered;
+-- missed = calls rung to the user that someone else (or no one) answered,
+-- one per call however many times it rang them.
+SELECT
+  (SELECT count(*) FROM calls
+    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= $3),
+  (SELECT COALESCE(sum(duration_seconds), 0)::int FROM calls
+    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= $3),
+  (SELECT count(DISTINCT e.call_id) FROM call_events e
+    WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= $3
+      AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.id = e.call_id AND c.agent_id = $2));
+
+-- name: list-my-calls
+-- Same columns as list-calls, restricted to calls this user handled.
+SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
+       c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
+       c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
+       COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
+       COALESCE(c.room_id, '')
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+WHERE c.tenant_id = $1 AND c.agent_id = $2
+ORDER BY c.started_at DESC LIMIT $3 OFFSET $4;
+
+-- name: count-my-calls
+SELECT count(*) FROM calls WHERE tenant_id = $1 AND agent_id = $2;
+
+-- name: is-my-call
+SELECT EXISTS (SELECT 1 FROM calls WHERE tenant_id = $1 AND id = $2 AND agent_id = $3);

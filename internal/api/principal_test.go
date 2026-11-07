@@ -17,12 +17,20 @@ import (
 	"github.com/shridarpatil/tring/internal/dbtest"
 )
 
-// selfScopeAllowlist are the route prefixes a non-admin console session may
-// reach: principal-checked routes plus static/SPA and agent-JWT surfaces that
-// aren't console-authenticated at all.
-var selfScopeAllowlist = []string{
-	"/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise",
-	"/v1/sdk/", "/healthz", "/sdk/", "/admin",
+// selfScopeAllowed reports whether a non-admin console session may reach a
+// route: principal-checked routes (exact path or sub-path, never a mere string
+// prefix) plus the static/SPA surfaces that aren't console-authenticated.
+func selfScopeAllowed(route string) bool {
+	switch route {
+	case "/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise", "/healthz":
+		return true
+	}
+	for _, p := range []string{"/v1/me/", "/v1/my-teams/", "/sdk/", "/admin"} {
+		if strings.HasPrefix(route, p) {
+			return true
+		}
+	}
+	return false
 }
 
 var routeParam = regexp.MustCompile(`\{[^}]+\}`)
@@ -58,7 +66,7 @@ func doReq(t *testing.T, h http.Handler, method, path, tok, body string) *httpte
 }
 
 // assertAllLegacyRoutesDenied walks every registered route and asserts a
-// console session for the given role gets 401/403 outside the allowlist, so a
+// console session for the given role is refused outside the allowlist, so a
 // route added later without a principal check fails here by default.
 func assertAllLegacyRoutesDenied(t *testing.T, role string) {
 	f := dbtest.Setup(t)
@@ -69,15 +77,20 @@ func assertAllLegacyRoutesDenied(t *testing.T, role string) {
 
 	checked := 0
 	err := chi.Walk(h.(chi.Routes), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		for _, p := range selfScopeAllowlist {
-			if strings.HasPrefix(route, p) {
-				return nil
-			}
+		if selfScopeAllowed(route) {
+			return nil
 		}
 		path := routeParam.ReplaceAllString(route, uuid.NewString())
 		rec := doReq(t, h, method, path, tok, "")
-		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
-			t.Errorf("%s session: %s %s = %d, want 401/403", role, method, route, rec.Code)
+		// Routes in the AuthRequired group must answer 403 (authenticated,
+		// refused); only the agent-JWT /v1/sdk/* routes see a console token as
+		// unauthenticated.
+		want := http.StatusForbidden
+		if strings.HasPrefix(route, "/v1/sdk/") {
+			want = http.StatusUnauthorized
+		}
+		if rec.Code != want {
+			t.Errorf("%s session: %s %s = %d, want %d", role, method, route, rec.Code, want)
 		}
 		checked++
 		return nil

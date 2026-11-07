@@ -20,6 +20,7 @@ type Principal struct {
 	UserID, TenantID uuid.UUID
 	Role             string // "admin" | "supervisor" | "agent"
 	SipUsername      string
+	Email            string
 	DisplayName      string
 	Teams            []string // team names the user is a member of
 	ManagedTeams     []string // subset where the user is the team's manager
@@ -72,7 +73,7 @@ func (s *Server) loadPrincipal(ctx context.Context, c *ConsoleClaims) (*Principa
 func (s *Server) principalFor(ctx context.Context, userID, tenantID uuid.UUID) (*Principal, error) {
 	p := &Principal{UserID: userID, TenantID: tenantID}
 	err := s.db.Pool.QueryRow(ctx, s.q.GetConsolePrincipal, userID, tenantID).
-		Scan(&p.Role, &p.SipUsername, &p.DisplayName, &p.Teams, &p.ManagedTeams)
+		Scan(&p.Role, &p.SipUsername, &p.Email, &p.DisplayName, &p.Teams, &p.ManagedTeams)
 	if err != nil {
 		return nil, err
 	}

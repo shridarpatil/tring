@@ -240,10 +240,7 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	var a Agent
-	err = s.db.Pool.QueryRow(r.Context(), s.q.SetAgentAvailability, req.Available, id, t.ID).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
-	)
+	a, err := s.applyAgentAvailability(r.Context(), t.ID, id, req.Available)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "agent not found")
 		return
@@ -252,15 +249,28 @@ func (s *Server) handleSetAgentAvailability(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+// applyAgentAvailability persists the flag, refreshes the gateway's cached copy
+// and publishes agent.status; shared by the backend and /v1/me endpoints.
+func (s *Server) applyAgentAvailability(ctx context.Context, tenantID, agentID uuid.UUID, available bool) (Agent, error) {
+	var a Agent
+	err := s.db.Pool.QueryRow(ctx, s.q.SetAgentAvailability, available, agentID, tenantID).Scan(
+		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
+	)
+	if err != nil {
+		return Agent{}, err
+	}
 	// Overwrite the gateway's cached flag so a reconnecting agent reads the new
 	// one (a write, not a delete: see presence.FillAvailability).
-	s.presence.SetAvailability(r.Context(), t.ID.String(), a.SipUsername, a.AvailableForCalls)
-	s.events.Publish(r.Context(), t.ID.String(), events.TypeAgentStatus, map[string]any{
+	s.presence.SetAvailability(ctx, tenantID.String(), a.SipUsername, a.AvailableForCalls)
+	s.events.Publish(ctx, tenantID.String(), events.TypeAgentStatus, map[string]any{
 		"agent_id":            a.ID,
 		"sip_username":        a.SipUsername,
 		"available_for_calls": a.AvailableForCalls,
 	})
-	writeJSON(w, http.StatusOK, a)
+	return a, nil
 }
 
 // ---- Numbers ------------------------------------------------------------

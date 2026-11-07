@@ -260,11 +260,17 @@ func (s *Server) handleGetCallRecording(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
+	s.serveCallRecording(w, r, t.ID, id)
+}
+
+// serveCallRecording streams the recording of a call already authorized by
+// the caller; the lookup is still tenant-filtered.
+func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tenantID, id uuid.UUID) {
 	var (
 		fsUUID string
 		s3Key  *string
 	)
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetCallRecording, id, t.ID).Scan(&fsUUID, &s3Key)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetCallRecording, id, tenantID).Scan(&fsUUID, &s3Key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return
