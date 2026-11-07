@@ -53,6 +53,29 @@ func seedRing(t *testing.T, f *dbtest.Fixture, call, agent uuid.UUID) {
 	}
 }
 
+// seedAnswered records that agent joined call, as callcdr.Answered does.
+func seedAnswered(t *testing.T, f *dbtest.Fixture, call, agent uuid.UUID) {
+	t.Helper()
+	if _, err := f.DB.Pool.Exec(context.Background(), `
+		INSERT INTO call_events (tenant_id, call_id, type, detail)
+		VALUES ($1, $2, 'answered', jsonb_build_object('agent_id', $3::text))`,
+		f.TenantID, call, agent.String()); err != nil {
+		t.Fatalf("seed answered: %v", err)
+	}
+}
+
+// seedTransferred seeds a call answered by first and then transferred to
+// second: calls.agent_id ends up as second, as callcdr re-stamps it.
+func seedTransferred(t *testing.T, f *dbtest.Fixture, first, second uuid.UUID, at string) uuid.UUID {
+	t.Helper()
+	id := seedCall(t, f, second, true, at)
+	seedRing(t, f, id, first)
+	seedAnswered(t, f, id, first)
+	seedRing(t, f, id, second)
+	seedAnswered(t, f, id, second)
+	return id
+}
+
 func TestMeTokenIsOwnAgentJWT(t *testing.T) {
 	f := dbtest.Setup(t)
 	s := newTestServer(f)
@@ -146,8 +169,17 @@ func TestMeStatsTakenAndMissed(t *testing.T) {
 	// Yesterday's call is outside range=today.
 	old := seedCall(t, f, me, true, "date_trunc('day', now()) - interval '1 hour'")
 	seedRing(t, f, old, me)
+	// C4: I answered, then transferred it to X; it stays taken for both.
+	seedTransferred(t, f, me, x, todayAt)
+	// C5: still ringing me — not missed until it ends unanswered.
+	c5 := seedCall(t, f, uuid.Nil, false, todayAt)
+	if _, err := f.DB.Pool.Exec(context.Background(),
+		`UPDATE calls SET status = 'ringing', ended_at = NULL WHERE id = $1`, c5); err != nil {
+		t.Fatal(err)
+	}
+	seedRing(t, f, c5, me)
 
-	get := func(q string) meStats {
+	getAs := func(tok, q string) meStats {
 		rec := doReq(t, s.Router(), "GET", "/v1/me/stats"+q, tok, "")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("stats%s: %d %s", q, rec.Code, rec.Body)
@@ -158,13 +190,19 @@ func TestMeStatsTakenAndMissed(t *testing.T) {
 		}
 		return st
 	}
+	get := func(q string) meStats { return getAs(tok, q) }
 	// todayAt ago can cross midnight only in the first second of the day;
 	// accept that flake window rather than complicate the seed.
-	if st := get(""); st.Taken != 1 || st.Missed != 2 || st.TalkSeconds != 60 || st.AvgTalkSeconds != 60 {
+	if st := get(""); st.Taken != 2 || st.Missed != 2 || st.TalkSeconds != 120 || st.AvgTalkSeconds != 60 {
 		t.Fatalf("today = %+v", st)
 	}
-	if st := get("?range=7d"); st.Taken != 2 || st.Missed != 2 || st.TalkSeconds != 120 {
+	if st := get("?range=7d"); st.Taken != 3 || st.Missed != 2 || st.TalkSeconds != 180 {
 		t.Fatalf("7d = %+v", st)
+	}
+	// X answered C2 and took C4 over from me.
+	xTok := tokenFor(t, s, f, x, "x@example.com", "agent")
+	if st := getAs(xTok, ""); st.Taken != 2 || st.Missed != 0 {
+		t.Fatalf("x today = %+v", st)
 	}
 	if rec := doReq(t, s.Router(), "GET", "/v1/me/stats?range=bogus", tok, ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad range: %d", rec.Code)
@@ -180,10 +218,12 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 	tok := tokenFor(t, s, f, me, "a@example.com", "agent")
 	mine := seedCall(t, f, me, true, "now() - interval '1 hour'")
 	theirs := seedCall(t, f, x, true, "now() - interval '1 hour'")
+	// I answered, then transferred to X: it is in both histories.
+	handedOff := seedTransferred(t, f, me, x, "now() - interval '2 hours'")
 
 	// Both recordings exist on disk, so a 404 for the other agent's can only
 	// come from the ownership check.
-	for _, id := range []uuid.UUID{mine, theirs} {
+	for _, id := range []uuid.UUID{mine, theirs, handedOff} {
 		var leg string
 		if err := f.DB.Pool.QueryRow(context.Background(), `SELECT leg_id FROM calls WHERE id = $1`, id).Scan(&leg); err != nil {
 			t.Fatal(err)
@@ -193,19 +233,31 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 		}
 	}
 
-	rec := doReq(t, s.Router(), "GET", "/v1/me/calls", tok, "")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("calls: %d %s", rec.Code, rec.Body)
-	}
-	var page struct {
+	type callsPage struct {
 		Items []Call `json:"items"`
 		Total int    `json:"total"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
-		t.Fatal(err)
+	list := func(tok string) callsPage {
+		rec := doReq(t, s.Router(), "GET", "/v1/me/calls", tok, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("calls: %d %s", rec.Code, rec.Body)
+		}
+		var page callsPage
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
 	}
-	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != mine {
+	page := list(tok)
+	if page.Total != 2 || len(page.Items) != 2 || page.Items[0].ID != mine || page.Items[1].ID != handedOff {
 		t.Fatalf("page = %+v", page)
+	}
+	xPage := list(tokenFor(t, s, f, x, "x@example.com", "agent"))
+	if xPage.Total != 2 || len(xPage.Items) != 2 || xPage.Items[0].ID != theirs || xPage.Items[1].ID != handedOff {
+		t.Fatalf("x page = %+v", xPage)
+	}
+	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+handedOff.String()+"/recording", tok, ""); rec.Code != http.StatusOK {
+		t.Fatalf("handed-off recording: %d, want 200", rec.Code)
 	}
 	if got := *page.Items[0].RecordingURL; got != "/v1/me/calls/"+mine.String()+"/recording" {
 		t.Fatalf("recording_url = %q", got)
@@ -213,7 +265,7 @@ func TestMeCallsOnlyOwn(t *testing.T) {
 	if rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+mine.String()+"/recording", tok, ""); rec.Code != http.StatusOK {
 		t.Fatalf("own recording: %d, want 200", rec.Code)
 	}
-	rec = doReq(t, s.Router(), "GET", "/v1/me/calls/"+theirs.String()+"/recording", tok, "")
+	rec := doReq(t, s.Router(), "GET", "/v1/me/calls/"+theirs.String()+"/recording", tok, "")
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "call not found") {
 		t.Fatalf("other's recording: %d %s, want 404 call not found", rec.Code, rec.Body)
 	}

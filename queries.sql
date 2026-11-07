@@ -916,46 +916,76 @@ WHERE id=$3;
 -- ===========================================================================
 
 -- name: get-me-stats-today
--- $1 tenant, $2 user. taken = calls the user answered; missed = calls rung to
--- the user that someone else (or no one) answered, one per call however many
--- times it rang them. The window starts at the DB session's local midnight,
--- like stats-today (Go-side tz math has drifted from it before).
+-- $1 tenant, $2 user. A call is the user's when they answered it: an
+-- 'answered' event naming them (callcdr re-stamps calls.agent_id on transfer,
+-- so it only names the last agent), or calls.agent_id for paths that log no
+-- answered event (outbound originate). taken = such calls; talk = their full
+-- duration_seconds, an approximation for a call handed off mid-way; missed =
+-- ended calls that rang the user and that they never answered, one per call
+-- however many times it rang them. Events of a call in the window happen after
+-- it started, so bounding e.at keeps the event lookups on the (tenant, type,
+-- at) index. The window starts at the DB session's local midnight, like
+-- stats-today (Go-side tz math has drifted from it before).
 SELECT
-  (SELECT count(*) FROM calls
-    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= date_trunc('day', now())),
-  (SELECT COALESCE(sum(duration_seconds), 0)::int FROM calls
-    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= date_trunc('day', now())),
-  (SELECT count(DISTINCT e.call_id) FROM call_events e
-    WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= date_trunc('day', now())
-      AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.id = e.call_id AND c.agent_id = $2));
+  (SELECT count(*) FROM calls c
+    WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now()) AND c.answered_at IS NOT NULL
+      AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text AND e.at >= date_trunc('day', now())))),
+  (SELECT COALESCE(sum(c.duration_seconds), 0)::int FROM calls c
+    WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now()) AND c.answered_at IS NOT NULL
+      AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text AND e.at >= date_trunc('day', now())))),
+  (SELECT count(*) FROM calls c
+    WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now()) AND c.ended_at IS NOT NULL
+      AND c.agent_id IS DISTINCT FROM $2
+      AND c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= date_trunc('day', now()))
+      AND NOT EXISTS (SELECT 1 FROM call_events e
+         WHERE e.tenant_id = $1 AND e.call_id = c.id AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text));
 
 -- name: get-me-stats-7d
 -- Same as get-me-stats-today over a rolling 7 days.
 SELECT
-  (SELECT count(*) FROM calls
-    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= now() - interval '7 days'),
-  (SELECT COALESCE(sum(duration_seconds), 0)::int FROM calls
-    WHERE tenant_id = $1 AND agent_id = $2 AND answered_at IS NOT NULL AND started_at >= now() - interval '7 days'),
-  (SELECT count(DISTINCT e.call_id) FROM call_events e
-    WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= now() - interval '7 days'
-      AND NOT EXISTS (SELECT 1 FROM calls c WHERE c.id = e.call_id AND c.agent_id = $2));
+  (SELECT count(*) FROM calls c
+    WHERE c.tenant_id = $1 AND c.started_at >= now() - interval '7 days' AND c.answered_at IS NOT NULL
+      AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text AND e.at >= now() - interval '7 days'))),
+  (SELECT COALESCE(sum(c.duration_seconds), 0)::int FROM calls c
+    WHERE c.tenant_id = $1 AND c.started_at >= now() - interval '7 days' AND c.answered_at IS NOT NULL
+      AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text AND e.at >= now() - interval '7 days'))),
+  (SELECT count(*) FROM calls c
+    WHERE c.tenant_id = $1 AND c.started_at >= now() - interval '7 days' AND c.ended_at IS NOT NULL
+      AND c.agent_id IS DISTINCT FROM $2
+      AND c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'ring' AND e.detail->>'agent_id' = $2::text AND e.at >= now() - interval '7 days')
+      AND NOT EXISTS (SELECT 1 FROM call_events e
+         WHERE e.tenant_id = $1 AND e.call_id = c.id AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text));
 
 -- name: list-my-calls
--- Same columns as list-calls, restricted to calls this user handled.
+-- Same columns as list-calls, restricted to calls this user answered (same
+-- ownership rule as get-me-stats-today, so a handed-off call stays listed).
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, '')
-FROM calls c LEFT JOIN users a ON a.id = c.agent_id
-WHERE c.tenant_id = $1 AND c.agent_id = $2
+FROM calls c LEFT JOIN users a ON a.id = c.agent_id AND a.tenant_id = c.tenant_id
+WHERE c.tenant_id = $1
+  AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text))
 ORDER BY c.started_at DESC LIMIT $3 OFFSET $4;
 
 -- name: count-my-calls
-SELECT count(*) FROM calls WHERE tenant_id = $1 AND agent_id = $2;
+SELECT count(*) FROM calls c
+WHERE c.tenant_id = $1
+  AND (c.agent_id = $2 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $2::text));
 
 -- name: is-my-call
-SELECT EXISTS (SELECT 1 FROM calls WHERE tenant_id = $1 AND id = $2 AND agent_id = $3);
+SELECT EXISTS (SELECT 1 FROM calls c WHERE c.tenant_id = $1 AND c.id = $2
+  AND (c.agent_id = $3 OR c.id IN (SELECT e.call_id FROM call_events e
+         WHERE e.tenant_id = $1 AND e.type = 'answered' AND e.detail->>'agent_id' = $3::text)));
 
 -- ===========================================================================
 -- admin users API (/v1/users)
