@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isAgentOnly, roleLabel, validateLogin, validateNewUser } from "./users.ts";
+import { buildUserPatch, isAgentOnly, roleLabel, validateLogin, validateNewUser } from "./users.ts";
 
 const ok = { email: "a@example.com", password: "longenough", role: "agent", display_name: "", sip_username: "" };
 
@@ -30,4 +30,18 @@ test("validateLogin", () => {
   assert.equal(validateLogin("a@example.com", "longenough"), "");
   assert.match(validateLogin("", "longenough"), /email/);
   assert.match(validateLogin("a@example.com", "x"), /8/);
+});
+
+test("buildUserPatch", () => {
+  const cur = { display_name: "Al", email: "a@example.com", role: "agent", can_login: true };
+  const same = { display_name: "Al", email: "a@example.com", role: "agent" };
+  assert.deepEqual(buildUserPatch(cur, same), { body: {}, problem: "" });
+  assert.deepEqual(buildUserPatch(cur, { ...same, display_name: " Bo ", role: "admin" }).body, { display_name: "Bo", role: "admin" });
+  assert.deepEqual(buildUserPatch(cur, { ...same, email: "A@Example.com" }).body, {});
+  assert.deepEqual(buildUserPatch(cur, { ...same, email: "b@example.com" }).body, { email: "b@example.com" });
+  assert.match(buildUserPatch(cur, { ...same, email: " " }).problem, /Clear login/);
+  assert.match(buildUserPatch(cur, { ...same, email: "nope" }).problem, /email/);
+  assert.match(buildUserPatch(cur, { ...same, role: "root" }).problem, /role/);
+  const nologin = { display_name: "", email: "", role: "agent", can_login: false };
+  assert.deepEqual(buildUserPatch(nologin, { display_name: "X", email: "z@example.com", role: "agent" }).body, { display_name: "X" });
 });

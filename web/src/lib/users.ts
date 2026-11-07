@@ -42,3 +42,33 @@ export function validateLogin(email: string, password: string): string {
   if (password.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters`;
   return "";
 }
+
+export interface EditUserForm {
+  display_name: string;
+  email: string;
+  role: string;
+}
+
+/**
+ * Fields of the edit dialog that differ from the saved user, or a problem.
+ * Emptying the email of a user with a login is refused: the server treats
+ * that as "clear login" (and ignores every other field), which has its own
+ * confirmed action. A login-less user's email is not editable here (setting
+ * one without a password would half-create a login), so it is never sent.
+ */
+export function buildUserPatch(
+  cur: EditUserForm & { can_login: boolean },
+  f: EditUserForm,
+): { body: Record<string, string>; problem: string } {
+  const body: Record<string, string> = {};
+  if (f.display_name.trim() !== cur.display_name) body.display_name = f.display_name.trim();
+  if (cur.can_login) {
+    const email = f.email.trim();
+    if (email === "") return { body, problem: 'Email can\'t be empty; use "Clear login" to remove the login' };
+    if (!email.includes("@")) return { body, problem: "Enter a valid email" };
+    if (email.toLowerCase() !== cur.email.toLowerCase()) body.email = email;
+  }
+  if (!roleOptions.some((o) => o.value === f.role)) return { body, problem: "Pick a role" };
+  if (f.role !== cur.role) body.role = f.role;
+  return { body, problem: "" };
+}
