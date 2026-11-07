@@ -136,6 +136,7 @@ type Queries struct {
 	// ---- api: /v1/my-teams + gateway team attribution ----
 	SetCallTeam               string `query:"set-call-team"`
 	ListTeamMemberships       string `query:"list-team-memberships"`
+	ListTeamCandidates        string `query:"list-team-candidates"`
 	ListTeamCallsToday        string `query:"list-team-calls-today"`
 	TeamStatsToday            string `query:"team-stats-today"`
 	SetTeamAgentManager       string `query:"set-team-agent-manager"`

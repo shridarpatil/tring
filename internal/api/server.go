@@ -517,6 +517,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/my-teams", s.handleListMyTeams)
 			r.Get("/my-teams/{name}", s.handleGetMyTeam)
 			r.Get("/my-teams/{name}/calls/{id}/recording", s.handleMyTeamCallRecording)
+			r.Get("/my-teams/{name}/candidates", s.handleMyTeamCandidates)
 			r.Post("/my-teams/{name}/members", s.handleAddMyTeamMember)
 			r.Delete("/my-teams/{name}/members/{userID}", s.handleRemoveMyTeamMember)
 			r.Put("/my-teams/{name}/members/{userID}/manager", s.handleSetMyTeamManager)
