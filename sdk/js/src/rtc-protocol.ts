@@ -13,7 +13,7 @@
 //                     `error` / `transfer-failed` and the message is ignored)
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
 //                     | incoming | incoming-cancel | ready | availability | error
-//                     | supervisor | transfer-failed | resume-call
+//                     | supervisor | transfer-failed | resume-call | superseded
 // Trickle ICE rides `ice` both ways. Resumption: the client stores
 // `session_token` from `joined` and re-sends it in a later `join`.
 
@@ -52,6 +52,9 @@ export const ServerMsgType = {
   // agent presence: a page refresh dropped this agent's call, and the gateway is
   // holding their slot for the grace window — `join` {room} to resume it.
   ResumeCall: "resume-call",
+  // agent presence: another tab/device registered as this agent and now gets
+  // the rings. Don't reconnect (two tabs would steal it back and forth forever).
+  Superseded: "superseded",
 } as const;
 
 /** Browser-facing STUN/TURN entry sent in `joined` (shape matches RTCIceServer). */

@@ -411,6 +411,14 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   }
 }
 
+// retire closes a presence socket without its handlers, so its close neither
+// reconnects nor reports the agent offline: the caller has already settled
+// the agent's state (superseded by another tab, or replaced by a new socket).
+function retire(ws: WebSocket): void {
+  ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+  ws.close();
+}
+
 // ── RtcAgent ─────────────────────────────────────────────────────────
 
 export interface RtcAgentOpts {
@@ -431,6 +439,7 @@ export type RtcAgentEvent =
   | { type: "incoming"; room: string; from?: string; auto?: boolean; phone?: boolean }
   | { type: "resume-call"; room: string; auto?: boolean; phone?: boolean }
   | { type: "incoming-canceled"; room: string }
+  | { type: "superseded" }
   | { type: "error"; error: Error };
 
 // The gateway closes an idle presence socket after ~90s with no inbound frame,
@@ -466,6 +475,13 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
       }
     }
     this.closedByUser = false;
+    // Also how a superseded agent takes the rings back (which supersedes the
+    // other tab). Retire any current socket so it can't linger registered.
+    this.backoffMs = 1000;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    if (this.ws) retire(this.ws);
+    this.ws = null;
     await this.openSocket();
   }
 
@@ -502,7 +518,19 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
         const room = m.room ?? this.incoming?.room ?? "";
         this.incoming = null;
         this.emit({ type: "incoming-canceled", room });
+      } else if (m.type === ServerMsgType.Superseded) {
+        // Another tab/device registered as this agent and gets the rings now.
+        // Close WITHOUT the reconnect onclose: reconnecting would take the
+        // rings back and the other tab would do the same, flapping forever.
+        // goOnline() (Tring.takeOver) resumes. A live call is on its own socket
+        // and is unaffected.
+        this.incoming = null;
+        this.stopKeepalive();
+        retire(ws);
+        this.ws = null;
+        this.emit({ type: "superseded" });
       }
+      // Unknown types are ignored, so older servers/clients interoperate.
     };
     ws.onclose = () => {
       this.stopKeepalive();

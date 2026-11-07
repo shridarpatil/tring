@@ -96,6 +96,9 @@ export type TringEvent =
   | { type: "availability"; available: boolean }
   | { type: "unregistered"; reason?: string }
   | { type: "reconnecting"; attempt: number }
+  // Another tab/device signed in as this agent and now gets the rings. This
+  // one stays connected to no one (no auto-reconnect) until takeOver().
+  | { type: "superseded" }
   | { type: "call:ringing"; call: Call }
   // The page reloaded mid-call and the SDK is rejoining that call on its own
   // (no accept needed); call:answered follows once it's back, else call:ended.

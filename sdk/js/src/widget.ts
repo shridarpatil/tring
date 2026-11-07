@@ -29,6 +29,12 @@ export interface WidgetOpts {
    * override (e.g. when loading the SDK from a CDN).
    */
   apiBase?: string;
+  /**
+   * Fetches agent credentials in place of tokenUrl, for a host that mints them
+   * its own way (e.g. the Tring console's POST /v1/me/token with its Bearer
+   * session). Called for the first connect, every reconnect and call control.
+   */
+  credentials?: () => Promise<AgentCredentials>;
 }
 
 const PANEL_ID = "tring-call-panel";
@@ -76,12 +82,12 @@ interface CallControl {
 // control directly — no CRM proxy.
 function makeCallControl(
   apiBase: string | undefined,
-  tokenUrl: string | undefined,
+  credentials: (() => Promise<AgentCredentials>) | undefined,
   staticToken: string,
 ): CallControl | undefined {
   if (!apiBase) return undefined;
-  const freshToken = tokenUrl
-    ? async () => (await fetchCredentials(tokenUrl)).token || staticToken
+  const freshToken = credentials
+    ? async () => (await credentials()).token || staticToken
     : async () => staticToken;
   const post = async (path: string, body?: unknown): Promise<boolean> => {
     try {
@@ -126,11 +132,14 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   // /v1/agents/{id}/token returns them), so the <script> tag needs only
   // data-token-url. Explicit data-token/data-gateway-url still win. Fetch when
   // either is missing.
+  // credentials (a host's own mint) or tokenUrl can re-mint; a bare token can't.
+  const tokenUrl = opts.tokenUrl;
+  const credentials = opts.credentials ?? (tokenUrl ? () => fetchCredentials(tokenUrl) : undefined);
   let token = opts.token;
   let gatewayUrl = opts.gatewayUrl;
   let iceServers: RTCIceServer[] | undefined;
   if (!token || !gatewayUrl) {
-    const creds = await fetchCredentials(opts.tokenUrl);
+    const creds = credentials ? await credentials() : {};
     token = token ?? creds.token;
     gatewayUrl = gatewayUrl ?? creds.gateway_url;
     iceServers = creds.ice_servers;
@@ -147,7 +156,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   }
 
   injectStyles();
-  const control = makeCallControl(opts.apiBase, opts.tokenUrl, token);
+  const control = makeCallControl(opts.apiBase, credentials, token);
   const panel = createPanel(control);
   document.body.appendChild(panel.root);
   const badge = createStatusBadge();
@@ -155,19 +164,19 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
 
   // getToken re-mints on every (re)connect so the agent's socket survives drops
   // past the ~5-min JWT TTL. The FIRST connect reuses the token we already
-  // fetched above (no double mint); reconnects re-fetch from data-token-url.
-  // A static data-token can't refresh (it'll work until it expires).
-  const tokenUrl = opts.tokenUrl;
+  // fetched above (no double mint); reconnects re-fetch from data-token-url
+  // (or the credentials hook). A static data-token can't refresh (it'll work
+  // until it expires).
   const staticToken = token;
   let prefetched: string | undefined = token;
-  const getToken = tokenUrl
+  const getToken = credentials
     ? async () => {
         if (prefetched) {
           const t = prefetched;
           prefetched = undefined; // only the first connect reuses it
           return t;
         }
-        const c = await fetchCredentials(tokenUrl);
+        const c = await credentials();
         if (!c.token) throw new Error("tring widget: token endpoint returned no token");
         return c.token;
       }
@@ -200,6 +209,17 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
     panel.setStatus("idle", "disconnected");
     badge.set("offline");
   });
+  // Another tab/device took this agent's rings. The badge (the one always
+  // visible element) says so and offers to take them back; a live call in the
+  // panel is on its own socket and carries on.
+  tring.on("superseded", () => badge.set("superseded"));
+  badge.onTakeOver(() => {
+    badge.set("reconnecting");
+    tring.takeOver().catch((e) => {
+      badge.set("superseded");
+      console.error("[tring] take over failed:", e);
+    });
+  });
   tring.on("call:ringing", ({ call }) => {
     if (call.direction === "inbound") panel.showIncoming(call);
     else panel.show(call, "calling");
@@ -219,15 +239,18 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
 // integrator's backend (POST /v1/agents/{id}/availability), pushed live.
 interface StatusBadge {
   root: HTMLElement;
-  set(state: "online" | "away" | "reconnecting" | "offline", attempt?: number, label?: string): void;
+  set(state: "online" | "away" | "reconnecting" | "offline" | "superseded", attempt?: number, label?: string): void;
+  /** onTakeOver wires the "Take calls here" button shown while superseded. */
+  onTakeOver(fn: () => void): void;
 }
 
 function createStatusBadge(): StatusBadge {
   const root = document.createElement("div");
   root.className = "tring-status-badge";
   root.setAttribute("data-state", "offline");
-  root.innerHTML = `<span class="tring-status-dot"></span><span class="tring-status-text">Offline</span>`;
+  root.innerHTML = `<span class="tring-status-dot"></span><span class="tring-status-text">Offline</span><button type="button" class="tring-status-takeover">Take calls here</button>`;
   const textEl = root.querySelector<HTMLElement>(".tring-status-text")!;
+  const takeOverBtn = root.querySelector<HTMLButtonElement>(".tring-status-takeover")!;
   return {
     root,
     set(state, attempt, label) {
@@ -240,12 +263,17 @@ function createStatusBadge(): StatusBadge {
             ? "Away"
             : state === "reconnecting"
               ? `Reconnecting${attempt ? ` (${attempt})` : ""}…`
-              : "Offline");
+              : state === "superseded"
+                ? "Active in another tab"
+                : "Offline");
+    },
+    onTakeOver(fn) {
+      takeOverBtn.addEventListener("click", fn);
     },
   };
 }
 
-interface AgentCredentials {
+export interface AgentCredentials {
   token?: string;
   gateway_url?: string;
   ice_servers?: RTCIceServer[];
@@ -1003,6 +1031,12 @@ function injectStyles(): void {
       background: #fbbf24; animation: tring-pulse 1s ease-in-out infinite;
     }
     .tring-status-badge[data-state="offline"] .tring-status-dot { background: #f87171; }
+    .tring-status-badge[data-state="superseded"] .tring-status-dot { background: #9ca3af; }
+    .tring-status-badge .tring-status-takeover {
+      display: none; margin-left: .2rem; padding: .25rem .55rem; border: 0; border-radius: 999px;
+      background: #34d399; color: #064e3b; font: 600 11px/1 system-ui, sans-serif; cursor: pointer;
+    }
+    .tring-status-badge[data-state="superseded"] .tring-status-takeover { display: inline-block; }
     @keyframes tring-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
   `;
   document.head.appendChild(style);
