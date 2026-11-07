@@ -14,10 +14,38 @@ An agent is a person who takes calls in the browser through the [agent widget](/
 | `id` | Agent UUID. |
 | `sip_username` | Your identifier for the agent, unique per tenant. Use your own CRM user id here: every `/v1/agents/{id}` path accepts either the UUID or the `sip_username`. It is also what a Transfer node's `agent_sip` names. |
 | `display_name` | Name shown in the console, transfer pickers and call logs. |
+| `role` | `admin`, `supervisor` or `agent`. See [Roles](#roles-and-logins). |
 | `available_for_calls` | Your Away/Break switch, controlled from your backend. |
 | `status` | Live state on list responses: `online`, `on_call`, `away` or `offline`. |
 
 Create agents in the console (**Agents**) or with `POST /v1/agents` (`sip_username` required, `display_name` optional). See the [Agents API](/tring/api-reference/agents/).
+
+## Roles and logins
+
+Agents and console users are the same thing: one **user** with a `role`.
+
+| Role | Console access |
+|---|---|
+| `agent` | Their own view at `/me`: their calls and stats, take calls in the browser, their teams. |
+| `supervisor` | Every team's live state and calls, and can supervise any live call. |
+| `admin` | Everything, including the admin API and managing users. |
+
+Team **manager** is not a role. It is a flag on a user's membership of one team (`is_manager`), so the same person can manage one team and be an ordinary member of another. A manager sees that team's live state and calls, can add and remove its members (but not other managers), and can supervise calls that belong to it. Only a supervisor or admin can make someone a manager.
+
+Role has no effect on routing: anyone in a team is rung when the team rings, whatever their role.
+
+**Login.** A user signs in to the console with email and password. Email is optional and, when set, unique across tenants. A user created with `POST /v1/agents` (API key) has no email or password, so they have no console login. An admin gives them one by setting `email` and `password` with `PATCH /v1/users/{id}`, or creates a user with a login directly using `POST /v1/users`. Clearing the email removes the login. See the [Users API](/tring/api-reference/users/).
+
+The CRM integration is unchanged: your backend still mints agent tokens with `/v1/agents/{id}/token`, the widget connects with them, and `sip_username` identifies the agent. `/v1/agents` responses simply include `role` as well.
+
+### Taken and missed
+
+The agent view counts calls today and over the last 7 days:
+
+| Count | Meaning |
+|---|---|
+| **Taken** | Calls this agent answered. |
+| **Missed** | Calls that rang this agent and that they did not answer, even if a teammate answered. A call that rang them several times counts once. |
 
 ## Presence and availability
 

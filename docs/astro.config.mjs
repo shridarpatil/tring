@@ -63,6 +63,7 @@ export default defineConfig({
             { label: 'Tenant & guest config', slug: 'api-reference/tenant' },
             { label: 'Agents', slug: 'api-reference/agents' },
             { label: 'Teams', slug: 'api-reference/teams' },
+            { label: 'Users', slug: 'api-reference/users' },
             { label: 'Queues & stats', slug: 'api-reference/queues-and-stats' },
             { label: 'Audio', slug: 'api-reference/audio' },
             { label: 'Numbers', slug: 'api-reference/numbers' },

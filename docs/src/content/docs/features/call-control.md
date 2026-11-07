@@ -70,7 +70,7 @@ The agent-token REST endpoints `POST /v1/sdk/calls/hold`, `POST /v1/sdk/calls/re
 
 ## Supervision
 
-A console user with the supervise permission can join a live call silently and switch modes. This works on web, phone and WhatsApp calls: any call whose audio runs through the gateway, including click-to-calls placed with `POST /v1/calls` and `POST /v1/calls/connect`.
+A console user permitted to supervise (see below) can join a live call silently and switch modes. This works on web, phone and WhatsApp calls: any call whose audio runs through the gateway, including click-to-calls placed with `POST /v1/calls` and `POST /v1/calls/connect`.
 
 | Mode | Supervisor hears | Who hears the supervisor |
 |---|---|---|
@@ -78,7 +78,7 @@ A console user with the supervise permission can join a live call silently and s
 | `whisper` | Everyone | The agent only |
 | `barge` | Everyone | Everyone |
 
-1. From the live calls list, the console calls `POST /v1/calls/{id}/supervise`. This endpoint accepts **only a console session**, never an API key, because the permission belongs to a user. The call must be live (`ringing` or `answered`) and have a media room.
+1. From the live calls list, the console calls `POST /v1/calls/{id}/supervise`. This endpoint accepts **only a console session**, never an API key, because permission depends on the user's role and teams. The call must be live (`ringing` or `answered`) and have a media room.
 2. Tring returns a single-use supervisor token (2 minutes) pinned to that call's room, plus `gateway_url` and ICE servers.
 3. The console joins in `monitor` and can switch modes. The agent's widget shows that a supervisor is present, with the mode and name.
 
@@ -86,4 +86,12 @@ On a phone call, a supervisor can listen from the IVR onwards, before any agent 
 
 Barge on a phone call needs the gateway to mix the agent's and the supervisor's audio into the one stream the caller receives. The `tring` image does this: it is built with libopus (`-tags opus`). A binary built without it, such as `go run ./cmd/tring`, logs a warning on barge, and the caller hears one of them at a time.
 
-Every session is audited (who, which call, when, which modes) and appears on the call's timeline. The first console admin created at bootstrap has the supervise permission; other users do not by default.
+Every session is audited (who, which call, when, which modes) and appears on the call's timeline. ### Who can supervise
+
+| Role | Can supervise |
+|---|---|
+| `admin`, `supervisor` | Any live call in the tenant. |
+| Team manager (`is_manager` on a team) | Only calls that belong to a team they manage. |
+| Everyone else | Nothing (`403 not permitted to supervise`). |
+
+A call belongs to a team when that team rang it, or when the caller waited in that team's queue. Being the answering agent's teammate does not count. The old per-user `can_supervise` flag no longer exists; roles and team management replace it.

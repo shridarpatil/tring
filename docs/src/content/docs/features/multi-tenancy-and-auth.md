@@ -7,7 +7,7 @@ description: Tenants, and every credential Tring uses (API keys, console session
 
 A **tenant** is one organization. Every agent, team, number, trunk, flow, sound, webhook, API key, console user and call belongs to exactly one tenant, and every API query is filtered by the tenant of the credential that made it. A tenant cannot read or change another tenant's data, and gateway rooms are namespaced by tenant so two tenants can never share a call.
 
-The first tenant and its console admin are created on first boot from `TRING_BOOTSTRAP_TENANT`, `TRING_ADMIN_EMAIL` and `TRING_ADMIN_PASSWORD` (see [Configuration](/tring/getting-started/configuration/#3-first-boot-bootstrap)). There is no API for creating more tenants or console users yet.
+The first tenant and its console admin are created on first boot from `TRING_BOOTSTRAP_TENANT`, `TRING_ADMIN_EMAIL` and `TRING_ADMIN_PASSWORD` (see [Configuration](/tring/getting-started/configuration/#3-first-boot-bootstrap)). There is no API for creating more tenants. Admins manage a tenant's users with the [Users API](/tring/api-reference/users/).
 
 Tenant-wide settings (`GET` / `PATCH /v1/tenants/me`): `outbound_strategy`, `failover_causes`, `hold_music`, `record_calls`, `max_call_seconds` (60–86400, default 14400; also the lifetime of ephemeral TURN credentials) and `transfer_failed_message`. The default visitor flow lives at `/v1/guest-config`. See the [Tenant API](/tring/api-reference/tenant/).
 
@@ -18,7 +18,7 @@ Trunks are configured in the database per tenant, but they are all loaded into t
 | Credential | Looks like | Issued by | Lifetime | Accepted by | Grants |
 |---|---|---|---|---|---|
 | **API key** | `tk_live_…` | Console (**API keys**) or `POST /v1/api-keys` | Until revoked | The api (`/v1/*`) | Full access to the tenant's API |
-| **Console session** | JWT, `aud: tring.console` | `POST /v1/console/login` (email + password) | 12 hours | The api (`/v1/*`) | Same as an API key, plus supervision if the user is permitted |
+| **Console session** | JWT, `aud: tring.console` | `POST /v1/console/login` (email + password) | 12 hours | The api (`/v1/*`) | Admin: same as an API key, plus supervision. Supervisor and agent: their own `/me` and team views, scoped by role |
 | **Agent token** | JWT, `aud: tring.sdk` | `GET /v1/agents/{id}/token` (API key) | 5 minutes | Gateway `/rtc`; api `/v1/sdk/*` | Go online as that agent, take calls, control the agent's own call |
 | **Visitor call token** | JWT, `aud: tring.gateway` | `POST /v1/guest-credentials` (API key) | 2 minutes, single use | Gateway `/rtc` | Join one call pinned to one flow |
 | **Supervisor token** | JWT, `aud: tring.supervisor` | `POST /v1/calls/{id}/supervise` (console session only) | 2 minutes, single use | Gateway `/rtc` | Listen to, whisper on or barge into one live call |
@@ -50,7 +50,9 @@ An API key can do everything in its tenant, including placing billable calls and
 
 The admin console signs in with email and password (bcrypt-hashed) and holds a 12-hour session token. There is no refresh token; signing in again issues a new one. Failed logins return the same generic error whether the email or the password was wrong.
 
-Only console sessions can supervise calls, and only for users with the supervise permission (the bootstrap admin has it; it is off by default for others).
+Console users have a role (`admin`, `supervisor` or `agent`). The role and team memberships are loaded from the database on every request, so a role change or a removed login applies immediately. Only admin sessions can use the admin API routes; supervisor and agent sessions get `403` there and can use only `/v1/me*`, `/v1/my-teams*` and supervision. See [Agents and routing](/tring/features/agents-and-routing/#roles-and-logins).
+
+Only console sessions can supervise calls: admins and supervisors any live call, team managers only calls belonging to their teams.
 
 ## Agent tokens
 
@@ -87,7 +89,7 @@ Because anyone can reach a public "call us" page, protect your credentials endpo
 - **One API key per backend service**, named after it, so you can revoke one without breaking others. Revoke keys whose `last_used_at` is stale.
 - **Keep API keys server-side.** Browsers only ever receive agent, visitor and supervisor tokens, which are short-lived and narrowly scoped.
 - **Gate your token endpoints** with your own authentication (agents) or abuse controls (visitors). Tring trusts whatever your backend asks for.
-- **Grant supervision sparingly.** It allows silent listening to live calls.
+- **Grant the supervisor role and team manager flag sparingly.** Supervision allows silent listening to live calls.
 - **Protect `TRING_JWT_SECRET`.** It signs every token for every tenant. Store it in a secret manager and rotate it if exposed (rotation signs everyone out).
 - **Use HTTPS everywhere** in production: the api, the gateway (`wss://` for `/rtc`), your token endpoints and webhook receivers.
 - **Keep internals private.** `/fs/*`, FreeSWITCH ESL, Postgres and Redis must not be reachable from the internet.
