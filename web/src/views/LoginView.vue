@@ -3,12 +3,14 @@ import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
+import { homeRoute, type MeUser } from "../lib/roles";
 import { Button, TextField } from "../components/ui";
 
 interface LoginResponse {
   token: string;
   expires_at: string;
   tenant: { id: string; name: string; sip_domain: string };
+  user: MeUser;
 }
 
 const router = useRouter();
@@ -32,10 +34,10 @@ async function submit() {
       email: email.value.trim(),
       password: password.value,
     });
-    auth.setSession(res.token, res.tenant);
+    auth.setSession(res.token, res.tenant, res.user);
     const next = safeRedirect();
     if (next) router.replace(next);
-    else router.push({ name: "dashboard" });
+    else router.push({ name: homeRoute(res.user) });
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "sign-in failed";
   } finally {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   LayoutDashboard,
@@ -13,6 +13,7 @@ import {
   Webhook,
   KeyRound,
   Settings,
+  Phone,
   Sun,
   Moon,
 } from "lucide-vue-next";
@@ -29,7 +30,7 @@ const router = useRouter();
 const tenant = ref<Tenant | null>(null);
 const version = ref("…");
 
-const nav = [
+const adminNav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/agents", label: "Agents", icon: Headset },
   { to: "/teams", label: "Teams", icon: UsersRound },
@@ -43,7 +44,24 @@ const nav = [
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
+// Supervisors see every team, others only their own: /v1/my-teams answers both.
+const myTeams = ref<{ name: string }[]>([]);
+const nav = computed(() => {
+  const mine = [{ to: "/me", label: "My calls", icon: Phone }];
+  const teams = myTeams.value.map((t) => ({ to: "/me/teams/" + encodeURIComponent(t.name), label: t.name, icon: UsersRound }));
+  return auth.isAdmin() ? [...adminNav, ...mine] : [...mine, ...teams];
+});
+
 onMounted(async () => {
+  // Admin API routes 403 for other roles, so they only load their own data.
+  if (!auth.isAdmin()) {
+    try {
+      myTeams.value = await api.get<{ name: string }[]>("/v1/my-teams");
+    } catch {
+      /* nav falls back to My calls only */
+    }
+    return;
+  }
   try {
     tenant.value = await api.get<Tenant>("/v1/tenants/me");
   } catch {
@@ -70,15 +88,16 @@ function logout() {
         <span class="brand-name">Tring</span>
       </div>
       <SidebarNav :items="nav" />
-      <div class="sidebar-foot">{{ version }} console</div>
+      <div v-if="auth.isAdmin()" class="sidebar-foot">{{ version }} console</div>
     </aside>
 
     <div class="main-col">
       <header class="topbar">
-        <LiveStatusStrip />
+        <LiveStatusStrip v-if="auth.isAdmin()" />
+        <span v-else></span>
         <div class="topbar-right">
           <div class="tenant">
-            <span>{{ tenant?.name || "…" }}</span>
+            <span>{{ tenant?.name || auth.state.tenant?.name || "…" }}</span>
             <span v-if="tenant" class="sep">·</span>
             <span v-if="tenant" class="sip">{{ tenant.sip_domain }}</span>
           </div>

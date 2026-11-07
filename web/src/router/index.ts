@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
+import { api } from "../api/client";
 import { auth } from "../stores/auth";
+import { canOpen, homeRoute, type MeUser } from "../lib/roles";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -24,26 +26,30 @@ const routes: RouteRecordRaw[] = [
     path: "/flows/:id",
     name: "flow-editor",
     component: () => import("../views/flows/FlowEditorView.vue"),
+    meta: { admin: true },
   },
   {
     path: "/",
     component: () => import("../layouts/AppLayout.vue"),
     children: [
-      { path: "", name: "dashboard", component: () => import("../views/DashboardView.vue") },
-      { path: "agents", name: "agents", component: () => import("../views/AgentsView.vue") },
-      { path: "teams", name: "teams", component: () => import("../views/TeamsView.vue") },
-      { path: "teams/:name", name: "team", component: () => import("../views/TeamDetailView.vue") },
-      { path: "sounds", name: "sounds", component: () => import("../views/SoundsView.vue") },
-      { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue") },
+      // Open to every role; the rest of the children are admin-only (meta.admin).
+      { path: "me", name: "me", component: () => import("../views/MeView.vue") },
+      { path: "me/teams/:name", name: "my-team", component: () => import("../views/MyTeamView.vue") },
+      { path: "", name: "dashboard", component: () => import("../views/DashboardView.vue"), meta: { admin: true } },
+      { path: "agents", name: "agents", component: () => import("../views/AgentsView.vue"), meta: { admin: true } },
+      { path: "teams", name: "teams", component: () => import("../views/TeamsView.vue"), meta: { admin: true } },
+      { path: "teams/:name", name: "team", component: () => import("../views/TeamDetailView.vue"), meta: { admin: true } },
+      { path: "sounds", name: "sounds", component: () => import("../views/SoundsView.vue"), meta: { admin: true } },
+      { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue"), meta: { admin: true } },
       // calls/:id opens that call's detail (?view=log → full log), so a call
       // has a URL that can be shared. Optional param = same view instance, so
       // the list's page/filter survive opening and closing a call.
-      { path: "calls/:id?", name: "calls", component: () => import("../views/CallsView.vue") },
-      { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue") },
-      { path: "api-keys", name: "api-keys", component: () => import("../views/ApiKeysView.vue") },
-      { path: "flows", name: "flows", component: () => import("../views/flows/FlowsListView.vue") },
-      { path: "trunks", name: "trunks", component: () => import("../views/TrunksView.vue") },
-      { path: "settings", name: "settings", component: () => import("../views/SettingsView.vue") },
+      { path: "calls/:id?", name: "calls", component: () => import("../views/CallsView.vue"), meta: { admin: true } },
+      { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue"), meta: { admin: true } },
+      { path: "api-keys", name: "api-keys", component: () => import("../views/ApiKeysView.vue"), meta: { admin: true } },
+      { path: "flows", name: "flows", component: () => import("../views/flows/FlowsListView.vue"), meta: { admin: true } },
+      { path: "trunks", name: "trunks", component: () => import("../views/TrunksView.vue"), meta: { admin: true } },
+      { path: "settings", name: "settings", component: () => import("../views/SettingsView.vue"), meta: { admin: true } },
     ],
   },
 ];
@@ -56,13 +62,20 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   if (to.name === "styleguide") return; // dev-only, no auth
   if (to.name !== "login" && !auth.isAuthed()) {
     // Remember where they were going (e.g. a shared call link) for after login.
     return to.fullPath === "/" ? { name: "login" } : { name: "login", query: { redirect: to.fullPath } };
   }
-  if (to.name === "login" && auth.isAuthed()) return { name: "dashboard" };
+  // Sessions from before roles existed have a token but no cached user.
+  if (auth.isAuthed() && !auth.state.user) {
+    await auth.refreshMe(() => api.get<MeUser>("/v1/me"));
+    if (!auth.isAuthed()) return { name: "login" }; // 401 -> client logged out
+  }
+  const u = auth.state.user;
+  if (to.name === "login" && auth.isAuthed()) return { name: u ? homeRoute(u) : "dashboard" };
+  if (u && !to.matched.every((r) => canOpen(u, r))) return { name: "me" };
 });
 
 export default router;

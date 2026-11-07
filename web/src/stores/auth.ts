@@ -1,4 +1,5 @@
 import { reactive } from "vue";
+import type { MeUser } from "../lib/roles";
 
 // The console authenticates with email + password against
 // POST /v1/console/login, which returns a JWT. The JWT is the only
@@ -12,6 +13,15 @@ import { reactive } from "vue";
 // that served the bundle. No base-URL field on the login form.
 
 const KEY_TOKEN = "tring_console_token";
+const KEY_USER = "tring_console_user";
+
+function loadUser(): MeUser | null {
+  try {
+    return JSON.parse(localStorage.getItem(KEY_USER) || "null");
+  } catch {
+    return null;
+  }
+}
 
 interface TenantSummary {
   id: string;
@@ -22,20 +32,43 @@ interface TenantSummary {
 const state = reactive({
   token: localStorage.getItem(KEY_TOKEN) || "",
   tenant: null as TenantSummary | null,
+  user: loadUser(),
 });
 
 export const auth = {
   state,
   isAuthed: (): boolean => state.token.length > 0,
   token: (): string => state.token,
-  setSession(token: string, tenant: TenantSummary) {
+  role: () => state.user?.role ?? null,
+  isAdmin: (): boolean => state.user?.role === "admin",
+  seesAllTeams: (): boolean => state.user?.role === "admin" || state.user?.role === "supervisor",
+  managedTeams: (): string[] => (state.user?.teams ?? []).filter((t) => t.is_manager).map((t) => t.name),
+  setSession(token: string, tenant: TenantSummary, user: MeUser) {
     state.token = token;
     state.tenant = tenant;
+    state.user = user;
     localStorage.setItem(KEY_TOKEN, token);
+    localStorage.setItem(KEY_USER, JSON.stringify(user));
+  },
+  // Replaces the cached user from GET /v1/me. Covers sessions that predate
+  // the cached user and role/team changes made since sign-in. A 401 is
+  // handled by the api client (logout); other errors keep the cached copy.
+  // The fetch is injected so this module doesn't import the api client
+  // (which imports this store).
+  async refreshMe(fetchMe: () => Promise<MeUser>) {
+    try {
+      const u = await fetchMe();
+      state.user = u;
+      localStorage.setItem(KEY_USER, JSON.stringify(u));
+    } catch {
+      /* keep cached user */
+    }
   },
   logout() {
     state.token = "";
     state.tenant = null;
+    state.user = null;
     localStorage.removeItem(KEY_TOKEN);
+    localStorage.removeItem(KEY_USER);
   },
 };
