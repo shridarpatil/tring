@@ -122,10 +122,11 @@ let pending: SupervisorSession | undefined;
 async function startSupervise(c: Call) {
   stopSupervise();
   const gen = superviseGen;
+  let session: SupervisorSession | undefined;
   try {
     const creds = await api.supervise(c.id);
     if (gen !== superviseGen || unmounted) return;
-    const session = new SupervisorSession(creds.gateway_url, creds.room, creds.token, creds.ice_servers || []);
+    session = new SupervisorSession(creds.gateway_url, creds.room, creds.token, creds.ice_servers || []);
     pending = session;
     session.onClose = (reason) => {
       if (active.value?.session === session) active.value = null;
@@ -139,6 +140,13 @@ async function startSupervise(c: Call) {
     }
     active.value = { callId: c.id, mode: "monitor", session };
   } catch (e) {
+    // A failed connect leaves a half-open session: hang it up so it can't
+    // linger in the room, and stay quiet if the user has moved on.
+    if (session) {
+      session.hangup();
+      if (pending === session) pending = undefined;
+    }
+    if (gen !== superviseGen || unmounted) return;
     toast.error(errMessage(e, "Could not start supervising this call"));
   }
 }

@@ -71,4 +71,19 @@ export const auth = {
     localStorage.removeItem(KEY_TOKEN);
     localStorage.removeItem(KEY_USER);
   },
+  // signOut ends the session with a full page load of the login page rather
+  // than a router push: the agent widget (presence socket, ringing) lives for
+  // the page's lifetime and has no teardown, so only a reload stops it.
+  // keepPlace sends the user back to the current page after signing in again
+  // (an expired session), as the router guard does for a signed-out visit.
+  signOut(keepPlace = false) {
+    auth.logout();
+    const base = import.meta.env.BASE_URL; // "/admin/" embedded, "/" in dev
+    let q = "";
+    if (keepPlace && location.pathname.startsWith(base)) {
+      const here = "/" + location.pathname.slice(base.length) + location.search;
+      if (here !== "/" && !here.startsWith("/login")) q = "?redirect=" + encodeURIComponent(here);
+    }
+    location.assign(base + "login" + q);
+  },
 };
