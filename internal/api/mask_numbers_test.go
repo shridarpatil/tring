@@ -75,8 +75,8 @@ func meCallsFrom(t *testing.T, s *Server, tok string) []string {
 	var out []string
 	for _, c := range page.Items {
 		out = append(out, c.FromNumber)
-		if c.FromNumber == maskedFrom && strings.Contains(c.ToNumber, "98000000") {
-			t.Fatalf("to_number %q not masked alongside from", c.ToNumber)
+		if strings.ContainsRune(c.ToNumber, '•') {
+			t.Fatalf("to_number %q (the tenant's DID on an inbound call) masked", c.ToNumber)
 		}
 	}
 	return out
@@ -189,12 +189,11 @@ func TestMaskNumbersManagersFlag(t *testing.T) {
 	}
 }
 
-// streamBody runs the dashboard stream as tok, dispatches one call.ringing
-// frame from the hub, and returns everything the client received.
-func streamBody(t *testing.T, s *Server, hub *events.Hub, tenantID uuid.UUID, tok string) string {
+// openStream runs the dashboard stream as tok in the background; the returned
+// func ends it and returns everything the client received.
+func openStream(t *testing.T, s *Server, tok string) func() string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	r := httptest.NewRequest("GET", "/v1/stream/dashboard", nil).WithContext(ctx)
 	r.Header.Set("Authorization", "Bearer "+tok)
 	w := httptest.NewRecorder()
@@ -203,15 +202,16 @@ func streamBody(t *testing.T, s *Server, hub *events.Hub, tenantID uuid.UUID, to
 		s.Router().ServeHTTP(w, r)
 		close(done)
 	}()
-	time.Sleep(300 * time.Millisecond) // snapshot written, subscribed
-	hub.DispatchForTest(tenantID.String(), events.Frame(events.TypeCallRinging,
-		[]byte(`{"id":"c1","from_number":"+919811112222","to_number":"+918000001234","source":"phone"}`)))
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	<-done
-	return w.Body.String()
+	return func() string {
+		cancel()
+		<-done
+		return w.Body.String()
+	}
 }
 
+// An admin and a masked supervisor share one tenant stream: one dispatched
+// frame reaches the admin byte for byte and the supervisor with the client
+// side masked (inbound: the caller and client_ref; the DID stays visible).
 func TestMaskNumbersSupervisorsStream(t *testing.T) {
 	f := dbtest.Setup(t)
 	dir := t.TempDir()
@@ -224,27 +224,82 @@ func TestMaskNumbersSupervisorsStream(t *testing.T) {
 	insertTeamCall(t, f, dir, a, "")
 	setMaskFlags(t, f, false, false, true)
 
-	supBody := streamBody(t, s, hub, f.TenantID, tokenFor(t, s, f, sup, "s@example.com", "supervisor"))
-	admBody := streamBody(t, s, hub, f.TenantID, tokenFor(t, s, f, adm, "admin@example.com", "admin"))
+	endSup := openStream(t, s, tokenFor(t, s, f, sup, "s@example.com", "supervisor"))
+	endAdm := openStream(t, s, tokenFor(t, s, f, adm, "admin@example.com", "admin"))
+	time.Sleep(300 * time.Millisecond) // both snapshots written, both subscribed
+	frame := events.Frame(events.TypeCallRinging, []byte(
+		`{"id":"c1","direction":"inbound","from_number":"+919811112222","to_number":"+918000001234","client_ref":"Lead +919811112222","source":"phone"}`))
+	hub.DispatchForTest(f.TenantID.String(), frame)
+	hub.DispatchForTest(f.TenantID.String(), events.Frame(events.TypeCallRinging, []byte(`not json`)))
+	time.Sleep(100 * time.Millisecond)
+	supBody, admBody := endSup(), endAdm()
 
-	for _, leak := range []string{fullFrom, "+919811112222", "+918000001234"} {
+	if !strings.Contains(admBody, string(frame)) {
+		t.Fatalf("admin did not get the original frame bytes:\n%s", admBody)
+	}
+	if !strings.Contains(admBody, fullFrom) || !strings.Contains(admBody, "not json") {
+		t.Fatalf("admin stream altered:\n%s", admBody)
+	}
+	for _, leak := range []string{fullFrom, "+919811112222", "not json"} {
 		if strings.Contains(supBody, leak) {
-			t.Fatalf("supervisor stream leaks %s:\n%s", leak, supBody)
+			t.Fatalf("supervisor stream leaks %q:\n%s", leak, supBody)
 		}
 	}
-	for _, want := range []string{maskedFrom, "+91••••••2222", "+91••••••1234", "event: call.ringing"} {
+	for _, want := range []string{maskedFrom, `"from_number":"+91••••••2222"`, `"client_ref":"Lead +91••••••2222"`, `"to_number":"+918000001234"`} {
 		if !strings.Contains(supBody, want) {
 			t.Fatalf("supervisor stream missing %s:\n%s", want, supBody)
-		}
-	}
-	for _, want := range []string{fullFrom, "+919811112222", "+918000001234"} {
-		if !strings.Contains(admBody, want) {
-			t.Fatalf("admin stream missing full %s:\n%s", want, admBody)
 		}
 	}
 	// The supervisor's REST dashboard is masked too.
 	if got := dashboardFrom(t, s, tokenFor(t, s, f, sup, "s@example.com", "supervisor")); !allEqual(got, maskedFrom) {
 		t.Fatalf("supervisor dashboard from = %v, want masked", got)
+	}
+}
+
+// Only the client side is masked: an outbound call's callee (not the tenant's
+// caller ID), and a web call's client_ref (the console shows it as the caller).
+func TestMaskNumbersClientSideOnly(t *testing.T) {
+	f, mf := newMaskFixture(t)
+	setMaskFlags(t, f, true, false, false)
+	var aID uuid.UUID
+	if err := f.DB.Pool.QueryRow(context.Background(),
+		`SELECT id FROM users WHERE tenant_id = $1 AND sip_username = 'a@example.com'`, f.TenantID).Scan(&aID); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, agent_id, started_at, answered_at, ended_at)
+		 VALUES ($1, 'outbound', 'ended', '+918000001234', '+919876543210', $2, $3, now(), now(), now())`,
+		`INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, agent_id, client_ref, source, started_at, answered_at, ended_at)
+		 VALUES ($1, 'inbound', 'ended', '9123456789', 'Support', $2, $3, '9123456789', 'web', now(), now(), now())`,
+	} {
+		if _, err := f.DB.Pool.Exec(context.Background(), q, f.TenantID, uuid.NewString(), aID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := doReq(t, mf.s.Router(), "GET", "/v1/me/calls?limit=100", mf.agentTok, "")
+	var page struct {
+		Items []Call `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("%d %s: %v", rec.Code, rec.Body, err)
+	}
+	var sawOut, sawWeb bool
+	for _, c := range page.Items {
+		switch {
+		case c.Direction == "outbound":
+			sawOut = true
+			if c.FromNumber != "+918000001234" || c.ToNumber != "+91••••••3210" {
+				t.Errorf("outbound = %q → %q, want caller ID full, callee masked", c.FromNumber, c.ToNumber)
+			}
+		case c.ClientRef != nil:
+			sawWeb = true
+			if *c.ClientRef != "91••••6789" || c.FromNumber != "91••••6789" {
+				t.Errorf("web call client_ref/from = %q / %q, want masked", *c.ClientRef, c.FromNumber)
+			}
+		}
+	}
+	if !sawOut || !sawWeb {
+		t.Fatalf("calls missing: outbound %v web %v (%s)", sawOut, sawWeb, rec.Body)
 	}
 }
 

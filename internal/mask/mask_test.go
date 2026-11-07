@@ -57,3 +57,37 @@ func TestSettingsFor(t *testing.T) {
 		t.Error("Any")
 	}
 }
+
+func TestInText(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"Customer +919876543210", "Customer +91••••••3210"},
+		{"+919876543210", "+91••••••3210"},
+		{"1001", "••••"}, // a whole-label number is masked like Number
+		{"Lead 9876543210 (VIP)", "Lead 98••••3210 (VIP)"},
+		{"Call +91 98765-43210 now", "Call +91 •••••-•3210 now"},
+		{"a 9876543 b 12345678", "a 98•6543 b 12••5678"},
+		{"ext 12", "ext 12"},
+		{"Order 123456 for Bob", "Order 123456 for Bob"},
+		{"Sales queue", "Sales queue"},
+		{"", ""},
+	} {
+		if got := InText(tc.in); got != tc.want {
+			t.Errorf("InText(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCallNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		dir, from, to, wantFrom, wantTo string
+	}{
+		{"inbound", "+919876543210", "+918000001234", "+91••••••3210", "+918000001234"},
+		{"outbound", "+918000001234", "+919876543210", "+918000001234", "+91••••••3210"},
+		{"", "+919876543210", "+918000001234", "+91••••••3210", "+91••••••1234"},
+	} {
+		f, to := CallNumbers(tc.dir, tc.from, tc.to)
+		if f != tc.wantFrom || to != tc.wantTo {
+			t.Errorf("CallNumbers(%s) = %q %q, want %q %q", tc.dir, f, to, tc.wantFrom, tc.wantTo)
+		}
+	}
+}

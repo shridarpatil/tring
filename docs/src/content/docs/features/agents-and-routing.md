@@ -139,8 +139,12 @@ The ringing agent sees a label, never an internal id: the Transfer node's `label
 | Supervisor | Supervisors is checked |
 | Admin | Never |
 
-A masked number keeps its first 2 and last 4 digits and any leading `+`: `+919876543210` shows as `+91••••••3210`. A number with 6 digits or fewer is hidden completely. Labels that are not numbers (a Transfer node's `label`, `Web Caller`, a name) are shown as they are.
+Only the client's side of a call is masked: the caller on an inbound call, the person called on an outbound call, and the `client_ref` your CRM passes for a web caller. Your own numbers (the DID that was called, the caller ID you dial out from) stay visible.
 
-Masking happens on the server, so the full number never reaches a masked user's browser. It covers the calls in the agent view and team pages (`/v1/me/calls`, `/v1/me/dashboard`, `/v1/my-teams`), a supervisor's live dashboard stream, and the caller shown on an incoming ring. That ring is also what your CRM's embedded widget shows, so a masked agent sees the masked number there too. Admins on the same dashboard still see full numbers.
+A masked number keeps its first 2 and last 4 digits and any leading `+`: `+919876543210` shows as `+91••••••3210`. A number that is the whole value and has 6 digits or fewer is hidden completely.
+
+Caller labels from IVR flows are masked too. If a Transfer node's `label` includes the caller's number (for example `Customer {{caller}}`), a masked agent sees `Customer +91••••••3210`: every run of 7 or more digits in the label is masked and the rest of the text is kept. A label without such a number (`Sales lead`, `ext 12`, `Web Caller`) is shown as it is. Digits the caller entered in the IVR (the call's IVR path) are not masked.
+
+Masking happens on the server, so the full number never reaches a masked user's browser. It covers the calls in the agent view and team pages (`/v1/me/calls`, `/v1/me/dashboard`, `/v1/my-teams`), a supervisor's live dashboard stream, and the caller shown on an incoming ring. That ring is also what your CRM's embedded widget shows, so a masked agent sees the masked number there too. Admins on the same dashboard still see full numbers. If the gateway can't tell whether an agent should be masked (for example it can't reach the database), it masks.
 
 API keys and webhooks are never masked: your backend always gets the full number. A change applies to new rings and page loads straight away; an open supervisor dashboard picks it up within about 20 seconds.

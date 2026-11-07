@@ -72,13 +72,13 @@ func TestIncomingMasksCallerNumberPerAgent(t *testing.T) {
 	}
 
 	_, eff, cleanup := s.Prepare(context.Background(), tenant+"/pstn-x",
-		ivrdrive.Target{Label: "+919876543210"}, true, nil, "", "")
+		ivrdrive.Target{Label: "Customer +919876543210"}, true, nil, "", "")
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go func() { _, _ = eff.(*pionRing).Ring(ctx, []string{"alice", "bob", "carol"}, 200*time.Millisecond) }()
 
-	want := map[string]string{"alice": "+91••••••3210", "bob": "+919876543210", "carol": "+91••••••3210"}
+	want := map[string]string{"alice": "Customer +91••••••3210", "bob": "Customer +919876543210", "carol": "Customer +91••••••3210"}
 	for sip, w := range want {
 		select {
 		case m := <-got[sip]:
@@ -88,5 +88,17 @@ func TestIncomingMasksCallerNumberPerAgent(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("%s: no incoming", sip)
 		}
+	}
+}
+
+// A gateway with no mask config (started without a DB) can't tell who is
+// masked, so it masks; a label without a number passes through.
+func TestCallerLabelFailsClosedWithoutConfig(t *testing.T) {
+	s := newHandoffServer(t)
+	if got := s.callerLabelFor(uuid.NewString(), "alice", "+919876543210"); got != "+91••••••3210" {
+		t.Errorf("nil NumberMask: label = %q, want masked", got)
+	}
+	if got := s.callerLabelFor(uuid.NewString(), "alice", "Lead 42"); got != "Lead 42" {
+		t.Errorf("label without a number = %q, want unchanged", got)
 	}
 }

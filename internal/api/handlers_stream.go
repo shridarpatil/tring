@@ -105,7 +105,9 @@ func (s *Server) handleDashboardStream(w http.ResponseWriter, r *http.Request) {
 				return // hub dropped us (slow); client reconnects + re-snapshots
 			}
 			if masked {
-				frame = maskFrame(frame)
+				if frame = maskFrame(frame); frame == nil {
+					continue
+				}
 			}
 			if _, err := w.Write(frame); err != nil {
 				return

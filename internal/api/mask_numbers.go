@@ -31,48 +31,64 @@ func (s *Server) masksNumbers(ctx context.Context, p *Principal) bool {
 	return shouldMask(ms, p)
 }
 
-// maskCall masks a call's client numbers in place.
+// maskCall masks a call's client side in place: the caller (inbound) or callee
+// (outbound) number, and the embedder's client_ref, which on a web call is the
+// caller's identity (and the console shows it in place of from_number).
 func maskCall(c *Call) {
-	c.FromNumber = mask.Number(c.FromNumber)
-	c.ToNumber = mask.Number(c.ToNumber)
+	c.FromNumber, c.ToNumber = mask.CallNumbers(c.Direction, c.FromNumber, c.ToNumber)
+	if c.ClientRef != nil {
+		ref := mask.InText(*c.ClientRef)
+		c.ClientRef = &ref
+	}
 }
 
-// maskCalls masks the client numbers of calls in place.
+// maskCalls masks the client side of calls in place.
 func maskCalls(calls []Call) {
 	for i := range calls {
 		maskCall(&calls[i])
 	}
 }
 
-// numberKeys are the event payload fields carrying a client number (only
-// call.ringing has them today).
-var numberKeys = []string{"from_number", "to_number"}
-
-// maskFrame masks the number fields of one hub SSE frame
-// ("event: <type>\ndata: <json>\n\n"). Frames without them pass unchanged.
+// maskFrame masks the client side of one hub SSE frame
+// ("event: <type>\ndata: <json>\n\n") the way maskCall masks a call: only
+// call.ringing carries numbers today, with the call's direction. Frames
+// without number fields pass unchanged. A frame that can't be parsed returns
+// nil: dropped for the masked subscriber rather than risk a full number.
 func maskFrame(frame []byte) []byte {
 	head, rest, ok := bytes.Cut(frame, []byte("\ndata: "))
 	if !ok {
-		return frame
+		return nil
 	}
 	var data map[string]json.RawMessage
 	if json.Unmarshal(bytes.TrimSuffix(rest, []byte("\n\n")), &data) != nil {
-		return frame
+		return nil
 	}
-	changed := false
-	for _, k := range numberKeys {
+	str := func(k string) (string, bool) {
 		var v string
-		if raw, ok := data[k]; ok && json.Unmarshal(raw, &v) == nil {
-			data[k], _ = json.Marshal(mask.Number(v))
-			changed = true
-		}
+		raw, ok := data[k]
+		return v, ok && json.Unmarshal(raw, &v) == nil
 	}
-	if !changed {
+	from, hasFrom := str("from_number")
+	to, hasTo := str("to_number")
+	ref, hasRef := str("client_ref")
+	if !hasFrom && !hasTo && !hasRef {
 		return frame
+	}
+	dir, _ := str("direction")
+	from, to = mask.CallNumbers(dir, from, to)
+	set := func(k, v string) { data[k], _ = json.Marshal(v) }
+	if hasFrom {
+		set("from_number", from)
+	}
+	if hasTo {
+		set("to_number", to)
+	}
+	if hasRef {
+		set("client_ref", mask.InText(ref))
 	}
 	out, err := json.Marshal(data)
 	if err != nil {
-		return frame
+		return nil
 	}
 	return events.Frame(string(bytes.TrimPrefix(head, []byte("event: "))), out)
 }
