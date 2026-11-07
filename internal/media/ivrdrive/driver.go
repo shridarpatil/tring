@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/shridarpatil/tring/internal/ivr"
+	"github.com/shridarpatil/tring/internal/mask"
 )
 
 // Prompts plays a prompt audio file into the room, blocking until it finishes
@@ -42,7 +43,10 @@ type Target struct {
 	Team     string // ring a team (with its strategy/queue) — takes precedence
 	AgentSIP string // ring one specific agent
 	Label    string // what the agent's incoming-call UI shows (never an internal id); the node's `label` overrides the caller ref
-	Answered func() // optional: called once an agent answers, before the call is waited out
+	// MaskedLabel is Label as an agent with masked numbers sees it: rendered
+	// with the caller's number masked. "" → mask.Number(Label).
+	MaskedLabel string
+	Answered    func() // optional: called once an agent answers, before the call is waited out
 }
 
 // Agents rings an agent into the call's room — the transfer membership change.
@@ -419,18 +423,23 @@ func (d *Driver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, err
 	if _, isNumber := n.Config["number"]; isNumber {
 		return d.transferToNumber(ctx, n, ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "number"), d.vars))
 	}
-	label := d.clientRef
-	if l := ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "label"), d.vars); l != "" {
-		label = l // a masked label: the agent never sees the caller's real number
+	label, masked := d.clientRef, mask.Number(d.clientRef)
+	tmpl := ivr.StringFromConfig(n.Config, "label")
+	if l := ivr.SubstituteVars(tmpl, d.vars); l != "" {
+		// The flow's own label. Masked agents get it rendered with {{caller}}
+		// masked rather than the result searched for numbers, so the rest of
+		// the label (dates, order ids) is left as the flow wrote it.
+		label, masked = l, ivr.SubstituteVars(tmpl, d.maskedVars())
 	}
 	if label == "" {
-		label = "Web Caller"
+		label, masked = "Web Caller", "Web Caller"
 	}
 	target := Target{
-		Team:     ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "team"), d.vars),
-		AgentSIP: ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "agent_sip"), d.vars),
-		Label:    label,
-		Answered: func() { d.nodeEvent(n, "answered", "") },
+		Team:        ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "team"), d.vars),
+		AgentSIP:    ivr.SubstituteVars(ivr.StringFromConfig(n.Config, "agent_sip"), d.vars),
+		Label:       label,
+		MaskedLabel: masked,
+		Answered:    func() { d.nodeEvent(n, "answered", "") },
 	}
 	detail := target.Team
 	if detail == "" {
@@ -544,4 +553,17 @@ func (d *Driver) loopDialAudio(ctx context.Context) func() {
 			<-done
 		})
 	}
+}
+
+// maskedVars is the flow vars with the caller's number masked, for rendering
+// a Transfer label the way a masked agent may see it.
+func (d *Driver) maskedVars() map[string]string {
+	vars := make(map[string]string, len(d.vars))
+	for k, v := range d.vars {
+		vars[k] = v
+	}
+	if c, ok := vars["caller"]; ok {
+		vars["caller"] = mask.Number(c)
+	}
+	return vars
 }

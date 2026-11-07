@@ -186,7 +186,7 @@ func (s *Server) ringCallAgent(roomID room.RoomID, name, tenant, sip, label stri
 		}
 		s.mu.Unlock()
 	}()
-	if c == nil || c.send(msg{Type: msgIncoming, Room: name, From: s.callerLabelFor(tenant, sip, label), Auto: true, Phone: true}) != nil {
+	if c == nil || c.send(msg{Type: msgIncoming, Room: name, From: s.callerLabelFor(tenant, sip, label, ""), Auto: true, Phone: true}) != nil {
 		return "", false
 	}
 	select {
