@@ -84,11 +84,19 @@ func (s *Server) handleMePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid new password")
 		return
 	}
-	if _, err := s.db.Pool.Exec(r.Context(), s.q.SetUserPassword, p.TenantID, p.UserID, string(newHash)); err != nil {
+	// The epoch bump revokes every session, this one included, so hand back a
+	// token for the new epoch to keep the caller signed in.
+	var epoch int
+	if err := s.db.Pool.QueryRow(r.Context(), s.q.SetUserPassword, p.TenantID, p.UserID, string(newHash)).Scan(&epoch); err != nil {
 		writeError(w, http.StatusInternalServerError, "update failed")
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	tok, exp, err := s.IssueConsoleToken(p.UserID, p.TenantID, p.Email, p.Role, epoch, consoleTokenTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "issue token")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"token": tok, "expires_at": exp})
 }
 
 type meStats struct {

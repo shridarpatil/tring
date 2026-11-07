@@ -119,7 +119,7 @@ func TestMePasswordChange(t *testing.T) {
 	if rec := doReq(t, h, "POST", "/v1/me/password", tok, `{"current":"old-password","new":"short"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("short new: %d, want 400", rec.Code)
 	}
-	if rec := doReq(t, h, "POST", "/v1/me/password", tok, `{"current":"old-password","new":"new-password"}`); rec.Code != http.StatusNoContent {
+	if rec := doReq(t, h, "POST", "/v1/me/password", tok, `{"current":"old-password","new":"new-password"}`); rec.Code != http.StatusOK {
 		t.Fatalf("change: %d %s", rec.Code, rec.Body)
 	}
 	if rec := doReq(t, h, "POST", "/v1/console/login", "", `{"email":"a@example.com","password":"new-password"}`); rec.Code != http.StatusOK {
@@ -233,5 +233,32 @@ func TestRequirePrincipalRejectsAPIKey(t *testing.T) {
 	// An API key has no user, so /v1/me has nothing to act on.
 	if rec := doReq(t, s.Router(), "GET", "/v1/me", k.Key, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("api key on /v1/me: %d, want 401", rec.Code)
+	}
+}
+
+func TestMePasswordReturnsFreshToken(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	id := f.AddUser(t, "agent", "a@example.com")
+	setPassword(t, f, id, "old-password")
+	old := tokenFor(t, s, f, id, "a@example.com", "agent")
+
+	rec := doReq(t, h, "POST", "/v1/me/password", old, `{"current":"old-password","new":"new-password"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change: %d %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Token     string `json:"token"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Token == "" || resp.ExpiresAt == "" {
+		t.Fatalf("response = %s (%v)", rec.Body, err)
+	}
+	if rec := doReq(t, h, "GET", "/v1/me", old, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token = %d, want 401", rec.Code)
+	}
+	if rec := doReq(t, h, "GET", "/v1/me", resp.Token, ""); rec.Code != http.StatusOK {
+		t.Fatalf("fresh token = %d, want 200", rec.Code)
 	}
 }

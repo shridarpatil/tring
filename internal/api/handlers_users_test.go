@@ -177,3 +177,36 @@ func TestUsersPasswordWithoutEmailCannotLogin(t *testing.T) {
 		t.Fatalf("old token = %d, want 401", rec.Code)
 	}
 }
+
+func TestPasswordResetRevokesOldSessions(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+
+	rec := doReq(t, h, "POST", "/v1/users", admin, `{"email":"dee@example.com","password":"correct-horse","role":"agent"}`)
+	var u userRow
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &u) != nil {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	old := tokenFor(t, s, f, u.ID, "dee@example.com", "agent")
+	if rec := doReq(t, h, "GET", "/v1/me", old, ""); rec.Code != http.StatusOK {
+		t.Fatalf("me before: %d", rec.Code)
+	}
+	// A rename alone must not sign the user out.
+	if rec := doReq(t, h, "PATCH", "/v1/users/"+u.ID.String(), admin, `{"display_name":"Dee"}`); rec.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doReq(t, h, "GET", "/v1/me", old, ""); rec.Code != http.StatusOK {
+		t.Fatalf("me after rename = %d, want 200", rec.Code)
+	}
+	if rec := doReq(t, h, "PATCH", "/v1/users/"+u.ID.String(), admin, `{"password":"battery-staple"}`); rec.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doReq(t, h, "GET", "/v1/me", old, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token after reset = %d, want 401", rec.Code)
+	}
+	if rec := doReq(t, h, "POST", "/v1/console/login", "", `{"email":"dee@example.com","password":"battery-staple"}`); rec.Code != http.StatusOK {
+		t.Fatalf("login after reset: %d %s", rec.Code, rec.Body)
+	}
+}

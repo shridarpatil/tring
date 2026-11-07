@@ -37,7 +37,13 @@ var routeParam = regexp.MustCompile(`\{[^}]+\}`)
 
 func tokenFor(t *testing.T, s *Server, f *dbtest.Fixture, userID uuid.UUID, email, role string) string {
 	t.Helper()
-	tok, _, err := s.IssueConsoleToken(userID, f.TenantID, email, role, time.Hour)
+	// Mint at the user's current epoch, as login would.
+	var epoch int
+	if err := f.DB.Pool.QueryRow(context.Background(),
+		`SELECT session_epoch FROM users WHERE id = $1`, userID).Scan(&epoch); err != nil {
+		t.Fatalf("read epoch: %v", err)
+	}
+	tok, _, err := s.IssueConsoleToken(userID, f.TenantID, email, role, epoch, time.Hour)
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
