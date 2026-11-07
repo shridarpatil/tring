@@ -28,6 +28,10 @@ export interface Tenant {
   recording_sample_rate?: number;
   // Format of call recordings: ogg (default), mp3 or wav.
   recording_format?: string;
+  // Mask client phone numbers (server-side) for each non-admin role.
+  mask_numbers_agents?: boolean;
+  mask_numbers_managers?: boolean;
+  mask_numbers_supervisors?: boolean;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.
