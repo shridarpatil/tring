@@ -594,3 +594,39 @@ func TestAgentLookupThroughCache(t *testing.T) {
 		t.Errorf("warm ring named %q, want cached Carol A", got)
 	}
 }
+
+// TestRingStartStampsCallTeam: a team ring window attributes the call to that
+// team (calls.team), even with the events sink off, and the last team wins.
+func TestRingStartStampsCallTeam(t *testing.T) {
+	fx := dbtest.Setup(t)
+	ctx := context.Background()
+	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil) // nil events sink
+	roomID := fx.TenantID.String() + "/team-stamp"
+	l.Started(ctx, fx.TenantID, roomID, "+15551230000", "Support flow", "web", "", "caller-pid")
+
+	team := func() string {
+		t.Helper()
+		var got *string
+		if err := fx.DB.Pool.QueryRow(ctx, `SELECT team FROM calls WHERE tenant_id = $1`, fx.TenantID).Scan(&got); err != nil {
+			t.Fatalf("read team: %v", err)
+		}
+		if got == nil {
+			return "<nil>"
+		}
+		return *got
+	}
+
+	l.RingStart(ctx, roomID, "", "alice") // direct-agent ring: no team
+	if got := team(); got != "<nil>" {
+		t.Fatalf("team after agent ring = %q, want NULL", got)
+	}
+	l.RingStart(ctx, roomID, "sales", "")
+	if got := team(); got != "sales" {
+		t.Fatalf("team = %q, want sales", got)
+	}
+	l.RingStart(ctx, roomID, "support", "") // transfer to another team
+	if got := team(); got != "support" {
+		t.Fatalf("team after transfer = %q, want support", got)
+	}
+	l.Ended(roomID, "caller_hangup")
+}

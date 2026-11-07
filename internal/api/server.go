@@ -507,9 +507,24 @@ func (s *Server) Router() http.Handler {
 			r.Get("/me/calls/{id}/recording", s.handleMeCallRecording)
 		})
 
+		// Team views for any console user, scoped per handler by the
+		// Principal's role and team memberships (handlers_my_teams.go). Also
+		// outside RejectSelfScope on purpose.
+		r.Group(func(r chi.Router) {
+			r.Use(s.AuthRequired)
+			r.Use(middleware.Timeout(30 * time.Second))
+			r.Use(s.RequirePrincipal)
+			r.Get("/my-teams", s.handleListMyTeams)
+			r.Get("/my-teams/{name}", s.handleGetMyTeam)
+			r.Get("/my-teams/{name}/calls/{id}/recording", s.handleMyTeamCallRecording)
+			r.Post("/my-teams/{name}/members", s.handleAddMyTeamMember)
+			r.Delete("/my-teams/{name}/members/{userID}", s.handleRemoveMyTeamMember)
+			r.Put("/my-teams/{name}/members/{userID}/manager", s.handleSetMyTeamManager)
+		})
+
 		// Console-only: supervise a live web call. Separate from AuthRequired
-		// because the supervise permission is per-user and an API key has no
-		// user identity to check it against.
+		// because supervise is authorized by the user's role and managed teams,
+		// and an API key has no user identity to check it against.
 		r.Group(func(r chi.Router) {
 			r.Use(s.ConsoleAuthRequired)
 			r.Post("/calls/{id}/supervise", s.handleSupervise)

@@ -376,8 +376,10 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 // instead of the stale IVR label. Called when a transfer node starts routing.
 // The target label is resolved for humans: a team by its name, a single agent by
 // their display name (falling back to the SIP username), or "Available agents"
-// for a ring-all. Best-effort + dashboard-only (no calls.status change); a nil
-// events sink or unknown room is a no-op.
+// for a ring-all. A team ring also attributes the call to that team
+// (calls.team, last team wins), which scopes team managers' access to it.
+// Best-effort, no calls.status change; an unknown room is a no-op, and a nil
+// events sink skips only the dashboard publish.
 func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 	l.mu.Lock()
 	ac := l.calls[roomID]
@@ -386,7 +388,18 @@ func (l *Log) RingStart(ctx context.Context, roomID, team, agentSIP string) {
 		ac.ringDone = false
 	}
 	l.mu.Unlock()
-	if ac == nil || l.events == nil {
+	if ac == nil {
+		return
+	}
+	if team != "" && l.db != nil {
+		// Own deadline: attribution must not stall routing on a slow DB.
+		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		if _, err := l.db.Pool.Exec(tctx, l.q.SetCallTeam, ac.tenant, ac.id, team); err != nil {
+			l.log.Warn("cdr: set call team failed", "room", roomID, "call", ac.id, "team", team, "err", err)
+		}
+		cancel()
+	}
+	if l.events == nil {
 		return
 	}
 	// Live dashboard label only: the team name (or a single agent's name / "Available
