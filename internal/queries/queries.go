@@ -117,12 +117,15 @@ type Queries struct {
 	GetTenant           string `query:"get-tenant"`
 
 	// ---- api: /v1/users (admin) ----
-	ListUsers      string `query:"list-users"`
-	GetUser        string `query:"get-user"`
-	CreateUser     string `query:"create-user"`
-	UpdateUser     string `query:"update-user"`
-	ClearUserLogin string `query:"clear-user-login"`
-	DeleteUser     string `query:"delete-user"`
+	ListUsers       string `query:"list-users"`
+	GetUser         string `query:"get-user"`
+	CreateUser      string `query:"create-user"`
+	UpdateUser      string `query:"update-user"`
+	ClearUserLogin  string `query:"clear-user-login"`
+	RenameUserSip   string `query:"rename-user-sip"`
+	UserOnCall      string `query:"user-on-call"`
+	FlowsByAgentSip string `query:"flows-by-agent-sip"`
+	DeleteUser      string `query:"delete-user"`
 
 	// ---- api: /v1/me ----
 	GetUserPasswordHash string `query:"get-user-password-hash"`

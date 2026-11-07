@@ -47,6 +47,20 @@ export interface EditUserForm {
   display_name: string;
   email: string;
   role: string;
+  sip_username: string;
+}
+
+// Mirrors the server's sipUsernameRe (internal/api/esl_inputs.go).
+const SIP_USERNAME_RE = /^[A-Za-z0-9._@+-]{1,64}$/;
+
+/** The SIP username as the server stores it (trimmed, lowercased). */
+function normalizeSip(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/** Whether an edited SIP username renames the user (vs. the saved one). */
+export function sipChanged(saved: string, edited: string): boolean {
+  return normalizeSip(edited) !== saved;
 }
 
 /**
@@ -70,5 +84,12 @@ export function buildUserPatch(
   }
   if (!roleOptions.some((o) => o.value === f.role)) return { body, problem: "Pick a role" };
   if (f.role !== cur.role) body.role = f.role;
+  if (sipChanged(cur.sip_username, f.sip_username)) {
+    const sip = normalizeSip(f.sip_username);
+    if (!SIP_USERNAME_RE.test(sip)) {
+      return { body, problem: "SIP username may only contain letters, digits and . _ @ + - (max 64)" };
+    }
+    body.sip_username = sip;
+  }
   return { body, problem: "" };
 }

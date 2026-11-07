@@ -1154,6 +1154,28 @@ UPDATE users SET email = NULL, password_hash = NULL, session_epoch = session_epo
 WHERE tenant_id = $1 AND id = $2
 RETURNING id;
 
+-- name: rename-user-sip
+UPDATE users SET sip_username = $3 WHERE tenant_id = $1 AND id = $2;
+
+-- name: user-on-call
+-- Whether the user is connected to a live call (blocks a SIP rename). Same 4 h
+-- window as list-active-calls, so a CDR orphaned by a crash can't block forever.
+SELECT EXISTS (
+    SELECT 1 FROM calls
+    WHERE tenant_id = $1 AND agent_id = $2 AND status = 'answered'
+      AND ended_at IS NULL AND started_at > now() - interval '4 hours'
+);
+
+-- name: flows-by-agent-sip
+-- Flows with a transfer node pinned to the agent $2 (config.agent_sip), listed
+-- after a SIP rename so the admin can fix them; flows aren't rewritten.
+SELECT id, name FROM flows
+WHERE tenant_id = $1
+  AND jsonb_path_exists(definition,
+      '$.nodes[*] ? (@.type == "transfer" && @.config.agent_sip == $sip)',
+      jsonb_build_object('sip', $2::text))
+ORDER BY name;
+
 -- name: delete-user
 DELETE FROM users WHERE tenant_id = $1 AND id = $2;
 
