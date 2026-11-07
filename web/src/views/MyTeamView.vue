@@ -69,9 +69,10 @@ const candidates = ref<Candidate[]>([]);
 const pick = ref("");
 async function loadCandidates() {
   if (!manages.value) return;
+  const requested = name.value;
   try {
-    const list = await api.get<Candidate[]>(`/v1/my-teams/${encodeURIComponent(name.value)}/candidates`);
-    if (!unmounted) candidates.value = list;
+    const list = await api.get<Candidate[]>(`/v1/my-teams/${encodeURIComponent(requested)}/candidates`);
+    if (!unmounted && requested === name.value) candidates.value = list;
   } catch {
     /* picker stays as it was */
   }
@@ -112,17 +113,27 @@ async function setManager(m: Member, v: boolean) {
 const active = ref<{ callId: string; mode: SuperviseMode; session: SupervisorSession } | null>(null);
 const LABELS: Record<SuperviseMode, string> = { monitor: "Monitor", whisper: "Whisper", barge: "Barge" };
 
+// Bumped by every start/stop/reset/unmount so a connect that resolves after
+// any of them hangs its own session up instead of orphaning it.
+let superviseGen = 0;
+// The session currently connecting, so stopSupervise can cancel it.
+let pending: SupervisorSession | undefined;
+
 async function startSupervise(c: Call) {
   stopSupervise();
+  const gen = superviseGen;
   try {
     const creds = await api.supervise(c.id);
+    if (gen !== superviseGen || unmounted) return;
     const session = new SupervisorSession(creds.gateway_url, creds.room, creds.token, creds.ice_servers || []);
+    pending = session;
     session.onClose = (reason) => {
       if (active.value?.session === session) active.value = null;
       if (reason) toast.error(reason);
     };
     await session.connect("monitor");
-    if (unmounted) {
+    if (pending === session) pending = undefined;
+    if (gen !== superviseGen || unmounted) {
       session.hangup();
       return;
     }
@@ -137,6 +148,9 @@ function setMode(mode: SuperviseMode) {
   active.value.mode = mode;
 }
 function stopSupervise() {
+  superviseGen++;
+  pending?.hangup();
+  pending = undefined;
   active.value?.session.hangup();
   active.value = null;
 }
@@ -192,6 +206,7 @@ onMounted(async () => {
     .then((l) => !unmounted && (teamNames.value = l.map((t) => t.name)))
     .catch(() => {});
   await load();
+  if (unmounted) return;
   loadCandidates();
   poll = setInterval(load, 5000);
 });
