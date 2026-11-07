@@ -3,12 +3,10 @@ import { ref, computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
-import { auth } from "../stores/auth";
 import { toast } from "../lib/toast";
-import { callStatusTone } from "../lib/status";
 import { usePagedList } from "../composables/usePagedList";
 import type { Call, CallEvent } from "../api/types";
-import { Button, Select, Badge, Modal, TextField, Pagination, CallDetailModal, CallFullLogModal } from "../components/ui";
+import { Button, Select, CallsTable, Modal, TextField, Pagination, CallDetailModal, CallFullLogModal } from "../components/ui";
 import { toCallDetail, toFullLog } from "../lib/callDetail";
 
 const statusFilter = ref("");
@@ -31,23 +29,6 @@ const {
   load,
   setPage,
 } = usePagedList<Call>("/v1/calls", { params });
-
-// Recordings are served behind auth, so a plain <a href>/<audio src> can't send
-// the bearer token. Fetch the WAV as a blob and bind it to an inline <audio>
-// player (a blob URL opened in a new tab would just download).
-const recUrl = ref<Record<string, string>>({});
-async function playRecording(c: Call) {
-  if (!c.recording_url || recUrl.value[c.id]) return;
-  const token = auth.token();
-  const res = await fetch(c.recording_url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) {
-    toast.error("recording not available yet");
-    return;
-  }
-  recUrl.value = { ...recUrl.value, [c.id]: URL.createObjectURL(await res.blob()) };
-}
 
 // Detail popup: clicking a row opens the summary modal; "View full log" swaps to
 // the wide event table. Both read the same fetched timeline + the call's ivr_path.
@@ -152,10 +133,6 @@ async function connect() {
     placing.value = false;
   }
 }
-
-function fmt(d?: string) {
-  return d ? new Date(d).toLocaleString() : "—";
-}
 </script>
 
 <template>
@@ -178,76 +155,7 @@ function fmt(d?: string) {
     </div>
 
     <div class="card" style="padding: 0">
-      <!-- Cap the log to the viewport so the table scrolls inside its own area
-           (sticky header) instead of growing the whole page; the filter above
-           and pagination below stay put. -->
-      <div class="table calls-scroll">
-        <table>
-        <thead class="calls-sticky">
-          <tr>
-            <th>From</th>
-            <th>To</th>
-            <th>Agent</th>
-            <th>Dir</th>
-            <th>Status</th>
-            <th>Started</th>
-            <th class="align-right">Dur</th>
-            <th>Recording</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-for="c in calls" :key="c.id">
-            <tr style="cursor: pointer" @click="openDetail(c)">
-              <td class="mono">
-                <div class="truncate" style="max-width: 200px" :title="c.client_ref || c.from_number">
-                  {{ c.client_ref || c.from_number }}
-                </div>
-              </td>
-              <td class="mono">
-                <div class="truncate" style="max-width: 200px" :title="c.to_number">{{ c.to_number }}</div>
-              </td>
-              <td>{{ c.agent_name || "—" }}</td>
-              <td class="text-light">{{ c.direction }}</td>
-              <td><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
-              <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
-              <td class="align-right mono">
-                {{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}
-              </td>
-              <td>
-                <audio
-                  v-if="recUrl[c.id]"
-                  :src="recUrl[c.id]"
-                  controls
-                  autoplay
-                  style="height: 2rem"
-                  @click.stop
-                ></audio>
-                <button
-                  v-else-if="c.recording_url"
-                  type="button"
-                  class="plain"
-                  style="color: var(--primary)"
-                  @click.stop="playRecording(c)"
-                >
-                  Play
-                </button>
-                <span v-else class="text-lighter">—</span>
-              </td>
-              <td class="align-right" style="white-space: nowrap">
-                <Button variant="secondary" size="sm" @click.stop="openDetail(c)">Details</Button>
-              </td>
-            </tr>
-          </template>
-          <tr v-if="!loading && calls.length === 0">
-            <td colspan="9" class="align-center text-lighter">No calls</td>
-          </tr>
-          <tr v-if="loading">
-            <td colspan="9" class="align-center text-lighter">Loading…</td>
-          </tr>
-        </tbody>
-      </table>
-      </div>
+      <CallsTable :calls="calls" :loading="loading" selectable @select="openDetail" />
       <Pagination
         :page="page"
         :page-size="pageSize"
@@ -296,10 +204,3 @@ function fmt(d?: string) {
     />
   </div>
 </template>
-
-<style scoped>
-/* Structural only — cap the log to the viewport so it scrolls within its own
-   area (sticky header) instead of growing the whole page. Colours via tokens. */
-.calls-scroll { max-height: calc(100vh - 16rem); overflow: auto; }
-.calls-sticky { position: sticky; top: 0; z-index: 10; background: var(--card); }
-</style>
