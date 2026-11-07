@@ -182,6 +182,7 @@ func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /control/connect", s.handleControlConnect)
 	mux.HandleFunc("POST /control/call", s.handleControlCall)
+	mux.HandleFunc("POST /control/agent-kick", s.handleControlAgentKick)
 	return mux
 }
 
@@ -225,6 +226,27 @@ func (s *Server) handleControlCall(w http.ResponseWriter, r *http.Request) {
 		AgentSIP: req.AgentSIP, To: req.To, Label: req.AgentLabel, CallerID: req.CallerID,
 	})
 	s.controlPlaced(w, tenant, callID, err)
+}
+
+// handleControlAgentKick is POST /control/agent-kick {sip} → 204: the api
+// renamed the agent, so their presence socket is registered under a name that
+// no longer exists. Closing it makes the SDK reconnect with a fresh token
+// carrying the new name — an ordinary drop, so no new wire message. A no-op
+// when the agent isn't connected to this gateway.
+func (s *Server) handleControlAgentKick(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := s.controlTenant(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		SIP string `json:"sip"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.SIP == "" {
+		controlError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	s.kickAgent(tenant.String(), req.SIP)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // controlTenant authenticates a control request by the API's token and returns

@@ -305,6 +305,19 @@ func (s *Server) lookupAvailability(tenant, sip string) (available, ok bool) {
 	return available, true
 }
 
+// kickAgent closes the agent's presence socket; handleAgentPresence's read
+// then fails and its deferred cleanup deregisters them and marks them offline.
+func (s *Server) kickAgent(tenant, sip string) {
+	s.mu.Lock()
+	c := s.agents[tenant][sip]
+	s.mu.Unlock()
+	if c == nil {
+		return
+	}
+	_ = c.Close()
+	s.log.Info("agent kicked", "tenant", tenant, "sip", sip)
+}
+
 // PushAvailability forwards a backend availability change (the API's
 // agent.status event, POST /v1/agents/{id}/availability) to the agent's
 // presence socket on this gateway, if they're connected here.
