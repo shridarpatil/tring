@@ -8,8 +8,9 @@ import type { Call, Paginated } from "../api/types";
 import { Toggle, CallsTable, Pagination } from "../components/ui";
 import { useAgentWidget } from "../composables/useAgentWidget";
 
-// The user's own call history (calls they answered), with recordings. Also
-// mounts the call panel, so admins (who land on /admin) can take calls here.
+// The user's own call history: calls they answered (with recordings) and calls
+// that rang them and they missed (badged, no recording). Also mounts the call
+// panel, so admins (who land on /admin) can take calls here.
 const { available, savingAvail, setAvailable } = useAgentWidget();
 
 const PAGE = 25;

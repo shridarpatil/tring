@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/shridarpatil/tring/internal/callrow"
 )
 
 // The /v1/me handlers serve the logged-in user's own view. Each acts only on
@@ -130,6 +132,13 @@ func (s *Server) handleMeStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// myCall is a /v1/me/calls item: the call plus whether it is one the user
+// missed (it rang them, they never answered, it ended) rather than took.
+type myCall struct {
+	Call
+	Missed bool `json:"missed,omitempty"`
+}
+
 func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
 	// Days before today's local midnight: "7d" is today and the 6 days before.
@@ -163,14 +172,18 @@ func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	out := []Call{}
+	out := []myCall{}
 	for rows.Next() {
-		c, err := scanCall(rows)
-		if err != nil {
+		var c myCall
+		if c.Call, err = callrow.ScanWith(rows, &c.Missed); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
-		if c.RecordingURL != nil {
+		switch {
+		case c.Missed:
+			// Recordings are only for calls the user took (is-my-call).
+			c.RecordingURL = nil
+		case c.RecordingURL != nil:
 			// Point at the /me route: the tenant-wide one rejects this session.
 			u := "/v1/me/calls/" + c.ID.String() + "/recording"
 			c.RecordingURL = &u

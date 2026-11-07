@@ -87,7 +87,10 @@ const cols = () => 7 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
           </td>
           <td v-if="!hideAgent">{{ c.agent_name || "—" }}</td>
           <td class="text-light">{{ c.direction }}</td>
-          <td><Badge :tone="callStatusTone(c.status)">{{ c.status }}</Badge></td>
+          <td>
+            <Badge v-if="c.missed" tone="danger">Missed</Badge>
+            <Badge v-else :tone="callStatusTone(c.status)">{{ c.status }}</Badge>
+          </td>
           <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
           <td class="align-right mono">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
           <td>
@@ -100,7 +103,7 @@ const cols = () => 7 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
               @click.stop
             ></audio>
             <button
-              v-else-if="recordingUrl(c)"
+              v-else-if="!c.missed && recordingUrl(c)"
               type="button"
               class="plain"
               style="color: var(--primary)"
