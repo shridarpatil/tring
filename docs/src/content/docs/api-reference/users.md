@@ -71,7 +71,7 @@ Available to any console session, whatever its role. Each endpoint acts only on 
 
 | Endpoint | What it does |
 |---|---|
-| `GET /v1/me` | The caller's profile: `id`, `display_name`, `email`, `role`, `sip_username`, `teams`. |
+| `GET /v1/me` | The caller's profile: `id`, `display_name`, `email`, `role`, `sip_username`, `teams`, and `tenant` (`id`, `name`, `sip_domain`). |
 | `POST /v1/me/token` | Mints the caller's own agent token (same response as `/v1/agents/{id}/token`). |
 | `POST /v1/me/availability` | `{"available": false}` sets the caller's Away flag. |
 | `POST /v1/me/password` | `{"current": "...", "new": "..."}`. `401` if `current` is wrong; `new` must be at least 8 characters. |
