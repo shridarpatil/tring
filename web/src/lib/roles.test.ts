@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canManageTeam, canOpen, guardTarget, homeRoute, safeRedirect, type MeUser } from "./roles.ts";
+import { canManageTeam, canOpen, canSuperviseCall, dashboardScope, guardTarget, homeRoute, safeRedirect, type MeUser } from "./roles.ts";
 
 const mk = (role: MeUser["role"], teams: MeUser["teams"] = []): MeUser => ({
   id: "u1",
@@ -50,4 +50,21 @@ test("safeRedirect: only pages of this app", () => {
   for (const bad of ["//evil.example", "https://evil.example", "/login", "/", "/administrator", "/agents", "", undefined, ["/agent"]]) {
     assert.equal(safeRedirect(bad), null);
   }
+});
+
+test("dashboardScope: supervisors all, managers managed teams, agents own", () => {
+  assert.equal(dashboardScope(mk("admin")), "all");
+  assert.equal(dashboardScope(mk("supervisor")), "all");
+  assert.equal(dashboardScope(mk("agent", [{ name: "A", is_manager: true }, { name: "B", is_manager: false }])), "managed");
+  assert.equal(dashboardScope(mk("agent", [{ name: "B", is_manager: false }])), "own");
+  assert.equal(dashboardScope(mk("agent")), "own");
+});
+
+test("canSuperviseCall: supervisors any call, managers others' calls, agents none", () => {
+  assert.equal(canSuperviseCall(mk("supervisor"), { agent_id: "u1" }), true);
+  const m = mk("agent", [{ name: "A", is_manager: true }]);
+  assert.equal(canSuperviseCall(m, { agent_id: "u2" }), true);
+  assert.equal(canSuperviseCall(m, {}), true);
+  assert.equal(canSuperviseCall(m, { agent_id: "u1" }), false);
+  assert.equal(canSuperviseCall(mk("agent", [{ name: "A", is_manager: false }]), { agent_id: "u2" }), false);
 });
