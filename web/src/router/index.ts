@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
 import { api } from "../api/client";
 import { auth } from "../stores/auth";
-import { canOpen, homeRoute, type MeUser } from "../lib/roles";
+import { guardTarget, homeRoute, type MeUser } from "../lib/roles";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -62,20 +62,23 @@ const router = createRouter({
   routes,
 });
 
+// One /v1/me refresh per page load, shared by concurrent navigations, so role
+// or team changes made after login are reconciled with the cached user.
+let refreshed: Promise<void> | null = null;
+
 router.beforeEach(async (to) => {
   if (to.name === "styleguide") return; // dev-only, no auth
   if (to.name !== "login" && !auth.isAuthed()) {
     // Remember where they were going (e.g. a shared call link) for after login.
     return to.fullPath === "/" ? { name: "login" } : { name: "login", query: { redirect: to.fullPath } };
   }
-  // Sessions from before roles existed have a token but no cached user.
-  if (auth.isAuthed() && !auth.state.user) {
-    await auth.refreshMe(() => api.get<MeUser>("/v1/me"));
-    if (!auth.isAuthed()) return { name: "login" }; // 401 -> client logged out
-  }
+  if (!auth.isAuthed()) return; // login page, signed out: nothing to refresh
+  refreshed ??= auth.refreshMe(() => api.get<MeUser>("/v1/me"));
+  await refreshed;
+  if (!auth.isAuthed()) return { name: "login" }; // 401 -> client logged out
   const u = auth.state.user;
   if (to.name === "login" && auth.isAuthed()) return { name: u ? homeRoute(u) : "dashboard" };
-  if (u && !to.matched.every((r) => canOpen(u, r))) return { name: "me" };
+  if (to.matched.some((r) => guardTarget(u, r) === "me")) return { name: "me" };
 });
 
 export default router;

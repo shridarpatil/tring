@@ -27,3 +27,12 @@ export function canManageTeam(u: MeUser, team: string): boolean {
   if (u.role === "admin" || u.role === "supervisor") return true;
   return (u.teams ?? []).some((t) => t.name === team && t.is_manager);
 }
+
+/**
+ * Route guard decision. A missing user (refresh failed, non-401) is treated as
+ * non-admin so admin pages fail closed instead of being skipped.
+ */
+export function guardTarget(u: MeUser | null, route: { meta?: { admin?: boolean } }): "ok" | "me" {
+  if (!route.meta?.admin) return "ok";
+  return u && canOpen(u, route) ? "ok" : "me";
+}
