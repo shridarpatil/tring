@@ -72,7 +72,7 @@ func TestIncomingMasksCallerNumberPerAgent(t *testing.T) {
 	}
 
 	_, eff, cleanup := s.Prepare(context.Background(), tenant+"/pstn-x",
-		ivrdrive.Target{Label: "Customer +919876543210"}, true, nil, "", "")
+		ivrdrive.Target{Label: "Customer +919876543210", MaskedLabel: "Customer +91••••••3210"}, true, nil, "", "")
 	defer cleanup()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -92,13 +92,18 @@ func TestIncomingMasksCallerNumberPerAgent(t *testing.T) {
 }
 
 // A gateway with no mask config (started without a DB) can't tell who is
-// masked, so it masks; a label without a number passes through.
+// masked, so it masks; a label without a number passes through, and text
+// around a number is never searched (the flow renders the masked label).
 func TestCallerLabelFailsClosedWithoutConfig(t *testing.T) {
 	s := newHandoffServer(t)
-	if got := s.callerLabelFor(uuid.NewString(), "alice", "+919876543210"); got != "+91••••••3210" {
-		t.Errorf("nil NumberMask: label = %q, want masked", got)
-	}
-	if got := s.callerLabelFor(uuid.NewString(), "alice", "Lead 42"); got != "Lead 42" {
-		t.Errorf("label without a number = %q, want unchanged", got)
+	for _, tc := range []struct{ label, masked, want string }{
+		{"+919876543210", "", "+91••••••3210"},
+		{"Lead 42", "", "Lead 42"},
+		{"Order 2026-11-07", "", "Order 2026-11-07"},
+		{"Customer +919876543210", "Customer +91••••••3210", "Customer +91••••••3210"},
+	} {
+		if got := s.callerLabelFor(uuid.NewString(), "alice", tc.label, tc.masked); got != tc.want {
+			t.Errorf("nil NumberMask: label %q = %q, want %q", tc.label, got, tc.want)
+		}
 	}
 }

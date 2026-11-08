@@ -396,7 +396,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	rid := room.RoomID(roomID)
 	ring := make(chan struct{})
 	eff := &pionRing{
-		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label,
+		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label, maskedLabel: t.MaskedLabel,
 		strategy: strategy, moh: moh, ring: ring,
 		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{},
 		declineCh: make(chan struct{}, 1),
@@ -475,15 +475,17 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 type pionRing struct {
 	s        *Server
 	tenant   string
-	roomID   room.RoomID     // full "<tenant>/<name>" — where hold music is injected
-	roomName string          // un-namespaced name agents join
-	label    string          // caller label shown to the agent
-	strategy string          // team strategy; "" / ring_all → all at once, else one at a time
-	moh      string          // resolved team hold music played to the caller while waiting
-	ring     <-chan struct{} // closed on a room join
-	rung     map[string]bool // sips popped at least once this transfer (suppresses re-pop within a round)
-	active   map[string]bool // sips whose popup is currently showing (guarded by s.mu)
-	declined map[string]bool // sips that rejected this call — excluded from candidates (guarded by s.mu)
+	roomID   room.RoomID // full "<tenant>/<name>" — where hold music is injected
+	roomName string      // un-namespaced name agents join
+	label    string      // caller label shown to the agent
+	// maskedLabel is label as a masked agent sees it ("" → mask.Number(label)).
+	maskedLabel string
+	strategy    string          // team strategy; "" / ring_all → all at once, else one at a time
+	moh         string          // resolved team hold music played to the caller while waiting
+	ring        <-chan struct{} // closed on a room join
+	rung        map[string]bool // sips popped at least once this transfer (suppresses re-pop within a round)
+	active      map[string]bool // sips whose popup is currently showing (guarded by s.mu)
+	declined    map[string]bool // sips that rejected this call — excluded from candidates (guarded by s.mu)
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
@@ -558,7 +560,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	}
 	for _, sip := range ordered {
 		if _, ok := p.labels[sip]; !ok {
-			p.labels[sip] = p.s.callerLabelFor(p.tenant, sip, p.label)
+			p.labels[sip] = p.s.callerLabelFor(p.tenant, sip, p.label, p.maskedLabel)
 		}
 	}
 	p.s.mu.Lock()
@@ -765,14 +767,16 @@ func (s *Server) takeInvite(roomID room.RoomID, sip string) bool {
 var _ brain.RingTransport = (*Server)(nil)
 var _ brain.HandoffWaiter = (*Server)(nil)
 
-// callerLabelFor returns the caller label as sip may see it: with every phone
-// number in it masked (mask.InText — a flow's Transfer label may embed
-// {{caller}}) when the tenant masks numbers for sip's role, so the full number
-// never reaches a masked agent's widget. It fails closed — masks — when the
-// verdict can't be read, including a gateway started without a DB (nil
-// NumberMask). A label with no number in it is returned as is.
-func (s *Server) callerLabelFor(tenant, sip, label string) string {
-	masked := mask.InText(label)
+// callerLabelFor returns the caller label as sip may see it: masked (the
+// flow-rendered masked label, else mask.Number of the label) when the tenant
+// masks numbers for sip's role, so the full number never reaches a masked
+// agent's widget. It fails closed — masks — when the verdict can't be read,
+// including a gateway started without a DB (nil NumberMask). A label with no
+// number in it is returned as is without a lookup.
+func (s *Server) callerLabelFor(tenant, sip, label, masked string) string {
+	if masked == "" {
+		masked = mask.Number(label)
+	}
 	if masked == label || s.cfg.NumberMask == nil {
 		return masked
 	}
