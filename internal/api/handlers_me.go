@@ -23,9 +23,25 @@ const (
 	meCallsMax     = 100
 )
 
+// meTenant is the signed-in user's tenant as every role may see it. Only
+// admins can read GET /v1/tenants/me, so /v1/me carries the name the console
+// shows in its top bar for everyone else.
+type meTenant struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	SipDomain string `json:"sip_domain"`
+}
+
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	writeJSON(w, http.StatusOK, newMeUser(p, p.Email))
+	resp := struct {
+		meUser
+		Tenant *meTenant `json:"tenant,omitempty"`
+	}{meUser: newMeUser(p, p.Email)}
+	if t := tenantFromCtx(r.Context()); t != nil {
+		resp.Tenant = &meTenant{ID: t.ID.String(), Name: t.Name, SipDomain: t.SipDomain}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleMeToken mints the caller's own agent JWT so the agent view can open

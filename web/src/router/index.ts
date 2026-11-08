@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from "vue-router";
 import { api } from "../api/client";
-import { auth } from "../stores/auth";
-import { guardTarget, homeRoute, safeRedirect, type MeUser } from "../lib/roles";
+import { auth, type MeResponse } from "../stores/auth";
+import { guardTarget, homeRoute, safeRedirect } from "../lib/roles";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -84,7 +84,7 @@ router.beforeEach(async (to) => {
     return safeRedirect(to.fullPath) ? { name: "login", query: { redirect: to.fullPath } } : { name: "login" };
   }
   if (!auth.isAuthed()) return; // login page, signed out: nothing to refresh
-  refreshed ??= auth.refreshMe(() => api.get<MeUser>("/v1/me"));
+  refreshed ??= auth.refreshMe(() => api.get<MeResponse>("/v1/me"));
   await refreshed;
   if (!auth.isAuthed()) return { name: "login" }; // 401 -> client logged out
   const u = auth.state.user;
