@@ -154,7 +154,7 @@ func TestPrincipalReloadedEachRequest(t *testing.T) {
 	if rec := doReq(t, h, "GET", "/v1/trunks", tok, ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("demoted: %d, want 403", rec.Code)
 	}
-	if _, err := f.DB.Pool.Exec(ctx, `UPDATE users SET password_hash = NULL WHERE id = $1`, b); err != nil {
+	if _, err := f.DB.Pool.Exec(ctx, `UPDATE users SET email = NULL, password_hash = NULL WHERE id = $1`, b); err != nil {
 		t.Fatal(err)
 	}
 	if rec := doReq(t, h, "GET", "/v1/trunks", tok, ""); rec.Code != http.StatusUnauthorized {

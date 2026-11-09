@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -112,7 +113,7 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	var (
 		userID       uuid.UUID
 		tenantID     uuid.UUID
-		passwordHash string
+		passwordHash *string
 	)
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetUserByEmail,
 		email,
@@ -130,7 +131,14 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
+	if passwordHash == nil {
+		// SSO-only user: no password to check. Burn the same bcrypt time and
+		// answer exactly like a wrong password so this can't be told apart.
+		_ = bcrypt.CompareHashAndPassword([]byte("$2a$10$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi"), []byte(req.Password))
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(*passwordHash), []byte(req.Password)); err != nil {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
@@ -139,36 +147,46 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	s.loginByIP.release(ip)
 	s.loginByEmail.release(email)
 
+	resp, err := s.consoleSession(r.Context(), userID, tenantID, email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// consoleSession builds the login response (tenant, user view, signed
+// console JWT) for an already-authenticated user. Shared by password login
+// and the SSO callback so both issue identical sessions. Errors are short
+// messages safe to show the client.
+func (s *Server) consoleSession(ctx context.Context, userID, tenantID uuid.UUID, email string) (consoleLoginResponse, error) {
 	// Pull the tenant in the same shape AuthRequired loads it so the
 	// console gets a consistent /v1/tenants/me-equivalent payload back
 	// from /login without a second round-trip.
 	var t Tenant
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetTenant,
+	err := s.db.Pool.QueryRow(ctx, s.q.GetTenant,
 		tenantID,
 	).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "load tenant")
-		return
+		return consoleLoginResponse{}, errors.New("load tenant")
 	}
 
-	principal, err := s.principalFor(r.Context(), userID, tenantID)
+	principal, err := s.principalFor(ctx, userID, tenantID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "load user")
-		return
+		return consoleLoginResponse{}, errors.New("load user")
 	}
 
 	signed, exp, err := s.IssueConsoleToken(userID, tenantID, email, principal.Role, principal.Epoch, consoleTokenTTL)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "issue token")
-		return
+		return consoleLoginResponse{}, errors.New("issue token")
 	}
 
-	writeJSON(w, http.StatusOK, consoleLoginResponse{
+	return consoleLoginResponse{
 		Token:     signed,
 		ExpiresAt: exp,
 		Tenant:    t,
 		User:      newMeUser(principal, email),
-	})
+	}, nil
 }
 
 // IssueConsoleToken signs a console-audience JWT. Exported so tests can
