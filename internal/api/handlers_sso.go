@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -27,7 +30,13 @@ import (
 //
 // The state record and the one-time code live in Redis and are consumed with
 // GETDEL, so each is single-use; without Redis SSO is unavailable. The console
-// token never appears in a URL: only the 60 s one-time code does.
+// token never appears in a URL: only the 60 s one-time code does, and only in
+// the fragment, which browsers don't send and access logs don't record.
+//
+// Both are bound to the browser that started the flow by the tring_sso cookie
+// (its SHA-256 is stored in the state and code records): a callback URL or
+// code handed to someone else is useless, which stops login CSRF (RFC 9700
+// §4.7).
 
 const (
 	ssoStateTTL = 10 * time.Minute
@@ -35,6 +44,10 @@ const (
 
 	ssoStatePrefix = "sso:state:"
 	ssoCodePrefix  = "sso:code:"
+
+	ssoCookieName = "tring_sso"
+	// Covers /callback and /exchange; start may still set it.
+	ssoCookiePath = "/v1/console/sso"
 )
 
 // ssoRedirectRe is safeRedirect in web/src/lib/roles.ts: only the console's
@@ -56,6 +69,41 @@ type ssoState struct {
 	Nonce      string    `json:"nonce"`
 	Verifier   string    `json:"verifier"`
 	Redirect   string    `json:"redirect"`
+	// Binding is the hex SHA-256 of the tring_sso cookie value.
+	Binding string `json:"binding"`
+}
+
+// ssoCodeRecord is what the callback parks under sso:code:<code>.
+type ssoCodeRecord struct {
+	Binding  string          `json:"binding"`
+	Response json.RawMessage `json:"response"`
+}
+
+func ssoBindingHash(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:])
+}
+
+// ssoBound reports whether the request carries the tring_sso cookie whose hash
+// is binding.
+func ssoBound(r *http.Request, binding string) bool {
+	c, err := r.Cookie(ssoCookieName)
+	if err != nil || c.Value == "" || binding == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(ssoBindingHash(c.Value)), []byte(binding)) == 1
+}
+
+func (s *Server) setSSOCookie(w http.ResponseWriter, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     ssoCookieName,
+		Value:    value,
+		Path:     ssoCookiePath,
+		MaxAge:   maxAge,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   strings.HasPrefix(s.consolePublicURL, "https://"),
+	})
 }
 
 // ssoRandom is 32 random bytes, base64url: state, nonce and one-time codes.
@@ -151,7 +199,8 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 
 	state, err1 := ssoRandom()
 	nonce, err2 := ssoRandom()
-	if err1 != nil || err2 != nil {
+	browser, err3 := ssoRandom()
+	if err1 != nil || err2 != nil || err3 != nil {
 		writeError(w, http.StatusInternalServerError, "sso start failed")
 		return
 	}
@@ -159,6 +208,7 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	st.Nonce = nonce
 	st.Verifier = oauth2.GenerateVerifier()
 	st.Redirect = safeSSORedirect(req.Redirect)
+	st.Binding = ssoBindingHash(browser)
 	rec, err := json.Marshal(st)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "sso start failed")
@@ -177,6 +227,7 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		oidc.Nonce(nonce),
 		oauth2.SetAuthURLParam("login_hint", email),
 	)
+	s.setSSOCookie(w, browser, int(ssoStateTTL/time.Second))
 	writeJSON(w, http.StatusOK, map[string]string{"method": "sso", "redirect_url": authURL})
 }
 
@@ -219,6 +270,11 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !ssoBound(r, st.Binding) {
+		s.ssoRedirectFail(w, r, st, ssoFail("expired", "browser binding mismatch", nil))
+		return
+	}
+
 	userID, email, fail := s.ssoVerifyCallback(ctx, st, q)
 	if fail != nil {
 		s.ssoRedirectFail(w, r, st, fail)
@@ -229,7 +285,12 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 		s.ssoRedirectFail(w, r, st, ssoFail("failed", "build session", err))
 		return
 	}
-	body, err := json.Marshal(resp)
+	sessionJSON, err := json.Marshal(resp)
+	if err != nil {
+		s.ssoRedirectFail(w, r, st, ssoFail("failed", "encode session", err))
+		return
+	}
+	body, err := json.Marshal(ssoCodeRecord{Binding: st.Binding, Response: sessionJSON})
 	if err != nil {
 		s.ssoRedirectFail(w, r, st, ssoFail("failed", "encode session", err))
 		return
@@ -245,12 +306,15 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.log.Info("sso login", "tenant_id", st.TenantID, "provider_id", st.ProviderID, "user_id", userID)
-	target := "/login?sso_code=" + url.QueryEscape(code)
+	// Fragment, not query: the code must not reach access logs or proxies.
+	target := "/login#sso_code=" + url.QueryEscape(code)
 	if st.Redirect != "" {
 		target += "&redirect=" + url.QueryEscape(st.Redirect)
 	}
 	ssoNoStore(w)
-	http.Redirect(w, r, target, http.StatusFound)
+	// Set directly: http.Redirect would path-clean the target.
+	w.Header().Set("Location", target)
+	w.WriteHeader(http.StatusFound)
 }
 
 // ssoVerifyCallback exchanges the code and checks the ID token and the user.
@@ -379,7 +443,11 @@ func (s *Server) handleSSOExchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}
-	body, ok, err := s.cache.GetDel(r.Context(), ssoCodePrefix+req.Code)
+	if c, err := r.Cookie(ssoCookieName); err != nil || c.Value == "" {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
+	raw, ok, err := s.cache.GetDel(r.Context(), ssoCodePrefix+req.Code)
 	if err != nil {
 		s.log.Warn("sso exchange: read code failed", "err", err)
 		writeError(w, http.StatusServiceUnavailable, "sso unavailable")
@@ -389,13 +457,21 @@ func (s *Server) handleSSOExchange(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid or expired code")
 		return
 	}
+	// The code is burned either way: one stolen from another browser is
+	// useless to the thief and gone for the victim.
+	var rec ssoCodeRecord
+	if err := json.Unmarshal(raw, &rec); err != nil || !ssoBound(r, rec.Binding) {
+		writeError(w, http.StatusUnauthorized, "invalid or expired code")
+		return
+	}
 	// A completed login refunds its start and exchange attempts, as password
 	// login does, so an office behind one NAT isn't throttled by its own
 	// successful sign-ins.
 	s.ssoStartByIP.release(ip)
 	s.ssoStartByIP.release(ip)
+	s.setSSOCookie(w, "", -1)
 	ssoNoStore(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	_, _ = w.Write(rec.Response)
 }
