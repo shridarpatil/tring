@@ -147,12 +147,55 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	s.loginByIP.release(ip)
 	s.loginByEmail.release(email)
 
+	// Checked only after a correct password, so it reveals nothing to a guesser.
+	blocked, err := s.passwordLoginBlocked(r.Context(), userID, tenantID, email)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	if blocked {
+		writeError(w, http.StatusForbidden, "this account must sign in with SSO")
+		return
+	}
+
 	resp, err := s.consoleSession(r.Context(), userID, tenantID, email)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// passwordLoginBlocked reports whether the user's email domain belongs to an
+// enabled require_sso provider in the user's own tenant. Admins are exempt:
+// they are the break-glass accounts when an IdP is broken. Errors fail closed
+// (the caller refuses the login).
+func (s *Server) passwordLoginBlocked(ctx context.Context, userID, tenantID uuid.UUID, email string) (bool, error) {
+	domain := emailDomain(email)
+	if domain == "" {
+		return false, nil
+	}
+	var (
+		pid, tid                 uuid.UUID
+		issuer, clientID, secret string
+		requireSSO               bool
+	)
+	err := s.db.Pool.QueryRow(ctx, s.q.GetSSODomain, domain).Scan(&pid, &tid, &issuer, &clientID, &secret, &requireSSO)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if tid != tenantID || !requireSSO {
+		return false, nil
+	}
+	// Only the rare enforced-domain login pays for this extra principal load.
+	p, err := s.principalFor(ctx, userID, tenantID)
+	if err != nil {
+		return false, err
+	}
+	return p.Role != "admin", nil
 }
 
 // consoleSession builds the login response (tenant, user view, signed
