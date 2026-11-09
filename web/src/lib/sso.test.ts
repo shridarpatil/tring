@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deleteProviderMessage, parseSsoFragment, splitDomains, ssoErrorMessage } from "./sso.ts";
+import { deleteProviderMessage, parseSsoFragment, splitDomains, ssoButtonName, ssoErrorMessage } from "./sso.ts";
 
 test("parseSsoFragment", () => {
   assert.deepEqual(parseSsoFragment("#sso_code=abc"), { code: "abc", redirect: "" });
@@ -31,4 +31,11 @@ test("deleteProviderMessage", () => {
   assert.doesNotMatch(deleteProviderMessage("Okta", 0), /no password/);
   assert.match(deleteProviderMessage("Okta", 1), /1 user on these domains has no password/);
   assert.match(deleteProviderMessage("Okta", 3), /3 users on these domains have no password/);
+});
+
+test("ssoButtonName", () => {
+  assert.equal(ssoButtonName({ name: " Demo IdP " }), "Demo IdP");
+  assert.equal(ssoButtonName({}), "");
+  assert.equal(ssoButtonName(null), "");
+  assert.equal(ssoButtonName({ name: 3 }), "");
 });

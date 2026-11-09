@@ -1331,3 +1331,11 @@ SELECT p.id, p.tenant_id, p.issuer_url, p.client_id, p.client_secret, p.require_
 FROM sso_provider_domains d
 JOIN sso_providers p ON p.id = d.provider_id
 WHERE d.domain = $1 AND p.enabled;
+
+-- name: get-single-sso-provider
+-- The login page's "Sign in with <provider>" button, before any tenant is
+-- known (same pre-auth global exception as get-sso-domain): the enabled
+-- provider, only when exactly one is enabled install-wide.
+SELECT id, tenant_id, name, issuer_url, client_id
+FROM sso_providers
+WHERE enabled AND (SELECT count(*) FROM sso_providers WHERE enabled) = 1;

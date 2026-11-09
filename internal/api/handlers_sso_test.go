@@ -767,3 +767,137 @@ func TestSSOHostedDomainOffIgnoresHD(t *testing.T) {
 		}
 	}
 }
+
+// nameSSOProvider renames a seeded provider and sets its enabled flag.
+func nameSSOProvider(t *testing.T, f *dbtest.Fixture, id uuid.UUID, name string, enabled bool) {
+	t.Helper()
+	if _, err := f.DB.Pool.Exec(context.Background(),
+		`UPDATE sso_providers SET name = $2, enabled = $3 WHERE id = $1`, id, name, enabled); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func ssoButtonBody(t *testing.T, s *Server) string {
+	t.Helper()
+	rec := doReq(t, s.Router(), "GET", "/v1/console/sso/button", "", "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("button: %d cache-control=%q %s", rec.Code, rec.Header().Get("Cache-Control"), rec.Body)
+	}
+	return strings.TrimSpace(rec.Body.String())
+}
+
+func TestSSOButtonSingleProvider(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	idp := newFakeIdP(t)
+	id := seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
+	nameSSOProvider(t, f, id, "Demo IdP", true)
+	if got := ssoButtonBody(t, s); got != `{"name":"Demo IdP"}` {
+		t.Fatalf("body = %s", got)
+	}
+}
+
+func TestSSOButtonHidden(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	idp := newFakeIdP(t)
+	if got := ssoButtonBody(t, s); got != `{}` {
+		t.Fatalf("zero providers: %s", got)
+	}
+	a := seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "a.example.com")
+	nameSSOProvider(t, f, a, "A", true)
+	b := seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "b.example.com")
+	nameSSOProvider(t, f, b, "B", true)
+	if got := ssoButtonBody(t, s); got != `{}` {
+		t.Fatalf("two enabled: %s", got)
+	}
+	nameSSOProvider(t, f, b, "B", false)
+	if got := ssoButtonBody(t, s); got != `{"name":"A"}` {
+		t.Fatalf("one enabled one disabled: %s", got)
+	}
+	// Single provider but SSO unavailable (no Redis): no button.
+	ns, _ := newSSOServerWithCache(t, f, nil)
+	if got := ssoButtonBody(t, ns); got != `{}` {
+		t.Fatalf("nil cache: %s", got)
+	}
+}
+
+func startSSOButton(t *testing.T, h http.Handler) *httptest.ResponseRecorder {
+	t.Helper()
+	return doReq(t, h, "POST", "/v1/console/login/start", "", `{"sso":true,"redirect":"/admin/calls"}`)
+}
+
+func TestSSOStartWithoutEmail(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
+	f.AddUser(t, "agent", "ann@sso.example.com")
+
+	rec := startSSOButton(t, h)
+	var st ssoStart
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &st) != nil || st.Method != "sso" {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	u, err := url.Parse(st.RedirectURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	for _, k := range []string{"state", "nonce", "code_challenge"} {
+		if len(q.Get(k)) < 40 {
+			t.Errorf("%s = %q, want a long random value", k, q.Get(k))
+		}
+	}
+	if q.Has("login_hint") {
+		t.Errorf("login_hint present: %v", q)
+	}
+	ck := ssoCookieFrom(t, rec)
+
+	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
+	loc := callbackLocation(t, h, q.Get("state"), ck)
+	frag := ssoFrag(t, loc)
+	if frag.Get("redirect") != "/admin/calls" {
+		t.Fatalf("location = %s", loc)
+	}
+	status, resp := exchangeSSO(t, h, frag.Get("sso_code"), ck)
+	if status != http.StatusOK || resp.User.Email != "ann@sso.example.com" {
+		t.Fatalf("exchange: %d %+v", status, resp)
+	}
+}
+
+func TestSSOStartWithoutEmailNotSingle(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	idp := newFakeIdP(t)
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "a.example.com")
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "b.example.com")
+	rec := startSSOButton(t, s.Router())
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"method":"password"}` {
+		t.Fatalf("two providers: %d %s", rec.Code, rec.Body)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("cookie set: %v", rec.Result().Cookies())
+	}
+}
+
+func TestSSOStartWithoutEmailStillChecksDomain(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, logs := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
+	f.AddUser(t, "agent", "cat@plain.example.com")
+
+	rec := startSSOButton(t, h)
+	var st ssoStart
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &st) != nil || st.Method != "sso" {
+		t.Fatalf("start: %d %s", rec.Code, rec.Body)
+	}
+	u, _ := url.Parse(st.RedirectURL)
+	q := u.Query()
+	idp.setClaims(q.Get("nonce"), "cat@plain.example.com", true)
+	loc := callbackLocation(t, h, q.Get("state"), ssoCookieFrom(t, rec))
+	assertSSOError(t, logs, loc, "failed", "email domain not owned by provider")
+}

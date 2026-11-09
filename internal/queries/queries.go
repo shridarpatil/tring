@@ -138,6 +138,7 @@ type Queries struct {
 	DeleteSSOProviderDomains string `query:"delete-sso-provider-domains"`
 	InsertSSOProviderDomain  string `query:"insert-sso-provider-domain"`
 	GetSSODomain             string `query:"get-sso-domain"`
+	GetSingleSSOProvider     string `query:"get-single-sso-provider"`
 
 	// ---- api: /v1/me ----
 	GetUserPasswordHash string `query:"get-user-password-hash"`

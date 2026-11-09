@@ -390,6 +390,7 @@ func (s *Server) Router() http.Handler {
 		r.With(middleware.Timeout(30*time.Second)).Post("/console/login", s.handleConsoleLogin)
 		// SSO login (handlers_sso.go): public for the same reason.
 		r.With(middleware.Timeout(30*time.Second)).Post("/console/login/start", s.handleSSOStart)
+		r.With(middleware.Timeout(30*time.Second)).Get("/console/sso/button", s.handleSSOButton)
 		r.With(middleware.Timeout(30*time.Second)).Get("/console/sso/callback", s.handleSSOCallback)
 		r.With(middleware.Timeout(30*time.Second)).Post("/console/sso/exchange", s.handleSSOExchange)
 		// NOTE: the public guest mint (/sdk/guest-credentials) was removed —
