@@ -104,7 +104,7 @@ async function remove(p: SsoProvider) {
   <div class="vstack" style="padding: 1.25rem 1.5rem">
     <div class="hstack justify-between">
       <div class="vstack gap-2">
-        <span style="font-size: var(--text-7); font-weight: 500">Redirect URI</span>
+        <strong>Redirect URI</strong>
         <div class="hstack">
           <code class="mono">{{ callbackUrl || "…" }}</code>
           <CopyButton v-if="callbackUrl" :value="callbackUrl" />
