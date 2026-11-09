@@ -146,6 +146,9 @@ func (s *Server) handleConsoleLogin(w http.ResponseWriter, r *http.Request) {
 	// behind one office NAT) don't eat into the guessing budget.
 	s.loginByIP.release(ip)
 	s.loginByEmail.release(email)
+	// Every login began with login/start from this IP; refund that too so a
+	// NAT'd office of password users can't exhaust the SSO users' budget.
+	s.ssoStartByIP.release(ip)
 
 	// Checked only after a correct password, so it reveals nothing to a guesser.
 	blocked, err := s.passwordLoginBlocked(r.Context(), userID, tenantID, email)

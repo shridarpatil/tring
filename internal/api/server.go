@@ -252,7 +252,7 @@ func NewServer(cfg Config) *Server {
 		trustedProxies:    cfg.TrustedProxies,
 		loginByIP:         newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		loginByEmail:      newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
-		ssoStartByIP:      newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		ssoStartByIP:      newAttemptLimiter(ssoStartAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		ssoHTTP:           safehttp.NewClient(cfg.OutboundAllow, 10*time.Second),
 		consolePublicURL:  strings.TrimRight(cfg.ConsolePublicURL, "/"),
 		outboundAllow:     cfg.OutboundAllow,
@@ -387,11 +387,11 @@ func (s *Server) Router() http.Handler {
 		// Public console-auth endpoint: takes email+password, returns a
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
-		r.With(middleware.Timeout(30 * time.Second)).Post("/console/login", s.handleConsoleLogin)
+		r.With(middleware.Timeout(30*time.Second)).Post("/console/login", s.handleConsoleLogin)
 		// SSO login (handlers_sso.go): public for the same reason.
-		r.With(middleware.Timeout(30 * time.Second)).Post("/console/login/start", s.handleSSOStart)
-		r.With(middleware.Timeout(30 * time.Second)).Get("/console/sso/callback", s.handleSSOCallback)
-		r.With(middleware.Timeout(30 * time.Second)).Post("/console/sso/exchange", s.handleSSOExchange)
+		r.With(middleware.Timeout(30*time.Second)).Post("/console/login/start", s.handleSSOStart)
+		r.With(middleware.Timeout(30*time.Second)).Get("/console/sso/callback", s.handleSSOCallback)
+		r.With(middleware.Timeout(30*time.Second)).Post("/console/sso/exchange", s.handleSSOExchange)
 		// NOTE: the public guest mint (/sdk/guest-credentials) was removed —
 		// all visitor tokens are minted server-side via POST /v1/guest-credentials
 		// (tenant API key, below), so there's no unauthenticated mint surface.
