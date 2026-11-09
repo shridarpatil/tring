@@ -387,6 +387,12 @@ func (s *Server) handleDecline(tenant, sip, roomName string) {
 	}
 }
 
+// TeamMembersChanged makes this gateway's queued callers in tenant re-read
+// their team, so an agent added (or made available) mid-wait is rung.
+func (s *Server) TeamMembersChanged(tenant string) {
+	s.agentRouter.MembersChanged(tenant)
+}
+
 // Prepare satisfies brain.RingTransport: it wires the pion ring transport for
 // one transfer — candidates from the live socket registry + the pionRing Effects
 // + a cleanup that withdraws popups and deregisters the pending-ring channel.

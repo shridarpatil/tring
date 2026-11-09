@@ -252,6 +252,7 @@ func (s *Server) handleAddMyTeamMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "user not found in this tenant")
 		return
 	}
+	s.publishTeamMembers(r.Context(), p.TenantID, name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -295,6 +296,7 @@ func (s *Server) handleRemoveMyTeamMember(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
+	s.publishTeamMembers(r.Context(), p.TenantID, name)
 	s.invalidateUserAgentCache(r.Context(), p.TenantID, userID) // may no longer manage a team
 	w.WriteHeader(http.StatusNoContent)
 }

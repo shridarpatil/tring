@@ -64,20 +64,19 @@ type AgentRouter struct {
 	stints QueueStints // nil = queue stints not recorded
 	log    *slog.Logger
 
-	// memberTTL bounds how often a queued caller re-reads team membership. The
-	// hold loop polls candidates every tick (250ms on pion), so re-querying the
-	// DB each time would cost a query per tick per waiting caller.
-	memberTTL time.Duration
+	// gen counts membership changes per tenant (MembersChanged). A queued
+	// caller re-reads its team only when this moves, so a waiting call costs
+	// no DB queries until a member is actually added or removed.
+	mu  sync.Mutex
+	gen map[string]uint64
 }
-
-const defaultMemberTTL = 2 * time.Second
 
 // NewAgentRouter builds an AgentRouter. stints may be nil.
 func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, stints QueueStints, log *slog.Logger) *AgentRouter {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AgentRouter{teams: teams, router: router, tport: tport, stints: stints, log: log.With("component", "brain.route"), memberTTL: defaultMemberTTL}
+	return &AgentRouter{teams: teams, router: router, tport: tport, stints: stints, log: log.With("component", "brain.route"), gen: map[string]uint64{}}
 }
 
 // Ring satisfies ivrdrive.Agents. roomID is the tenant-namespaced "<tenant>/<name>".
@@ -175,28 +174,46 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 	return outcome
 }
 
-// teamMembers returns a member lookup for one queued caller that re-reads the
-// team at most once per memberTTL. On a lookup error it keeps the last good
-// list, so a DB blip doesn't empty the candidate pool mid-wait.
+// MembersChanged tells queued callers of a tenant that team membership (or an
+// agent's availability, which the member lookup filters on) changed, so each
+// re-reads its team on its next check. Called from the api's team.members /
+// agent.status events; per tenant rather than per team since changes are rare.
+func (a *AgentRouter) MembersChanged(tenant string) {
+	a.mu.Lock()
+	a.gen[tenant]++
+	a.mu.Unlock()
+}
+
+func (a *AgentRouter) generation(tenant string) uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.gen[tenant]
+}
+
+// teamMembers returns a member lookup for one queued caller: it reads the team
+// once, then again only after MembersChanged for its tenant. A failed read is
+// retried on the next check; until then the last good list is kept so a DB
+// blip doesn't empty the candidate pool mid-wait.
 func (a *AgentRouter) teamMembers(tenant uuid.UUID, team string) func(context.Context) []string {
 	var (
-		mu      sync.Mutex
-		sips    []string
-		fetched time.Time
+		mu     sync.Mutex
+		sips   []string
+		loaded bool
+		seen   uint64
 	)
 	return func(ctx context.Context) []string {
 		mu.Lock()
 		defer mu.Unlock()
-		if !fetched.IsZero() && time.Since(fetched) < a.memberTTL {
+		g := a.generation(tenant.String())
+		if loaded && g == seen {
 			return sips
 		}
-		fetched = time.Now()
 		m, err := a.teams.TeamSIPs(ctx, tenant, team)
 		if err != nil {
 			a.log.Warn("transfer: team resolve failed", "team", team, "err", err)
 			return sips
 		}
-		sips = m
+		sips, loaded, seen = m, true, g
 		return sips
 	}
 }
