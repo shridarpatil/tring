@@ -14,7 +14,8 @@ test("validateNewUser", () => {
   assert.match(validateNewUser({ ...ok, email: "nope" }), /email/);
   assert.match(validateNewUser({ ...ok, password: "short" }), /8/);
   assert.match(validateNewUser({ ...ok, role: "root" }), /role/);
-  assert.match(validateNewUser({ ...ok, email: "a@example.com", password: "" }), /8/);
+  // Empty password = SSO user; the server checks the domain.
+  assert.equal(validateNewUser({ ...ok, email: "a@example.com", password: "" }), "");
   assert.match(validateNewUser({ ...ok, email: "", password: "longenough" }), /email/);
 });
 
@@ -30,6 +31,7 @@ test("validateLogin", () => {
   assert.equal(validateLogin("a@example.com", "longenough"), "");
   assert.match(validateLogin("", "longenough"), /email/);
   assert.match(validateLogin("a@example.com", "x"), /8/);
+  assert.equal(validateLogin("a@example.com", ""), "");
 });
 
 test("buildUserPatch", () => {
