@@ -197,7 +197,13 @@ async function saveLogin() {
   const problem = validateLogin(loginForm.value.email, loginForm.value.password);
   if (problem) return toast.error(problem);
   saving.value = true;
-  const done = await patch(u, loginForm.value.password ? { ...loginForm.value } : { email: loginForm.value.email }, u.can_login ? "Password reset" : "Login set");
+  const withPassword = !!loginForm.value.password;
+  const done = await patch(
+    u,
+    withPassword ? { ...loginForm.value } : { email: loginForm.value.email },
+    // A blank password leaves the existing one alone, so don't claim a reset.
+    !u.can_login ? "Login set" : withPassword ? "Password reset" : "Login updated",
+  );
   saving.value = false;
   if (done) showLogin.value = false;
 }
