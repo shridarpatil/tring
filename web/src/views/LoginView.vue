@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { nextTick, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
@@ -28,6 +28,21 @@ const showPassword = ref(false);
 // Set when exactly one provider is enabled: a "Sign in with <name>" button
 // above the classic email + password form (no Continue step in this mode).
 const ssoName = ref("");
+// In single-provider mode the password form stays hidden until requested.
+const formOpen = ref(false);
+const formEl = ref<HTMLFormElement | null>(null);
+
+async function openForm() {
+  error.value = "";
+  formOpen.value = true;
+  await nextTick();
+  formEl.value?.querySelector<HTMLInputElement>('input[type="email"]')?.focus();
+}
+
+function closeForm() {
+  error.value = "";
+  formOpen.value = false;
+}
 
 function finish(res: LoginResponse, redirect: unknown) {
   auth.setSession(res.token, res.tenant, res.user);
@@ -132,7 +147,7 @@ onMounted(async () => {
 
 <template>
   <div class="login">
-    <form class="card login-card" @submit.prevent="showPassword || ssoName ? submit() : start()">
+    <form ref="formEl" class="card login-card" @submit.prevent="showPassword || ssoName ? submit() : start()">
       <div class="login-brand">
         <div class="login-word">
           <span class="brand-dot"></span>
@@ -140,38 +155,41 @@ onMounted(async () => {
         </div>
         <div class="text-light">Console sign-in</div>
       </div>
-      <template v-if="ssoName">
+      <template v-if="ssoName && !formOpen">
         <Button type="button" :loading="loading" block @click="startButton">
           <KeyRound :size="16" /> Sign in with {{ ssoName }}
         </Button>
-        <div class="text-light login-or">or</div>
+        <p v-if="error" class="login-error">{{ error }}</p>
+        <button type="button" class="ghost small" @click="openForm">Sign in with email and password</button>
       </template>
-      <TextField
-        v-model="email"
-        type="email"
-        label="Email"
-        required
-        autocomplete="username"
-        placeholder="admin@tring.local"
-      />
-      <TextField
-        v-if="showPassword || ssoName"
-        v-model="password"
-        type="password"
-        label="Password"
-        required
-        autocomplete="current-password"
-      />
-      <p v-if="error" class="login-error">{{ error }}</p>
-      <Button type="submit" :loading="loading" block>
-        {{
-          showPassword || ssoName ? (loading ? "Signing in…" : "Sign in") : loading ? "Checking…" : "Continue"
-        }}
-      </Button>
-      <p v-if="ssoName" class="text-light small">Have a {{ ssoName }} account? Use the button above.</p>
-      <button v-if="!showPassword && !ssoName" type="button" class="ghost small" @click="showPassword = true">
-        Sign in with password
-      </button>
+      <template v-else>
+        <TextField
+          v-model="email"
+          type="email"
+          label="Email"
+          required
+          autocomplete="username"
+          placeholder="admin@tring.local"
+        />
+        <TextField
+          v-if="showPassword || ssoName"
+          v-model="password"
+          type="password"
+          label="Password"
+          required
+          autocomplete="current-password"
+        />
+        <p v-if="error" class="login-error">{{ error }}</p>
+        <Button type="submit" :variant="ssoName ? 'secondary' : 'primary'" :loading="loading" block>
+          {{
+            showPassword || ssoName ? (loading ? "Signing in…" : "Sign in") : loading ? "Checking…" : "Continue"
+          }}
+        </Button>
+        <button v-if="ssoName" type="button" class="ghost small" @click="closeForm">← Back to {{ ssoName }}</button>
+        <button v-else-if="!showPassword" type="button" class="ghost small" @click="showPassword = true">
+          Sign in with password
+        </button>
+      </template>
     </form>
   </div>
 </template>
@@ -197,6 +215,5 @@ onMounted(async () => {
 .login-word { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
 .brand-dot { height: 0.5rem; width: 0.5rem; border-radius: 9999px; background: var(--primary); }
 .brand-name { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
-.login-or { text-align: center; }
 .login-error { font-size: var(--text-7); color: var(--danger); }
 </style>
