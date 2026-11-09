@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
 	"github.com/shridarpatil/tring/internal/ivr"
 )
@@ -235,6 +236,12 @@ func (s *Server) invalidateTeam(ctx context.Context, tenantID uuid.UUID, team st
 	}
 }
 
+// publishTeamMembers tells gateways a team's membership changed so callers
+// already queued for it re-read the team (an added agent is rung at once).
+func (s *Server) publishTeamMembers(ctx context.Context, tenantID uuid.UUID, team string) {
+	s.events.Publish(ctx, tenantID.String(), events.TypeTeamMembers, map[string]any{"team": team})
+}
+
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	name := chi.URLParam(r, "name")
@@ -296,6 +303,7 @@ func (s *Server) handleAddTeamAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "agent not found in this tenant")
 		return
 	}
+	s.publishTeamMembers(r.Context(), t.ID, name)
 	members, err := s.listTeamMembers(r, t.ID, name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "member lookup failed")
@@ -321,6 +329,7 @@ func (s *Server) handleRemoveTeamAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "agent not in team")
 		return
 	}
+	s.publishTeamMembers(r.Context(), t.ID, name)
 	s.invalidateUserAgentCache(r.Context(), t.ID, agentID) // may no longer manage a team
 	w.WriteHeader(http.StatusNoContent)
 }

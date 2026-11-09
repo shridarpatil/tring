@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,8 +26,11 @@ type Teams interface {
 // team resolution + the routing.Router queue/ring loop; the plug owns the wires.
 // strategy is the resolved team strategy (e.g. "round_robin") so the transport
 // can drive one-at-a-time vs ring-all behaviour inside its Effects adapter.
+// members returns the target's current member SIPs (nil when ringAll); it is
+// re-evaluated while the caller waits so agents added to a team mid-queue are
+// rung.
 type RingTransport interface {
-	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy, moh string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
+	Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, members func(context.Context) []string, strategy, moh string) (candidates func(context.Context) []string, eff routing.Effects, cleanup func())
 }
 
 // HandoffWaiter is an OPTIONAL transport capability. After an agent answers a
@@ -59,6 +63,12 @@ type AgentRouter struct {
 	tport  RingTransport
 	stints QueueStints // nil = queue stints not recorded
 	log    *slog.Logger
+
+	// gen counts membership changes per tenant (MembersChanged). A queued
+	// caller re-reads its team only when this moves, so a waiting call costs
+	// no DB queries until a member is actually added or removed.
+	mu  sync.Mutex
+	gen map[string]uint64
 }
 
 // NewAgentRouter builds an AgentRouter. stints may be nil.
@@ -66,7 +76,7 @@ func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, st
 	if log == nil {
 		log = slog.Default()
 	}
-	return &AgentRouter{teams: teams, router: router, tport: tport, stints: stints, log: log.With("component", "brain.route")}
+	return &AgentRouter{teams: teams, router: router, tport: tport, stints: stints, log: log.With("component", "brain.route"), gen: map[string]uint64{}}
 }
 
 // Ring satisfies ivrdrive.Agents. roomID is the tenant-namespaced "<tenant>/<name>".
@@ -101,8 +111,8 @@ func (a *AgentRouter) RingNoHandoff(ctx context.Context, roomID string, t ivrdri
 
 // runRing resolves the target (single agent or team) to candidates + a RouteConfig,
 // drives routing.Router.Run over the transport's Effects, and returns the raw
-// outcome. Unresolvable target / no candidates → OutcomeAbandoned (treated as
-// no_answer by both callers).
+// outcome. A malformed room → OutcomeAbandoned; a team with no free members
+// queues until max_wait like any other (both read as no_answer by callers).
 func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Target) string {
 	tenant, _, ok := strings.Cut(roomID, "/")
 	if !ok {
@@ -110,22 +120,19 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 		return routing.OutcomeAbandoned
 	}
 
-	var sips []string
+	var members func(context.Context) []string
 	ringAll := true
 	if t.AgentSIP != "" {
-		sips, ringAll = []string{t.AgentSIP}, false
+		sips := []string{t.AgentSIP}
+		members, ringAll = func(context.Context) []string { return sips }, false
 	} else if t.Team != "" && a.teams != nil {
-		ringAll = false
-		if tid, err := uuid.Parse(tenant); err == nil {
-			if m, err := a.teams.TeamSIPs(ctx, tid, t.Team); err == nil {
-				sips = m
-			} else {
-				a.log.Warn("transfer: team resolve failed", "team", t.Team, "err", err)
-			}
+		tid, err := uuid.Parse(tenant)
+		if err != nil {
+			return routing.OutcomeAbandoned
 		}
-	}
-	if !ringAll && len(sips) == 0 {
-		return routing.OutcomeAbandoned
+		// A team with no members yet still queues (until max_wait): an agent
+		// added to the team while the caller waits must pick the call up.
+		members, ringAll = a.teamMembers(tid, t.Team), false
 	}
 
 	rc := routing.RouteConfig{TenantID: tenant}
@@ -151,7 +158,7 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 		}
 	}
 
-	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, sips, rc.Strategy, moh)
+	candidates, eff, cleanup := a.tport.Prepare(ctx, roomID, t, ringAll, members, rc.Strategy, moh)
 	var stint uuid.UUID
 	recordStint := rc.Team != "" && a.stints != nil
 	if recordStint {
@@ -165,6 +172,50 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 		cleanup()
 	}
 	return outcome
+}
+
+// MembersChanged tells queued callers of a tenant that team membership (or an
+// agent's availability, which the member lookup filters on) changed, so each
+// re-reads its team on its next check. Called from the api's team.members /
+// agent.status events; per tenant rather than per team since changes are rare.
+func (a *AgentRouter) MembersChanged(tenant string) {
+	a.mu.Lock()
+	a.gen[tenant]++
+	a.mu.Unlock()
+}
+
+func (a *AgentRouter) generation(tenant string) uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.gen[tenant]
+}
+
+// teamMembers returns a member lookup for one queued caller: it reads the team
+// once, then again only after MembersChanged for its tenant. A failed read is
+// retried on the next check; until then the last good list is kept so a DB
+// blip doesn't empty the candidate pool mid-wait.
+func (a *AgentRouter) teamMembers(tenant uuid.UUID, team string) func(context.Context) []string {
+	var (
+		mu     sync.Mutex
+		sips   []string
+		loaded bool
+		seen   uint64
+	)
+	return func(ctx context.Context) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		g := a.generation(tenant.String())
+		if loaded && g == seen {
+			return sips
+		}
+		m, err := a.teams.TeamSIPs(ctx, tenant, team)
+		if err != nil {
+			a.log.Warn("transfer: team resolve failed", "team", team, "err", err)
+			return sips
+		}
+		sips, loaded, seen = m, true, g
+		return sips
+	}
 }
 
 // stintOutcome maps a routing.Router.Run result to a queue stint outcome.
