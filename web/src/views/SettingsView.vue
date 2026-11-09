@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { Building2, PhoneCall, Mic, Route, Globe, EyeOff } from "lucide-vue-next";
+import { Building2, PhoneCall, Mic, Route, Globe, EyeOff, KeyRound } from "lucide-vue-next";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
+import SsoProviders from "../components/SsoProviders.vue";
 import AudioPicker from "../components/AudioPicker.vue";
 import { Card, Button, Select, Toggle, Badge, CopyButton } from "../components/ui";
 import type { Tenant, GuestConfig, Flow, Paginated } from "../api/types";
@@ -343,6 +344,18 @@ onMounted(load);
           </div>
           <Select v-model="form.defaultFlowId" :options="flowOptions" />
         </div>
+      </Card>
+
+      <!-- Single sign-on -->
+      <Card class="section">
+        <header>
+          <span class="section-icon"><KeyRound :size="16" /></span>
+          <div>
+            <h2>Single sign-on</h2>
+            <p>Let people sign in to the console with your identity provider (OpenID Connect).</p>
+          </div>
+        </header>
+        <SsoProviders />
       </Card>
 
       <Transition name="savebar">
