@@ -85,6 +85,8 @@ With **Require SSO** on, password sign-in is refused for everyone on the provide
 
 If Redis is unavailable, or the IdP's discovery fails, the login page falls back to the password form; require-SSO still applies, so only admins get in.
 
+Email domains are global across the install, not per tenant. On a multi-tenant install one tenant can claim a domain first, and people from another tenant on that domain are then routed to the wrong IdP. Sign-in still requires a user in the provider's own tenant, so this is not an account takeover, but treat adding providers as a trusted-admin action.
+
 Deleting a provider returns its domains to password sign-in. Users that had no password cannot sign in until an admin sets one.
 
 ## Sessions and revocation
@@ -92,4 +94,5 @@ Deleting a provider returns its domains to password sign-in. Users that had no p
 A console session is a token valid for 12 hours, with no refresh. SSO does not change that.
 
 - Disabling or deleting a person at the IdP stops **new** sign-ins immediately, but an existing Tring session keeps working until it expires.
+- Turning on **Require SSO** does not end existing password sessions; they last up to 12 hours. Use **Clear login** to end one immediately.
 - To cut access immediately, use **Clear login** on the user in Tring. Roles and logins are checked on every request, so it takes effect at once.
