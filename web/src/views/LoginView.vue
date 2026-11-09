@@ -180,7 +180,7 @@ onMounted(async () => {
           autocomplete="current-password"
         />
         <p v-if="error" class="login-error">{{ error }}</p>
-        <Button type="submit" :variant="ssoName ? 'secondary' : 'primary'" :loading="loading" block>
+        <Button type="submit" :loading="loading" block>
           {{
             showPassword || ssoName ? (loading ? "Signing in…" : "Sign in") : loading ? "Checking…" : "Continue"
           }}
