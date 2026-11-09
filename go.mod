@@ -24,6 +24,7 @@ require (
 	github.com/pion/webrtc/v4 v4.2.9
 	github.com/redis/go-redis/v9 v9.20.0
 	golang.org/x/crypto v0.56.0
+	golang.org/x/oauth2 v0.37.0
 	gopkg.in/hraban/opus.v2 v2.0.0-20230925203106-0188a62cb302
 )
 
@@ -65,7 +66,6 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

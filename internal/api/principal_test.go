@@ -22,7 +22,8 @@ import (
 // prefix) plus the static/SPA surfaces that aren't console-authenticated.
 func selfScopeAllowed(route string) bool {
 	switch route {
-	case "/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise", "/healthz":
+	case "/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise", "/healthz",
+		"/v1/console/login/start", "/v1/console/sso/callback", "/v1/console/sso/exchange":
 		return true
 	}
 	for _, p := range []string{"/v1/me/", "/v1/my-teams/", "/sdk/", "/admin", "/login", "/agent"} {
