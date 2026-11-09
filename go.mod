@@ -3,8 +3,10 @@ module github.com/shridarpatil/tring
 go 1.26.0
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/emiago/sipgo v1.4.3
 	github.com/go-chi/chi/v5 v5.4.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/gobwas/ws v1.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
@@ -27,7 +29,6 @@ require (
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coreos/go-oidc/v3 v3.21.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
