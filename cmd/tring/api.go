@@ -125,6 +125,7 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		AgentJitter:       k.String("agent_jitter_msec"),
 		GatewayPublicURL:  k.String("gateway_public_url"),
 		GatewayControlURL: k.String("gateway_control_url"),
+		ConsolePublicURL:  k.String("console_public_url"),
 		AudioDir:          k.String("audio_dir"),
 		RecordingsDir:     k.String("recordings_dir"),
 		Blob:              d.blob,

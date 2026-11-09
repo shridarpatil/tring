@@ -104,9 +104,17 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "valid email required")
 		return
 	}
-	if len(req.Password) < minPasswordLen {
+	// An empty password is a password-less SSO user: only meaningful when the
+	// email's domain signs in through this tenant's provider.
+	if req.Password != "" && len(req.Password) < minPasswordLen {
 		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
+	}
+	if req.Password == "" {
+		if code, msg := s.requireSSODomain(r.Context(), p.TenantID, email); code != 0 {
+			writeError(w, code, msg)
+			return
+		}
 	}
 	if !slices.Contains(userRoles, req.Role) {
 		writeError(w, http.StatusBadRequest, "role must be admin, supervisor or agent")
@@ -120,10 +128,15 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sip_username may only contain letters, digits and . _ @ + - (max 64)")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "hash password")
-		return
+	var hash *string // nil = no password (SSO only)
+	if req.Password != "" {
+		b, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "hash password")
+			return
+		}
+		h := string(b)
+		hash = &h
 	}
 	sipPassword, err := GenerateSipPassword()
 	if err != nil {
@@ -132,7 +145,7 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var id uuid.UUID
 	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateUser,
-		p.TenantID, email, string(hash), sip, s.sealSecret(sipPassword), req.DisplayName, req.Role).Scan(&id)
+		p.TenantID, email, hash, sip, s.sealSecret(sipPassword), req.DisplayName, req.Role).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeError(w, http.StatusConflict, "email or sip_username already in use")
@@ -237,6 +250,21 @@ func (s *Server) handlePatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	// Giving a password-less user an email without a password only works
+	// through SSO; otherwise they would hold an email that can't sign in.
+	if req.Email != nil && !clearLogin && hash == nil {
+		var h string
+		err := s.db.Pool.QueryRow(ctx, s.q.GetUserPasswordHash, p.TenantID, id).Scan(&h)
+		if errors.Is(err, pgx.ErrNoRows) {
+			if code, msg := s.requireSSODomain(ctx, p.TenantID, *req.Email); code != 0 {
+				writeError(w, code, msg)
+				return
+			}
+		} else if err != nil {
+			writeError(w, http.StatusInternalServerError, "update user failed")
+			return
+		}
+	}
 	// A password on a user with no email would leave a half-set login that
 	// can't sign in (require the email to exist or be set in the same request),
 	// and a rename needs the old name.
@@ -432,4 +460,42 @@ func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.retireSip(r.Context(), p.TenantID, sip)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ssoDomainEnabled reports whether the email's domain (after the last '@')
+// has an enabled SSO provider in this tenant. Another tenant's provider does
+// not count: it can't sign this tenant's users in.
+func (s *Server) ssoDomainEnabled(ctx context.Context, tenantID uuid.UUID, email string) (bool, error) {
+	i := strings.LastIndex(email, "@")
+	if i < 0 {
+		return false, nil
+	}
+	domain, ok := normalizeDomain(email[i+1:])
+	if !ok {
+		return false, nil
+	}
+	var pid, tid uuid.UUID
+	var issuer, clientID, secret string
+	var requireSSO bool
+	err := s.db.Pool.QueryRow(ctx, s.q.GetSSODomain, domain).Scan(&pid, &tid, &issuer, &clientID, &secret, &requireSSO)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return tid == tenantID, nil
+}
+
+// requireSSODomain is the shared 400 for a password-less login on a domain
+// with no SSO provider. Returns 0 when allowed.
+func (s *Server) requireSSODomain(ctx context.Context, tenantID uuid.UUID, email string) (int, string) {
+	ok, err := s.ssoDomainEnabled(ctx, tenantID, email)
+	if err != nil {
+		return http.StatusInternalServerError, "check SSO domain failed"
+	}
+	if !ok {
+		return http.StatusBadRequest, "set a password or add an SSO provider for this domain"
+	}
+	return 0, ""
 }

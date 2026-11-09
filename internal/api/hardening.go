@@ -134,9 +134,13 @@ func sdkHandler(fsys fs.FS) http.Handler {
 // Console login throttling: each attempt costs a ~70ms bcrypt, so without a
 // cap the endpoint is both a password-guessing oracle and a CPU sink.
 const (
-	loginAttemptLimit  = 10
-	loginAttemptWindow = 5 * time.Minute
-	loginLimiterKeys   = 10000
+	loginAttemptLimit = 10
+	// ssoStartAttemptLimit is higher because every console login (password
+	// ones included) calls login/start first and the form is public; the
+	// per-attempt cost is a cheap domain lookup, not a bcrypt.
+	ssoStartAttemptLimit = 60
+	loginAttemptWindow   = 5 * time.Minute
+	loginLimiterKeys     = 10000
 )
 
 // attemptLimiter is a fixed-window counter per key (client IP or email),

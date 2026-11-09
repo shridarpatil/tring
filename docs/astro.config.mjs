@@ -43,7 +43,10 @@ export default defineConfig({
         },
         {
           label: 'Guides',
-          items: [{ label: 'WhatsApp calls over SIP', slug: 'guides/whatsapp-sip' }],
+          items: [
+            { label: 'WhatsApp calls over SIP', slug: 'guides/whatsapp-sip' },
+            { label: 'Single sign-on (OIDC)', slug: 'guides/sso' },
+          ],
         },
         {
           label: 'Browser SDK',

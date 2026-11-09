@@ -129,6 +129,17 @@ type Queries struct {
 	FlowsByAgentSip string `query:"flows-by-agent-sip"`
 	DeleteUser      string `query:"delete-user"`
 
+	// ---- api: /v1/sso-providers (admin) + SSO routing ----
+	ListSSOProviders         string `query:"list-sso-providers"`
+	GetSSOProvider           string `query:"get-sso-provider"`
+	CreateSSOProvider        string `query:"create-sso-provider"`
+	UpdateSSOProvider        string `query:"update-sso-provider"`
+	DeleteSSOProvider        string `query:"delete-sso-provider"`
+	DeleteSSOProviderDomains string `query:"delete-sso-provider-domains"`
+	InsertSSOProviderDomain  string `query:"insert-sso-provider-domain"`
+	GetSSODomain             string `query:"get-sso-domain"`
+	GetSingleSSOProvider     string `query:"get-single-sso-provider"`
+
 	// ---- api: /v1/me ----
 	GetUserPasswordHash string `query:"get-user-password-hash"`
 	SetUserPassword     string `query:"set-user-password"`

@@ -22,7 +22,8 @@ import (
 // prefix) plus the static/SPA surfaces that aren't console-authenticated.
 func selfScopeAllowed(route string) bool {
 	switch route {
-	case "/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise", "/healthz":
+	case "/v1/me", "/v1/my-teams", "/v1/console/login", "/v1/calls/{id}/supervise", "/healthz",
+		"/v1/console/login/start", "/v1/console/sso/callback", "/v1/console/sso/exchange", "/v1/console/sso/button":
 		return true
 	}
 	for _, p := range []string{"/v1/me/", "/v1/my-teams/", "/sdk/", "/admin", "/login", "/agent"} {
@@ -154,7 +155,7 @@ func TestPrincipalReloadedEachRequest(t *testing.T) {
 	if rec := doReq(t, h, "GET", "/v1/trunks", tok, ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("demoted: %d, want 403", rec.Code)
 	}
-	if _, err := f.DB.Pool.Exec(ctx, `UPDATE users SET password_hash = NULL WHERE id = $1`, b); err != nil {
+	if _, err := f.DB.Pool.Exec(ctx, `UPDATE users SET email = NULL, password_hash = NULL WHERE id = $1`, b); err != nil {
 		t.Fatal(err)
 	}
 	if rec := doReq(t, h, "GET", "/v1/trunks", tok, ""); rec.Code != http.StatusUnauthorized {
@@ -242,5 +243,34 @@ func TestPrincipalTeamChecks(t *testing.T) {
 	}
 	if !(&Principal{Role: "admin"}).IsAdmin() {
 		t.Fatal("admin")
+	}
+}
+
+// Every console login calls login/start first; successful password logins
+// must not leave the IP throttled for SSO users behind the same NAT.
+func TestPasswordLoginsDoNotThrottleSSOStart(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	id := f.AddUser(t, "agent", "nat@example.com")
+	setPassword(t, f, id, "correct-horse")
+
+	post := func(path, body string) int {
+		r := httptest.NewRequest("POST", path, strings.NewReader(body))
+		r.RemoteAddr = "198.51.100.20:40000"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	for i := 0; i < ssoStartAttemptLimit+1; i++ {
+		if c := post("/v1/console/login/start", `{"email":"nat@example.com"}`); c != http.StatusOK {
+			t.Fatalf("start #%d = %d", i, c)
+		}
+		if c := post("/v1/console/login", `{"email":"nat@example.com","password":"correct-horse"}`); c != http.StatusOK {
+			t.Fatalf("login #%d = %d", i, c)
+		}
+	}
+	if c := post("/v1/console/login/start", `{"email":"sso@example.com"}`); c != http.StatusOK {
+		t.Fatalf("start after logins = %d, want 200", c)
 	}
 }
