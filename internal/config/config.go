@@ -81,6 +81,10 @@ var defaults = map[string]any{
 	// gateway_public_url is the browser-reachable base URL of the gateway the
 	// API hands to visitors in a mint response (override per environment).
 	"gateway_public_url": "http://localhost:8087",
+	// console_public_url is the browser-reachable base URL of the api/console;
+	// the SSO callback is {console_public_url}/v1/console/sso/callback and must
+	// match the redirect URI registered at the IdP.
+	"console_public_url": "http://localhost:8085",
 	"gateway_addr":       ":8087",
 	"gateway_udp_min":    10000,
 	"gateway_udp_max":    10100,

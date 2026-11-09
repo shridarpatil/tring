@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -49,5 +50,49 @@ func TestOptionsSetsAddrAndPassword(t *testing.T) {
 	}
 	if o := Options("127.0.0.1:6379", ""); o.Password != "" {
 		t.Error("empty password should yield no auth, got a non-empty Password")
+	}
+}
+
+// testRedis returns a live cache or skips; TRING_TEST_REDIS is host:port with
+// no password.
+func testRedis(t *testing.T) *Cache {
+	t.Helper()
+	addr := os.Getenv("TRING_TEST_REDIS")
+	if addr == "" {
+		t.Skip("TRING_TEST_REDIS not set")
+	}
+	c, err := New(addr, "")
+	if err != nil || c == nil {
+		t.Skipf("redis unavailable: %v", err)
+	}
+	if err := c.rdb.Ping(context.Background()).Err(); err != nil {
+		t.Skipf("redis unreachable: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
+
+// GetDel backs single-use SSO state/code: the second read must miss.
+func TestGetDelSingleUse(t *testing.T) {
+	c := testRedis(t)
+	ctx := context.Background()
+	const k = "test:getdel:single-use"
+	c.Set(ctx, k, []byte("v"), time.Minute)
+
+	val, ok, err := c.GetDel(ctx, k)
+	if err != nil || !ok || string(val) != "v" {
+		t.Fatalf("first GetDel = %q,%v,%v; want v,true,nil", val, ok, err)
+	}
+	val, ok, err = c.GetDel(ctx, k)
+	if err != nil || ok || val != nil {
+		t.Fatalf("second GetDel = %q,%v,%v; want nil,false,nil", val, ok, err)
+	}
+}
+
+// A nil cache must surface an error, not a miss, so single-use callers fail closed.
+func TestGetDelNilCache(t *testing.T) {
+	var c *Cache
+	if _, ok, err := c.GetDel(context.Background(), "k"); err == nil || ok {
+		t.Errorf("GetDel on nil cache = ok %v, err %v; want error", ok, err)
 	}
 }
