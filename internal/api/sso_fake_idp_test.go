@@ -27,7 +27,8 @@ type fakeIdP struct {
 	clientID      string // aud
 	nonce         string
 	email         string
-	emailVerified any // bool or string, as IdPs differ
+	emailVerified any    // bool or string, as IdPs differ
+	hd            string // Google hosted-domain claim; empty = omitted
 	gotVerifier   string
 }
 
@@ -36,6 +37,13 @@ func (idp *fakeIdP) setClaims(nonce, email string, emailVerified any) {
 	idp.mu.Lock()
 	defer idp.mu.Unlock()
 	idp.nonce, idp.email, idp.emailVerified = nonce, email, emailVerified
+}
+
+// setHD sets the hd claim of the next ID token (empty omits it).
+func (idp *fakeIdP) setHD(hd string) {
+	idp.mu.Lock()
+	defer idp.mu.Unlock()
+	idp.hd = hd
 }
 
 // verifier is the PKCE code_verifier the last /token request carried.
@@ -83,6 +91,9 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 			"iss": idp.issuer, "aud": idp.clientID, "sub": "fake-subject",
 			"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
 			"nonce": idp.nonce, "email": idp.email, "email_verified": idp.emailVerified,
+		}
+		if idp.hd != "" {
+			claims["hd"] = idp.hd
 		}
 		idp.mu.Unlock()
 		payload, _ := json.Marshal(claims)

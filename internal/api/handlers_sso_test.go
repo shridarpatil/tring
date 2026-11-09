@@ -700,3 +700,70 @@ func TestSSOExchangeRequiresBrowserBinding(t *testing.T) {
 		t.Fatalf("response not the login JSON verbatim: %s", rec.Body)
 	}
 }
+
+// setHostedDomain flips require_hosted_domain on a seeded provider.
+func setHostedDomain(t *testing.T, f *dbtest.Fixture, id uuid.UUID, on bool) {
+	t.Helper()
+	if _, err := f.DB.Pool.Exec(context.Background(),
+		`UPDATE sso_providers SET require_hosted_domain = $2 WHERE id = $1`, id, on); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ssoLoginHD is ssoLogin with the IdP asserting the given hd claim.
+func ssoLoginHD(t *testing.T, h http.Handler, idp *fakeIdP, startEmail, idpEmail, hd string) *url.URL {
+	t.Helper()
+	idp.setHD(hd)
+	return ssoLoginTo(t, h, idp, startEmail, idpEmail)
+}
+
+func TestSSOHostedDomainRequired(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, logs := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	id := seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "demo.test")
+	setHostedDomain(t, f, id, true)
+	f.AddUser(t, "agent", "ann@demo.test")
+
+	ok := func(hd string) {
+		t.Helper()
+		if loc := ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", hd); !ssoFrag(t, loc).Has("sso_code") {
+			t.Fatalf("hd=%q: %s", hd, loc)
+		}
+	}
+	ok("demo.test")
+	assertSSOError(t, logs, ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", ""), "failed", "hosted domain mismatch")
+	assertSSOError(t, logs, ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", "other.test"), "failed", "hosted domain mismatch")
+	ok("DEMO.TEST ")
+}
+
+func TestSSOHostedDomainSecondaryDomain(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	id := seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "demo.test", "demo2.test")
+	setHostedDomain(t, f, id, true)
+	f.AddUser(t, "agent", "bob@demo2.test")
+
+	loc := ssoLoginHD(t, h, idp, "bob@demo2.test", "bob@demo2.test", "demo.test")
+	if !ssoFrag(t, loc).Has("sso_code") {
+		t.Fatalf("secondary domain: %s", loc)
+	}
+}
+
+func TestSSOHostedDomainOffIgnoresHD(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "demo.test")
+	f.AddUser(t, "agent", "ann@demo.test")
+
+	for _, hd := range []string{"", "other.test"} {
+		if loc := ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", hd); !ssoFrag(t, loc).Has("sso_code") {
+			t.Fatalf("hd=%q: %s", hd, loc)
+		}
+	}
+}

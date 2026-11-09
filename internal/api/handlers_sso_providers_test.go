@@ -233,3 +233,47 @@ func TestSSOProviderSSOOnlyCount(t *testing.T) {
 		t.Fatalf("list = %s", rec.Body)
 	}
 }
+
+func TestSSOProviderRequireHostedDomainField(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newSSOTestServer(t, f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	idp := newFakeIdP(t)
+
+	body := strings.Replace(ssoBody(idp.issuer, "G", "demo.test"), `"enabled"`, `"require_hosted_domain":true,"enabled"`, 1)
+	rec := doReq(t, h, "POST", "/v1/sso-providers", admin, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var p ssoProvider
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	get := func() bool {
+		t.Helper()
+		rec := doReq(t, h, "GET", "/v1/sso-providers", admin, "")
+		var list []ssoProvider
+		if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || len(list) != 1 {
+			t.Fatalf("list: %v %s", err, rec.Body)
+		}
+		return list[0].RequireHostedDomain
+	}
+	patch := func(b string) {
+		t.Helper()
+		if rec := doReq(t, h, "PATCH", "/v1/sso-providers/"+p.ID.String(), admin, b); rec.Code != http.StatusOK {
+			t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+		}
+	}
+	if !get() {
+		t.Fatal("create did not persist require_hosted_domain")
+	}
+	patch(`{"name":"G2"}`)
+	if !get() {
+		t.Fatal("PATCH without the field changed it")
+	}
+	patch(`{"require_hosted_domain":false}`)
+	if get() {
+		t.Fatal("PATCH false did not clear it")
+	}
+}

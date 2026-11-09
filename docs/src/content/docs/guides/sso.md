@@ -44,6 +44,12 @@ Register the redirect URI above as a **web** application with a client secret in
 2. **Credentials > Create credentials > OAuth client ID**, type **Web application**. Add the redirect URI under **Authorized redirect URIs**.
 3. Issuer URL: `https://accounts.google.com`
 
+**Require a Google Workspace account.** Anyone can create a personal Google account on a work email address they can receive mail at, and Google marks that email as verified. Workspace-managed accounts carry an `hd` (hosted domain) claim naming the Workspace domain; personal accounts do not. Turn on **Require a Google Workspace account (Google only)** on the provider and Tring only accepts a sign-in whose `hd` is one of the provider's email domains. It matches the provider's list rather than the user's own address because Google may report the Workspace's primary domain for a user on a secondary domain, so list both. Failed checks show the generic "sign-in failed" message on the login page; the reason (`hosted domain mismatch`) is in the server log.
+
+- Shared or **External** OAuth client (any Google account can reach it): strongly recommended.
+- Per-company **Internal** client: optional extra insurance.
+- Leave it off for non-Google providers; they do not send `hd`, so every sign-in would be refused.
+
 ### Microsoft Entra ID
 
 1. In the Entra admin center, **App registrations > New registration**. Platform **Web**, redirect URI as above.

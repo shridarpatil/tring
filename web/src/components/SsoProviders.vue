@@ -31,13 +31,13 @@ const showForm = ref(false);
 const editing = ref<SsoProvider | null>(null);
 const saving = ref(false);
 const formError = ref("");
-const form = ref({ name: "", issuer_url: "", client_id: "", client_secret: "", domains: "", require_sso: false, enabled: true });
+const form = ref({ name: "", issuer_url: "", client_id: "", client_secret: "", domains: "", require_sso: false, require_hosted_domain: false, enabled: true });
 const title = computed(() => (editing.value ? "Edit identity provider" : "Add identity provider"));
 
 function openAdd() {
   editing.value = null;
   formError.value = "";
-  form.value = { name: "", issuer_url: "", client_id: "", client_secret: "", domains: "", require_sso: false, enabled: true };
+  form.value = { name: "", issuer_url: "", client_id: "", client_secret: "", domains: "", require_sso: false, require_hosted_domain: false, enabled: true };
   showForm.value = true;
 }
 
@@ -51,6 +51,7 @@ function openEdit(p: SsoProvider) {
     client_secret: "",
     domains: p.domains.join(", "),
     require_sso: p.require_sso,
+    require_hosted_domain: p.require_hosted_domain,
     enabled: p.enabled,
   };
   showForm.value = true;
@@ -67,6 +68,7 @@ async function save() {
       client_id: f.client_id.trim(),
       domains: splitDomains(f.domains),
       require_sso: f.require_sso,
+      require_hosted_domain: f.require_hosted_domain,
       enabled: f.enabled,
     };
     // Blank on edit keeps the stored secret.
@@ -124,6 +126,7 @@ async function remove(p: SsoProvider) {
         <div class="chip-wrap">
           <Badge :tone="row.enabled ? 'success' : 'neutral'">{{ row.enabled ? "Enabled" : "Disabled" }}</Badge>
           <Badge v-if="row.require_sso" tone="warning">Require SSO</Badge>
+          <Badge v-if="row.require_hosted_domain" tone="neutral">Workspace only</Badge>
         </div>
       </template>
       <template #row-actions="{ row }">
@@ -150,6 +153,7 @@ async function remove(p: SsoProvider) {
         <TextField v-model="form.domains" label="Email domains" required placeholder="acme.com, acme.io" />
         <Toggle v-model="form.enabled" label="Enabled" />
         <Toggle v-model="form.require_sso" label="Require SSO (admins can still use a password)" />
+        <Toggle v-model="form.require_hosted_domain" label="Require a Google Workspace account (Google only)" />
         <p v-if="formError" role="alert" data-variant="error">{{ formError }}</p>
       </form>
       <template #footer>
