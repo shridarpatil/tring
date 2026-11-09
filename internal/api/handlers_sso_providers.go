@@ -22,15 +22,18 @@ import (
 
 // ssoProvider is the API shape; it deliberately has no secret field.
 type ssoProvider struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	IssuerURL    string    `json:"issuer_url"`
-	ClientID     string    `json:"client_id"`
-	Domains      []string  `json:"domains"`
-	RequireSSO   bool      `json:"require_sso"`
-	Enabled      bool      `json:"enabled"`
-	SSOOnlyUsers int       `json:"sso_only_users"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	IssuerURL  string    `json:"issuer_url"`
+	ClientID   string    `json:"client_id"`
+	Domains    []string  `json:"domains"`
+	RequireSSO bool      `json:"require_sso"`
+	Enabled    bool      `json:"enabled"`
+	// RequireHostedDomain (Google only): the ID token must carry an hd claim
+	// naming one of Domains, i.e. a Workspace-managed account.
+	RequireHostedDomain bool      `json:"require_hosted_domain"`
+	SSOOnlyUsers        int       `json:"sso_only_users"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // normalizeDomain lower-cases and validates an email domain claim.
@@ -90,7 +93,7 @@ func (s *Server) handleListSSOProviders(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var sp ssoProvider
 		if err := rows.Scan(&sp.ID, &sp.Name, &sp.IssuerURL, &sp.ClientID, &sp.RequireSSO, &sp.Enabled,
-			&sp.CreatedAt, &sp.Domains, &sp.SSOOnlyUsers); err != nil {
+			&sp.CreatedAt, &sp.Domains, &sp.RequireHostedDomain, &sp.SSOOnlyUsers); err != nil {
 			writeError(w, http.StatusInternalServerError, "list sso providers failed")
 			return
 		}
@@ -108,18 +111,19 @@ func (s *Server) getSSOProvider(ctx context.Context, tenantID, id uuid.UUID) (ss
 	var sp ssoProvider
 	var secret string
 	err := s.db.Pool.QueryRow(ctx, s.q.GetSSOProvider, tenantID, id).Scan(&sp.ID, &sp.Name, &sp.IssuerURL,
-		&sp.ClientID, &secret, &sp.RequireSSO, &sp.Enabled, &sp.CreatedAt, &sp.Domains)
+		&sp.ClientID, &secret, &sp.RequireSSO, &sp.Enabled, &sp.CreatedAt, &sp.Domains, &sp.RequireHostedDomain)
 	return sp, secret, err
 }
 
 type createSSOProviderRequest struct {
-	Name         string   `json:"name"`
-	IssuerURL    string   `json:"issuer_url"`
-	ClientID     string   `json:"client_id"`
-	ClientSecret string   `json:"client_secret"`
-	Domains      []string `json:"domains"`
-	RequireSSO   bool     `json:"require_sso"`
-	Enabled      *bool    `json:"enabled"`
+	Name                string   `json:"name"`
+	IssuerURL           string   `json:"issuer_url"`
+	ClientID            string   `json:"client_id"`
+	ClientSecret        string   `json:"client_secret"`
+	Domains             []string `json:"domains"`
+	RequireSSO          bool     `json:"require_sso"`
+	Enabled             *bool    `json:"enabled"`
+	RequireHostedDomain bool     `json:"require_hosted_domain"`
 }
 
 func (s *Server) handleCreateSSOProvider(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +160,7 @@ func (s *Server) handleCreateSSOProvider(w http.ResponseWriter, r *http.Request)
 	defer func() { _ = tx.Rollback(ctx) }()
 	var id uuid.UUID
 	if err := tx.QueryRow(ctx, s.q.CreateSSOProvider, p.TenantID, req.Name, req.IssuerURL, req.ClientID,
-		s.sealSecret(req.ClientSecret), req.RequireSSO, enabled).Scan(&id); err != nil {
+		s.sealSecret(req.ClientSecret), req.RequireSSO, enabled, req.RequireHostedDomain).Scan(&id); err != nil {
 		writeError(w, http.StatusInternalServerError, "create sso provider failed")
 		return
 	}
@@ -190,13 +194,14 @@ func (s *Server) insertSSODomains(ctx context.Context, tx pgx.Tx, tenantID, prov
 }
 
 type patchSSOProviderRequest struct {
-	Name         *string   `json:"name"`
-	IssuerURL    *string   `json:"issuer_url"`
-	ClientID     *string   `json:"client_id"`
-	ClientSecret *string   `json:"client_secret"`
-	Domains      *[]string `json:"domains"`
-	RequireSSO   *bool     `json:"require_sso"`
-	Enabled      *bool     `json:"enabled"`
+	Name                *string   `json:"name"`
+	IssuerURL           *string   `json:"issuer_url"`
+	ClientID            *string   `json:"client_id"`
+	ClientSecret        *string   `json:"client_secret"`
+	Domains             *[]string `json:"domains"`
+	RequireSSO          *bool     `json:"require_sso"`
+	Enabled             *bool     `json:"enabled"`
+	RequireHostedDomain *bool     `json:"require_hosted_domain"`
 }
 
 func (s *Server) handlePatchSSOProvider(w http.ResponseWriter, r *http.Request) {
@@ -266,7 +271,7 @@ func (s *Server) handlePatchSSOProvider(w http.ResponseWriter, r *http.Request) 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, s.q.UpdateSSOProvider, p.TenantID, id, req.Name, req.IssuerURL, req.ClientID,
-		s.sealSecretPtr(req.ClientSecret), req.RequireSSO, req.Enabled); err != nil {
+		s.sealSecretPtr(req.ClientSecret), req.RequireSSO, req.Enabled, req.RequireHostedDomain); err != nil {
 		writeError(w, http.StatusInternalServerError, "update sso provider failed")
 		return
 	}

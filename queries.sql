@@ -1280,6 +1280,7 @@ WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3;
 SELECT p.id, p.name, p.issuer_url, p.client_id, p.require_sso, p.enabled, p.created_at,
        COALESCE((SELECT array_agg(d.domain ORDER BY d.domain) FROM sso_provider_domains d
                  WHERE d.provider_id = p.id AND d.tenant_id = p.tenant_id), '{}')::text[],
+       p.require_hosted_domain,
        (SELECT count(*) FROM users u
          WHERE u.tenant_id = p.tenant_id AND u.email IS NOT NULL AND u.password_hash IS NULL
            AND split_part(lower(u.email), '@', 2) IN
@@ -1292,13 +1293,14 @@ ORDER BY p.created_at, p.id;
 -- Includes the sealed secret: callers open it with Server.openSecret.
 SELECT p.id, p.name, p.issuer_url, p.client_id, p.client_secret, p.require_sso, p.enabled, p.created_at,
        COALESCE((SELECT array_agg(d.domain ORDER BY d.domain) FROM sso_provider_domains d
-                 WHERE d.provider_id = p.id AND d.tenant_id = p.tenant_id), '{}')::text[]
+                 WHERE d.provider_id = p.id AND d.tenant_id = p.tenant_id), '{}')::text[],
+       p.require_hosted_domain
 FROM sso_providers p
 WHERE p.tenant_id = $1 AND p.id = $2;
 
 -- name: create-sso-provider
-INSERT INTO sso_providers (tenant_id, name, issuer_url, client_id, client_secret, require_sso, enabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sso_providers (tenant_id, name, issuer_url, client_id, client_secret, require_sso, enabled, require_hosted_domain)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id;
 
 -- name: update-sso-provider
@@ -1310,6 +1312,7 @@ SET name          = COALESCE($3, name),
     client_secret = COALESCE($6, client_secret),
     require_sso   = COALESCE($7, require_sso),
     enabled       = COALESCE($8, enabled),
+    require_hosted_domain = COALESCE($9, require_hosted_domain),
     updated_at    = now()
 WHERE tenant_id = $1 AND id = $2;
 

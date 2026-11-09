@@ -361,6 +361,7 @@ export interface SsoProvider {
   client_id: string;
   domains: string[];
   require_sso: boolean;
+  require_hosted_domain: boolean; // Google only: needs an hd claim from a provider domain
   enabled: boolean;
   sso_only_users: number; // users on these domains with no password
   created_at: string;

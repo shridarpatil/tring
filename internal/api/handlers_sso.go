@@ -331,11 +331,12 @@ func (s *Server) ssoVerifyCallback(ctx context.Context, st ssoState, q url.Value
 		pid                            uuid.UUID
 		name, issuer, clientID, sealed string
 		requireSSO, enabled            bool
+		requireHD                      bool
 		createdAt                      time.Time
 		domains                        []string
 	)
 	err := s.db.Pool.QueryRow(ctx, s.q.GetSSOProvider, st.TenantID, st.ProviderID).
-		Scan(&pid, &name, &issuer, &clientID, &sealed, &requireSSO, &enabled, &createdAt, &domains)
+		Scan(&pid, &name, &issuer, &clientID, &sealed, &requireSSO, &enabled, &createdAt, &domains, &requireHD)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, "", ssoFail("failed", "provider gone", nil)
 	}
@@ -374,6 +375,7 @@ func (s *Server) ssoVerifyCallback(ctx context.Context, st ssoState, q url.Value
 	var claims struct {
 		Email         string          `json:"email"`
 		EmailVerified json.RawMessage `json:"email_verified"`
+		HD            string          `json:"hd"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return uuid.Nil, "", ssoFail("failed", "decode claims", err)
@@ -387,6 +389,14 @@ func (s *Server) ssoVerifyCallback(ctx context.Context, st ssoState, q url.Value
 		// Exact match only: a provider vouches for its own domains, never a
 		// sub- or look-alike domain.
 		return uuid.Nil, "", ssoFail("failed", "email domain not owned by provider", nil)
+	}
+	if requireHD {
+		// Google sets hd only for Workspace-managed accounts, so a personal
+		// account on a work address lacks it. A secondary-domain user may
+		// carry the primary domain, hence "one of the provider's domains".
+		if hd := strings.ToLower(strings.TrimSpace(claims.HD)); hd == "" || !slices.Contains(domains, hd) {
+			return uuid.Nil, "", ssoFail("failed", "hosted domain mismatch", nil)
+		}
 	}
 
 	var (
