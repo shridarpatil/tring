@@ -90,7 +90,7 @@ func TestRingCandidatesSkipAway(t *testing.T) {
 	if got := ringAll(context.Background()); len(got) != 1 || got[0] != "alice" {
 		t.Fatalf("ring-all candidates = %v, want [alice]", got)
 	}
-	direct, _, cleanup2 := s.Prepare(context.Background(), "t/direct", ivrdrive.Target{AgentSIP: "bob"}, false, []string{"bob"}, "", "")
+	direct, _, cleanup2 := s.Prepare(context.Background(), "t/direct", ivrdrive.Target{AgentSIP: "bob"}, false, func(context.Context) []string { return []string{"bob"} }, "", "")
 	defer cleanup2()
 	if got := direct(context.Background()); len(got) != 0 {
 		t.Fatalf("direct candidates for an Away agent = %v, want none", got)
