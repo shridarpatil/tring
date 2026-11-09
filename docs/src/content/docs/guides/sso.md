@@ -79,6 +79,15 @@ Entra often omits the `email_verified` claim. Tring requires it to be `true` and
 2. On success the callback redirects to `/login#sso_code=...`. The code is single use, valid for 60 seconds, and travels in the URL fragment so it never reaches server logs. The console exchanges it for the session.
 3. The flow is bound to the browser by an HttpOnly cookie (`tring_sso`). The user must **start and finish in the same browser, and on the same host as `TRING_CONSOLE_PUBLIC_URL`**. If that URL is `http://localhost:8085`, browse to `localhost`, not `127.0.0.1`, or the cookie will not come back and the sign-in fails with "Sign-in took too long, try again".
 
+## The sign-in button
+
+When exactly **one** SSO provider is enabled on the install, the login page shows a **Sign in with <provider name>** button above the form, then an "or" divider and the usual email and password fields. The button starts SSO without asking for an email; every check after the IdP redirect is the same (verified ID token, email domain owned by the provider, an existing Tring user).
+
+- The button needs Redis, like SSO itself. With no enabled provider, two or more, or no Redis, the page is the email-first form described above.
+- The provider's **name is shown publicly** on the login page, so don't put anything sensitive in it.
+- Adding a second enabled provider (or disabling the only one) makes the button disappear; people then sign in by email as before.
+- Tring sends no `login_hint` for the button, so Google users signed into several accounts see Google's account picker.
+
 The login page shows only three failure messages, on purpose: "Sign-in took too long, try again", "No Tring account for this email, ask your admin" and "Single sign-on failed". The specific reason is in the api log.
 
 ## Users without a password

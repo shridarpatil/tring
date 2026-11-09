@@ -4,7 +4,8 @@ import { useRoute, useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
 import { homeRoute, safeRedirect, type MeUser } from "../lib/roles";
-import { parseSsoFragment, ssoErrorMessage } from "../lib/sso";
+import { parseSsoFragment, ssoButtonName, ssoErrorMessage, ssoUnavailableMessage } from "../lib/sso";
+import { KeyRound } from "lucide-vue-next";
 import { Button, TextField } from "../components/ui";
 
 interface LoginResponse {
@@ -24,6 +25,9 @@ const loading = ref(false);
 // Step 1 asks only for the email; the server says whether to hand off to the
 // IdP or ask for a password.
 const showPassword = ref(false);
+// Set when exactly one provider is enabled: a "Sign in with <name>" button
+// above the classic email + password form (no Continue step in this mode).
+const ssoName = ref("");
 
 function finish(res: LoginResponse, redirect: unknown) {
   auth.setSession(res.token, res.tenant, res.user);
@@ -54,6 +58,26 @@ async function start() {
   loading.value = false;
 }
 
+async function startButton() {
+  error.value = "";
+  loading.value = true;
+  try {
+    const redirect = route.query.redirect;
+    const res = await api.post<{ method: string; redirect_url?: string }>("/v1/console/login/start", {
+      sso: true,
+      redirect: typeof redirect === "string" ? redirect : undefined,
+    });
+    if (res.method === "sso" && res.redirect_url) {
+      location.assign(res.redirect_url);
+      return; // keep the spinner while the browser navigates away
+    }
+    error.value = ssoUnavailableMessage;
+  } catch (e) {
+    error.value = e instanceof ApiError && e.status === 429 ? e.message : ssoUnavailableMessage;
+  }
+  loading.value = false;
+}
+
 async function submit() {
   error.value = "";
   loading.value = true;
@@ -70,13 +94,25 @@ async function submit() {
   }
 }
 
+async function loadButton() {
+  try {
+    ssoName.value = ssoButtonName(await api.get("/v1/console/sso/button"));
+  } catch {
+    // No button: the page stays email-first.
+  }
+}
+
 onMounted(async () => {
   // The code and redirect arrive in the URL fragment (never sent to servers or
   // logs); failures arrive as ?sso_error=. Clear both so neither lingers in the
   // address bar or history.
   const frag = parseSsoFragment(location.hash);
   const err = ssoErrorMessage(route.query.sso_error);
-  if (!frag && !err) return;
+  if (!frag && !err) {
+    void loadButton();
+    return;
+  }
+  void loadButton();
   history.replaceState(null, "", "/login");
   if (err) {
     error.value = err;
@@ -96,7 +132,7 @@ onMounted(async () => {
 
 <template>
   <div class="login">
-    <form class="card login-card" @submit.prevent="showPassword ? submit() : start()">
+    <form class="card login-card" @submit.prevent="showPassword || ssoName ? submit() : start()">
       <div class="login-brand">
         <div class="login-word">
           <span class="brand-dot"></span>
@@ -104,6 +140,12 @@ onMounted(async () => {
         </div>
         <div class="text-light">Console sign-in</div>
       </div>
+      <template v-if="ssoName">
+        <Button type="button" :loading="loading" block @click="startButton">
+          <KeyRound :size="16" /> Sign in with {{ ssoName }}
+        </Button>
+        <div class="text-light login-or">or</div>
+      </template>
       <TextField
         v-model="email"
         type="email"
@@ -113,7 +155,7 @@ onMounted(async () => {
         placeholder="admin@tring.local"
       />
       <TextField
-        v-if="showPassword"
+        v-if="showPassword || ssoName"
         v-model="password"
         type="password"
         label="Password"
@@ -122,9 +164,12 @@ onMounted(async () => {
       />
       <p v-if="error" class="login-error">{{ error }}</p>
       <Button type="submit" :loading="loading" block>
-        {{ showPassword ? (loading ? "Signing in…" : "Sign in") : loading ? "Checking…" : "Continue" }}
+        {{
+          showPassword || ssoName ? (loading ? "Signing in…" : "Sign in") : loading ? "Checking…" : "Continue"
+        }}
       </Button>
-      <button v-if="!showPassword" type="button" class="ghost small" @click="showPassword = true">
+      <p v-if="ssoName" class="text-light small">Have a {{ ssoName }} account? Use the button above.</p>
+      <button v-if="!showPassword && !ssoName" type="button" class="ghost small" @click="showPassword = true">
         Sign in with password
       </button>
     </form>
@@ -152,5 +197,6 @@ onMounted(async () => {
 .login-word { display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
 .brand-dot { height: 0.5rem; width: 0.5rem; border-radius: 9999px; background: var(--primary); }
 .brand-name { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+.login-or { text-align: center; }
 .login-error { font-size: var(--text-7); color: var(--danger); }
 </style>

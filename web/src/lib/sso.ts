@@ -37,3 +37,12 @@ export function deleteProviderMessage(name: string, ssoOnlyUsers: number): strin
   const n = ssoOnlyUsers === 1 ? "1 user on these domains has" : `${ssoOnlyUsers} users on these domains have`;
   return `${base} ${n} no password and won't be able to sign in.`;
 }
+
+/** Shown when the button's login/start doesn't hand off to the IdP. */
+export const ssoUnavailableMessage = "Single sign-on is unavailable, sign in with your password";
+
+/** Provider name from GET /v1/console/sso/button; "" (no button) for `{}` or anything unexpected. */
+export function ssoButtonName(res: unknown): string {
+  const name = (res as { name?: unknown } | null)?.name;
+  return typeof name === "string" ? name.trim() : "";
+}

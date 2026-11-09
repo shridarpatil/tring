@@ -142,13 +142,17 @@ func (s *Server) ssoOAuthConfig(p *oidc.Provider, clientID, clientSecret string)
 type ssoStartRequest struct {
 	Email    string `json:"email"`
 	Redirect string `json:"redirect"`
+	// SSO asks for the install's single provider instead of routing by email
+	// (the login page's "Sign in with <provider>" button).
+	SSO bool `json:"sso"`
 }
 
 var passwordMethod = map[string]string{"method": "password"}
 
 // handleSSOStart routes an email to its SSO provider or to the password form.
 // The answer depends only on the email's domain, never on whether a user
-// exists, so it can't be used to enumerate accounts.
+// exists, so it can't be used to enumerate accounts. With sso:true and no
+// email it starts the install's single provider instead (see ssoBegin).
 func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	if retry, ok := s.ssoStartByIP.take(clientIP(r)); !ok {
 		writeTooManyRequests(w, retry)
@@ -160,18 +164,34 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	domain := emailDomain(email)
-	if domain == "" {
-		writeError(w, http.StatusBadRequest, "email required")
-		return
-	}
-
 	ctx := r.Context()
 	var (
 		st                       ssoState
 		issuer, clientID, secret string
 		requireSSO               bool
 	)
+	if email == "" && req.SSO {
+		// Same global pre-auth lookup class as get-sso-domain; only a
+		// lone provider is unambiguous without an email.
+		var name string
+		err := s.db.Pool.QueryRow(ctx, s.q.GetSingleSSOProvider).
+			Scan(&st.ProviderID, &st.TenantID, &name, &issuer, &clientID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusOK, passwordMethod)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "query failed")
+			return
+		}
+		s.ssoBegin(w, r, st, issuer, clientID, "", req.Redirect)
+		return
+	}
+	domain := emailDomain(email)
+	if domain == "" {
+		writeError(w, http.StatusBadRequest, "email required")
+		return
+	}
 	err := s.db.Pool.QueryRow(ctx, s.q.GetSSODomain, domain).
 		Scan(&st.ProviderID, &st.TenantID, &issuer, &clientID, &secret, &requireSSO)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -182,6 +202,40 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
+	s.ssoBegin(w, r, st, issuer, clientID, email, req.Redirect)
+}
+
+// handleSSOButton tells the login page whether to show a "Sign in with
+// <name>" button: only when exactly one provider is enabled and SSO can run.
+// Public and pre-auth, so it reveals nothing but the provider's name.
+func (s *Server) handleSSOButton(w http.ResponseWriter, r *http.Request) {
+	ssoNoStore(w)
+	if s.cache == nil {
+		writeJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	var (
+		id, tenant     uuid.UUID
+		name, iss, cid string
+	)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.GetSingleSSOProvider).Scan(&id, &tenant, &name, &iss, &cid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": name})
+}
+
+// ssoBegin is everything after the provider is chosen: Redis check, discovery,
+// state record, nonce, PKCE, browser-binding cookie and the IdP redirect. email
+// is "" for the button flow: the state then carries no email (the callback
+// takes the address from the verified ID token only) and no login_hint is sent.
+func (s *Server) ssoBegin(w http.ResponseWriter, r *http.Request, st ssoState, issuer, clientID, email, redirect string) {
+	ctx := r.Context()
 	if s.cache == nil {
 		// Password login still enforces require_sso, so enforced domains
 		// fail closed rather than open.
@@ -207,7 +261,7 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 	st.Email = email
 	st.Nonce = nonce
 	st.Verifier = oauth2.GenerateVerifier()
-	st.Redirect = safeSSORedirect(req.Redirect)
+	st.Redirect = safeSSORedirect(redirect)
 	st.Binding = ssoBindingHash(browser)
 	rec, err := json.Marshal(st)
 	if err != nil {
@@ -222,11 +276,11 @@ func (s *Server) handleSSOStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authURL := s.ssoOAuthConfig(provider, clientID, "").AuthCodeURL(state,
-		oauth2.S256ChallengeOption(st.Verifier),
-		oidc.Nonce(nonce),
-		oauth2.SetAuthURLParam("login_hint", email),
-	)
+	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(st.Verifier), oidc.Nonce(nonce)}
+	if email != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("login_hint", email))
+	}
+	authURL := s.ssoOAuthConfig(provider, clientID, "").AuthCodeURL(state, opts...)
 	s.setSSOCookie(w, browser, int(ssoStateTTL/time.Second))
 	writeJSON(w, http.StatusOK, map[string]string{"method": "sso", "redirect_url": authURL})
 }
