@@ -175,6 +175,15 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		if json.Unmarshal(data, &e) == nil {
 			sig.PushAvailability(tenant, e.Sip, e.Available)
 		}
+		// Team member lookups filter on available_for_calls (and a SIP rename
+		// publishes this too), so queued callers must re-read their team.
+		sig.TeamMembersChanged(tenant)
+	})
+	// A member added to (or removed from) a team reaches callers already
+	// queued for it. Without Redis, queued callers keep the membership they
+	// read on entering the queue.
+	g.hub.On(events.TypeTeamMembers, func(tenant string, _ json.RawMessage) {
+		sig.TeamMembersChanged(tenant)
 	})
 	go g.hub.Run(context.Background())
 

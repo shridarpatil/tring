@@ -387,11 +387,17 @@ func (s *Server) handleDecline(tenant, sip, roomName string) {
 	}
 }
 
+// TeamMembersChanged makes this gateway's queued callers in tenant re-read
+// their team, so an agent added (or made available) mid-wait is rung.
+func (s *Server) TeamMembersChanged(tenant string) {
+	s.agentRouter.MembersChanged(tenant)
+}
+
 // Prepare satisfies brain.RingTransport: it wires the pion ring transport for
 // one transfer — candidates from the live socket registry + the pionRing Effects
 // + a cleanup that withdraws popups and deregisters the pending-ring channel.
 // team resolution + the routing.Router queue/ring loop live in brain.AgentRouter.
-func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, sips []string, strategy, moh string) (func(context.Context) []string, routing.Effects, func()) {
+func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, ringAll bool, members func(context.Context) []string, strategy, moh string) (func(context.Context) []string, routing.Effects, func()) {
 	tenant, name, _ := strings.Cut(roomID, "/")
 	rid := room.RoomID(roomID)
 	ring := make(chan struct{})
@@ -405,7 +411,11 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	// candidates excludes agents who declined this call (as well as busy, Away
 	// and offline ones) so the router never re-rings a decliner and the
 	// queue/hold logic sees the true remaining pool.
-	candidates := func(context.Context) []string {
+	candidates := func(ctx context.Context) []string {
+		var sips []string
+		if !ringAll && members != nil {
+			sips = members(ctx) // before s.mu: it may hit the DB
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		free := func(sip string) bool {
