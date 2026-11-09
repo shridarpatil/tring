@@ -500,6 +500,12 @@ func (s *Server) Router() http.Handler {
 						r.Post("/users", s.handleCreateUser)
 						r.Patch("/users/{id}", s.handlePatchUser)
 						r.Delete("/users/{id}", s.handleDeleteUser)
+
+						r.Get("/sso-providers", s.handleListSSOProviders)
+						r.Post("/sso-providers", s.handleCreateSSOProvider)
+						r.Get("/sso-providers/callback-url", s.handleSSOCallbackURL)
+						r.Patch("/sso-providers/{id}", s.handlePatchSSOProvider)
+						r.Delete("/sso-providers/{id}", s.handleDeleteSSOProvider)
 					})
 				})
 			})

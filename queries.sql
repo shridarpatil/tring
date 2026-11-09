@@ -1269,3 +1269,62 @@ SELECT is_manager FROM team_agents WHERE tenant_id = $1 AND team_name = $2 AND a
 -- Set or clear a member's manager flag; 0 rows when the user isn't a member.
 UPDATE team_agents SET is_manager = $4
 WHERE tenant_id = $1 AND team_name = $2 AND agent_id = $3;
+
+-- ===========================================================================
+-- api: /v1/sso-providers (admin) and SSO login routing
+-- ===========================================================================
+
+-- name: list-sso-providers
+-- sso_only_users: users with no password whose email domain is one of the
+-- provider's — they lose their login if the provider is removed.
+SELECT p.id, p.name, p.issuer_url, p.client_id, p.require_sso, p.enabled, p.created_at,
+       COALESCE((SELECT array_agg(d.domain ORDER BY d.domain) FROM sso_provider_domains d
+                 WHERE d.provider_id = p.id AND d.tenant_id = p.tenant_id), '{}')::text[],
+       (SELECT count(*) FROM users u
+         WHERE u.tenant_id = p.tenant_id AND u.email IS NOT NULL AND u.password_hash IS NULL
+           AND split_part(lower(u.email), '@', 2) IN
+               (SELECT d.domain FROM sso_provider_domains d WHERE d.provider_id = p.id AND d.tenant_id = p.tenant_id))::int
+FROM sso_providers p
+WHERE p.tenant_id = $1
+ORDER BY p.created_at, p.id;
+
+-- name: get-sso-provider
+-- Includes the sealed secret: callers open it with Server.openSecret.
+SELECT p.id, p.name, p.issuer_url, p.client_id, p.client_secret, p.require_sso, p.enabled, p.created_at,
+       COALESCE((SELECT array_agg(d.domain ORDER BY d.domain) FROM sso_provider_domains d
+                 WHERE d.provider_id = p.id AND d.tenant_id = p.tenant_id), '{}')::text[]
+FROM sso_providers p
+WHERE p.tenant_id = $1 AND p.id = $2;
+
+-- name: create-sso-provider
+INSERT INTO sso_providers (tenant_id, name, issuer_url, client_id, client_secret, require_sso, enabled)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id;
+
+-- name: update-sso-provider
+-- NULL = unchanged.
+UPDATE sso_providers
+SET name          = COALESCE($3, name),
+    issuer_url    = COALESCE($4, issuer_url),
+    client_id     = COALESCE($5, client_id),
+    client_secret = COALESCE($6, client_secret),
+    require_sso   = COALESCE($7, require_sso),
+    enabled       = COALESCE($8, enabled),
+    updated_at    = now()
+WHERE tenant_id = $1 AND id = $2;
+
+-- name: delete-sso-provider
+DELETE FROM sso_providers WHERE tenant_id = $1 AND id = $2;
+
+-- name: delete-sso-provider-domains
+DELETE FROM sso_provider_domains WHERE tenant_id = $1 AND provider_id = $2;
+
+-- name: insert-sso-provider-domain
+INSERT INTO sso_provider_domains (domain, provider_id, tenant_id) VALUES ($1, $2, $3);
+
+-- name: get-sso-domain
+-- Login routing by email domain alone (no tenant yet); enabled providers only.
+SELECT p.id, p.tenant_id, p.issuer_url, p.client_id, p.client_secret, p.require_sso
+FROM sso_provider_domains d
+JOIN sso_providers p ON p.id = d.provider_id
+WHERE d.domain = $1 AND p.enabled;
