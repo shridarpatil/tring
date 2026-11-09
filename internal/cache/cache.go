@@ -12,7 +12,7 @@
 // best-effort: a Redis error is treated as a miss / dropped write so a
 // transient cache problem never turns into a request failure. Two methods opt
 // OUT of best-effort and return their error so the caller decides: Delete
-// (invalidation — stale data may matter) and SetNX (single-use markers — a
+// (invalidation — stale data may matter), SetNX and GetDel (single-use markers — a
 // caller cannot treat an unreachable Redis as "first use" without opening a
 // replay window). For those, Redis is a hard dependency.
 package cache
@@ -100,6 +100,29 @@ func (c *Cache) SetNX(ctx context.Context, key string, val []byte, ttl time.Dura
 		return false, errors.New("cache: redis not configured")
 	}
 	return c.rdb.SetNX(ctx, key, val, ttl).Result()
+}
+
+// GetDel atomically reads and deletes key, for single-use values such as SSO
+// state and one-time codes. Returns (val, true, nil) for the one consumer,
+// (nil, false, nil) on a miss (never set, expired or already consumed), and
+// (nil, false, err) when Redis is not configured or unreachable.
+//
+// Like SetNX it does NOT swallow errors: treating "couldn't reach Redis" as a
+// plain miss is harmless, but the caller must be able to tell it apart to
+// answer "unavailable" rather than "invalid", and must never fall back to a
+// non-consuming read that would allow replay.
+func (c *Cache) GetDel(ctx context.Context, key string) ([]byte, bool, error) {
+	if c == nil {
+		return nil, false, errors.New("cache: redis not configured")
+	}
+	b, err := c.rdb.GetDel(ctx, key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return b, true, nil
 }
 
 // Delete removes a key (cache invalidation). Returns any Redis error so the
