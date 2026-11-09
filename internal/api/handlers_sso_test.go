@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -99,7 +100,9 @@ type ssoStart struct {
 	RedirectURL string `json:"redirect_url"`
 }
 
-func startSSO(t *testing.T, h http.Handler, email, redirect string) (ssoStart, url.Values) {
+// startSSO returns the start response, the IdP auth URL's query, and the
+// tring_sso browser-binding cookie value ("" when not routed to SSO).
+func startSSO(t *testing.T, h http.Handler, email, redirect string) (ssoStart, url.Values, string) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"email": email, "redirect": redirect})
 	rec := doReq(t, h, "POST", "/v1/console/login/start", "", string(body))
@@ -111,19 +114,59 @@ func startSSO(t *testing.T, h http.Handler, email, redirect string) (ssoStart, u
 		t.Fatal(err)
 	}
 	if st.Method != "sso" {
-		return st, nil
+		return st, nil, ""
 	}
 	u, err := url.Parse(st.RedirectURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return st, u.Query()
+	return st, u.Query(), ssoCookieFrom(t, rec)
 }
 
-// callbackLocation hits the callback and returns the parsed 302 target.
-func callbackLocation(t *testing.T, h http.Handler, state string) *url.URL {
+func ssoCookieFrom(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
-	rec := doReq(t, h, "GET", "/v1/console/sso/callback?code=any-code&state="+url.QueryEscape(state), "", "")
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == ssoCookieName {
+			return c.Value
+		}
+	}
+	t.Fatal("no tring_sso cookie set")
+	return ""
+}
+
+// doReqCookie is doReq with an optional tring_sso cookie.
+func doReqCookie(t *testing.T, h http.Handler, method, path, cookie, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var r *http.Request
+	if body != "" {
+		r = httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+	} else {
+		r = httptest.NewRequest(method, path, nil)
+	}
+	if cookie != "" {
+		r.AddCookie(&http.Cookie{Name: ssoCookieName, Value: cookie})
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	return rec
+}
+
+// ssoFrag is the success redirect's fragment parameters.
+func ssoFrag(t *testing.T, loc *url.URL) url.Values {
+	t.Helper()
+	v, err := url.ParseQuery(loc.EscapedFragment())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// callbackLocation hits the callback (with the binding cookie when non-empty)
+// and returns the parsed 302 target.
+func callbackLocation(t *testing.T, h http.Handler, state, cookie string) *url.URL {
+	t.Helper()
+	rec := doReqCookie(t, h, "GET", "/v1/console/sso/callback?code=any-code&state="+url.QueryEscape(state), cookie, "")
 	if rec.Code != http.StatusFound {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
 	}
@@ -142,7 +185,7 @@ func callbackLocation(t *testing.T, h http.Handler, state string) *url.URL {
 func assertSSOError(t *testing.T, logs *bytes.Buffer, loc *url.URL, want, reason string) {
 	t.Helper()
 	q := loc.Query()
-	if q.Get("sso_error") != want || q.Has("sso_code") {
+	if q.Get("sso_error") != want || q.Has("sso_code") || loc.Fragment != "" {
 		t.Fatalf("location = %s, want sso_error=%s", loc, want)
 	}
 	if !strings.Contains(logs.String(), `reason="`+reason+`"`) {
@@ -151,10 +194,10 @@ func assertSSOError(t *testing.T, logs *bytes.Buffer, loc *url.URL, want, reason
 	logs.Reset()
 }
 
-func exchangeSSO(t *testing.T, h http.Handler, code string) (int, consoleLoginResponse) {
+func exchangeSSO(t *testing.T, h http.Handler, code, cookie string) (int, consoleLoginResponse) {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"code": code})
-	rec := doReq(t, h, "POST", "/v1/console/sso/exchange", "", string(body))
+	rec := doReqCookie(t, h, "POST", "/v1/console/sso/exchange", cookie, string(body))
 	var resp consoleLoginResponse
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
@@ -164,16 +207,22 @@ func exchangeSSO(t *testing.T, h http.Handler, code string) (int, consoleLoginRe
 	return rec.Code, resp
 }
 
-// ssoLoginTo runs start for startEmail, has the IdP assert idpEmail, and
-// returns the callback's redirect target.
-func ssoLoginTo(t *testing.T, h http.Handler, idp *fakeIdP, startEmail, idpEmail string) *url.URL {
+// ssoLogin runs start for startEmail, has the IdP assert idpEmail, and
+// returns the callback's redirect target and the browser-binding cookie.
+func ssoLogin(t *testing.T, h http.Handler, idp *fakeIdP, startEmail, idpEmail string) (*url.URL, string) {
 	t.Helper()
-	_, q := startSSO(t, h, startEmail, "")
+	_, q, ck := startSSO(t, h, startEmail, "")
 	if q == nil {
 		t.Fatalf("start %s did not route to sso", startEmail)
 	}
 	idp.setClaims(q.Get("nonce"), idpEmail, true)
-	return callbackLocation(t, h, q.Get("state"))
+	return callbackLocation(t, h, q.Get("state"), ck), ck
+}
+
+func ssoLoginTo(t *testing.T, h http.Handler, idp *fakeIdP, startEmail, idpEmail string) *url.URL {
+	t.Helper()
+	loc, _ := ssoLogin(t, h, idp, startEmail, idpEmail)
+	return loc
 }
 
 func TestSSOStartRoutesByDomain(t *testing.T) {
@@ -184,7 +233,7 @@ func TestSSOStartRoutesByDomain(t *testing.T) {
 	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
-	st, q := startSSO(t, h, "Ann@SSO.example.com", "")
+	st, q, _ := startSSO(t, h, "Ann@SSO.example.com", "")
 	if st.Method != "sso" {
 		t.Fatalf("method = %q", st.Method)
 	}
@@ -243,7 +292,7 @@ func TestSSOStartNoRedis(t *testing.T) {
 		t.Fatalf("no redis: %d %s", rec.Code, rec.Body)
 	}
 	// The exchange can't succeed without Redis either.
-	if code, _ := exchangeSSO(t, s.Router(), "whatever"); code == http.StatusOK {
+	if code, _ := exchangeSSO(t, s.Router(), "whatever", "any-cookie"); code == http.StatusOK {
 		t.Fatal("exchange without redis succeeded")
 	}
 }
@@ -256,9 +305,9 @@ func TestSSOFullFlow(t *testing.T) {
 	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	id := f.AddUser(t, "supervisor", "ann@sso.example.com")
 
-	_, q := startSSO(t, h, "ann@sso.example.com", "")
+	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
-	loc := callbackLocation(t, h, q.Get("state"))
+	loc := callbackLocation(t, h, q.Get("state"), ck)
 
 	// PKCE: the verifier sent to the token endpoint matches the challenge.
 	sum := sha256.Sum256([]byte(idp.verifier()))
@@ -266,11 +315,12 @@ func TestSSOFullFlow(t *testing.T) {
 		t.Fatal("token request verifier does not match the auth request challenge")
 	}
 
-	code := loc.Query().Get("sso_code")
-	if code == "" || loc.Query().Has("redirect") || loc.Query().Has("sso_error") || len(loc.Query()) != 1 {
+	// The code travels in the fragment so it never reaches access logs.
+	code := ssoFrag(t, loc).Get("sso_code")
+	if code == "" || loc.RawQuery != "" || len(ssoFrag(t, loc)) != 1 || strings.Contains(loc.String(), "?") {
 		t.Fatalf("location = %s", loc)
 	}
-	status, resp := exchangeSSO(t, h, code)
+	status, resp := exchangeSSO(t, h, code, ck)
 	if status != http.StatusOK {
 		t.Fatalf("exchange: %d", status)
 	}
@@ -294,14 +344,14 @@ func TestSSOStateSingleUse(t *testing.T) {
 	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
-	_, q := startSSO(t, h, "ann@sso.example.com", "")
+	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
-	if loc := callbackLocation(t, h, q.Get("state")); !loc.Query().Has("sso_code") {
+	if loc := callbackLocation(t, h, q.Get("state"), ck); !ssoFrag(t, loc).Has("sso_code") {
 		t.Fatalf("first callback: %s", loc)
 	}
-	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state")), "expired", "unknown or used state")
-	assertSSOError(t, logs, callbackLocation(t, h, "never-issued"), "expired", "unknown or used state")
-	assertSSOError(t, logs, callbackLocation(t, h, ""), "expired", "missing state")
+	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "expired", "unknown or used state")
+	assertSSOError(t, logs, callbackLocation(t, h, "never-issued", ck), "expired", "unknown or used state")
+	assertSSOError(t, logs, callbackLocation(t, h, "", ck), "expired", "missing state")
 }
 
 func TestSSOExchangeSingleUse(t *testing.T) {
@@ -312,13 +362,14 @@ func TestSSOExchangeSingleUse(t *testing.T) {
 	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
-	code := ssoLoginTo(t, h, idp, "ann@sso.example.com", "ann@sso.example.com").Query().Get("sso_code")
-	if st, _ := exchangeSSO(t, h, code); st != http.StatusOK {
+	loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "ann@sso.example.com")
+	code := ssoFrag(t, loc).Get("sso_code")
+	if st, _ := exchangeSSO(t, h, code, ck); st != http.StatusOK {
 		t.Fatalf("first exchange: %d", st)
 	}
 	for _, c := range []string{code, "", "made-up"} {
 		body, _ := json.Marshal(map[string]string{"code": c})
-		rec := doReq(t, h, "POST", "/v1/console/sso/exchange", "", string(body))
+		rec := doReqCookie(t, h, "POST", "/v1/console/sso/exchange", ck, string(body))
 		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "invalid or expired code") {
 			t.Fatalf("exchange %q: %d %s", c, rec.Code, rec.Body)
 		}
@@ -333,9 +384,9 @@ func TestSSOCallbackBadNonce(t *testing.T) {
 	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
-	_, q := startSSO(t, h, "ann@sso.example.com", "")
+	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims("some-other-nonce", "ann@sso.example.com", true)
-	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state")), "failed", "nonce mismatch")
+	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "failed", "nonce mismatch")
 }
 
 func TestSSOCallbackEmailUnverified(t *testing.T) {
@@ -347,14 +398,14 @@ func TestSSOCallbackEmailUnverified(t *testing.T) {
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
 	for _, v := range []any{false, "false", nil, "yes", 1, "TRUE "} {
-		_, q := startSSO(t, h, "ann@sso.example.com", "")
+		_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 		idp.setClaims(q.Get("nonce"), "ann@sso.example.com", v)
-		assertSSOError(t, logs, callbackLocation(t, h, q.Get("state")), "failed", "email not verified")
+		assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "failed", "email not verified")
 	}
 	// Some IdPs send the string "true"; that one counts.
-	_, q := startSSO(t, h, "ann@sso.example.com", "")
+	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", "true")
-	if loc := callbackLocation(t, h, q.Get("state")); !loc.Query().Has("sso_code") {
+	if loc := callbackLocation(t, h, q.Get("state"), ck); !ssoFrag(t, loc).Has("sso_code") {
 		t.Fatalf(`email_verified="true": %s`, loc)
 	}
 }
@@ -405,8 +456,8 @@ func TestSSOCallbackEmailCaseInsensitive(t *testing.T) {
 	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	id := f.AddUser(t, "agent", "ann@sso.example.com")
 
-	loc := ssoLoginTo(t, h, idp, "ann@sso.example.com", "  Ann@SSO.Example.COM ")
-	st, resp := exchangeSSO(t, h, loc.Query().Get("sso_code"))
+	loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "  Ann@SSO.Example.COM ")
+	st, resp := exchangeSSO(t, h, ssoFrag(t, loc).Get("sso_code"), ck)
 	if st != http.StatusOK || resp.User.ID != id.String() || resp.User.Email != "ann@sso.example.com" {
 		t.Fatalf("exchange: %d %+v (location %s)", st, resp, loc)
 	}
@@ -441,23 +492,23 @@ func TestSSOCallbackProviderDisabledMidFlow(t *testing.T) {
 	pid := seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
-	_, q := startSSO(t, h, "ann@sso.example.com", "")
+	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
 	if _, err := f.DB.Pool.Exec(context.Background(), `UPDATE sso_providers SET enabled = false WHERE id = $1`, pid); err != nil {
 		t.Fatal(err)
 	}
-	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state")), "failed", "provider disabled")
+	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "failed", "provider disabled")
 
 	// Deleted mid-flow fails the same way.
 	if _, err := f.DB.Pool.Exec(context.Background(), `UPDATE sso_providers SET enabled = true WHERE id = $1`, pid); err != nil {
 		t.Fatal(err)
 	}
-	_, q = startSSO(t, h, "ann@sso.example.com", "")
+	_, q, ck = startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
 	if _, err := f.DB.Pool.Exec(context.Background(), `DELETE FROM sso_providers WHERE id = $1`, pid); err != nil {
 		t.Fatal(err)
 	}
-	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state")), "failed", "provider gone")
+	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "failed", "provider gone")
 }
 
 func TestSSORedirectOnlySameOriginPaths(t *testing.T) {
@@ -486,18 +537,19 @@ func TestSSORedirectOnlySameOriginPaths(t *testing.T) {
 		"/agent@evil.example":  "",
 		"/admin\n":             "",
 	} {
-		_, q := startSSO(t, h, "ann@sso.example.com", redirect)
+		_, q, ck := startSSO(t, h, "ann@sso.example.com", redirect)
 		idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
-		loc := callbackLocation(t, h, q.Get("state"))
-		if !loc.Query().Has("sso_code") {
+		loc := callbackLocation(t, h, q.Get("state"), ck)
+		frag := ssoFrag(t, loc)
+		if !frag.Has("sso_code") || loc.RawQuery != "" {
 			t.Fatalf("%q: location %s", redirect, loc)
 		}
-		if got := loc.Query().Get("redirect"); got != want || (want == "" && loc.Query().Has("redirect")) {
+		if got := frag.Get("redirect"); got != want || (want == "" && frag.Has("redirect")) {
 			t.Errorf("redirect %q: got %q (location %s), want %q", redirect, got, loc, want)
 		}
 		// A completed login refunds its attempts, so this loop stays under
 		// the per-IP start limit.
-		if st, _ := exchangeSSO(t, h, loc.Query().Get("sso_code")); st != http.StatusOK {
+		if st, _ := exchangeSSO(t, h, frag.Get("sso_code"), ck); st != http.StatusOK {
 			t.Fatalf("exchange: %d", st)
 		}
 	}
@@ -559,5 +611,92 @@ func TestPasswordLoginRequireSSOOtherTenant(t *testing.T) {
 	rec := doReq(t, s.Router(), "POST", "/v1/console/login", "", `{"email":"a@x.example.com","password":"correct-horse"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+// The callback only works in the browser that started the flow: a callback
+// URL sent to someone else (login CSRF) is rejected and the state burned.
+func TestSSOCallbackRequiresBrowserBinding(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, logs := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
+	f.AddUser(t, "agent", "ann@sso.example.com")
+
+	body := `{"email":"ann@sso.example.com"}`
+	rec := doReq(t, h, "POST", "/v1/console/login/start", "", body)
+	var c *http.Cookie
+	for _, x := range rec.Result().Cookies() {
+		if x.Name == ssoCookieName {
+			c = x
+		}
+	}
+	if c == nil || !c.HttpOnly || c.SameSite != http.SameSiteLaxMode || c.Path != "/v1/console/sso" ||
+		!c.Secure || c.MaxAge != 600 || len(c.Value) < 40 {
+		t.Fatalf("cookie = %+v", c)
+	}
+	// Password-routed emails get no cookie.
+	if rec := doReq(t, h, "POST", "/v1/console/login/start", "", `{"email":"a@other.example.com"}`); len(rec.Result().Cookies()) != 0 {
+		t.Fatalf("password route set cookies: %v", rec.Result().Cookies())
+	}
+
+	for _, cookie := range []string{"", "someone-elses-cookie"} {
+		_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
+		idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
+		assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), cookie), "expired", "browser binding mismatch")
+		// The state was consumed: even the right browser can't use it now.
+		assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "expired", "unknown or used state")
+	}
+	// Another flow's genuine cookie doesn't fit this state either.
+	_, q1, _ := startSSO(t, h, "ann@sso.example.com", "")
+	_, _, ck2 := startSSO(t, h, "ann@sso.example.com", "")
+	assertSSOError(t, logs, callbackLocation(t, h, q1.Get("state"), ck2), "expired", "browser binding mismatch")
+}
+
+// A one-time code is only redeemable with the cookie of the browser that ran
+// the flow, and a wrong attempt burns it.
+func TestSSOExchangeRequiresBrowserBinding(t *testing.T) {
+	f := dbtest.Setup(t)
+	s, _ := ssoFlowServer(t, f)
+	h := s.Router()
+	idp := newFakeIdP(t)
+	seedSSOProvider(t, f, s, f.TenantID, idp.issuer, false, "sso.example.com")
+	f.AddUser(t, "agent", "ann@sso.example.com")
+
+	for _, cookie := range []string{"", "someone-elses-cookie"} {
+		loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "ann@sso.example.com")
+		code := ssoFrag(t, loc).Get("sso_code")
+		body, _ := json.Marshal(map[string]string{"code": code})
+		rec := doReqCookie(t, h, "POST", "/v1/console/sso/exchange", cookie, string(body))
+		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "invalid or expired code") {
+			t.Fatalf("cookie %q: %d %s", cookie, rec.Code, rec.Body)
+		}
+		if cookie != "" {
+			if st, _ := exchangeSSO(t, h, code, ck); st != http.StatusUnauthorized {
+				t.Fatalf("code survived a mismatched exchange: %d", st)
+			}
+		}
+	}
+
+	// The right cookie works and is cleared on success.
+	loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "ann@sso.example.com")
+	body, _ := json.Marshal(map[string]string{"code": ssoFrag(t, loc).Get("sso_code")})
+	rec := doReqCookie(t, h, "POST", "/v1/console/sso/exchange", ck, string(body))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("exchange: %d %s", rec.Code, rec.Body)
+	}
+	var cleared *http.Cookie
+	for _, x := range rec.Result().Cookies() {
+		if x.Name == ssoCookieName {
+			cleared = x
+		}
+	}
+	if cleared == nil || cleared.MaxAge >= 0 || cleared.Path != "/v1/console/sso" {
+		t.Fatalf("cookie not cleared: %+v", cleared)
+	}
+	var resp consoleLoginResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.Token == "" || strings.Contains(rec.Body.String(), "binding") {
+		t.Fatalf("response not the login JSON verbatim: %s", rec.Body)
 	}
 }
