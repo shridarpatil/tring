@@ -89,6 +89,11 @@ func (s *Server) handleMePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	var hash string
 	if err := s.db.Pool.QueryRow(r.Context(), s.q.GetUserPasswordHash, p.TenantID, p.UserID).Scan(&hash); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// SSO-only user: nothing to change (there is no set-first-password flow).
+			writeError(w, http.StatusBadRequest, "no password set")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}

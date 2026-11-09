@@ -548,7 +548,8 @@ SELECT id, sip_password FROM users WHERE tenant_id = $1 AND sip_username = $2;
 -- ===========================================================================
 
 -- name: get-user-by-email
-SELECT id, tenant_id, password_hash FROM users WHERE lower(email) = $1 AND password_hash IS NOT NULL;
+-- The login is the email; password_hash may be NULL (SSO-only user).
+SELECT id, tenant_id, password_hash FROM users WHERE lower(email) = $1;
 
 -- name: get-console-principal
 -- A console session's user, reloaded every request: role and team memberships
@@ -560,7 +561,7 @@ SELECT u.role, u.sip_username, COALESCE(u.email, ''), COALESCE(u.display_name, '
        u.session_epoch
 FROM users u
 LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
-WHERE u.id = $1 AND u.tenant_id = $2 AND u.password_hash IS NOT NULL AND u.email IS NOT NULL
+WHERE u.id = $1 AND u.tenant_id = $2 AND u.email IS NOT NULL
 GROUP BY u.id;
 
 -- name: get-user-password-hash
@@ -1132,7 +1133,7 @@ SELECT EXISTS (SELECT 1 FROM calls c WHERE c.tenant_id = $1 AND c.id = $2
 SELECT u.id, COALESCE(u.display_name, ''), COALESCE(u.email, ''), u.role, u.sip_username, u.available_for_calls,
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[],
-       (u.email IS NOT NULL AND u.password_hash IS NOT NULL), u.created_at
+       (u.email IS NOT NULL), u.created_at
 FROM users u
 LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
 WHERE u.tenant_id = $1
@@ -1143,7 +1144,7 @@ ORDER BY u.created_at, u.id;
 SELECT u.id, COALESCE(u.display_name, ''), COALESCE(u.email, ''), u.role, u.sip_username, u.available_for_calls,
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.team_name IS NOT NULL), '{}')::text[],
        COALESCE(array_agg(ta.team_name ORDER BY ta.team_name) FILTER (WHERE ta.is_manager), '{}')::text[],
-       (u.email IS NOT NULL AND u.password_hash IS NOT NULL), u.created_at
+       (u.email IS NOT NULL), u.created_at
 FROM users u
 LEFT JOIN team_agents ta ON ta.agent_id = u.id AND ta.tenant_id = u.tenant_id
 WHERE u.tenant_id = $1 AND u.id = $2
