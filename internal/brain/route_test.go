@@ -38,8 +38,8 @@ func (e *answerEffects) CallerAlive(context.Context) bool                 { retu
 
 type fakeTransport struct{ eff *answerEffects }
 
-func (f *fakeTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, sips []string, _, _ string) (func(context.Context) []string, routing.Effects, func()) {
-	return func(context.Context) []string { return sips }, f.eff, func() {}
+func (f *fakeTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, members func(context.Context) []string, _, _ string) (func(context.Context) []string, routing.Effects, func()) {
+	return members, f.eff, func() {}
 }
 
 // handoffTransport is a fakeTransport that also implements brain.HandoffWaiter,
@@ -110,10 +110,10 @@ func TestRingNoHandoffSkipsHandoffWait(t *testing.T) {
 	}
 }
 
-// A target with no resolvable candidates is "no_answer".
+// A team that stays empty for the whole max_wait is "no_answer".
 func TestRingNoHandoffNoCandidates(t *testing.T) {
-	tp := &fakeTransport{eff: &answerEffects{}}
-	r := NewAgentRouter(fakeTeams{sips: nil}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil, nil)
+	tp := effTransport{eff: noAnswerEffects{}}
+	r := NewAgentRouter(fakeTeams{sips: nil, maxWait: 1}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil, nil)
 	got, _ := r.RingNoHandoff(context.Background(), "11111111-1111-1111-1111-111111111111/room", ivrdrive.Target{Team: "sales"})
 	if got != "no_answer" {
 		t.Fatalf("outcome = %q, want no_answer", got)
@@ -194,8 +194,8 @@ func (noAnswerEffects) CallerAlive(context.Context) bool { return true }
 
 type effTransport struct{ eff routing.Effects }
 
-func (f effTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, sips []string, _, _ string) (func(context.Context) []string, routing.Effects, func()) {
-	return func(context.Context) []string { return sips }, f.eff, func() {}
+func (f effTransport) Prepare(_ context.Context, _ string, _ ivrdrive.Target, _ bool, members func(context.Context) []string, _, _ string) (func(context.Context) []string, routing.Effects, func()) {
+	return members, f.eff, func() {}
 }
 
 func newStintRouter(teams fakeTeams, tport RingTransport, stints QueueStints) *AgentRouter {
