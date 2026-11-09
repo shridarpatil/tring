@@ -197,7 +197,13 @@ async function saveLogin() {
   const problem = validateLogin(loginForm.value.email, loginForm.value.password);
   if (problem) return toast.error(problem);
   saving.value = true;
-  const done = await patch(u, { ...loginForm.value }, u.can_login ? "Password reset" : "Login set");
+  const withPassword = !!loginForm.value.password;
+  const done = await patch(
+    u,
+    withPassword ? { ...loginForm.value } : { email: loginForm.value.email },
+    // A blank password leaves the existing one alone, so don't claim a reset.
+    !u.can_login ? "Login set" : withPassword ? "Password reset" : "Login updated",
+  );
   saving.value = false;
   if (done) showLogin.value = false;
 }
@@ -350,7 +356,7 @@ async function mintToken(u: UserRow) {
         <TextField v-model="form.email" label="Email" type="email" placeholder="alice@example.com" autocomplete="off" hint="Leave email and password empty for a CRM-only agent (no Tring login)" />
         <TextField v-model="form.display_name" label="Display name" placeholder="Alice" />
         <Select v-model="form.role" label="Role" :options="roleOptions" :disabled="isAgentOnly(form)" />
-        <TextField v-model="form.password" label="Password" type="password" hint="At least 8 characters" autocomplete="new-password" />
+        <TextField v-model="form.password" label="Password" type="password" hint="At least 8 characters. Leave blank for SSO users" autocomplete="new-password" />
         <TextField v-model="form.sip_username" label="SIP username" mono :required="isAgentOnly(form)" hint="Required for a CRM-only agent; otherwise defaults to the email" />
       </form>
       <template #footer>
@@ -385,7 +391,7 @@ async function mintToken(u: UserRow) {
     <Modal v-model:open="showLogin" :title="loginFor?.can_login ? 'Reset password' : 'Set login'">
       <form id="login-form" class="vstack" @submit.prevent="saveLogin">
         <TextField v-model="loginForm.email" label="Email" type="email" required autocomplete="off" />
-        <TextField v-model="loginForm.password" label="New password" type="password" required hint="At least 8 characters" autocomplete="new-password" />
+        <TextField v-model="loginForm.password" label="New password" type="password" hint="At least 8 characters. Leave blank for SSO users" autocomplete="new-password" />
       </form>
       <template #footer>
         <Button variant="ghost" @click="showLogin = false">Cancel</Button>

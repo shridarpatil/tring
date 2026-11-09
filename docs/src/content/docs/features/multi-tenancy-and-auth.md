@@ -50,6 +50,8 @@ An API key can do everything in its tenant, including placing billable calls and
 
 The admin console signs in with email and password (bcrypt-hashed) and holds a 12-hour session token. There is no refresh token; signing in again issues a new one. Failed logins return the same generic error whether the email or the password was wrong.
 
+A tenant can also route email domains to an OpenID Connect identity provider (Google Workspace, Entra, Okta, Keycloak) and require SSO for them, with admins keeping a password break-glass. See [Single sign-on](/tring/guides/sso/).
+
 Console users have a role (`admin`, `supervisor` or `agent`). The role and team memberships are loaded from the database on every request, so a role change or a removed login applies immediately. Only admin sessions can use the admin API routes; supervisor and agent sessions get `403` there and can use only `/v1/me*`, `/v1/my-teams*` and supervision. See [Agents and routing](/tring/features/agents-and-routing/#roles-and-logins).
 
 Only console sessions can supervise calls: admins and supervisors any live call, team managers only calls belonging to their teams.

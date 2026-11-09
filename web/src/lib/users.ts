@@ -29,9 +29,9 @@ export function isAgentOnly(f: NewUserForm): boolean {
 
 /** First problem with the create form, or "" when it can be submitted. */
 export function validateNewUser(f: NewUserForm): string {
-  if (isAgentOnly(f)) return f.sip_username.trim() ? "" : "Enter a SIP username, or an email and password";
+  if (isAgentOnly(f)) return f.sip_username.trim() ? "" : "Enter a SIP username, or an email";
   if (!f.email.trim().includes("@")) return "Enter a valid email";
-  if (f.password.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters`;
+  if (f.password !== "" && f.password.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters`;
   if (!roleOptions.some((o) => o.value === f.role)) return "Pick a role";
   return "";
 }
@@ -39,7 +39,7 @@ export function validateNewUser(f: NewUserForm): string {
 /** Problem with a set-login / reset-password form, or "". */
 export function validateLogin(email: string, password: string): string {
   if (!email.trim().includes("@")) return "Enter a valid email";
-  if (password.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters`;
+  if (password !== "" && password.length < MIN_PASSWORD_LEN) return `Password must be at least ${MIN_PASSWORD_LEN} characters`;
   return "";
 }
 

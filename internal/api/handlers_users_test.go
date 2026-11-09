@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -208,5 +209,96 @@ func TestPasswordResetRevokesOldSessions(t *testing.T) {
 	}
 	if rec := doReq(t, h, "POST", "/v1/console/login", "", `{"email":"dee@example.com","password":"battery-staple"}`); rec.Code != http.StatusOK {
 		t.Fatalf("login after reset: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// seedSSODomain adds an enabled provider owning domain to tenantID.
+func seedSSODomain(t *testing.T, f *dbtest.Fixture, tenantID uuid.UUID, domain string) {
+	t.Helper()
+	ctx := context.Background()
+	var pid uuid.UUID
+	if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO sso_providers (tenant_id, name, issuer_url, client_id, client_secret)
+		VALUES ($1, 'idp', 'https://idp.example.com', 'cid', 'x') RETURNING id`, tenantID).Scan(&pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(ctx, `INSERT INTO sso_provider_domains (domain, provider_id, tenant_id) VALUES ($1, $2, $3)`,
+		domain, pid, tenantID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateUserNoPasswordSSODomain(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	seedSSODomain(t, f, f.TenantID, "corp.example.com")
+
+	rec := doReq(t, h, "POST", "/v1/users", admin, `{"email":"Ann@Corp.Example.com","role":"agent"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	var u userRow
+	if err := json.Unmarshal(rec.Body.Bytes(), &u); err != nil {
+		t.Fatal(err)
+	}
+	var null bool
+	if err := f.DB.Pool.QueryRow(context.Background(), `SELECT password_hash IS NULL FROM users WHERE id = $1`, u.ID).Scan(&null); err != nil || !null {
+		t.Fatalf("password_hash null = %v err %v", null, err)
+	}
+	// A short non-empty password is still refused.
+	rec = doReq(t, h, "POST", "/v1/users", admin, `{"email":"bob@corp.example.com","password":"short","role":"agent"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("short password = %d", rec.Code)
+	}
+}
+
+func TestCreateUserNoPasswordOtherDomain(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	// A provider in another tenant must not count.
+	var other uuid.UUID
+	if err := f.DB.Pool.QueryRow(context.Background(), `INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
+		VALUES ('other', 'other.sip.test', 'x', 'other-pfx') RETURNING id`).Scan(&other); err != nil {
+		t.Fatal(err)
+	}
+	seedSSODomain(t, f, other, "elsewhere.example.com")
+
+	for _, email := range []string{"a@plain.example.com", "a@elsewhere.example.com"} {
+		rec := doReq(t, h, "POST", "/v1/users", admin, `{"email":"`+email+`","role":"agent"}`)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "set a password or add an SSO provider for this domain") {
+			t.Fatalf("%s: %d %s", email, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestPatchUserSetEmailNoPasswordOtherDomain(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	h := s.Router()
+	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
+	seedSSODomain(t, f, f.TenantID, "corp.example.com")
+
+	rec := doReq(t, h, "POST", "/v1/users", admin, `{"email":"cy@example.com","password":"correct-horse","role":"agent"}`)
+	var u userRow
+	if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &u) != nil {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	path := "/v1/users/" + u.ID.String()
+	if rec := doReq(t, h, "PATCH", path, admin, `{"email":""}`); rec.Code != http.StatusOK {
+		t.Fatalf("clear: %d", rec.Code)
+	}
+	rec = doReq(t, h, "PATCH", path, admin, `{"email":"cy@plain.example.com"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "set a password or add an SSO provider for this domain") {
+		t.Fatalf("non-SSO: %d %s", rec.Code, rec.Body)
+	}
+	if rec := doReq(t, h, "PATCH", path, admin, `{"email":"cy@corp.example.com"}`); rec.Code != http.StatusOK {
+		t.Fatalf("SSO: %d %s", rec.Code, rec.Body)
+	}
+	// With a password in the same request, any domain is fine.
+	if rec := doReq(t, h, "PATCH", path, admin, `{"email":"cy@plain.example.com","password":"correct-horse"}`); rec.Code != http.StatusOK {
+		t.Fatalf("with password: %d %s", rec.Code, rec.Body)
 	}
 }

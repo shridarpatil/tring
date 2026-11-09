@@ -351,3 +351,18 @@ export interface Trunk {
   // for registered trunks (IP-auth inbound calls aren't attributed).
   calls?: { out: number; failed_out: number; in?: number; failed_in?: number; since: string };
 }
+
+// An OIDC identity provider for console sign-in. The client secret is
+// write-only: it is never returned.
+export interface SsoProvider {
+  id: string;
+  name: string;
+  issuer_url: string;
+  client_id: string;
+  domains: string[];
+  require_sso: boolean;
+  require_hosted_domain: boolean; // Google only: needs an hd claim from a provider domain
+  enabled: boolean;
+  sso_only_users: number; // users on these domains with no password
+  created_at: string;
+}

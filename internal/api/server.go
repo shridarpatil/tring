@@ -24,6 +24,7 @@ import (
 	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
 	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/secretbox"
 	"github.com/shridarpatil/tring/internal/tts"
 	"github.com/shridarpatil/tring/internal/webui"
@@ -108,6 +109,10 @@ type Config struct {
 	// and XFF is ignored entirely.
 	TrustedProxies []string
 
+	// ConsolePublicURL is the browser-reachable base URL of the console, used
+	// to build the SSO redirect URI.
+	ConsolePublicURL string
+
 	// OutboundAllow are private CIDRs tenant-supplied URLs (webhooks) may
 	// still reach — the operator's escape hatch for an on-prem CRM. Empty (the
 	// default) = public internet only. See internal/safehttp.
@@ -186,6 +191,12 @@ type Server struct {
 	loginByIP    *attemptLimiter
 	loginByEmail *attemptLimiter
 
+	// ssoStartByIP throttles POST /v1/console/sso/start; ssoHTTP is the
+	// SSRF-guarded client for all IdP traffic (discovery, token, JWKS).
+	ssoStartByIP     *attemptLimiter
+	ssoHTTP          *http.Client
+	consolePublicURL string
+
 	// outboundAllow: private CIDRs webhook URLs may target (validated on create;
 	// enforced again at delivery by the notifier's safehttp client).
 	outboundAllow []netip.Prefix
@@ -241,6 +252,9 @@ func NewServer(cfg Config) *Server {
 		trustedProxies:    cfg.TrustedProxies,
 		loginByIP:         newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
 		loginByEmail:      newAttemptLimiter(loginAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		ssoStartByIP:      newAttemptLimiter(ssoStartAttemptLimit, loginAttemptWindow, loginLimiterKeys),
+		ssoHTTP:           safehttp.NewClient(cfg.OutboundAllow, 10*time.Second),
+		consolePublicURL:  strings.TrimRight(cfg.ConsolePublicURL, "/"),
 		outboundAllow:     cfg.OutboundAllow,
 		secrets:           cfg.Secrets,
 		version:           cfg.Version,
@@ -373,7 +387,12 @@ func (s *Server) Router() http.Handler {
 		// Public console-auth endpoint: takes email+password, returns a
 		// JWT. Lives outside the AuthRequired group because by definition
 		// the caller has no credentials yet.
-		r.With(middleware.Timeout(30 * time.Second)).Post("/console/login", s.handleConsoleLogin)
+		r.With(middleware.Timeout(30*time.Second)).Post("/console/login", s.handleConsoleLogin)
+		// SSO login (handlers_sso.go): public for the same reason.
+		r.With(middleware.Timeout(30*time.Second)).Post("/console/login/start", s.handleSSOStart)
+		r.With(middleware.Timeout(30*time.Second)).Get("/console/sso/button", s.handleSSOButton)
+		r.With(middleware.Timeout(30*time.Second)).Get("/console/sso/callback", s.handleSSOCallback)
+		r.With(middleware.Timeout(30*time.Second)).Post("/console/sso/exchange", s.handleSSOExchange)
 		// NOTE: the public guest mint (/sdk/guest-credentials) was removed —
 		// all visitor tokens are minted server-side via POST /v1/guest-credentials
 		// (tenant API key, below), so there's no unauthenticated mint surface.
@@ -486,6 +505,12 @@ func (s *Server) Router() http.Handler {
 						r.Post("/users", s.handleCreateUser)
 						r.Patch("/users/{id}", s.handlePatchUser)
 						r.Delete("/users/{id}", s.handleDeleteUser)
+
+						r.Get("/sso-providers", s.handleListSSOProviders)
+						r.Post("/sso-providers", s.handleCreateSSOProvider)
+						r.Get("/sso-providers/callback-url", s.handleSSOCallbackURL)
+						r.Patch("/sso-providers/{id}", s.handlePatchSSOProvider)
+						r.Delete("/sso-providers/{id}", s.handleDeleteSSOProvider)
 					})
 				})
 			})
