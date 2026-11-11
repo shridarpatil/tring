@@ -35,6 +35,7 @@ const attemptColumns: Column[] = [
 const typeOptions: { value: CampaignConfig["type"]; label: string; hint: string; icon: typeof FileAudio }[] = [
   { value: "audio", label: "Uploaded audio", hint: "Play a recorded message to every recipient.", icon: FileAudio },
   { value: "tts", label: "Text-to-speech", hint: "Type a message; Tring speaks it with the Piper voice.", icon: MessageSquareText },
+  { value: "agent", label: "Agent-assisted", hint: "Ring a team agent first, then connect the client.", icon: PhoneOutgoing },
   { value: "ivr", label: "Interactive IVR", hint: "Run an IVR flow so recipients can respond with keypresses.", icon: Workflow },
 ];
 const recipientStatuses = ["pending", "active", "completed", "incomplete", "busy", "no_answer", "failed", "unknown", "cancelled"];
@@ -54,6 +55,7 @@ const name = ref("");
 const config = ref(defaultCampaignConfig());
 const sounds = ref<Audio[]>([]);
 const flows = ref<Flow[]>([]);
+const teams = ref<{ name: string }[]>([]);
 const hooks = ref<{ id: string; name: string; active: boolean }[]>([]);
 const numbers = ref<{ e164: string; active: boolean }[]>([]);
 const busy = ref(false), loading = ref(false), error = ref(""), notice = ref("");
@@ -88,7 +90,7 @@ const tabs = computed(() => {
 });
 const readiness = computed(() => [
   { done: !!current.value && !changed.value, label: "Draft saved", hint: changed.value ? "You have unsaved changes." : "" },
-  { done: prepared.value, label: "Content prepared", hint: prepared.value ? "" : "Prepare audio in Content & delivery." },
+  { done: prepared.value, label: config.value.type === "agent" ? "Team verified" : "Content prepared", hint: prepared.value ? "" : "Prepare the campaign in Content & delivery." },
   { done: summary.value.total > 0, label: "Recipients added", hint: summary.value.total ? `${summary.value.total} recipients` : "Import a CSV or paste numbers." },
   { done: !!current.value?.config.caller_id, label: "Caller ID selected", hint: current.value?.config.caller_id || "" },
 ]);
@@ -154,11 +156,17 @@ watch(listPage, () => action(loadList));
 watch([recipientPage, statusFilter], () => action(loadRecipients));
 watch(attemptPage, () => action(loadAttempts));
 watch(tab, () => { if (tab.value === "recipients") void action(loadRecipients); if (tab.value === "results") void action(loadAttempts); });
+watch(() => config.value.type, (type) => {
+  if (type === "agent") {
+    config.value.team ??= "";
+    config.value.agent_wait_seconds ||= 120;
+  }
+});
 watch(changed, (v) => { if (v) resetPreviews(); });
 onMounted(async () => {
   try {
-    const [a, f, n, h] = await Promise.all([api.get<Audio[]>("/v1/audio"), api.get<Paginated<Flow>>("/v1/flows"), api.get<{e164: string; active: boolean}[]>("/v1/numbers"), api.get<{id: string; name: string; active: boolean}[]>("/v1/webhooks")]);
-    hooks.value = h.filter(v => v.active); sounds.value = a; flows.value = f.items.filter(v => v.is_active); numbers.value = n.filter(v => v.active);
+    const [a, f, n, h, t] = await Promise.all([api.get<Audio[]>("/v1/audio"), api.get<Paginated<Flow>>("/v1/flows"), api.get<{e164: string; active: boolean}[]>("/v1/numbers"), api.get<{id: string; name: string; active: boolean}[]>("/v1/webhooks"), api.get<{ name: string }[]>("/v1/teams")]);
+    teams.value = t; hooks.value = h.filter(v => v.active); sounds.value = a; flows.value = f.items.filter(v => v.is_active); numbers.value = n.filter(v => v.active);
   } catch (e) { error.value = e instanceof Error ? e.message : "Could not load campaign options"; }
 });
 usePoll(() => {
@@ -178,7 +186,7 @@ async function prepare() {
   await save(false);
   if (!current.value) return;
   current.value = await api.post<Campaign>(`/v1/campaigns/${current.value.id}/prepare`, { revision: current.value.revision });
-  resetPreviews(); toast.success("Content prepared. Preview it or place a test call.");
+  resetPreviews(); toast.success(config.value.type === "agent" ? "Team verified. You can place a test call." : "Content prepared. Preview it or place a test call.");
 }
 async function uploadAudio(event: Event) {
   const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file) return;
@@ -235,7 +243,7 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
           <h1 class="page-title">{{ id ? (current?.name || "New campaign") : "Campaigns" }}</h1>
           <Badge v-if="current" :tone="campaignTone(current.status)">{{ campaignLabel(current.status) }}</Badge>
         </div>
-        <p class="text-light">{{ current ? campaignLabel(current.config.type) : "Voice blasts and interactive outbound calls." }}</p>
+        <p class="text-light">{{ current ? campaignLabel(current.config.type) : "Voice blasts, IVR and agent-assisted calls." }}</p>
       </div>
       <div class="hstack">
         <RouterLink v-if="!id" to="/admin/campaigns/new" class="button"><Plus :size="16" />New campaign</RouterLink>
@@ -301,7 +309,7 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
               <div data-field><label for="c-name">Name<span class="req">*</span></label><input id="c-name" v-model="name" required maxlength="200" placeholder="Appointment reminders" :disabled="locked" /></div>
               <div data-field>
                 <label>Campaign type</label>
-                <div class="grid grid-3 mt-2" role="radiogroup" aria-label="Campaign type">
+                <div class="grid grid-2 mt-2" role="radiogroup" aria-label="Campaign type">
                   <label v-for="t in typeOptions" :key="t.value" class="card p-4" style="align-items: flex-start" :style="config.type === t.value ? selectedCard : undefined">
                     <input v-model="config.type" type="radio" name="campaign-type" :value="t.value" :disabled="locked" style="flex-shrink: 0" />
                     <span class="vstack gap-1">
@@ -330,6 +338,19 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
               <div v-if="config.type === 'ivr'" data-field>
                 <label for="c-flow">IVR flow<span class="req">*</span></label>
                 <select id="c-flow" v-model="config.flow_id" required :disabled="locked"><option value="" disabled>Select a flow</option><option v-for="flow in flows" :key="flow.id" :value="flow.id">{{ flow.name }}</option></select>
+              </div>
+              <div v-if="config.type === 'agent'" class="grid grid-2">
+                <div data-field>
+                  <label for="c-team">Team<span class="req">*</span></label>
+                  <select id="c-team" v-model="config.team" required :disabled="locked"><option value="" disabled>Select a team</option><option v-for="team in teams" :key="team.name" :value="team.name">{{ team.name }}</option></select>
+                  <small data-hint>Available agents answer in their Tring app. The client is dialed only after an agent accepts.</small>
+                  <small v-if="!teams.length" data-hint>Create a team and add agents first.</small>
+                </div>
+                <div data-field>
+                  <label for="c-agent-wait">Maximum agent wait (s)</label>
+                  <input id="c-agent-wait" v-model.number="config.agent_wait_seconds" type="number" min="5" max="3600" required :disabled="locked" />
+                  <small data-hint>Uses the team's ringing strategy and queue timeout, capped by this wait. No agent answer uses one attempt; retries follow your settings.</small>
+                </div>
               </div>
               <div data-field>
                 <label for="c-caller">Caller ID<span class="req">*</span></label>
@@ -370,7 +391,7 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
         <div class="col-4">
           <div style="position: sticky; top: 1rem">
             <Panel pad>
-              <template #title>Preview</template>
+              <template #title>{{ config.type === "agent" ? "Agent connection" : "Preview" }}</template>
               <template #actions>
                 <Badge v-if="changed" tone="warning">Unsaved</Badge>
                 <Badge v-else-if="prepared" tone="success">Prepared</Badge>
@@ -378,9 +399,9 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
               </template>
               <div class="vstack">
                 <template v-if="draft">
-                  <Button block :loading="busy" @click="action(prepare)">Prepare audio &amp; preview</Button>
+                  <Button block :loading="busy" @click="action(prepare)">{{ config.type === "agent" ? "Verify team & prepare" : "Prepare audio & preview" }}</Button>
                   <Button block type="submit" variant="secondary" :disabled="busy">Save draft</Button>
-                  <small class="text-light">{{ changed ? "Prepare again after changes, before testing or launching." : "Preparing renders the audio each recipient will hear." }}</small>
+                  <small class="text-light">{{ changed ? "Prepare again after changes, before testing or launching." : config.type === "agent" ? "Verify the team before testing or launching. No audio message is required." : "Preparing renders the audio each recipient will hear." }}</small>
                 </template>
                 <small v-else class="text-light">Content is frozen for this campaign.</small>
                 <div v-for="p in previews" :key="p.path" class="vstack gap-2">
@@ -449,6 +470,7 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
             <table>
               <tbody>
                 <tr><th scope="row">Type</th><td>{{ campaignLabel(current.config.type) }}</td></tr>
+                <tr v-if="current.config.type === 'agent'"><th scope="row">Team</th><td>{{ current.config.team }}</td></tr>
                 <tr><th scope="row">Recipients</th><td class="mono">{{ summary.total }}</td></tr>
                 <tr><th scope="row">Caller ID</th><td class="mono">{{ current.config.caller_id || "—" }}</td></tr>
                 <tr><th scope="row">Calling hours</th><td>{{ current.config.window_start }}–{{ current.config.window_end }} <span class="text-light">({{ current.config.timezone }})</span></td></tr>
@@ -464,6 +486,7 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
             <div data-field>
               <label for="l-test">Phone number</label>
               <input id="l-test" v-model="testNumber" type="tel" class="mono" placeholder="+91…" :disabled="busy" />
+              <small v-if="config.type === 'agent'" data-hint>The selected team rings first. Once an agent accepts, this test number is dialed.</small>
               <small data-hint>Places a real call now, outside the schedule. Tests don't change recipient results.</small>
             </div>
             <Button block variant="secondary" :disabled="busy || !prepared || !testNumber" @click="action(testCall)"><PhoneOutgoing :size="16" />Place test call</Button>
@@ -507,7 +530,7 @@ const dateLabel = (value: string | null) => value ? new Date(value).toLocaleStri
           </DataTable>
         </Panel>
         <Pagination v-model:page="attemptPage" :page-size="25" :total="attemptTotal" label="attempts" />
-        <small v-if="!draft" class="text-lighter">{{ current.config.type === "ivr" ? "Completed means the IVR flow finished." : "Completed means the entire message finished playing." }} Answered alone does not mean the message was heard. Metrics exclude test calls.</small>
+        <small v-if="!draft" class="text-lighter">{{ current.config.type === "agent" ? "Completed means the client connected to an agent and the conversation ended." : current.config.type === "ivr" ? "Completed means the IVR flow finished." : "Completed means the entire message finished playing." }} Metrics exclude test calls.</small>
       </div>
     </template>
   </div>

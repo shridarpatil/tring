@@ -1,6 +1,8 @@
 export interface CampaignConfig {
   webhook_id?: string;
-  type: "audio" | "tts" | "ivr";
+  type: "audio" | "tts" | "ivr" | "agent";
+  team?: string;
+  agent_wait_seconds?: number;
   audio_id?: string;
   text?: string;
   flow_id?: string;
@@ -21,7 +23,7 @@ export interface Campaign {
   status: string;
   revision: number;
   config: CampaignConfig;
-  prepared: { audio_file?: string; flow?: { nodes: { id: string; label: string; config: { audio_file?: string } }[] } } | null;
+  prepared: { team?: string; audio_file?: string; flow?: { nodes: { id: string; label: string; config: { audio_file?: string } }[] } } | null;
   counts: Record<string, number> | null;
   metrics: { attempts: number; answered: number; completed: number };
   scheduled_at: string | null;
@@ -47,7 +49,7 @@ export interface CampaignAttempt {
   error: string;
 }
 export function defaultCampaignConfig(): CampaignConfig {
-  return { type: "audio", webhook_id: "", caller_id: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata", window_start: "09:00", window_end: "18:00", concurrency: 2, calls_per_minute: 30, max_attempts: 1, retry_minutes: 30, ring_seconds: 30, max_seconds: 300 };
+  return { type: "audio", team: "", agent_wait_seconds: 120, webhook_id: "", caller_id: "", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Kolkata", window_start: "09:00", window_end: "18:00", concurrency: 2, calls_per_minute: 30, max_attempts: 1, retry_minutes: 30, ring_seconds: 30, max_seconds: 300 };
 }
 export function recipientSummary(counts: Record<string, number> | null) {
   const c = counts || {};
@@ -57,7 +59,7 @@ export function recipientSummary(counts: Record<string, number> | null) {
   return { total, pending, active, finished: total - pending - active, completed: c.completed || 0 };
 }
 export function campaignLabel(value: string): string {
-  const names: Record<string, string> = { audio: "Voice blast · uploaded audio", tts: "Voice blast · text-to-speech", ivr: "IVR campaign", no_answer: "No answer", unknown: "Needs review", incomplete: "Incomplete", completed: "Completed", queued: "Queued", active: "Calling", pending: "Pending", draft: "Draft", scheduled: "Scheduled", running: "Running", paused: "Paused", cancelled: "Cancelled", failed: "Failed", busy: "Busy" };
+  const names: Record<string, string> = { audio: "Voice blast · uploaded audio", tts: "Voice blast · text-to-speech", ivr: "IVR campaign", agent: "Agent-assisted campaign", no_answer: "No answer", unknown: "Needs review", incomplete: "Incomplete", completed: "Completed", queued: "Queued", active: "Calling", pending: "Pending", draft: "Draft", scheduled: "Scheduled", running: "Running", paused: "Paused", cancelled: "Cancelled", failed: "Failed", busy: "Busy" };
   return names[value] || value;
 }
 export type CampaignTone = "neutral" | "success" | "live" | "danger" | "warning" | "accent";

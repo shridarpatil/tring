@@ -29,7 +29,7 @@ All endpoints require a tenant administrator console session or a `full` tenant 
 }
 ```
 
-For `type: "audio"`, provide `audio_id` from `POST /v1/audio`. For `type: "ivr"`, provide `flow_id` of an active flow. `webhook_id` optionally selects a registered active result webhook. All delivery fields above are required; `text`, `audio_id`, and `flow_id` are required only for their respective type.
+For `type: "audio"`, provide `audio_id` from `POST /v1/audio`. For `type: "ivr"`, provide `flow_id` of an active flow. For `type: "agent"`, provide `team` (the tenant team name) and `agent_wait_seconds` (5–3,600). No audio, text or flow is required. Preparation validates the team and returns `prepared.team`. The team is revalidated at launch and execution. Agents answer in their Tring app/widget before the client is dialed. `webhook_id` optionally selects a registered active result webhook. All delivery fields above are required; `text`, `audio_id`, and `flow_id` are required only for their respective type. `team` and `agent_wait_seconds` are required for agent-assisted campaigns.
 
 | Field | Limits |
 |---|---|
@@ -90,6 +90,8 @@ The response is `{ "added": 1, "duplicates": 1, "rejected": [{ "row": 3, "phone"
 | `/v1/campaigns/{id}/cancel` | `{"revision": 7}`. Terminal; pending/unclaimed attempts are cancelled, active calls finish. |
 
 Lifecycle actions return `200` with the updated campaign. Start and schedule require prepared content, at least one valid recipient, an owned active caller ID, and an active outbound trunk. Test calls bypass the calling window but share system capacity limits. Tests have `recipient_id: null` and never update recipient progress.
+
+For agent-assisted campaigns, test calls ring the selected team first. If no agent accepts within the team/campaign wait, the attempt ends as `no_answer` with reason `agent_not_answered`, without dialing the client. It counts toward the maximum attempts and follows retry settings. `answered_at` records customer answer, never the agent's acceptance. `completed` means the conversation connected and ended normally.
 
 ## Results
 

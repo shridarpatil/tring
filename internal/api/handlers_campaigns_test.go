@@ -244,3 +244,37 @@ func TestCampaignIVRValidation(t *testing.T) {
 		t.Fatal("unsupported goto_flow accepted")
 	}
 }
+
+func TestAgentCampaignPreparationRequiresTenantTeam(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	cfg := apiCampaignConfig()
+	cfg.Type, cfg.Text, cfg.Team, cfg.AgentWaitSeconds = "agent", "", "sales", 120
+	c := campaignFromResponse(t, campaignRequest(t, s, f, "POST", "/v1/campaigns", map[string]any{"name": "Team calls", "config": cfg}, 201))
+	path := "/v1/campaigns/" + c.ID.String()
+	// The API may store a draft before a team exists, but may not prepare it.
+	campaignRequest(t, s, f, "POST", path+"/prepare", map[string]any{"revision": c.Revision}, 400)
+	other := uuid.New()
+	if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO tenants(id,name,sip_domain,api_key_hash,api_key_prefix) VALUES($1,'Other','agent-campaign-other.test','agent-campaign-test-hash','deprecated--')`, other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO teams(tenant_id,name) VALUES($1,'sales')`, other); err != nil {
+		t.Fatal(err)
+	}
+	campaignRequest(t, s, f, "POST", path+"/prepare", map[string]any{"revision": c.Revision}, 400)
+	campaignRequest(t, s, f, "POST", "/v1/teams", map[string]any{"name": "sales"}, 201)
+	c = campaignFromResponse(t, campaignRequest(t, s, f, "POST", path+"/prepare", map[string]any{"revision": c.Revision}, 200))
+	if c.Prepared == nil || c.Prepared.Team != "sales" || c.Prepared.AudioFile != "" {
+		t.Fatalf("prepared=%+v", c.Prepared)
+	}
+	if err := s.checkCampaignPrepared(c.Prepared, c.Config.MaxSeconds); err != nil {
+		t.Fatal(err)
+	}
+	// A removed team is rejected again at launch, before any attempt is queued.
+	if _, err := f.DB.Pool.Exec(context.Background(), `DELETE FROM teams WHERE tenant_id=$1 AND name='sales'`, f.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.campaignCaller(context.Background(), f.TenantID, c.Config); err == nil || !strings.Contains(err.Error(), "team") {
+		t.Fatalf("launch validation=%v", err)
+	}
+}
