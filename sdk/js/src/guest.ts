@@ -120,13 +120,8 @@ export class TringGuest extends Emitter<GuestEvent> {
       void this.cleanup();
     });
     call.on("error", (e) => this.emit({ type: "error", error: e.error }));
-    // The agent's screen-share arrives as a video track; surface it to the UI,
-    // and clear it when that track ends (the agent stopped sharing).
-    call.on("track", (e) => {
-      if (e.kind !== "video") return;
-      this.emit({ type: "remote-video", stream: e.stream });
-      e.track.onended = () => this.emit({ type: "remote-video", stream: null });
-    });
+    call.on("local-video", (state) => this.emit(state));
+    call.on("remote-video", (state) => this.emit(state));
 
     try {
       await call.join();
@@ -149,6 +144,22 @@ export class TringGuest extends Emitter<GuestEvent> {
   /** Send a DTMF digit (0-9, *, #) to the IVR mid-call. */
   async sendDTMF(digit: string): Promise<void> {
     this.rtc?.sendDtmf(digit);
+  }
+
+  get isCameraEnabled(): boolean { return this.rtc?.cameraEnabled ?? false; }
+  get localVideoStream(): MediaStream | null { return this.rtc?.localVideoStream ?? null; }
+
+  async startCamera(constraints?: MediaTrackConstraints): Promise<void> {
+    if (!this.rtc) throw new Error("not in a call");
+    await this.rtc.startCamera(constraints);
+  }
+
+  stopCamera(): void { this.rtc?.stopCamera(); }
+
+  async toggleCamera(): Promise<boolean> {
+    if (this.isCameraEnabled) { this.stopCamera(); return false; }
+    await this.startCamera();
+    return true;
   }
 
   /** Start sharing the visitor's screen with the agent. Prompts the OS

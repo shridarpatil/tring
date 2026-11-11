@@ -49,11 +49,11 @@ type Peer struct {
 	// delivering it to me). Keyed per-TRACK, not per-source, so a participant
 	// adding a second track later (screen share) is picked up, not skipped.
 	subs        map[room.ParticipantID]map[*webrtc.TrackLocalStaticRTP]*webrtc.RTPSender
-	recv        map[webrtc.RTPCodecType]bool // recvonly transceivers we've added to invite the client's media
-	started     bool                         // the initial offer has been sent
-	dirty       bool                         // a subscription was removed (Leave) → needs a renegotiation
-	negotiating bool                         // an offer is outstanding (awaiting the client's answer)
-	needSync    bool                         // tracks changed while negotiating → renegotiate after the answer
+	recv        map[webrtc.RTPCodecType]*webrtc.RTPTransceiver // recvonly transceivers we've added to invite the client's media
+	started     bool                                           // the initial offer has been sent
+	dirty       bool                                           // a subscription was removed (Leave) → needs a renegotiation
+	negotiating bool                                           // an offer is outstanding (awaiting the client's answer)
+	needSync    bool                                           // tracks changed while negotiating → renegotiate after the answer
 	closed      bool
 }
 
@@ -63,19 +63,34 @@ type Peer struct {
 // its track. No-op if that kind is already invited.
 func (p *Peer) Publish(kind webrtc.RTPCodecType) {
 	p.mu.Lock()
-	if p.closed || p.recv[kind] {
+	if p.closed || p.recv[kind] != nil {
 		p.mu.Unlock()
 		return
 	}
-	if _, err := p.pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{
+	transceiver, err := p.pc.AddTransceiverFromKind(kind, webrtc.RTPTransceiverInit{
 		Direction: webrtc.RTPTransceiverDirectionRecvonly,
-	}); err != nil {
+	})
+	if err != nil {
 		p.mu.Unlock()
 		p.log.Warn("publish add transceiver", "kind", kind, "err", err)
 		return
 	}
-	p.recv[kind] = true
+	p.recv[kind] = transceiver
 	p.dirty = true // force a renegotiation even with no subscription change
+	p.mu.Unlock()
+	p.Negotiate()
+}
+
+// stopPublication retires the old receiver so a later camera/screen start gets
+// a fresh track and OnTrack callback, even after several video on/off cycles.
+func (p *Peer) stopPublication(kind webrtc.RTPCodecType) {
+	p.mu.Lock()
+	transceiver := p.recv[kind]
+	delete(p.recv, kind)
+	if transceiver != nil {
+		_ = transceiver.Stop()
+		p.dirty = true
+	}
 	p.mu.Unlock()
 	p.Negotiate()
 }

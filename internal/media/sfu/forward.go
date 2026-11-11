@@ -33,8 +33,9 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 	// Recvonly audio transceiver so the server's offer invites the client's mic
 	// (the server is the sole offerer). Screen-share video gets a recvonly video
 	// transceiver in M5.
-	if _, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio,
-		webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly}); err != nil {
+	audio, err := pc.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio,
+		webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionRecvonly})
+	if err != nil {
 		_ = pc.Close()
 		return nil, fmt.Errorf("add recvonly audio: %w", err)
 	}
@@ -46,7 +47,7 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 		sfu:    s,
 		log:    s.log.With("room", roomID, "participant", pid),
 		subs:   make(map[room.ParticipantID]map[*webrtc.TrackLocalStaticRTP]*webrtc.RTPSender),
-		recv:   map[webrtc.RTPCodecType]bool{webrtc.RTPCodecTypeAudio: true}, // recvonly audio added above
+		recv:   map[webrtc.RTPCodecType]*webrtc.RTPTransceiver{webrtc.RTPCodecTypeAudio: audio}, // recvonly audio added above
 	}
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
@@ -346,6 +347,11 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 		pub = &publication{tracks: make(map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP)}
 		r.pubs[p.pid] = pub
 	}
+	videoStream := ""
+	if kind == webrtc.RTPCodecTypeVideo {
+		videoStream = uuid.NewString()
+		pub.videoStream = videoStream
+	}
 	track := pub.tracks[kind]
 	fresh := track == nil
 	if fresh {
@@ -384,6 +390,9 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 	}
 	s.mu.Unlock()
 
+	if videoStream != "" {
+		defer endVideoSinks(pub, p.pid, videoStream)
+	}
 	p.log.Info("participant published", "codec", remote.Codec().MimeType, "kind", kind.String(), "fresh", fresh)
 
 	// Only a brand-new publication needs subscribers wired; a reconnect reuses the
@@ -405,7 +414,11 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 			p.log.Debug("fan-out write ended", "err", err)
 			return
 		}
-		teeSinks(pub, p.pid, pkt)
+		if kind == webrtc.RTPCodecTypeVideo {
+			teeVideoSinks(pub, p.pid, videoStream, remote.Codec().MimeType, pkt)
+		} else {
+			teeSinks(pub, p.pid, pkt)
+		}
 	}
 }
 
@@ -421,8 +434,14 @@ func (s *SFU) Unpublish(roomID room.RoomID, pid room.ParticipantID, kind webrtc.
 		s.mu.Unlock()
 		return
 	}
+	publisher := r.peers[pid]
 	pub := r.pubs[pid]
 	var track *webrtc.TrackLocalStaticRTP
+	videoStream := ""
+	if pub != nil && kind == webrtc.RTPCodecTypeVideo {
+		videoStream = pub.videoStream
+		pub.videoStream = ""
+	}
 	if pub != nil {
 		track = pub.tracks[kind]
 		delete(pub.tracks, kind)
@@ -435,6 +454,10 @@ func (s *SFU) Unpublish(roomID room.RoomID, pid room.ParticipantID, kind webrtc.
 		}
 	}
 	s.mu.Unlock()
+	endVideoSinks(pub, pid, videoStream)
+	if publisher != nil {
+		publisher.stopPublication(kind)
+	}
 	if track == nil {
 		return
 	}
@@ -470,7 +493,10 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 		return
 	}
 	p := r.peers[pid]
-	if pub := r.pubs[pid]; pub != nil {
+	pub := r.pubs[pid]
+	videoStream := ""
+	if pub != nil {
+		videoStream = pub.videoStream
 		for _, t := range pub.tracks {
 			delete(s.keyframe, t)
 		}
@@ -489,6 +515,7 @@ func (s *SFU) Leave(roomID room.RoomID, pid room.ParticipantID) {
 		remaining = append(remaining, q)
 	}
 	s.mu.Unlock()
+	endVideoSinks(pub, pid, videoStream)
 	s.portsClearActive(roomID, pid) // a port locked onto this feed switches over
 
 	// Remove all of this source's tracks from each remaining subscriber, resync.

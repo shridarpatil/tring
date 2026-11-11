@@ -214,13 +214,8 @@ export class Tring extends Emitter<TringEvent> {
         rtc.on("supervisor", ({ present, mode, name }) =>
           this.emit({ type: "call:supervisor", call, present, mode, name }),
         );
-        // The remote party's screen-share arrives as a video track; surface it,
-        // and clear it when that track ends (they stopped sharing).
-        rtc.on("track", ({ kind, stream, track }) => {
-          if (kind !== "video") return;
-          this.emit({ type: "call:remote-video", call, stream });
-          track.onended = () => this.emit({ type: "call:remote-video", call, stream: null });
-        });
+        rtc.on("local-video", (state) => this.emit({ ...state, type: "call:local-video", call }));
+        rtc.on("remote-video", ({ stream }) => this.emit({ type: "call:remote-video", call, stream }));
       },
       hangup: async () => {
         if (rtc) {
@@ -246,6 +241,11 @@ export class Tring extends Emitter<TringEvent> {
       hold: () => rtc?.hold(),
       resume: () => rtc?.resume(),
       transfer: (target) => rtc?.transfer(target),
+      startCamera: (constraints) =>
+        rtc && !call.phone ? rtc.startCamera(constraints) : Promise.reject(new Error("Camera is available during web calls only.")),
+      stopCamera: () => rtc?.stopCamera(),
+      get cameraEnabled() { return rtc?.cameraEnabled ?? false; },
+      get localVideoStream() { return rtc?.localVideoStream ?? null; },
       shareScreen: (constraints) =>
         rtc ? rtc.shareScreen(constraints) : Promise.reject(new Error("call not active")),
       stopScreen: () => rtc?.stopScreen(),

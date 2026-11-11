@@ -33,7 +33,15 @@ How it works:
 - Merging needs `ffmpeg` on the gateway host (it ships in the images).
 - The file is named `<leg-id>.<format>` and written to `TRING_RECORDINGS_DIR`. When `TRING_S3_BUCKET` is set, it is uploaded to `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>` and the local copy is deleted. If `ffmpeg` fails, the caller's leg is kept as `<leg-id>.ogg`.
 
-Fetch a recording through the API, which streams it from local disk or S3 (no public or pre-signed URLs):
+### Web video recordings
+
+If either participant publishes camera or screen video after answer, the final recording is an **MP4 (H.264 video and AAC audio)**. It contains two panels, **agent left and client right**, with both microphones on their respective stereo channels. Each panel is 640 × 480, for a 1280 × 480 recording. Dark panels fill periods when a camera is off; switching cameras, sharing a screen, and agent transfers retain their position on the call timeline.
+
+Video calls use MP4 regardless of `recording_format`; the tenant's audio sample rate still applies. Calls without captured video keep the audio format described above. The call log automatically displays a video player for MP4 recordings.
+
+Composition runs after hangup, so long video recordings may take longer to appear. It needs FFmpeg with the `libx264` or `libopenh264` encoder. If composition fails, all captured source files remain on disk for recovery and no incomplete recording is advertised. The same tenant recording switch, authorization, local storage, and S3 upload apply to video recordings.
+
+Fetch a recording through the API, which streams it from local disk or S3 (no public or pre-signed URLs). Use a `.mp4` output name for a video call:
 
 ```bash
 curl -sS -o call.ogg https://api.example.com/v1/calls/<call-id>/recording \

@@ -7,6 +7,7 @@
 // presence socket and produces an RtcCall on accept. Speaks the FROZEN contract
 // in rtc-protocol.ts.
 
+import { LocalVideo, type LocalVideoState } from "./video";
 import { Emitter } from "./events";
 import {
   ClientMsgType,
@@ -89,6 +90,8 @@ export type RtcCallEvent =
   | { type: "connecting" }
   | { type: "connected" }
   | { type: "answered" }
+  | ({ type: "local-video" } & LocalVideoState)
+  | { type: "remote-video"; stream: MediaStream | null }
   | { type: "track"; kind: "audio" | "video"; stream: MediaStream; track: MediaStreamTrack }
   | { type: "peer-joined"; participantId: string; name?: string }
   | { type: "peer-left"; participantId: string }
@@ -107,8 +110,12 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
   private mic: MediaStream | null = null;
-  private screen: MediaStream | null = null;
-  private screenSender: RTCRtpSender | null = null;
+  private remoteVideoTrack: MediaStreamTrack | null = null;
+  private video = new LocalVideo(
+    () => this.pc,
+    (publish) => this.send({ type: publish ? ClientMsgType.Publish : ClientMsgType.Unpublish, kind: "video" }),
+    (state) => this.emit({ type: "local-video", ...state }),
+  );
   private sessionToken = "";
   private remoteDescSet = false;
   private pendingIce: RTCIceCandidateInit[] = [];
@@ -247,8 +254,8 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     pc.ontrack = (e) => {
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       // Auto-play incoming AUDIO (the IVR voice, the other party) — a calling SDK
-      // must sound the call without the integrator wiring an element. Video (a
-      // screen share) is left to the consumer's `track` event to render.
+      // must sound the call without the integrator wiring an element. Camera
+      // and screen video are exposed through remote-video for the UI to render.
       if (e.track.kind === "audio") {
         const el = document.createElement("audio");
         el.autoplay = true;
@@ -260,6 +267,19 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         });
         this.audioEls.push(el);
         e.track.onended = () => el.remove();
+      }
+      if (e.track.kind === "video") {
+        const track = e.track;
+        this.remoteVideoTrack = track;
+        const videoStream = new MediaStream([track]);
+        const update = () => {
+          if (this.remoteVideoTrack !== track) return;
+          this.emit({ type: "remote-video", stream: track.muted || track.readyState === "ended" ? null : videoStream });
+        };
+        track.onmute = update;
+        track.onunmute = update;
+        track.onended = update;
+        update();
       }
       this.emit({ type: "track", kind: e.track.kind as "audio" | "video", stream, track: e.track });
     };
@@ -302,39 +322,14 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.send({ type: ClientMsgType.Transfer, to_sip: target.toSip, to_team: target.toTeam });
   }
 
-  /** Whether this leg is currently publishing a screen-share track. */
-  get sharingScreen(): boolean {
-    return this.screen !== null;
-  }
+  get sharingScreen(): boolean { return this.video.source === "screen"; }
+  get cameraEnabled(): boolean { return this.video.source === "camera"; }
+  get localVideoStream(): MediaStream | null { return this.video.stream; }
 
-  /** shareScreen publishes a screen/window video track (the server renegotiates,
-   *  staying the sole offerer). Pass {selfBrowserSurface:"exclude"} etc. via opts. */
-  async shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> {
-    if (!this.pc) throw new Error("not connected");
-    this.screen = await navigator.mediaDevices.getDisplayMedia(constraints ?? { video: true });
-    const track = this.screen.getVideoTracks()[0];
-    if (!track) throw new Error("no screen video track captured");
-    track.contentHint = "detail";
-    track.onended = () => void this.stopScreen();
-    this.screenSender = this.pc.addTrack(track, this.screen);
-    this.send({ type: ClientMsgType.Publish, kind: "video" });
-  }
-
-  stopScreen(): void {
-    if (this.screen) {
-      this.screen.getTracks().forEach((t) => t.stop());
-      this.screen = null;
-    }
-    if (this.screenSender && this.pc) {
-      try {
-        this.pc.removeTrack(this.screenSender);
-      } catch {
-        /* already gone */
-      }
-      this.screenSender = null;
-    }
-    this.send({ type: ClientMsgType.Unpublish, kind: "video" });
-  }
+  startCamera(constraints?: MediaTrackConstraints): Promise<void> { return this.video.startCamera(constraints); }
+  stopCamera(): void { this.video.stop("camera"); }
+  shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> { return this.video.shareScreen(constraints); }
+  stopScreen(): void { this.video.stop("screen"); }
 
   /** hangup ends the call (no reconnect). */
   hangup(): void {
@@ -353,6 +348,9 @@ export class RtcCall extends Emitter<RtcCallEvent> {
       this.emit({ type: "reconnecting" });
       this.remoteDescSet = false;
       this.pendingIce = [];
+      this.video.stop(); // release capture on reconnect; restarting is an explicit gesture
+      this.remoteVideoTrack = null;
+      this.emit({ type: "remote-video", stream: null });
       this.pc?.close();
       this.pc = null;
       setTimeout(() => {
@@ -383,6 +381,9 @@ export class RtcCall extends Emitter<RtcCallEvent> {
 
   private teardown(): void {
     this.stopKeepalive();
+    this.video.stop();
+    this.remoteVideoTrack = null;
+    this.emit({ type: "remote-video", stream: null });
     this.pc?.close();
     this.pc = null;
     // Only stop a mic we own. A borrowed shared mic (keepMic — the agent's
@@ -390,7 +391,6 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     // stopping it would leave the next call publishing a dead track.
     if (!this.opts.keepMic) this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
-    this.stopScreenSilently();
     this.audioEls.forEach((el) => {
       el.srcObject = null;
       el.remove();
@@ -400,11 +400,6 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.ws = null;
   }
 
-  private stopScreenSilently(): void {
-    this.screen?.getTracks().forEach((t) => t.stop());
-    this.screen = null;
-    this.screenSender = null;
-  }
 
   private send(m: RtcMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));

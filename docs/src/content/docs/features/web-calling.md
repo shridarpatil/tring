@@ -79,6 +79,16 @@ The browser never holds your API key. Your backend calls Tring with the key and 
 
 The token is only used to open sockets, so a 5-minute lifetime is enough; the widget fetches a fresh one from your endpoint when it reconnects. Agents cannot place calls from the browser through the SDK; outbound calls go through your backend (see [Outbound calls](/tring/features/outbound-calls/)).
 
+## Camera video and screen sharing
+
+The agent and visitor widgets have a **Camera** button during a web call. Cameras start off; each person chooses when to enable theirs and grants browser permission. Both cameras can run at the same time. Each person sees the other participant's video and a muted, mirrored preview of their own camera.
+
+Each participant publishes one video source: starting screen sharing replaces their camera, and starting the camera replaces their screen share. Turning video off leaves the microphone connected. Camera permission errors also leave the audio call running. Video capture stops on hangup or reconnect; enable it again after reconnecting.
+
+When **Record calls** is enabled, calls with video produce a side-by-side MP4 with the **agent on the left and client on the right**, including both voices. Camera-off periods show a dark panel, and screen sharing appears in that person's panel. See [Recording and call logs](/tring/features/recording-and-call-logs/).
+
+Camera access needs HTTPS or localhost. Embedded widgets also need their host iframe to permit camera and microphone access. Video uses VP8 or VP9 through the same gateway and TURN configuration as audio.
+
 ## Page-refresh grace
 
 When a participant's connection drops (page refresh, network blip), the gateway does not end the call. It holds the participant's slot for `TRING_MEDIA_GRACE_SECONDS` (default 30).

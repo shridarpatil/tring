@@ -1,3 +1,5 @@
+import type { LocalVideoState } from "./video";
+
 // Public types for the Tring browser SDK.
 
 export interface InitOpts {
@@ -77,6 +79,11 @@ export interface Call {
   resume(): void;
   /** Blind-transfer the call to another agent or team; this leg then ends. */
   transfer(target: { toSip?: string; toTeam?: string }): void;
+  /** Turn on the camera for a web call. Must be called from a user gesture. */
+  startCamera(constraints?: MediaTrackConstraints): Promise<void>;
+  stopCamera(): void;
+  readonly cameraEnabled: boolean;
+  readonly localVideoStream: MediaStream | null;
   /** Start publishing the agent's screen to the other party. Prompts the OS
    *  screen-picker (must be called from a user gesture). */
   shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void>;
@@ -105,7 +112,8 @@ export type TringEvent =
   | { type: "call:resuming"; call: Call }
   | { type: "call:answered"; call: Call }
   | { type: "call:ended"; call: Call; cause?: string }
-  // The remote party's screen-share track arrived (stream) or ended (null).
+  | ({ type: "call:local-video"; call: Call } & LocalVideoState)
+  // The remote party's camera or screen track arrived (stream) or ended (null).
   | { type: "call:remote-video"; call: Call; stream: MediaStream | null }
   // A supervisor (console operator) is monitoring/whispering/barging on this
   // call, or has stopped. The customer is never notified — this is agent-only.
@@ -176,6 +184,7 @@ export type GuestEvent =
   | { type: "ringing" } // offer sent to the gateway, awaiting answer
   | { type: "connected" } // IVR answered, media flowing
   | { type: "ended"; reason?: string }
-  // The remote party's (agent's) screen-share track arrived (stream) or ended (null).
+  | ({ type: "local-video" } & LocalVideoState)
+  // The agent's camera or screen track arrived (stream) or ended (null).
   | { type: "remote-video"; stream: MediaStream | null }
   | { type: "error"; error: Error };

@@ -10,6 +10,7 @@
 
 import { Tring } from "./tring";
 import type { Call } from "./types";
+import { videoErrorMessage, type VideoSource } from "./video";
 import { IncomingCallNotification, supportsCallNotifications } from "./call-notifications";
 
 export interface WidgetOpts {
@@ -49,6 +50,7 @@ const ICON_PHONE = `<svg viewBox="0 0 24 24" width="22" height="22" fill="curren
 const ICON_USER = `<svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4 0-9 2-9 6v1h18v-1c0-4-5-6-9-6z"/></svg>`;
 const ICON_KEYPAD = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="5" r="1.7"/><circle cx="12" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="12" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg>`;
 const ICON_TRANSFER = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 7l-1.4 1.4L17.2 11H8v2h9.2l-2.6 2.6L16 17l5-5-5-5zM4 5h7V3H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7v-2H4V5z"/></svg>`;
+const ICON_CAMERA = `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="12" height="14" rx="2"/><path d="m15 10 6-4v12l-6-4z"/></svg>`;
 const ICON_SCREEN = `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v2H8v2h8v-2h-2v-2h6a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 12H4V6h16v10z"/></svg>`;
 const ICON_MINIMIZE = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg>`;
 const ICON_EXPAND = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/></svg>`;
@@ -227,6 +229,7 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   });
   tring.on("call:resuming", ({ call }) => panel.show(call, "connecting"));
   tring.on("call:answered", ({ call }) => panel.setActive(call, "connected"));
+  tring.on("call:local-video", ({ stream, source }) => panel.setLocalVideo(stream, source));
   tring.on("call:remote-video", ({ stream }) => panel.setRemoteVideo(stream));
   tring.on("call:supervisor", ({ present, mode, name }) => panel.setSupervisor(present, mode, name));
   tring.on("call:ended", () => panel.hide()); // hide() resets the supervisor badge too
@@ -323,6 +326,7 @@ interface Panel {
   setActive(call: Call, status: string): void;
   setStatus(state: string, text: string): void;
   setRemoteVideo(stream: MediaStream | null): void;
+  setLocalVideo(stream: MediaStream | null, source: VideoSource | null): void;
   setSupervisor(present: boolean, mode: string, name: string): void;
   hide(): void;
 }
@@ -364,14 +368,15 @@ function createPanel(control?: CallControl): Panel {
         <div class="tring-panel-avatar"></div>
         <div class="tring-panel-to"></div>
       </div>
+      <video class="tring-local-video" autoplay playsinline muted aria-label="Your camera preview"></video>
       <div class="tring-panel-supervisor"></div>
       <div class="tring-panel-stage">
         <div class="tring-wave" aria-hidden="true">${WAVE_HTML}</div>
         <div class="tring-stage-msg tring-msg-ringing" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="tring-stage-msg tring-msg-hold"><strong>Caller is on hold</strong><span>They hear hold music.</span></div>
         <div class="tring-panel-video">
-          <video class="tring-remote-video" autoplay playsinline></video>
-          <div class="tring-video-bar"><span>Caller is sharing their screen</span><button type="button" class="tring-fullscreen">Full screen</button></div>
+          <video class="tring-remote-video" autoplay playsinline muted></video>
+          <div class="tring-video-bar"><span>Live video</span><button type="button" class="tring-fullscreen">Full screen</button></div>
         </div>
         <div class="tring-panel-dialpad">
           <div class="tring-panel-dialed"></div>
@@ -388,9 +393,11 @@ function createPanel(control?: CallControl): Panel {
         <button type="button" class="tring-ctl tring-hold" title="Hold" aria-label="Hold">${ICON_HOLD}</button>
         <button type="button" class="tring-ctl tring-keypad" title="Keypad" aria-label="Keypad">${ICON_KEYPAD}</button>
         <button type="button" class="tring-ctl tring-transfer" title="Transfer" aria-label="Transfer">${ICON_TRANSFER}</button>
+        <button type="button" class="tring-ctl tring-camera" title="Turn camera on" aria-label="Turn camera on" aria-pressed="false">${ICON_CAMERA}</button>
         <button type="button" class="tring-ctl tring-share" title="Share screen" aria-label="Share screen">${ICON_SCREEN}</button>
         <button type="button" class="tring-ctl tring-hangup" title="Hang up" aria-label="Hang up">End</button>
       </div>
+      <div class="tring-video-error" role="status"></div>
     </div>
   `;
 
@@ -408,6 +415,9 @@ function createPanel(control?: CallControl): Panel {
   const transferBtn = root.querySelector<HTMLButtonElement>(".tring-transfer")!;
   const keypadBtn = root.querySelector<HTMLButtonElement>(".tring-keypad")!;
   const shareBtn = root.querySelector<HTMLButtonElement>(".tring-share")!;
+  const cameraBtn = root.querySelector<HTMLButtonElement>(".tring-camera")!;
+  const localVideo = root.querySelector<HTMLVideoElement>(".tring-local-video")!;
+  const videoError = root.querySelector<HTMLElement>(".tring-video-error")!;
   const remoteVideo = root.querySelector<HTMLVideoElement>(".tring-remote-video")!;
   const pickerEl = root.querySelector<HTMLElement>(".tring-panel-picker")!;
   const dialpadEl = root.querySelector<HTMLElement>(".tring-panel-dialpad")!;
@@ -508,6 +518,7 @@ function createPanel(control?: CallControl): Panel {
   // key into, so those controls are hidden for such calls.
   function fitControls(call: Call) {
     shareBtn.style.display = call.phone ? "none" : "";
+    cameraBtn.style.display = call.phone ? "none" : "";
     keypadBtn.style.display = call.direction === "inbound" ? "none" : "";
   }
 
@@ -525,6 +536,9 @@ function createPanel(control?: CallControl): Panel {
     holdBtn.disabled = false;
     transferBtn.disabled = false;
     keypadBtn.classList.remove("is-active");
+    setLocalVideo(null, null);
+    videoError.textContent = "";
+    cameraBtn.disabled = false;
     shareBtn.innerHTML = ICON_SCREEN;
     shareBtn.title = "Share screen";
     shareBtn.classList.remove("is-active");
@@ -588,28 +602,43 @@ function createPanel(control?: CallControl): Panel {
     if (open) closePicker();
     updateStage();
   });
-  // Screen share: toggle the agent's own screen to the caller. getDisplayMedia
-  // must run in this click gesture; on cancel we just restore the button.
-  shareBtn.addEventListener("click", async () => {
-    if (!active) return;
-    if (active.sharingScreen) {
-      active.stopScreen();
-      shareBtn.innerHTML = ICON_SCREEN;
-      shareBtn.title = "Share screen";
-      shareBtn.classList.remove("is-active");
-      return;
-    }
-    shareBtn.disabled = true;
-    try {
-      await active.shareScreen();
-      shareBtn.title = "Stop sharing";
-      shareBtn.classList.add("is-active");
-    } catch {
-      /* user cancelled the screen-picker */
-    } finally {
-      shareBtn.disabled = false;
-    }
-  });
+  function setLocalVideo(stream: MediaStream | null, source: VideoSource | null) {
+    const camera = source === "camera";
+    const screen = source === "screen";
+    localVideo.srcObject = camera ? stream : null;
+    root.classList.toggle("tring-camera-on", camera);
+    cameraBtn.classList.toggle("is-active", camera);
+    cameraBtn.setAttribute("aria-pressed", String(camera));
+    cameraBtn.title = camera ? "Turn camera off" : "Turn camera on";
+    cameraBtn.setAttribute("aria-label", cameraBtn.title);
+    shareBtn.classList.toggle("is-active", screen);
+    shareBtn.setAttribute("aria-pressed", String(screen));
+    shareBtn.title = screen ? "Stop sharing" : "Share screen";
+    shareBtn.setAttribute("aria-label", shareBtn.title);
+  }
+  function bindVideoControl(button: HTMLButtonElement, camera: boolean) {
+    button.addEventListener("click", async () => {
+      const call = active;
+      if (!call || call.phone || call.status !== "connected") return;
+      videoError.textContent = "";
+      cameraBtn.disabled = shareBtn.disabled = true;
+      try {
+        if (camera) {
+          if (call.cameraEnabled) call.stopCamera();
+          else await call.startCamera();
+        } else {
+          if (call.sharingScreen) call.stopScreen();
+          else await call.shareScreen();
+        }
+      } catch (error) {
+        if (active === call) videoError.textContent = videoErrorMessage(error);
+      } finally {
+        if (active === call) cameraBtn.disabled = shareBtn.disabled = false;
+      }
+    });
+  }
+  bindVideoControl(cameraBtn, true);
+  bindVideoControl(shareBtn, false);
   holdBtn.addEventListener("click", () => {
     if (!active) return;
     // Hold/resume act on the live call over /rtc (the brain injects MOH); the
@@ -758,6 +787,7 @@ function createPanel(control?: CallControl): Panel {
       subEl.textContent = text;
       setState(state);
     },
+    setLocalVideo,
     setRemoteVideo(stream) {
       remoteVideo.srcObject = stream;
       root.classList.toggle("tring-has-video", stream !== null);
@@ -938,6 +968,10 @@ function injectStyles(): void {
     }
     #${PANEL_ID} .tring-msg-ringing i:nth-child(2) { animation-delay: .2s; }
     #${PANEL_ID} .tring-msg-ringing i:nth-child(3) { animation-delay: .4s; }
+    #${PANEL_ID} .tring-local-video { display: none; width: 128px; height: 96px; margin-left: auto; border-radius: 12px; object-fit: cover; transform: scaleX(-1); background: #111; }
+    #${PANEL_ID}.tring-camera-on .tring-local-video { display: block; }
+    #${PANEL_ID} .tring-video-error { color: #a3271b; font-size: 12px; }
+    #${PANEL_ID} .tring-video-error:empty { display: none; }
     /* The caller's shared screen (a web caller's video track). */
     #${PANEL_ID} .tring-panel-video { padding: 8px; }
     #${PANEL_ID} .tring-remote-video {

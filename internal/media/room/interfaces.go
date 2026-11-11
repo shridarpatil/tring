@@ -32,6 +32,14 @@ type TrackSink interface {
 	Close() error
 }
 
+// VideoSink optionally receives video separately from an audio TrackSink.
+// stream identifies one publication lifetime; EndVideo excludes late packets
+// after camera-off and preserves the gap before the next publication.
+type VideoSink interface {
+	WriteVideoRTP(p ParticipantID, stream, codec string, pkt *rtp.Packet) error
+	EndVideo(p ParticipantID, stream string)
+}
+
 // ParticipantSource injects a participant whose media originates OUTSIDE WebRTC.
 // The IVR prompt player and a channel's phone/PSTN leg both implement it: they
 // appear in the room as ordinary participants publishing Opus. pion never sees a

@@ -170,6 +170,36 @@ inbound (IVR transfer / inbound DID) rings per `autoAnswer` (default `true`; set
 `false` to gate on Accept/Decline). `call.to` carries the backend-supplied label,
 never the dialed number.
 
+## Camera video and recording
+
+Both widgets include a Camera button with a local preview. Cameras are off until
+each person enables theirs. For a connected web `Call`, use `startCamera()` and
+`stopCamera()`; `cameraEnabled` and `localVideoStream` expose the current state.
+`TringGuest` offers the same methods plus `toggleCamera()` and `isCameraEnabled`.
+
+```js
+cameraButton.onclick = () => call.startCamera().catch(showError);
+tring.on('call:local-video', ({ stream, source }) => {
+  preview.muted = true;
+  preview.srcObject = source === 'camera' ? stream : null;
+});
+tring.on('call:remote-video', ({ stream }) => {
+  remoteVideo.muted = true; // the SDK already plays remote audio
+  remoteVideo.srcObject = stream;
+});
+```
+
+Use `autoplay playsinline` on the video elements. Guest events are `local-video`
+and `remote-video` (without the `call:` prefix). A null stream clears the view.
+Camera access requires HTTPS/localhost and browser permission. Camera and screen
+share use one outgoing video track: starting one replaces the other. Stopping
+video leaves audio connected; hangup/reconnect releases video capture.
+
+With tenant `record_calls` enabled, calls with captured video become an MP4 after
+hangup: agent left, client right, both voices, and dark panels when video is off.
+Screen sharing occupies the same panel. The call log plays this video; calls
+without video keep the tenant's audio recording format.
+
 ## Development
 
 ```bash
