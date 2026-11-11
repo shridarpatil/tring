@@ -10,6 +10,7 @@
 
 import { Tring } from "./tring";
 import type { Call } from "./types";
+import { IncomingCallNotification, supportsCallNotifications } from "./call-notifications";
 
 export interface WidgetOpts {
   /** JWT — preferred for short-lived static tokens. */
@@ -248,9 +249,32 @@ function createStatusBadge(): StatusBadge {
   const root = document.createElement("div");
   root.className = "tring-status-badge";
   root.setAttribute("data-state", "offline");
-  root.innerHTML = `<span class="tring-status-dot"></span><span class="tring-status-text">Offline</span><button type="button" class="tring-status-takeover">Take calls here</button>`;
+  root.innerHTML = `<span class="tring-status-dot"></span><span class="tring-status-text">Offline</span><button type="button" class="tring-status-takeover">Take calls here</button><button type="button" class="tring-status-notifications" hidden>Enable call notifications</button>`;
   const textEl = root.querySelector<HTMLElement>(".tring-status-text")!;
   const takeOverBtn = root.querySelector<HTMLButtonElement>(".tring-status-takeover")!;
+  const notificationsBtn = root.querySelector<HTMLButtonElement>(".tring-status-notifications")!;
+  const refreshNotifications = () => {
+    notificationsBtn.hidden = !supportsCallNotifications() || Notification.permission === "granted";
+    if (notificationsBtn.hidden) return;
+    const blocked = Notification.permission === "denied";
+    notificationsBtn.disabled = blocked;
+    notificationsBtn.textContent = blocked ? "Notifications blocked" : "Enable call notifications";
+    notificationsBtn.title = blocked
+      ? "Allow notifications in your browser's site settings to receive incoming call alerts."
+      : "Show incoming call alerts while you are in another tab or app.";
+  };
+  refreshNotifications();
+  window.addEventListener("focus", refreshNotifications);
+  notificationsBtn.addEventListener("click", async () => {
+    notificationsBtn.disabled = true;
+    try {
+      await Notification.requestPermission();
+    } catch {
+      // Embedded pages and browser policies may block permission requests.
+    } finally {
+      refreshNotifications();
+    }
+  });
   return {
     root,
     set(state, attempt, label) {
@@ -529,6 +553,7 @@ function createPanel(control?: CallControl): Panel {
   }
 
   const ringer = new Ringer();
+  const incomingNotification = new IncomingCallNotification(() => acceptBtn.focus());
   let active: Call | null = null;
   let dialed = "";
   // After a connected call ends the card lingers on "Call ended · MM:SS".
@@ -656,6 +681,7 @@ function createPanel(control?: CallControl): Panel {
     active.transfer(btn.dataset.sip ? { toSip: btn.dataset.sip } : { toTeam: btn.dataset.team });
   });
   acceptBtn.addEventListener("click", async () => {
+    incomingNotification.stop();
     ringer.stop();
     if (!active) return;
     // The WebRTC handshake (mic prompt + ICE gathering + offer/answer) takes a
@@ -670,6 +696,7 @@ function createPanel(control?: CallControl): Panel {
     }
   });
   declineBtn.addEventListener("click", async () => {
+    incomingNotification.stop();
     ringer.stop();
     if (active) await active.hangup();
   });
@@ -693,6 +720,7 @@ function createPanel(control?: CallControl): Panel {
   return {
     root,
     show(call, status) {
+      incomingNotification.stop();
       cancelEndLinger();
       active = call;
       stopTimer();
@@ -714,8 +742,10 @@ function createPanel(control?: CallControl): Panel {
       setState("incoming");
       root.classList.add("tring-panel-visible");
       ringer.start();
+      incomingNotification.start(call.displayName || call.to || "Unknown caller");
     },
     setActive(call, status) {
+      incomingNotification.stop();
       active = call;
       ringer.stop();
       setState(status);
@@ -743,6 +773,7 @@ function createPanel(control?: CallControl): Panel {
       supervisorEl.style.display = "block";
     },
     hide() {
+      incomingNotification.stop();
       ringer.stop();
       // A call that was never connected (declined, missed, picked up
       // elsewhere) closes at once, as before. A connected one shows
@@ -1037,6 +1068,12 @@ function injectStyles(): void {
       background: #34d399; color: #064e3b; font: 600 11px/1 system-ui, sans-serif; cursor: pointer;
     }
     .tring-status-badge[data-state="superseded"] .tring-status-takeover { display: inline-block; }
+    .tring-status-badge .tring-status-notifications {
+      padding: .25rem .55rem; border: 0; border-radius: 999px;
+      background: #e5e7eb; color: #111827; font: 600 11px/1 system-ui, sans-serif; cursor: pointer;
+    }
+    .tring-status-badge .tring-status-notifications[hidden] { display: none; }
+    .tring-status-badge .tring-status-notifications:disabled { opacity: .65; cursor: default; }
     @keyframes tring-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
   `;
   document.head.appendChild(style);
