@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,6 +102,16 @@ func TestCampaignPlaysOnlyAfterAnswerAndCloses(t *testing.T) {
 	if got := waitEnd(t, s.cfg.Calls.(*connectCallLog)); got != "ended:campaign_completed" {
 		t.Fatal(got)
 	}
+	carrierAnswered := false
+	for _, event := range s.cfg.Calls.(*connectCallLog).snapshot() {
+		carrierAnswered = carrierAnswered || event == "carrier_answered"
+		if strings.HasPrefix(event, "answered:") {
+			t.Fatalf("playback must not arm an agent recording: %s", event)
+		}
+	}
+	if !carrierAnswered {
+		t.Fatal("recipient answer must still update the CDR")
+	}
 }
 func TestCampaignEarlyHangupIsIncomplete(t *testing.T) {
 	audio := campaignAudioFixture(t, "2")
@@ -176,6 +187,67 @@ func TestCampaignIVRMenuDTMF(t *testing.T) {
 		t.Fatal("menu did not consume DTMF")
 	}
 }
+
+func TestCampaignIVRFeedbackDoesNotBecomeAgentRecording(t *testing.T) {
+	audio := campaignAudioFixture(t, "0.1")
+	leg := newConnectLeg("campaign-customer")
+	digits := make(chan string, 1)
+	leg.leg.DTMF = digits
+	var feedback atomic.Bool
+	var feedbackOnce sync.Once
+	leg.leg.Write = func(*rtp.Packet) error {
+		if feedback.Load() {
+			feedbackOnce.Do(func() { digits <- "5" })
+		}
+		return nil
+	}
+	h, m := agentCampaignHarness(t, []string{"alice"}, leg)
+	h.srv.cfg.AudioDir = filepath.Dir(audio)
+	m.a.Payload.Config.Type = "ivr"
+	m.a.Payload.Prepared = campaign.Prepared{Flow: &ivr.Flow{
+		EntryNode: "greeting",
+		Nodes: []ivr.Node{
+			{ID: "greeting", Type: ivr.NodeGreeting, Config: map[string]any{"audio_file": audio}},
+			{ID: "transfer", Type: ivr.NodeTransfer, Config: map[string]any{"team": "sales"}},
+			{ID: "feedback", Type: ivr.NodeGather, Config: map[string]any{"audio_file": audio, "max_digits": 1, "timeout_seconds": 2}},
+			{ID: "bye", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "greeting", To: "transfer", Condition: "default"},
+			{From: "transfer", To: "feedback", Condition: "completed"},
+			{From: "feedback", To: "bye", Condition: "default"},
+		},
+	}}
+	startAgentCampaign(h, m)
+	in := h.readUntil(h.pres, msgIncoming)
+	agent := h.dial()
+	h.send(agent, msg{Type: msgJoin, Room: in.Room})
+	h.readUntil(agent, msgJoined)
+	waitHandoff(t, h.srv, room.RoomID(h.tenant.String()+"/"+in.Room))
+	select {
+	case result := <-m.done:
+		t.Fatalf("flow finished before agent disconnect: %s", result)
+	default:
+	}
+	feedback.Store(true)
+	h.send(agent, msg{Type: msgBye})
+	if got := campaignResult(t, m); got != "completed:" {
+		t.Fatal(got)
+	}
+	answers := 0
+	for _, event := range h.cl.snapshot() {
+		if strings.HasPrefix(event, "answered:") {
+			answers++
+			if strings.HasPrefix(event, "answered:ivr-") {
+				t.Fatalf("IVR prompt attached as an agent recording: %s", event)
+			}
+		}
+	}
+	if answers != 1 {
+		t.Fatalf("expected only the real agent to enable recording: %v", h.cl.snapshot())
+	}
+}
+
 func TestCampaignControlRequiresAuthentication(t *testing.T) {
 	s, m, _ := campaignFixture(t, newConnectLeg("customer"), "/missing.ogg")
 	r := httptest.NewRequest("POST", "/control/campaign", strings.NewReader(`{"attempt_id":"`+m.a.ID.String()+`"}`))

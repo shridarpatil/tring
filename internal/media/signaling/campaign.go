@@ -187,6 +187,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 		reason = "state_unavailable"
 		return
 	}
+	s.cfg.Calls.CarrierAnswered(string(rid))
 	playerID := room.ParticipantID("ivr-" + uuid.NewString())
 	player := prompt.NewPlayer(playerID, 0)
 	tagParticipant(playerID, "ivr")
@@ -197,9 +198,8 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 		reason = "media_attach_failed"
 		return
 	}
-	if sink := s.cfg.Calls.Answered(string(rid), playerID, ""); sink != nil {
-		s.sfu.AddSink(rid, playerID, sink)
-	}
+	// Match inbound IVR: prompts are audible to the customer but are never a
+	// recording source. A transfer's real agent join arms conversation capture.
 	callCtx, stopCall := context.WithTimeout(ctx, time.Duration(cfg.MaxSeconds)*time.Second)
 	defer stopCall()
 	flow := a.Payload.Prepared.Flow

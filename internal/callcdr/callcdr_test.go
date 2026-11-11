@@ -21,6 +21,7 @@ import (
 	"github.com/shridarpatil/tring/internal/dbtest"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/logging"
+	"github.com/shridarpatil/tring/internal/media/record"
 )
 
 // routingSink captures the last call.routing event's data, for asserting what the
@@ -54,6 +55,97 @@ func opusPkt(ts uint32) *rtp.Packet {
 	return &rtp.Packet{
 		Header:  rtp.Header{Version: 2, PayloadType: 111, Timestamp: ts},
 		Payload: []byte{0x78, 0x01, 0x02},
+	}
+}
+
+// Campaign IVR answers update the CDR without recording. Both a later IVR
+// transfer and an agent-assisted campaign must still record the human legs.
+func TestCampaignRecordingStartsWithAgent(t *testing.T) {
+	for _, mode := range []string{"ivr_transfer", "agent_assisted"} {
+		t.Run(mode, func(t *testing.T) {
+			fx := dbtest.Setup(t)
+			ctx := context.Background()
+			if _, err := fx.DB.Pool.Exec(ctx, `UPDATE tenants SET record_calls = true WHERE id = $1`, fx.TenantID); err != nil {
+				t.Fatal(err)
+			}
+			var agentID uuid.UUID
+			if err := fx.DB.Pool.QueryRow(ctx, `INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'alice', 'x') RETURNING id`, fx.TenantID).Scan(&agentID); err != nil {
+				t.Fatal(err)
+			}
+			l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
+			roomID := fx.TenantID.String() + "/" + mode
+			l.StartedOutbound(ctx, fx.TenantID, roomID, "16001122", "+919900112233", "", "")
+			customer := l.Customer(roomID, "customer")
+			rec, ok := customer.(*record.Recorder)
+			if !ok {
+				t.Fatal("expected customer recording sink")
+			}
+			t.Cleanup(func() { _ = rec.Close() })
+			var carrierAnswer time.Time
+			if mode == "ivr_transfer" {
+				l.CarrierAnswered(roomID)
+				var status string
+				var gotAgent *uuid.UUID
+				if err := fx.DB.Pool.QueryRow(ctx, `SELECT status::text, answered_at, agent_id FROM calls WHERE room_id = $1`, roomID).Scan(&status, &carrierAnswer, &gotAgent); err != nil {
+					t.Fatal(err)
+				}
+				if status != "answered" || carrierAnswer.IsZero() || gotAgent != nil {
+					t.Fatalf("carrier answer: status=%s at=%v agent=%v", status, carrierAnswer, gotAgent)
+				}
+			}
+			for i := range 20 {
+				if err := customer.WriteRTP("customer", opusPkt(uint32(i*960))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tracks := rec.Tracks(); len(tracks) != 0 {
+				t.Fatalf("recorded before agent connected: %+v", tracks)
+			}
+			agent := l.Answered(roomID, "agent", "alice")
+			if agent == nil {
+				t.Fatal("agent answer did not enable recording")
+			}
+			for i := range 20 {
+				if err := customer.WriteRTP("customer", opusPkt(uint32((20+i)*960))); err != nil {
+					t.Fatal(err)
+				}
+				if err := agent.WriteRTP("agent", opusPkt(uint32(i*960))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			tracks := rec.Tracks()
+			if len(tracks) != 2 {
+				t.Fatalf("want both human legs: %+v", tracks)
+			}
+			for _, track := range tracks {
+				if string(track.PID) != track.Role || (track.Role != "agent" && track.Role != "customer") {
+					t.Fatalf("unexpected recording track: %+v", track)
+				}
+			}
+			var gotAgent uuid.UUID
+			var answeredAt time.Time
+			if err := fx.DB.Pool.QueryRow(ctx, `SELECT agent_id, answered_at FROM calls WHERE room_id = $1`, roomID).Scan(&gotAgent, &answeredAt); err != nil {
+				t.Fatal(err)
+			}
+			if gotAgent != agentID || (!carrierAnswer.IsZero() && !answeredAt.Equal(carrierAnswer)) {
+				t.Fatalf("agent attribution or carrier answer changed: agent=%v at=%v", gotAgent, answeredAt)
+			}
+			l.Ended(roomID, "campaign_completed")
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				var url string
+				if err := fx.DB.Pool.QueryRow(ctx, `SELECT COALESCE(recording_url, '') FROM calls WHERE room_id = $1`, roomID).Scan(&url); err != nil {
+					t.Fatal(err)
+				}
+				if url != "" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("human conversation recording was not finalized")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
 	}
 }
 
@@ -257,13 +349,13 @@ func TestTimelineEvents(t *testing.T) {
 	roomID := fx.TenantID.String() + "/tl-test"
 
 	l.Started(ctx, fx.TenantID, roomID, "+15551230000", "Support flow", "web", "", "caller-pid")
-	l.RingStart(ctx, roomID, "Sales", "")              // team window opens (live label only)
-	l.RingAgent(roomID, "alice")                       // Alice is actually rung → ring(Alice A)
-	l.RingStop(roomID)                                 // window ends unanswered → no_answer([Alice A])
-	l.RingStart(ctx, roomID, "", "alice")              // direct-agent window
-	l.RingAgent(roomID, "alice")                       // ring(Alice A)
-	l.Answered(roomID, "agent-pid", "alice")           // answered by Alice
-	l.Transferred(roomID, "alice", "Bob") // agent blind-transfers onward
+	l.RingStart(ctx, roomID, "Sales", "")    // team window opens (live label only)
+	l.RingAgent(roomID, "alice")             // Alice is actually rung → ring(Alice A)
+	l.RingStop(roomID)                       // window ends unanswered → no_answer([Alice A])
+	l.RingStart(ctx, roomID, "", "alice")    // direct-agent window
+	l.RingAgent(roomID, "alice")             // ring(Alice A)
+	l.Answered(roomID, "agent-pid", "alice") // answered by Alice
+	l.Transferred(roomID, "alice", "Bob")    // agent blind-transfers onward
 	l.Ended(roomID, "caller_hangup")
 
 	// agent := detail->>'agent' (ring/answered); noAns := first name in detail->'agents'

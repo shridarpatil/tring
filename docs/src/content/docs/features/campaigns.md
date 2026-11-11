@@ -50,6 +50,8 @@ Recipient outcomes are `pending`, `active`, `completed`, `incomplete`, `busy`, `
 
 **Answered** records carrier answer. **Completed** records finished message playback, a completed IVR walk, or an agent-assisted conversation that connected and ended normally. Neither proves a human listened. There is no answering-machine detection.
 
+When call recording is enabled, capture starts when an agent connects to the customer. Uploaded messages, TTS, and IVR prompts (including post-call feedback prompts) are not recording sources. An IVR campaign records the human conversation after a transfer; a message-only call does not produce a recording.
+
 Reports provide recipient counts, attempt/answer/completion counts excluding tests, paginated attempt history, call-log links, and recipient CSV export. Exported cells are escaped to prevent spreadsheet formula execution.
 
 An optional result webhook sends `campaign.attempt.finished` using the existing signed webhook delivery system. It includes campaign, recipient, attempt and call IDs, status, reason, answer flag, external reference, and whether it was a test. IVR node and call-end hooks remain available as configured in the flow. Webhooks use the existing best-effort submission and retry behavior; the campaign API remains the source of truth, including recovery outcomes after a gateway crash.
