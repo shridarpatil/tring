@@ -1339,3 +1339,129 @@ WHERE d.domain = $1 AND p.enabled;
 SELECT id, tenant_id, name, issuer_url, client_id
 FROM sso_providers
 WHERE enabled AND (SELECT count(*) FROM sso_providers WHERE enabled) = 1;
+
+-- name: campaign-create
+INSERT INTO campaigns (tenant_id,name,config) VALUES ($1,$2,$3) RETURNING id;
+
+-- name: campaign-get
+SELECT to_jsonb(c) FROM campaigns c WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-lock
+SELECT to_jsonb(c) FROM campaigns c WHERE tenant_id=$1 AND id=$2 FOR UPDATE;
+
+-- name: campaign-list
+SELECT to_jsonb(c) FROM campaigns c WHERE tenant_id=$1 ORDER BY created_at DESC,id LIMIT $2 OFFSET $3;
+
+-- name: campaign-count
+SELECT count(*) FROM campaigns WHERE tenant_id=$1;
+
+-- name: campaign-update
+UPDATE campaigns SET name=$3, config=$4, prepared=NULL, revision=revision+1, updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='draft' AND revision=$5;
+
+-- name: campaign-prepare
+UPDATE campaigns SET prepared=$3, revision=revision+1, updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status='draft' AND revision=$4;
+
+-- name: campaign-state
+UPDATE campaigns SET status=$3, scheduled_at=$4, revision=revision+1, updated_at=now() WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-counts
+SELECT status,count(*) FROM campaign_recipients WHERE tenant_id=$1 AND campaign_id=$2 GROUP BY status;
+
+-- name: campaign-import
+INSERT INTO campaign_recipients (tenant_id,campaign_id,phone,external_ref) VALUES ($1,$2,$3,$4) ON CONFLICT (tenant_id,campaign_id,phone) DO NOTHING;
+
+-- name: campaign-recipients
+SELECT to_jsonb(r) FROM campaign_recipients r WHERE tenant_id=$1 AND campaign_id=$2 AND ($5='' OR status=$5) ORDER BY created_at,id LIMIT $3 OFFSET $4;
+
+-- name: campaign-recipient-count
+SELECT count(*) FROM campaign_recipients WHERE tenant_id=$1 AND campaign_id=$2 AND ($3='' OR status=$3);
+
+-- name: campaign-attempts
+SELECT to_jsonb(a) FROM campaign_attempts a WHERE tenant_id=$1 AND campaign_id=$2 ORDER BY created_at DESC,id LIMIT $3 OFFSET $4;
+
+-- name: campaign-attempt-count
+SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND campaign_id=$2;
+
+-- name: campaign-attempt-get
+SELECT to_jsonb(a) FROM campaign_attempts a WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-attempt-create
+INSERT INTO campaign_attempts (tenant_id,campaign_id,recipient_id,phone,external_ref,attempt,payload) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id;
+
+-- name: campaign-attempt-claim
+UPDATE campaign_attempts SET status='active',started_at=now(),heartbeat_at=now() WHERE tenant_id=$1 AND id=$2 AND status='queued' RETURNING payload;
+
+-- name: campaign-attempt-call
+UPDATE campaign_attempts SET call_id=$3, heartbeat_at=now() WHERE tenant_id=$1 AND id=$2 AND status='active';
+
+-- name: campaign-attempt-answered
+UPDATE campaign_attempts SET answered_at=COALESCE(answered_at,now()), heartbeat_at=now() WHERE tenant_id=$1 AND id=$2 AND status='active';
+
+-- name: campaign-heartbeat
+UPDATE campaign_attempts SET heartbeat_at=now() WHERE tenant_id=$1 AND id=$2 AND status='active';
+
+-- name: campaign-attempt-finish
+UPDATE campaign_attempts SET status=$3,error=$4,finished_at=now() WHERE tenant_id=$1 AND id=$2 AND status IN ('queued','active') AND ($3 <> 'unknown' OR heartbeat_at<now()-interval '2 minutes') RETURNING recipient_id,payload,attempt;
+
+-- name: campaign-recipient-finish
+UPDATE campaign_recipients SET status=$3,next_attempt_at=now()+make_interval(secs=>$4) WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-cancel-queued
+UPDATE campaign_attempts SET status='cancelled',finished_at=now() WHERE tenant_id=$1 AND campaign_id=$2 AND status='queued';
+
+-- name: campaign-cancel-recipients
+UPDATE campaign_recipients r SET status='cancelled' WHERE tenant_id=$1 AND campaign_id=$2 AND (status='pending' OR (status='active' AND NOT EXISTS (SELECT 1 FROM campaign_attempts a WHERE a.tenant_id=$1 AND a.recipient_id=r.id AND a.status='active')));
+
+-- name: campaign-worker-lock
+SELECT pg_try_advisory_xact_lock(7274696, 35);
+
+-- name: campaign-tenants
+SELECT t.id FROM tenants t ORDER BY COALESCE((SELECT min(c.next_dispatch_at) FROM campaigns c WHERE c.tenant_id=t.id AND c.status IN ('running','scheduled')), 'infinity'::timestamptz),t.id;
+
+-- name: campaign-due
+SELECT to_jsonb(c) FROM campaigns c WHERE tenant_id=$1 AND (status='running' OR (status='scheduled' AND scheduled_at<=now())) AND next_dispatch_at<=now() ORDER BY next_dispatch_at,id FOR UPDATE;
+
+-- name: campaign-slots
+SELECT (SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND status IN ('queued','active')), (SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND created_at>now()-interval '1 second');
+
+-- name: campaign-live-calls
+SELECT count(*) FROM calls WHERE tenant_id=$1 AND ended_at IS NULL AND status IN ('ringing','answered');
+
+-- name: campaign-own-slots
+SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND campaign_id=$2 AND status IN ('queued','active');
+
+-- name: campaign-next-recipient
+SELECT to_jsonb(r) FROM campaign_recipients r WHERE tenant_id=$1 AND campaign_id=$2 AND status='pending' AND next_attempt_at<=now() ORDER BY next_attempt_at,id LIMIT 1 FOR UPDATE SKIP LOCKED;
+
+-- name: campaign-reserve-recipient
+UPDATE campaign_recipients SET status='active',attempts=attempts+1 WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-dispatch-at
+UPDATE campaigns SET status='running',next_dispatch_at=now()+make_interval(secs=>$3),updated_at=now() WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-queued
+SELECT a.id FROM campaign_attempts a JOIN campaigns c ON c.id=a.campaign_id AND c.tenant_id=a.tenant_id WHERE a.tenant_id=$1 AND a.status='queued' AND (c.status='running' OR a.recipient_id IS NULL) AND c.status NOT IN ('cancelled','failed') ORDER BY a.created_at LIMIT 100;
+
+-- name: campaign-stale
+SELECT id FROM campaign_attempts WHERE tenant_id=$1 AND status='active' AND heartbeat_at<now()-interval '2 minutes';
+
+-- name: campaign-complete
+UPDATE campaigns c SET status='completed',updated_at=now() WHERE tenant_id=$1 AND status='running' AND NOT EXISTS (SELECT 1 FROM campaign_recipients r WHERE r.tenant_id=$1 AND r.campaign_id=c.id AND r.status IN ('pending','active'));
+
+-- name: campaign-recent-starts
+SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND started_at>now()-interval '1 second';
+
+-- name: campaign-start-at
+UPDATE campaigns SET next_start_at=now()+make_interval(secs=>$3) WHERE tenant_id=$1 AND id=$2;
+
+-- name: campaign-recover-call
+UPDATE calls SET status=CASE WHEN answered_at IS NULL THEN 'failed'::call_status ELSE 'ended'::call_status END,ended_at=now(),hangup_cause='campaign_gateway_lost',duration_seconds=COALESCE(EXTRACT(EPOCH FROM (now()-answered_at))::integer,0) WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL;
+
+-- name: campaign-metrics
+SELECT jsonb_build_object('attempts',count(*),'answered',count(*) FILTER (WHERE answered_at IS NOT NULL),'completed',count(*) FILTER (WHERE status='completed')) FROM campaign_attempts WHERE tenant_id=$1 AND campaign_id=$2 AND recipient_id IS NOT NULL;
+
+-- name: campaign-webhook-owned
+SELECT EXISTS (SELECT 1 FROM webhooks WHERE tenant_id=$1 AND id=$2 AND active);
+
+-- name: campaign-running-slots
+SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND status='active';

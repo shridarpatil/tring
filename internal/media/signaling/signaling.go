@@ -42,6 +42,7 @@ import (
 // Config wires the signaling server to its dependencies. The room Manager is
 // built internally so its event emitter can fan out to connected sockets.
 type Config struct {
+	Campaigns CampaignStore
 	SFU       *sfu.SFU
 	JWTSecret []byte
 	// ICE servers handed to the browser in `joined`. STUNURL is advertised as-is;
@@ -215,9 +216,10 @@ type Server struct {
 
 	mu           sync.Mutex
 	conns        map[room.ParticipantID]*conn
-	agents       map[string]map[string]*conn                          // online agents: tenant → sip → presence socket
-	rings        map[room.RoomID]chan struct{}                        // pending transfer rings → closed when an agent joins
-	declines     map[room.RoomID]func(sip string)                     // registered per active ring → an agent rejecting advances the router now
+	agents       map[string]map[string]*conn      // online agents: tenant → sip → presence socket
+	rings        map[room.RoomID]chan struct{}    // pending transfer rings → closed when an agent joins
+	declines     map[room.RoomID]func(sip string) // registered per active ring → an agent rejecting advances the router now
+	campaignLegs map[room.RoomID]room.ParticipantID
 	pstnCalls    map[room.RoomID]room.CallID                          // live phone legs by room (pstn.go)
 	outboundLegs map[room.RoomID]room.ParticipantID                   // agent-initiated outbound legs by room (outbound.go)
 	onCall       map[string]int                                       // "tenant|sip" → active call legs (drives on_call presence)
@@ -269,6 +271,7 @@ func New(cfg Config) *Server {
 		rings:        make(map[room.RoomID]chan struct{}),
 		declines:     make(map[room.RoomID]func(sip string)),
 		pstnCalls:    make(map[room.RoomID]room.CallID),
+		campaignLegs: make(map[room.RoomID]room.ParticipantID),
 		outboundLegs: make(map[room.RoomID]room.ParticipantID),
 		onCall:       make(map[string]int),
 		away:         make(map[string]bool),

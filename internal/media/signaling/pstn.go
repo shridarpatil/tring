@@ -158,6 +158,7 @@ func (s *Server) endPstnRoom(roomID room.RoomID) {
 func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 	s.mu.Lock()
 	callID, isPstn := s.pstnCalls[roomID]
+	campaignPID, isCampaign := s.campaignLegs[roomID]
 	s.mu.Unlock()
 	if !isPstn {
 		return
@@ -178,7 +179,11 @@ func (s *Server) hangupPstnIfAbandoned(roomID room.RoomID) {
 	}
 	s.log.Info("pstn: no one serving the caller, hanging up", "room", roomID)
 	s.setHangupBy(roomID, "system") // no-op if the agent's leave was recorded first
-	_ = s.pstnGW.Hangup(callID)
+	if isCampaign {
+		_ = s.cfg.Originator.HangupOutbound(campaignPID)
+	} else {
+		_ = s.pstnGW.Hangup(callID)
+	}
 }
 
 // phoneLive reports whether roomID's inbound phone leg is still connected.

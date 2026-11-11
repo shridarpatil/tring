@@ -44,8 +44,9 @@ import (
 // Event names sent to webhooks. Kept as constants so handler code doesn't
 // drift from listener filtering on the integrator side.
 const (
-	EventIVRNode   = "ivr.node"   // an IVR node with a webhook finished (a transfer: answered or not)
-	EventCallEnded = "call.ended" // a call whose flow has an "on call end" webhook ended
+	EventCampaignAttempt = "campaign.attempt.finished" // campaign attempt reached a terminal outcome
+	EventIVRNode         = "ivr.node"                  // an IVR node with a webhook finished (a transfer: answered or not)
+	EventCallEnded       = "call.ended"                // a call whose flow has an "on call end" webhook ended
 )
 
 type Notifier struct {
@@ -205,7 +206,7 @@ func (n *Notifier) tenantHooks(ctx context.Context, tenantID uuid.UUID) (map[str
 	return hooks, nil
 }
 
-// openHeaders decodes a stored headers value ('' = none).
+// openHeaders decodes a stored headers value (” = none).
 func (n *Notifier) openHeaders(stored string) (map[string]string, error) {
 	if stored == "" {
 		return nil, nil
