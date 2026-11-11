@@ -368,14 +368,16 @@ function createPanel(control?: CallControl): Panel {
         <div class="tring-panel-avatar"></div>
         <div class="tring-panel-to"></div>
       </div>
-      <video class="tring-local-video" autoplay playsinline muted aria-label="Your camera preview"></video>
       <div class="tring-panel-supervisor"></div>
       <div class="tring-panel-stage">
         <div class="tring-wave" aria-hidden="true">${WAVE_HTML}</div>
         <div class="tring-stage-msg tring-msg-ringing" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="tring-stage-msg tring-msg-hold"><strong>Caller is on hold</strong><span>They hear hold music.</span></div>
         <div class="tring-panel-video">
-          <video class="tring-remote-video" autoplay playsinline muted></video>
+          <div class="tring-video-pictures">
+            <video class="tring-remote-video" autoplay playsinline muted aria-label="Client video"></video>
+            <video class="tring-local-video" autoplay playsinline muted aria-label="Your camera preview"></video>
+          </div>
           <div class="tring-video-bar"><span>Live video</span><button type="button" class="tring-fullscreen">Full screen</button></div>
         </div>
         <div class="tring-panel-dialpad">
@@ -469,7 +471,7 @@ function createPanel(control?: CallControl): Panel {
     let stage = "none";
     if (has("tring-keypad-open")) stage = "keypad";
     else if (has("tring-picker-open")) stage = "picker";
-    else if (has("tring-has-video")) stage = "video";
+    else if (has("tring-has-video") || has("tring-camera-on")) stage = "video";
     else if (state === "calling" || state === "connecting") stage = "ringing";
     else if (state === "connected") stage = held ? "hold" : "wave";
     root.setAttribute("data-stage", stage);
@@ -593,8 +595,24 @@ function createPanel(control?: CallControl): Panel {
   root.querySelector(".tring-mini-end")!.addEventListener("click", () => hangupBtn.click());
   root.querySelector(".tring-minimize")!.addEventListener("click", () => root.classList.add("tring-min"));
   root.querySelector(".tring-expand")!.addEventListener("click", () => root.classList.remove("tring-min"));
-  root.querySelector(".tring-fullscreen")!.addEventListener("click", () => {
-    remoteVideo.requestFullscreen?.().catch(() => {});
+  const videoStage = root.querySelector<HTMLElement>(".tring-panel-video")!;
+  const fullscreenBtn = root.querySelector<HTMLButtonElement>(".tring-fullscreen")!;
+  function exitVideoFullscreen() {
+    if (document.fullscreenElement === videoStage) void document.exitFullscreen().catch(() => {});
+  }
+  fullscreenBtn.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement === videoStage) await document.exitFullscreen();
+      else if (videoStage.requestFullscreen) await videoStage.requestFullscreen();
+      else {
+        const video = (remoteVideo.srcObject ? remoteVideo : localVideo) as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+        if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+        else throw new Error("Full-screen video is unavailable in this browser.");
+      }
+    } catch (error) { videoError.textContent = videoErrorMessage(error); }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    fullscreenBtn.textContent = document.fullscreenElement === videoStage ? "Exit full screen" : "Full screen";
   });
   keypadBtn.addEventListener("click", () => {
     const open = root.classList.toggle("tring-keypad-open");
@@ -607,6 +625,8 @@ function createPanel(control?: CallControl): Panel {
     const screen = source === "screen";
     localVideo.srcObject = camera ? stream : null;
     root.classList.toggle("tring-camera-on", camera);
+    if (!camera && !remoteVideo.srcObject) exitVideoFullscreen();
+    updateStage();
     cameraBtn.classList.toggle("is-active", camera);
     cameraBtn.setAttribute("aria-pressed", String(camera));
     cameraBtn.title = camera ? "Turn camera off" : "Turn camera on";
@@ -791,6 +811,7 @@ function createPanel(control?: CallControl): Panel {
     setRemoteVideo(stream) {
       remoteVideo.srcObject = stream;
       root.classList.toggle("tring-has-video", stream !== null);
+      if (!stream && !localVideo.srcObject) exitVideoFullscreen();
       updateStage();
     },
     setSupervisor(present, mode, name) {
@@ -968,16 +989,22 @@ function injectStyles(): void {
     }
     #${PANEL_ID} .tring-msg-ringing i:nth-child(2) { animation-delay: .2s; }
     #${PANEL_ID} .tring-msg-ringing i:nth-child(3) { animation-delay: .4s; }
-    #${PANEL_ID} .tring-local-video { display: none; width: 128px; height: 96px; margin-left: auto; border-radius: 12px; object-fit: cover; transform: scaleX(-1); background: #111; }
-    #${PANEL_ID}.tring-camera-on .tring-local-video { display: block; }
+    #${PANEL_ID} .tring-video-pictures { position: relative; background: #18241f; border-radius: 10px; overflow: hidden; }
+    #${PANEL_ID} .tring-local-video,
+    #${PANEL_ID} .tring-remote-video { display: none; width: 100%; height: 220px; object-fit: contain; background: #18241f; }
+    #${PANEL_ID}.tring-camera-on .tring-local-video { display: block; transform: scaleX(-1); }
+    #${PANEL_ID}.tring-has-video .tring-remote-video { display: block; }
+    #${PANEL_ID}.tring-has-video.tring-camera-on .tring-local-video { position: absolute; right: 8px; bottom: 8px; width: 96px; height: 72px; object-fit: cover; border: 2px solid #fbfaf7; border-radius: 8px; }
+    #${PANEL_ID} .tring-panel-video:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; background: #111; padding: 12px; }
+    #${PANEL_ID} .tring-panel-video:fullscreen .tring-video-pictures { flex: 1; min-height: 0; background: #111; }
+    #${PANEL_ID} .tring-panel-video:fullscreen .tring-remote-video,
+    #${PANEL_ID}:not(.tring-has-video) .tring-panel-video:fullscreen .tring-local-video { height: 100%; background: #111; }
+    #${PANEL_ID}.tring-has-video .tring-panel-video:fullscreen .tring-local-video { width: min(24vw, 240px); height: auto; aspect-ratio: 4/3; }
+    #${PANEL_ID} .tring-panel-video:fullscreen .tring-video-bar { color: #fff; }
     #${PANEL_ID} .tring-video-error { color: #a3271b; font-size: 12px; }
     #${PANEL_ID} .tring-video-error:empty { display: none; }
     /* The caller's shared screen (a web caller's video track). */
     #${PANEL_ID} .tring-panel-video { padding: 8px; }
-    #${PANEL_ID} .tring-remote-video {
-      display: block; width: 100%; max-height: 200px;
-      border-radius: 10px; background: #1f2420; object-fit: contain;
-    }
     #${PANEL_ID} .tring-video-bar {
       display: flex; align-items: center; gap: 8px; padding: 8px 4px 0;
       font-size: 13px; font-weight: 600;

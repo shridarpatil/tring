@@ -183,6 +183,7 @@ export type GuestEvent =
   | { type: "connecting" } // acquiring mic / negotiating
   | { type: "ringing" } // offer sent to the gateway, awaiting answer
   | { type: "connected" } // IVR answered, media flowing
+  | { type: "answered" } // agent accepted; conversation timer starts here
   | { type: "ended"; reason?: string }
   | ({ type: "local-video" } & LocalVideoState)
   // The agent's camera or screen track arrived (stream) or ended (null).

@@ -16,7 +16,7 @@ beforeEach(() => {
     transceivers: [], connectionState: 'connected',
     addTransceiver(track, options) {
       assert.equal(options.direction, 'sendonly');
-      const t = { sender: { track, async replaceTrack(next) { this.track = next; } }, stop() { this.stopped = true; } };
+      const t = { sender: { track, async replaceTrack(next) { this.track = next; }, setStreams(...streams) { this.streams = streams; } }, stop() { this.stopped = true; } };
       this.transceivers.push(t); return t;
     },
     getTransceivers() { return this.transceivers; },
@@ -33,15 +33,26 @@ afterEach(() => {
   }
 });
 
+async function invite() {
+  const tx = pc.addTransceiver(null, { direction: 'sendonly' });
+  tx.mid = String(pc.transceivers.length);
+  tx.direction = 'recvonly';
+  await video.answerOffer(`v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:${tx.mid}\r\na=recvonly\r\n`);
+  assert.equal(tx.direction, 'sendonly');
+  return tx;
+}
+
 test('camera is opt-in, requests no second microphone, and can restart', async () => {
   assert.equal(video.stream, null);
   media.getUserMedia = async options => { assert.equal(options.audio, false); return capture(); };
   await video.startCamera();
+  await invite();
   const first = video.stream;
   video.stop();
   assert.equal(first.track.stopped, true);
   assert.equal(pc.transceivers[0].stopped, true);
   await video.startCamera();
+  await invite();
   assert.equal(pc.transceivers.length, 2);
   assert.deepEqual(signals, [true, false, true]);
   assert.equal(changes.at(-1).source, 'camera');
@@ -49,6 +60,7 @@ test('camera is opt-in, requests no second microphone, and can restart', async (
 
 test('camera and screen replace the same sender and release the previous device', async () => {
   await video.startCamera();
+  await invite();
   const camera = video.stream;
   await video.shareScreen();
   assert.equal(camera.track.stopped, true);
@@ -64,6 +76,7 @@ test('camera and screen replace the same sender and release the previous device'
 
 test('denied camera permission preserves a running screen share', async () => {
   await video.shareScreen();
+  await invite();
   const screen = video.stream;
   media.getUserMedia = async () => { throw new Error('permission denied'); };
   await assert.rejects(video.startCamera(), /permission denied/);
@@ -87,6 +100,7 @@ test('capture completing after hangup is stopped without publishing', async () =
 
 test('failed source replacement keeps the old stream alive', async () => {
   await video.startCamera();
+  await invite();
   const camera = video.stream, screen = capture();
   media.getDisplayMedia = async () => screen;
   pc.transceivers[0].sender.replaceTrack = async () => { throw new Error('replacement failed'); };
@@ -96,12 +110,35 @@ test('failed source replacement keeps the old stream alive', async () => {
   assert.equal(screen.track.stopped, true);
 });
 
-test('failed publish signaling retires its transceiver and releases the camera', async () => {
+test('failed publish signaling releases the camera without creating a transceiver', async () => {
   const camera = capture();
   media.getUserMedia = async () => camera;
   video = new LocalVideo(() => pc, () => { throw new Error('socket closed'); }, state => changes.push(state));
   await assert.rejects(video.startCamera(), /socket closed/);
   assert.equal(camera.track.stopped, true);
-  assert.equal(pc.transceivers[0].stopped, true);
+  assert.equal(pc.transceivers.length, 0);
   assert.equal(video.stream, null);
+});
+
+// Chrome creates distinct transceivers for addTransceiver() and remote offers.
+// Only the MID of the SFU's recvonly section may carry our camera in the answer.
+test('camera binds to the offered MID and preserves the incoming video receiver', async () => {
+  await video.startCamera();
+  assert.equal(pc.transceivers.length, 0);
+  const remote = pc.addTransceiver(null, { direction: 'sendonly' }); remote.mid = 'remote'; remote.direction = 'recvonly';
+  const local = pc.addTransceiver(null, { direction: 'sendonly' }); local.mid = 'local'; local.direction = 'recvonly';
+  await video.answerOffer('v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:remote\r\na=sendonly\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:local\r\na=recvonly\r\n');
+  assert.equal(remote.sender.track, null);
+  assert.equal(remote.direction, 'recvonly');
+  assert.equal(local.sender.track, video.stream.track);
+  assert.deepEqual(local.sender.streams, [video.stream]);
+  assert.equal(local.direction, 'sendonly');
+});
+
+test('stopping video before the offer arrives cannot republish a stopped camera', async () => {
+  await video.startCamera(); video.stop();
+  const tx=pc.addTransceiver(null,{direction:'sendonly'});tx.mid='video';tx.direction='recvonly';
+  await video.answerOffer('v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=mid:video\r\na=recvonly\r\n');
+  assert.equal(tx.sender.track,null);
+  assert.deepEqual(signals,[true,false]);
 });
