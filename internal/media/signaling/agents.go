@@ -528,6 +528,11 @@ func (p *pionRing) BindClaims(claims map[string]*routing.Claim) { p.claims = cla
 // held, and keeps it playing for the rest of the transfer (across ring/hold
 // iterations). Idempotent — safe to call every Ring/Hold pass.
 func (p *pionRing) ensureHold() {
+	// An agent-first outbound campaign has no customer yet. Its caller rings
+	// only after the agent accepts; that stage manages the agent's hold music.
+	if p.s.outboundPending(p.roomID) {
+		return
+	}
 	p.holdOnce.Do(func() { p.holdStop = p.s.playHold(p.roomID, p.effectiveMOH()) })
 }
 
@@ -582,7 +587,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 
 	// A carrier caller is the room's SFU port: tell the widget it's a phone call
 	// (no screen share). Read before p.s.mu — the SFU has its own lock.
-	phone := p.s.sfu.HasPort(p.roomID)
+	phone := p.s.sfu.HasPort(p.roomID) || p.s.outboundPending(p.roomID)
 	// Resolve each agent's view of the caller label before p.s.mu: the masking
 	// verdict may need a Redis/DB read.
 	if p.labels == nil {
