@@ -229,6 +229,7 @@ type Server struct {
 	roles        map[room.ParticipantID]partRole                      // signaling-only participant roles (supervisor.go)
 	supers       map[room.RoomID]map[room.ParticipantID]*superSession // supervisor sessions per room (supervisor.go)
 	hangupBy     map[room.RoomID]string                               // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
+	inviteClaims map[room.RoomID]map[string]*routing.Claim            // retained by the answering participant before an invite is withdrawn
 	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
 	agentLegs    map[room.ParticipantID]agentLeg                      // agent call legs counted in onCall, released when the participant leaves
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
@@ -241,7 +242,8 @@ type Server struct {
 	// engine the FreeSWITCH plane uses, so web transfers honor team strategy,
 	// max_wait, reservations and queue depth identically. The pion plane supplies
 	// the transport via a pionRing Effects adapter (see agents.go).
-	router *routing.Router
+	reservations routing.Reservations
+	router       *routing.Router
 
 	// agentRouter is the brain-owned ivrdrive.Agents implementation: it drives
 	// team-resolution → RouteConfig → routing.Router.Run, delegating back to
@@ -275,6 +277,7 @@ func New(cfg Config) *Server {
 		holds:        make(map[room.RoomID]func()),
 		transfers:    make(map[room.RoomID]context.CancelFunc),
 		invites:      make(map[room.RoomID]map[string]bool),
+		inviteClaims: make(map[room.RoomID]map[string]*routing.Claim),
 		agentLegs:    make(map[room.ParticipantID]agentLeg),
 		dialing:      make(map[room.RoomID]bool),
 		agentDials:   make(map[string]int),
@@ -289,6 +292,7 @@ func New(cfg Config) *Server {
 	} else {
 		queue, reserve = routing.NewMemQueue(), routing.NewMemReservations()
 	}
+	s.reservations = reserve
 	s.router = routing.NewRouter(queue, reserve, routing.NewMemRR(), cfg.Presence, cfg.Cache, cfg.Events, s.log)
 	// Queue stints come from the call log when it records them (*callcdr.Log).
 	// A nil Calls leaves stints as an untyped nil; (*callcdr.Log) methods are
@@ -387,6 +391,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var p *room.Participant
+	var joinClaim *routing.Claim
+	defer func() { joinClaim.Release() }() // failures before the participant owns it
 	freshJoin := true
 	if first.Token != "" {
 		if p, _ = s.rooms.Reattach(roomID, first.Token); p != nil {
@@ -408,7 +414,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// ring_all agent is told it) could join a live call: listen in, transfer it
 		// away or dial into it, bypassing supervision. Dev tokens are exempt so the
 		// two-tab local test client still works.
-		if !s.cfg.DevTokens && s.roomOccupied(roomID) && (princ.isVisitor || !s.takeInvite(roomID, princ.sip)) {
+		invited := false
+		if !princ.isVisitor && flowID == "" {
+			invited, joinClaim = s.takeInvite(roomID, princ.sip)
+		}
+		if !s.cfg.DevTokens && s.roomOccupied(roomID) && !invited {
 			s.log.Warn("join refused: call already in progress", "room", roomID, "visitor", princ.isVisitor, "sip", princ.sip)
 			_ = c.send(msg{Type: msgError, Reason: "not invited to this call"})
 			_ = netConn.Close()
@@ -430,6 +440,15 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if flowID == "" && !princ.isVisitor && joinClaim == nil && !s.cfg.DevTokens {
+			joinClaim = routing.Acquire(r.Context(), s.reservations, tenant, princ.sip)
+			if joinClaim == nil {
+				_ = c.send(msg{Type: msgError, Reason: errAgentBusy.Error()})
+				_ = netConn.Close()
+				return
+			}
+		}
+
 		p, err = s.rooms.Join(roomID, first.Name)
 	}
 	if err != nil || p == nil {
@@ -472,7 +491,8 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// the participant's terminal leave, and a reattach doesn't count it again.
 	agentCallLeg := flowID == "" && !princ.isVisitor
 	if agentCallLeg && freshJoin {
-		s.holdAgentLeg(p, tenant, princ.sip)
+		s.holdAgentLeg(p, tenant, princ.sip, joinClaim)
+		joinClaim = nil
 	}
 
 	// Tell the joiner who it is + how to reach ICE, then who's already here.
