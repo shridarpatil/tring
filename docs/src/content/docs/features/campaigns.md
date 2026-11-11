@@ -3,13 +3,14 @@ title: Campaigns and voice blasts
 description: Send uploaded audio, text-to-speech messages, or interactive IVR calls to a recipient list.
 ---
 
-**Campaigns** in the admin console shares one scheduling and reporting workflow across three delivery types:
+**Campaigns** in the admin console shares one scheduling and reporting workflow across four delivery types:
 
 | Type | On answer |
 |---|---|
 | Uploaded audio | Play the prepared message once, then hang up. |
 | Text-to-speech | Play a message generated with the installed Piper voice, then hang up. |
 | Interactive IVR | Run a snapshot of an existing IVR flow, including keypad input and transfers. |
+| Agent-assisted | Ring an available team agent in Tring first; once they accept, dial the client and connect the conversation. |
 
 Campaign management is available to console administrators and `full` API keys. Agent/supervisor sessions and `calls` keys cannot access it.
 
@@ -28,6 +29,14 @@ TTS uses one static message and the configured voice. Spoken template variables 
 
 Saving a draft edit invalidates prepared content. Content and delivery settings become immutable when a campaign starts or is scheduled.
 
+## Agent-assisted campaigns
+
+Choose **Agent-assisted**, select a team, and set the maximum agent wait. **Verify team & prepare** validates the team without requiring audio or TTS. The team's live membership, ringing strategy, ring timeout, and queue timeout apply; the campaign's maximum agent wait also caps the wait. Agents must be online and available in their Tring app/widget. Agent phone-number dialing is not part of this mode.
+
+The customer is not dialed until an agent accepts. Shared reservations prevent an agent being assigned to competing calls. The agent hears the configured tenant hold music while the customer rings; a customer answer connects the conversation and starts its call recording when enabled. An agent leaving before customer answer cancels the dial, and either party ending a connected call ends both legs.
+
+If no agent accepts, the attempt is `no_answer` with reason `agent_not_answered`; no customer call is placed. This uses one attempt and follows the configured maximum attempts and retry delay. A test call also rings the selected team first. Completed means the customer connected to an agent and the conversation ended normally; exceeding the maximum call duration or losing gateway ownership is incomplete.
+
 ## Controls and outcomes
 
 - **Pause** stops new calls. Calls already claimed by the gateway finish.
@@ -39,7 +48,7 @@ Busy, unanswered, and selected temporary carrier failures retry up to the config
 
 Recipient outcomes are `pending`, `active`, `completed`, `incomplete`, `busy`, `no_answer`, `failed`, `unknown`, and `cancelled`. An attempt is initially `queued`, then `active`, then terminal. A recipient waiting for another attempt returns to `pending`; its earlier failure stays in attempt history.
 
-**Answered** records carrier answer. **Completed** records finished message playback or a completed IVR walk. Neither proves a human listened. There is no answering-machine detection.
+**Answered** records carrier answer. **Completed** records finished message playback, a completed IVR walk, or an agent-assisted conversation that connected and ended normally. Neither proves a human listened. There is no answering-machine detection.
 
 Reports provide recipient counts, attempt/answer/completion counts excluding tests, paginated attempt history, call-log links, and recipient CSV export. Exported cells are escaped to prevent spreadsheet formula execution.
 

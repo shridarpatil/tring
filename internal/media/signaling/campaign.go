@@ -64,7 +64,11 @@ func (s *Server) handleControlCampaign(w http.ResponseWriter, r *http.Request) {
 func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 	defer s.endPortCall()
 	cfg := a.Payload.Config
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.RingSeconds+cfg.MaxSeconds+10)*time.Second)
+	agentWait := 0
+	if cfg.Type == "agent" {
+		agentWait = cfg.AgentWaitSeconds
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(agentWait+cfg.RingSeconds+cfg.MaxSeconds+10)*time.Second)
 	defer cancel()
 	// Stop media if durable ownership cannot be renewed. A stale attempt is
 	// classified unknown by recovery and is never silently dialed again.
@@ -119,7 +123,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 				files = append(files, file)
 			}
 		}
-	} else {
+	} else if cfg.Type != "agent" || a.Payload.Prepared.Team != cfg.Team || cfg.Team == "" {
 		reason = "missing_content"
 		return
 	}
@@ -138,6 +142,10 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 	}
 	if err := s.cfg.Campaigns.SetCall(ctx, tenant, a.ID, callID); err != nil {
 		reason = "call_log_unavailable"
+		return
+	}
+	if cfg.Type == "agent" {
+		outcome, reason, answered = s.runAgentCampaign(ctx, tenant, rid, a)
 		return
 	}
 	ringCtx, stopRing := context.WithTimeout(ctx, time.Duration(cfg.RingSeconds)*time.Second)

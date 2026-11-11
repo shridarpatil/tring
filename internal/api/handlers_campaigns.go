@@ -121,6 +121,9 @@ func (s *Server) handleListCampaigns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) campaignCaller(ctx context.Context, tenant uuid.UUID, c campaign.Config) error {
+	if err := s.campaignTeam(ctx, tenant, c); err != nil {
+		return err
+	}
 	if c.WebhookID != "" {
 		var valid bool
 		if err := s.db.Pool.QueryRow(ctx, s.q.CampaignWebhookOwned, tenant, c.WebhookID).Scan(&valid); err != nil {
@@ -449,6 +452,11 @@ func (s *Server) prepareCampaign(ctx context.Context, tenant uuid.UUID, c campai
 		return p, err
 	}
 	switch c.Type {
+	case "agent":
+		if err := s.campaignTeam(ctx, tenant, c); err != nil {
+			return p, err
+		}
+		p.Team = c.Team
 	case "audio":
 		var a Audio
 		err := s.db.Pool.QueryRow(ctx, s.q.GetAudio, c.AudioID, tenant).Scan(&a.ID, &a.TenantID, &a.Name, &a.FilePath, &a.Format, &a.SizeBytes, &a.CreatedAt)
@@ -508,6 +516,22 @@ func (s *Server) prepareCampaign(ctx context.Context, tenant uuid.UUID, c campai
 		p.Flow = flow
 	}
 	return p, nil
+}
+
+func (s *Server) campaignTeam(ctx context.Context, tenant uuid.UUID, c campaign.Config) error {
+	if c.Type != "agent" {
+		return nil
+	}
+	var team Team
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetTeam, tenant, c.Team).Scan(
+		&team.TenantID, &team.Name, &team.Strategy, &team.RingSeconds, &team.MaxWaitSeconds, &team.MohSound,
+		&team.MinLiveAgents, &team.SLASeconds, &team.Hours, &team.CreatedAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("select a team belonging to this tenant")
+		}
+		return err
+	}
+	return nil
 }
 func validateCampaignFlow(f *ivr.Flow) error {
 	ids := map[string]bool{}
@@ -590,6 +614,9 @@ func checkCampaignAudio(path string, maxSeconds int) error {
 func (s *Server) checkCampaignPrepared(p *campaign.Prepared, maxSeconds int) error {
 	if p == nil {
 		return errors.New("prepare and preview campaign content before launch")
+	}
+	if p.Team != "" {
+		return nil
 	}
 	if p.AudioFile != "" {
 		return checkCampaignAudio(p.AudioFile, maxSeconds)

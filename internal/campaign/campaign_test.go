@@ -352,3 +352,18 @@ func TestFutureScheduleAndCancellationLeaveActiveCallAlone(t *testing.T) {
 		t.Fatalf("cancelled call retried: %+v", c)
 	}
 }
+
+func TestAgentCampaignValidation(t *testing.T) {
+	c := testConfig()
+	c.Type, c.Text, c.Team, c.AgentWaitSeconds = "agent", "", "sales", 120
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []func(*Config){func(c *Config) { c.Team = " " }, func(c *Config) { c.AgentWaitSeconds = 0 }, func(c *Config) { c.AgentWaitSeconds = 3601 }} {
+		bad := c
+		change(&bad)
+		if bad.Validate() == nil {
+			t.Fatalf("accepted invalid agent campaign: %+v", bad)
+		}
+	}
+}

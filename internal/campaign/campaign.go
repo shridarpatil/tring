@@ -14,25 +14,28 @@ import (
 
 // Config is the editable delivery configuration. A launched campaign is immutable.
 type Config struct {
-	WebhookID      string `json:"webhook_id,omitempty"`
-	Type           string `json:"type"`
-	AudioID        string `json:"audio_id,omitempty"`
-	Text           string `json:"text,omitempty"`
-	FlowID         string `json:"flow_id,omitempty"`
-	CallerID       string `json:"caller_id"`
-	Timezone       string `json:"timezone"`
-	WindowStart    string `json:"window_start"`
-	WindowEnd      string `json:"window_end"`
-	Concurrency    int    `json:"concurrency"`
-	CallsPerMinute int    `json:"calls_per_minute"`
-	MaxAttempts    int    `json:"max_attempts"`
-	RetryMinutes   int    `json:"retry_minutes"`
-	RingSeconds    int    `json:"ring_seconds"`
-	MaxSeconds     int    `json:"max_seconds"`
+	WebhookID        string `json:"webhook_id,omitempty"`
+	Type             string `json:"type"`
+	AudioID          string `json:"audio_id,omitempty"`
+	Text             string `json:"text,omitempty"`
+	FlowID           string `json:"flow_id,omitempty"`
+	Team             string `json:"team,omitempty"`
+	AgentWaitSeconds int    `json:"agent_wait_seconds,omitempty"`
+	CallerID         string `json:"caller_id"`
+	Timezone         string `json:"timezone"`
+	WindowStart      string `json:"window_start"`
+	WindowEnd        string `json:"window_end"`
+	Concurrency      int    `json:"concurrency"`
+	CallsPerMinute   int    `json:"calls_per_minute"`
+	MaxAttempts      int    `json:"max_attempts"`
+	RetryMinutes     int    `json:"retry_minutes"`
+	RingSeconds      int    `json:"ring_seconds"`
+	MaxSeconds       int    `json:"max_seconds"`
 }
 
 // Prepared contains immutable, tenant-owned playable assets.
 type Prepared struct {
+	Team      string    `json:"team,omitempty"`
 	AudioFile string    `json:"audio_file,omitempty"`
 	Flow      *ivr.Flow `json:"flow,omitempty"`
 }
@@ -106,8 +109,15 @@ func (c Config) Validate() error {
 		if _, err := uuid.Parse(c.FlowID); err != nil {
 			return errors.New("select an IVR flow")
 		}
+	case "agent":
+		if strings.TrimSpace(c.Team) == "" || len(c.Team) > 200 {
+			return errors.New("select a team")
+		}
+		if c.AgentWaitSeconds < 5 || c.AgentWaitSeconds > 3600 {
+			return errors.New("agent_wait_seconds must be 5–3600")
+		}
 	default:
-		return errors.New("type must be audio, tts, or ivr")
+		return errors.New("type must be audio, tts, ivr, or agent")
 	}
 	if c.CallerID == "" {
 		return errors.New("caller_id is required")
