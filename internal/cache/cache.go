@@ -102,6 +102,24 @@ func (c *Cache) SetNX(ctx context.Context, key string, val []byte, ttl time.Dura
 	return c.rdb.SetNX(ctx, key, val, ttl).Result()
 }
 
+// CompareDelete releases an owned key without deleting a replacement owner's key.
+func (c *Cache) CompareDelete(ctx context.Context, key, owner string) (bool, error) {
+	if c == nil {
+		return false, errors.New("cache: redis not configured")
+	}
+	n, err := c.rdb.Eval(ctx, `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end`, []string{key}, owner).Int()
+	return n == 1, err
+}
+
+// CompareExpire renews a lease only while it still belongs to the caller.
+func (c *Cache) CompareExpire(ctx context.Context, key, owner string, ttl time.Duration) (bool, error) {
+	if c == nil {
+		return false, errors.New("cache: redis not configured")
+	}
+	n, err := c.rdb.Eval(ctx, `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end`, []string{key}, owner, ttl.Milliseconds()).Int()
+	return n == 1, err
+}
+
 // GetDel atomically reads and deletes key, for single-use values such as SSO
 // state and one-time codes. Returns (val, true, nil) for the one consumer,
 // (nil, false, nil) on a miss (never set, expired or already consumed), and

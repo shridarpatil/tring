@@ -48,7 +48,6 @@ type RouteConfig struct {
 const (
 	defaultMaxWait     = 2 * time.Minute
 	defaultRingAttempt = 30 * time.Second
-	reserveBuffer      = 5 * time.Second
 )
 
 // Outcome values returned by Run.
@@ -108,27 +107,59 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 
 		avail := r.available(ctx, cfg, candidates)
 		if len(avail) > 0 && r.queue.IsHead(ctx, qkey, waiter) {
-			r.queue.Remove(ctx, qkey, waiter) // free our spot so the next waiter can claim too
-			r.publishDepth(ctx, cfg)
-
 			ordered := OrderByStrategy(ctx, r.pres, r.rr, cfg.TenantID, cfg.Team, cfg.Strategy, avail)
-			release := r.reserveAgents(ctx, cfg.TenantID, ordered, cfg.RingSeconds+reserveBuffer)
-			res, err := eff.Ring(ctx, ordered, cfg.RingSeconds)
-			release()
-			if err != nil {
-				r.log.Warn("ring attempt failed", "team", cfg.Team, "err", err)
-				return OutcomeAbandoned, false, ""
+			claimed, claims := r.reserveAgents(ctx, cfg.TenantID, ordered)
+			// Availability may have changed after the first read (e.g. an answer
+			// or Away update). Recheck while we own the agent, ignoring our own
+			// reservation. Only successful claimants may send a ring.
+			fresh := FilterAvailable(ctx, r.pres, nil, cfg.TenantID, candidates(ctx))
+			allowed := make(map[string]bool, len(fresh))
+			for _, sip := range fresh {
+				allowed[sip] = true
 			}
-			if res.Transferred {
-				return OutcomeAbandoned, true, res.Label
+			ordered = nil
+			for _, sip := range claimed {
+				if allowed[sip] {
+					ordered = append(ordered, sip)
+				} else {
+					claims[sip].Release()
+					delete(claims, sip)
+				}
 			}
-			if res.Answered {
-				return OutcomeCompleted, false, res.Label
+			if len(ordered) > 0 {
+				r.queue.Remove(ctx, qkey, waiter)
+				r.publishDepth(ctx, cfg)
+				ringCtx, cancel := context.WithCancel(ctx)
+				for _, claim := range claims {
+					go func(c *Claim) {
+						select {
+						case <-c.Lost():
+							cancel()
+						case <-ringCtx.Done():
+						}
+					}(claim)
+				}
+				if binder, ok := eff.(ClaimBinder); ok {
+					binder.BindClaims(claims)
+				}
+				res, err := eff.Ring(ringCtx, ordered, cfg.RingSeconds)
+				cancel()
+				for _, claim := range claims {
+					claim.Release()
+				}
+				if err != nil {
+					r.log.Warn("ring attempt failed", "team", cfg.Team, "err", err)
+					return OutcomeAbandoned, false, ""
+				}
+				if res.Transferred {
+					return OutcomeAbandoned, true, res.Label
+				}
+				if res.Answered {
+					return OutcomeCompleted, false, res.Label
+				}
+				// Nobody answered. Rejoin the line before the next attempt.
+				waiter = r.queue.Enqueue(ctx, qkey, cfg.Priority)
 			}
-			// Nobody answered (raced busy / declined) — rejoin the line and fall
-			// through to the deadline check + hold so a never-answering-but-available
-			// agent can't spin the loop.
-			waiter = r.queue.Enqueue(ctx, qkey, cfg.Priority)
 		}
 
 		if time.Now().After(deadline) {
@@ -152,20 +183,17 @@ func (r *Router) available(ctx context.Context, cfg RouteConfig, candidates func
 	return FilterAvailable(ctx, r.pres, r.reserve, cfg.TenantID, candidates(ctx))
 }
 
-// reserveAgents marks the agents being rung so a concurrent dequeue queues
-// instead of double-picking them; returns a release run on a fresh context (it
-// fires after a Sync ring when the call ctx may be done; the TTL is the backstop).
-func (r *Router) reserveAgents(ctx context.Context, tenantID string, sips []string, ttl time.Duration) func() {
+// reserveAgents claims only free slots, preserving the strategy's order.
+func (r *Router) reserveAgents(ctx context.Context, tenantID string, sips []string) ([]string, map[string]*Claim) {
+	var claimed []string
+	claims := make(map[string]*Claim)
 	for _, sip := range sips {
-		r.reserve.Reserve(ctx, ResKey(tenantID, sip), ttl)
-	}
-	return func() {
-		rctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		for _, sip := range sips {
-			r.reserve.Release(rctx, ResKey(tenantID, sip))
+		if claim := Acquire(ctx, r.reserve, tenantID, sip); claim != nil {
+			claimed = append(claimed, sip)
+			claims[sip] = claim
 		}
 	}
+	return claimed, claims
 }
 
 func (r *Router) publishDepth(ctx context.Context, cfg RouteConfig) {

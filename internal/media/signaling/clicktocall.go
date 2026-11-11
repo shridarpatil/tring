@@ -19,6 +19,7 @@ import (
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/routing"
 )
 
 // callAgentTimeout bounds how long the agent's widget has to auto-answer. A var
@@ -77,15 +78,27 @@ func (s *Server) Call(ctx context.Context, tenant uuid.UUID, req CallRequest) (u
 	if busy {
 		return uuid.Nil, errAgentBusy
 	}
+	claim := routing.Acquire(ctx, s.reservations, tenant.String(), req.AgentSIP)
+	if claim == nil {
+		return uuid.Nil, errAgentBusy
+	}
+	// The first availability read may have preceded another call's answer.
+	if s.agentOnCall(tenant.String(), req.AgentSIP) ||
+		(s.cfg.Presence.Enabled() && !s.cfg.Presence.Available(ctx, tenant.String(), req.AgentSIP)) {
+		claim.Release()
+		return uuid.Nil, errAgentBusy
+	}
 
 	name := "call-" + uuid.NewString()
 	roomID := room.RoomID(tenant.String() + "/" + name)
 	// Reserve the room's outbound slot now: the agent can't msgDial over it, and
 	// their join below isn't taken as the answer (outboundPending).
-	release, ok := s.beginDial(roomID, agentKey)
+	releaseDial, ok := s.beginDial(roomID, agentKey)
 	if !ok {
+		claim.Release()
 		return uuid.Nil, errAgentBusy
 	}
+	release := func() { releaseDial(); claim.Release() }
 	if !s.startPortCall() {
 		release()
 		return uuid.Nil, errDraining
@@ -97,17 +110,27 @@ func (s *Server) Call(ctx context.Context, tenant uuid.UUID, req CallRequest) (u
 		release()
 		return uuid.Nil, errConnectNoCDR
 	}
-	go s.runCall(roomID, name, tenant, req, to, release)
+	go s.runCall(roomID, name, tenant, req, to, claim, release)
 	return callID, nil
 }
 
 // runCall places a Call: the agent's widget first, then the customer, then
 // waits for either side to hang up.
-func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req CallRequest, to string, release func()) {
+func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req CallRequest, to string, claim *routing.Claim, release func()) {
 	defer s.endPortCall()
 	defer release()
+	ctx, cancelClaim := context.WithCancel(context.Background())
+	defer cancelClaim()
+	go func() {
+		select {
+		case <-claim.Lost():
+			cancelClaim()
+			s.endCallRoom(roomID)
+		case <-ctx.Done():
+		}
+	}()
 
-	agentPID, ok := s.ringCallAgent(roomID, name, tenant.String(), req.AgentSIP, req.Label)
+	agentPID, ok := s.ringCallAgent(ctx, roomID, name, tenant.String(), req.AgentSIP, req.Label, claim)
 	if !ok {
 		s.log.Warn("call: agent didn't answer", "room", roomID, "sip", req.AgentSIP)
 		s.cfg.Calls.Failed(string(roomID), "agent_not_answered")
@@ -119,7 +142,7 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	// The agent hears hold music while the customer rings, and hanging up stops
 	// the ring.
 	stopMusic := s.playHold(roomID, s.tenantHoldMusic(roomID))
-	octx, cancel := context.WithTimeout(context.Background(), connectRingTimeout)
+	octx, cancel := context.WithTimeout(ctx, connectRingTimeout)
 	go s.cancelWhenEmpty(octx, roomID, cancel)
 	leg, _, _, err := s.originateOut(octx, tenant, to, req.CallerID, func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
@@ -167,31 +190,54 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	}
 	s.log.Info("call: connected", "room", roomID)
 
-	<-leg.Done
+	select {
+	case <-leg.Done:
+	case <-ctx.Done():
+	}
 	s.endOutboundRoom(roomID, "client_hangup") // /v1/calls/connect's name for it
 }
 
 // ringCallAgent rings sip's widget with an auto-answer incoming for the room and
 // waits for them to join it, returning their participant id.
-func (s *Server) ringCallAgent(roomID room.RoomID, name, tenant, sip, label string) (room.ParticipantID, bool) {
+func (s *Server) ringCallAgent(ctx context.Context, roomID room.RoomID, name, tenant, sip, label string, claim *routing.Claim) (room.ParticipantID, bool) {
 	ring := make(chan struct{})
 	s.mu.Lock()
 	c := s.agents[tenant][sip]
 	s.rings[roomID] = ring // closed by signalRing when the agent joins
+	s.invites[roomID] = map[string]bool{sip: true}
+	s.inviteClaims[roomID] = map[string]*routing.Claim{sip: claim}
+	declined := make(chan struct{}, 1)
+	s.declines[roomID] = func(who string) {
+		if who == sip {
+			select {
+			case declined <- struct{}{}:
+			default:
+			}
+		}
+	}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		if s.rings[roomID] == ring {
+		if s.rings[roomID] == ring || s.rings[roomID] == nil {
 			delete(s.rings, roomID)
+			delete(s.invites, roomID)
+			delete(s.inviteClaims, roomID)
+			delete(s.declines, roomID)
 		}
 		s.mu.Unlock()
 	}()
-	if c == nil || c.send(msg{Type: msgIncoming, Room: name, From: s.callerLabelFor(tenant, sip, label, ""), Auto: true, Phone: true}) != nil {
+	if ctx.Err() != nil || c == nil || c.send(msg{Type: msgIncoming, Room: name, From: s.callerLabelFor(tenant, sip, label, ""), Auto: true, Phone: true}) != nil {
 		return "", false
 	}
 	select {
 	case <-ring:
 	case <-time.After(callAgentTimeout):
+		_ = c.send(msg{Type: msgCancelRing, Room: name})
+		return "", false
+	case <-ctx.Done():
+		_ = c.send(msg{Type: msgCancelRing, Room: name})
+		return "", false
+	case <-declined:
 		_ = c.send(msg{Type: msgCancelRing, Room: name})
 		return "", false
 	}

@@ -73,17 +73,17 @@ func TestRedisReservations(t *testing.T) {
 	if r.Reserved(ctx, key) {
 		t.Fatal("nothing reserved yet")
 	}
-	r.Reserve(ctx, key, time.Minute)
+	r.Reserve(ctx, key, "owner", time.Minute)
 	if !r.Reserved(ctx, key) {
 		t.Fatal("should be reserved")
 	}
-	r.Release(ctx, key)
+	r.Release(ctx, key, "owner")
 	if r.Reserved(ctx, key) {
 		t.Fatal("should be free after release")
 	}
 
 	// Native Redis TTL expiry.
-	r.Reserve(ctx, key, 150*time.Millisecond)
+	r.Reserve(ctx, key, "owner", 150*time.Millisecond)
 	time.Sleep(300 * time.Millisecond)
 	if r.Reserved(ctx, key) {
 		t.Fatal("reservation should expire via Redis TTL")
