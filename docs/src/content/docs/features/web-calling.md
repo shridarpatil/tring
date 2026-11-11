@@ -62,6 +62,10 @@ The browser never holds your API key. Your backend calls Tring with the key and 
 
 `client_ref` is trusted because only a holder of your API key can mint the token. Pass only identities your backend has verified.
 
+The visitor widget shows **Calling…** while the IVR or routing is waiting for an agent. Its elapsed timer starts when an agent accepts. In a custom UI, use the guest SDK's `answered` event to start the timer; `connected` only means the browser has connected to gateway media.
+
+For waiting music, upload an audio file to the audio library and select it as the tenant's **Hold music** in Settings (or set `hold_music` through `PATCH /v1/tenants/me`). Routing plays it while ringing or queueing, and stops it when the answering agent's media is ready. A team's hold-music setting overrides the tenant setting. Without a configured audio file, the gateway stays silent while waiting; IVR prompts play independently.
+
 ## Agent calls
 
 1. Your backend mints an agent token with the API key:
@@ -78,6 +82,16 @@ The browser never holds your API key. Your backend calls Tring with the key and 
 4. While joined, the agent can hold, resume, transfer and send DTMF. See [Call control](/tring/features/call-control/).
 
 The token is only used to open sockets, so a 5-minute lifetime is enough; the widget fetches a fresh one from your endpoint when it reconnects. Agents cannot place calls from the browser through the SDK; outbound calls go through your backend (see [Outbound calls](/tring/features/outbound-calls/)).
+
+## Camera video and screen sharing
+
+The agent and visitor widgets have a **Camera** button during a web call. Cameras start off; each person chooses when to enable theirs and grants browser permission. Both cameras can run at the same time. Each person sees the other participant's video and a muted, mirrored preview of their own camera in the bottom-right corner. The client keypad stays closed until **Keypad** is selected; selecting it again returns to the video. The visitor call opens in a compact floating panel that can be minimized. **Full screen** expands the video only when selected; **Exit full screen** or Escape returns to the panel.
+
+Each participant publishes one video source: starting screen sharing replaces their camera, and starting the camera replaces their screen share. Turning video off leaves the microphone connected. Camera permission errors also leave the audio call running. Video capture stops on hangup or reconnect; enable it again after reconnecting.
+
+When **Record calls** is enabled, calls with video produce a side-by-side MP4 with the **agent on the left and client on the right**, including both voices. Camera-off periods show an avatar labelled **Agent** or **Client** and **Camera off**, and screen sharing appears in that person's panel. See [Recording and call logs](/tring/features/recording-and-call-logs/).
+
+Camera access needs HTTPS or localhost. Embedded widgets also need their host iframe to permit camera and microphone access. Video uses VP8 or VP9 through the same gateway and TURN configuration as audio.
 
 ## Page-refresh grace
 

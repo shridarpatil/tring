@@ -8,9 +8,12 @@ description: Add a "Call us" button to any page. Visitors call into your IVR ove
 Out of the box, the widget renders:
 
 - a floating launcher button in the bottom-right corner (you can use your own button instead)
-- a full-screen call sheet with call status and a timer, a 12-key dialpad, and **Mute**, **Share** (screen) and **End** buttons
-- a ringback tone while the call connects
-- the agent's shared screen, if they share it
+- a compact floating call panel with call status, **Mute**, **Keypad**, **Camera**, **Share** (screen) and **End** buttons; the keypad opens only when selected
+- **Calling…** until an agent accepts, then a timer starting at **00:00**
+- a ringback tone while connecting to the gateway, followed by IVR audio and configured waiting music
+- the agent's camera or shared screen, with your own video preview in the bottom-right corner and an explicit **Full screen** control
+
+For waiting music, upload an audio file to the audio library and select it in **Settings → Hold music**. Team hold music overrides the tenant setting. Music plays while routing rings or queues the call, stopping when the answering agent's media connects; without a configured file, waiting is silent. See [Web calling](/tring/features/web-calling/) for routing and [Recording and call logs](/tring/features/recording-and-call-logs/) for recording both participants.
 
 ## How it works
 
@@ -260,7 +263,7 @@ The widget sends cookies with the request. If your credentials endpoint is on a 
 
 ## Events and callbacks
 
-The widget doesn't expose its session or any callbacks to the page. It drives its own UI. If you need to react to call events (for analytics, or to build your own UI), use `TringGuest` from the [JavaScript API](/tring/sdk/javascript-api/#tringguest) instead. It emits `connecting`, `ringing`, `connected`, `ended`, `remote-video` and `error`.
+The widget doesn't expose its session or any callbacks to the page. It drives its own UI. If you need to react to call events (for analytics, or to build your own UI), use `TringGuest` from the [JavaScript API](/tring/sdk/javascript-api/#tringguest) instead. It emits `connecting`, `ringing`, `connected`, `answered`, `ended`, `local-video`, `remote-video` and `error`. Start conversation timers on `answered`; `connected` means the gateway/IVR media is ready, before an agent necessarily answers.
 
 `voice.js` sets `window.TringGuest` when it loads, so you can use the class without a bundler. If you load `voice.js` with no `data-*` attributes to get only the class, the widget logs a harmless "provide data-gateway-url … or data-credentials-url" error to the console and renders nothing.
 
@@ -282,13 +285,14 @@ Hooks you can target:
 | Selector | What it is |
 |---|---|
 | `.tring-guest-launcher` | The floating launcher button (fixed, bottom-right, `z-index: 999998`) |
-| `#tring-guest-ui` | The full-screen call sheet (`z-index: 999999`). It's visible when it has the class `.tring-guest-visible`. |
-| `#tring-guest-ui[data-state="…"]` | Call state: `idle`, `connecting`, `ringing`, `connected` or `ended`. The dialpad and the action buttons show only in `connected`. |
-| `#tring-guest-ui.tring-guest-has-video` | Set while the agent is sharing their screen |
+| `#tring-guest-ui` | The floating call panel (`z-index: 999999`). It's visible when it has the class `.tring-guest-visible`. |
+| `#tring-guest-ui[data-state="…"]` | Media/UI state: `idle`, `connecting`, `ringing`, `connected` or `ended`. `connected` allows IVR controls and does not imply an agent has answered. |
+| `#tring-guest-ui.tring-guest-has-video` | Set while remote video is available |
+| `#tring-guest-ui.tring-guest-keypad-open` | Set while the visitor has opened the keypad |
 | `.tring-guest-card`, `.tring-guest-title`, `.tring-guest-sub`, `.tring-guest-avatar` | The parts of the call sheet |
 | `.tring-guest-keypad`, `.tring-guest-key`, `.tring-guest-dialed` | The dialpad and the digits pressed so far |
 | `.tring-guest-mute`, `.tring-guest-share`, `.tring-guest-end` | The action buttons. `.is-active` is set while mute or screen sharing is on. |
-| `.tring-guest-remote` | The `<video>` element for the agent's shared screen |
+| `.tring-guest-remote`, `.tring-guest-local` | The agent's camera/screen and your muted local video preview |
 
 ## Troubleshooting
 
@@ -304,5 +308,6 @@ Hooks you can target:
 | "signaling socket error" or "token rejected" | You're using `data-gateway-url` without a token, the token expired (2 minutes), or a token was used twice (for example, a cached response). Mint a new one per call and send `Cache-Control: no-store`. |
 | Stuck on "Calling…", no audio | The browser can't reach the gateway over UDP. Check `TRING_GATEWAY_PUBLIC_URL` and `TRING_PUBLIC_IP`, and configure TURN for restrictive networks. |
 | No ringback or audio until you tap | The browser blocked autoplay. The Call tap normally unlocks it. Make sure calls start from a real click. |
+| Agent rings but the caller hears silence while waiting | Upload an audio file and select tenant or team **Hold music**. An empty setting provides no waiting music. |
 
 For a working setup, run [`examples/demo-portal/`](https://github.com/shridarpatil/tring/tree/main/examples/demo-portal). `/support` is an anonymous visitor with an inline button, and `/portal` is a logged-in visitor with `client_ref`. See also [Web calling](/tring/features/web-calling/).

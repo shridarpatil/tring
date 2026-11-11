@@ -557,10 +557,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
 	// caller's own join.
 	// A click-to-call is answered by the customer instead (clicktocall.go).
-	if agentCallLeg && s.cfg.Calls != nil && !s.outboundPending(roomID) {
-		if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
-			s.sfu.AddSink(roomID, p.ID(), sink)
+	if agentCallLeg && !s.outboundPending(roomID) {
+		if s.cfg.Calls != nil {
+			if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
+				s.sfu.AddSink(roomID, p.ID(), sink)
+			}
 		}
+		s.notifyVisitorsAnswered(roomID)
+	} else if princ.isVisitor && len(s.agentPIDs(roomID)) > 0 {
+		// Restore answer state when a visitor reconnects to an existing call.
+		_ = c.send(msg{Type: msgAnswered})
 	}
 	// If a transfer is ringing for this room, this join is the agent answering:
 	// signalRing resolves the pending ring.
