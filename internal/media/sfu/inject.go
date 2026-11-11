@@ -103,8 +103,22 @@ func (s *SFU) AddSink(roomID room.RoomID, pid room.ParticipantID, sink room.Trac
 		pub = &publication{tracks: make(map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP)}
 		r.pubs[pid] = pub
 	}
+	// Answering arms the recorder and attaches the agent's sink. Request fresh
+	// keyframes from both sides so cameras already running before answer can
+	// start a decodable capture at the same recording boundary.
+	var keyframes []func()
+	if _, ok := sink.(room.VideoSink); ok {
+		for _, publication := range r.pubs {
+			if request := s.keyframe[publication.tracks[webrtc.RTPCodecTypeVideo]]; request != nil {
+				keyframes = append(keyframes, request)
+			}
+		}
+	}
 	s.mu.Unlock()
 	pub.addSink(sink)
+	for _, request := range keyframes {
+		request()
+	}
 }
 
 // addSink appends a sink, swapping the atomic slice so the copy loop sees it
@@ -173,6 +187,29 @@ func teeSinks(pub *publication, pid room.ParticipantID, pkt *rtp.Packet) {
 	if sp := pub.sinks.Load(); sp != nil {
 		for _, sk := range *sp {
 			_ = sk.WriteRTP(pid, pkt)
+		}
+	}
+}
+
+func teeVideoSinks(pub *publication, pid room.ParticipantID, stream, codec string, pkt *rtp.Packet) {
+	if sp := pub.sinks.Load(); sp != nil {
+		for _, sink := range *sp {
+			if video, ok := sink.(room.VideoSink); ok {
+				_ = video.WriteVideoRTP(pid, stream, codec, pkt)
+			}
+		}
+	}
+}
+
+func endVideoSinks(pub *publication, pid room.ParticipantID, stream string) {
+	if pub == nil || stream == "" {
+		return
+	}
+	if sp := pub.sinks.Load(); sp != nil {
+		for _, sink := range *sp {
+			if video, ok := sink.(room.VideoSink); ok {
+				video.EndVideo(pid, stream)
+			}
 		}
 	}
 }

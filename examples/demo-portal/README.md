@@ -33,8 +33,8 @@ See `docs/src/content/docs/architecture/overview.md` (trusted-identity sequence)
 - A running Tring stack (e.g. `make up`) reachable at `TRING_API_BASE`.
 - The **media gateway** reachable by the browser at `TRING_GATEWAY_URL`
   (raw WebRTC — FreeSWITCH stays private).
-- A **tenant API key** (`tk_live_…`) for the trusted flows. Server-side only —
-  never put it in a page. (The anonymous `/support` flow works without it.)
+- A **tenant API key** (`tk_live_…`) for all three flows, including anonymous
+  `/support` calls. Server-side only — never put it in a page.
 - A flow for visitors to land in: the tenant's **support flow** (console →
   Settings) or `TRING_FLOW_ID`.
 - An **agent** for `/crm`: the tenant's first agent is used automatically, or set
@@ -49,13 +49,14 @@ See `docs/src/content/docs/architecture/overview.md` (trusted-identity sequence)
 ## Run
 
 ```bash
+cd examples/demo-portal
 pip install -r requirements.txt
 
 export TRING_API_BASE=http://localhost:8085      # Tring REST API
 export TRING_GATEWAY_URL=http://localhost:8087   # media gateway (browser-reachable)
-export TRING_API_KEY=tk_live_xxxxxxxxxxxx         # tenant API key (trusted flows)
-export TRING_FLOW_ID=<flow-uuid>                  # IVR flow visitors land in
-export TRING_AGENT_ID=<agent-uuid>                # optional; else the first agent
+export TRING_API_KEY=tk_live_xxxxxxxxxxxx         # tenant API key (all flows)
+export TRING_FLOW_ID='your-flow-uuid'             # IVR flow visitors land in
+export TRING_AGENT_ID='your-agent-uuid'           # optional; else the first agent
 
 python app.py
 ```
@@ -83,6 +84,63 @@ Open <http://localhost:5000> and pick a demo:
 
 End-to-end test: open `/crm` in one tab (agent online) and `/support` in another
 (visitor), call support, and have the IVR transfer to the agent.
+
+## Set up calling on your portal
+
+1. In Tring, create an agent and an active flow that transfers to that agent or
+   their team. Select it as the default support flow in **Settings**, or pass
+   its UUID when minting visitor credentials.
+2. Add a visitor credentials endpoint to your portal backend. Check the user's
+   session, then call `POST /v1/guest-credentials` with the tenant API key and
+   `{ "flow_id": "your-flow-uuid", "client_ref": "verified-customer-id" }`.
+   Return Tring's JSON unchanged with `Cache-Control: no-store`. For anonymous
+   callers, omit `client_ref` and apply your CAPTCHA/rate limit checks.
+3. Add the visitor widget to the customer page:
+
+   ```html
+   <button data-tring-call>Call support</button>
+   <script src="https://tring.example.com/sdk/voice.js"
+           data-credentials-url="/tring/visitor-credentials"
+           data-render-button="false"
+           data-title="Support"></script>
+   ```
+
+4. Add an agent token endpoint to the agent portal backend. Check the agent's
+   session, call `GET /v1/agents/{id}/token` for that agent using the tenant API
+   key, and return the JSON. Add the agent widget to that page:
+
+   ```html
+   <script src="https://tring.example.com/sdk/agent.js"
+           data-token-url="/tring/agent-token"></script>
+   ```
+
+5. Upload waiting music to Tring's audio library and select it under
+   **Settings → Hold music**. A team's hold music overrides the tenant setting.
+   Music plays while routing rings or queues the call and stops when the
+   answering agent's media connects. Without a configured file, waiting is
+   silent. IVR prompts play separately.
+6. Enable **Record calls** if recordings are required. Both participants can
+   enable **Camera** during the call. Video recordings show agent left and
+   client right, include both voices, and show labelled placeholders while a
+   camera is off. Review recordings in the Tring console's **Calls** page.
+
+Replace `https://tring.example.com` with your Tring API URL. Serve production
+portal pages over HTTPS and make the gateway reachable by browsers; configure
+TURN where direct UDP is blocked. An iframe must allow camera, microphone, and
+fullscreen access. Keep both credentials endpoints on their portal's origin.
+
+The client panel opens compactly, with **Keypad**, **Camera**, **Share**, and
+an explicit video **Full screen** control. It shows **Calling…** until the
+agent accepts, then starts the timer at **00:00**. Custom clients should start
+timers on `TringGuest`'s `answered` event; `connected` means gateway/IVR media
+is ready and can happen before an agent answers.
+
+Detailed guides:
+
+- [Visitor widget and backend examples](../../docs/src/content/docs/sdk/visitor-widget.md)
+- [Agent widget and token endpoint](../../docs/src/content/docs/sdk/agent-widget.md)
+- [JavaScript API and events](../../docs/src/content/docs/sdk/javascript-api.md)
+- [Video recordings](../../docs/src/content/docs/features/recording-and-call-logs.md)
 
 ## How it maps to your real app
 

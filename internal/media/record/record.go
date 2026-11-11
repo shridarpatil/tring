@@ -48,25 +48,30 @@ type Recorder struct {
 	dir    string
 	callID string
 
-	mu      sync.Mutex
-	roles   map[room.ParticipantID]string
-	writers map[room.ParticipantID]*oggwriter.OggWriter
-	paths   map[room.ParticipantID]string
-	offsets map[room.ParticipantID]time.Duration // first-packet offset from armedAt
-	armed   bool
-	armedAt time.Time
-	closed  bool
+	mu         sync.Mutex
+	roles      map[room.ParticipantID]string
+	writers    map[room.ParticipantID]*oggwriter.OggWriter
+	paths      map[room.ParticipantID]string
+	offsets    map[room.ParticipantID]time.Duration // first-packet offset from armedAt
+	armed      bool
+	armedAt    time.Time
+	closed     bool
+	closedAt   time.Time
+	videos     map[string]*videoCapture
+	endedVideo map[string]bool
 }
 
 // New builds a recorder that writes <dir>/<callID>-<pid>.ogg per participant.
 func New(dir, callID string) *Recorder {
 	return &Recorder{
-		dir:     dir,
-		callID:  callID,
-		roles:   map[room.ParticipantID]string{},
-		writers: map[room.ParticipantID]*oggwriter.OggWriter{},
-		paths:   map[room.ParticipantID]string{},
-		offsets: map[room.ParticipantID]time.Duration{},
+		dir:        dir,
+		callID:     callID,
+		roles:      map[room.ParticipantID]string{},
+		writers:    map[room.ParticipantID]*oggwriter.OggWriter{},
+		paths:      map[room.ParticipantID]string{},
+		offsets:    map[room.ParticipantID]time.Duration{},
+		videos:     map[string]*videoCapture{},
+		endedVideo: map[string]bool{},
 	}
 }
 
@@ -130,7 +135,16 @@ func (r *Recorder) Close() error {
 		return nil
 	}
 	r.closed = true
+	r.closedAt = time.Now()
 	var firstErr error
+	for _, v := range r.videos {
+		if v.end.IsZero() {
+			v.end = r.closedAt
+		}
+		if err := v.writer.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	for _, w := range r.writers {
 		if err := w.Close(); err != nil && firstErr == nil {
 			firstErr = err

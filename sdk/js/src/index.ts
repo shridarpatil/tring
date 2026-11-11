@@ -3,6 +3,7 @@
 
 export { Tring } from "./tring";
 export { TringGuest } from "./guest";
+export type { LocalVideoState, VideoSource } from "./video";
 export type {
   Call,
   CallStatus,

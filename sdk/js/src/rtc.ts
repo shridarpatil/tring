@@ -7,6 +7,7 @@
 // presence socket and produces an RtcCall on accept. Speaks the FROZEN contract
 // in rtc-protocol.ts.
 
+import { LocalVideo, type LocalVideoState } from "./video";
 import { Emitter } from "./events";
 import {
   ClientMsgType,
@@ -73,12 +74,9 @@ export interface RtcCallOpts {
    */
   mic?: MediaStream;
   /**
-   * Keep the mic alive when this call tears down. Set by a caller that owns a
-   * long-lived mic shared across calls (the agent, whose mic is captured once at
-   * go-online and reused for every call). Default false: a per-call mic — the
-   * visitor's, captured fresh in the gesture — is stopped on teardown so the
-   * device's in-use indicator clears. Without this, an agent's second call would
-   * publish a dead track (the first call's teardown stopped the shared mic).
+   * Keep an externally owned mic alive when this call tears down. The owner
+   * must stop its tracks. Default false: both agent and visitor calls release
+   * their microphone on teardown so the device's in-use indicator clears.
    */
   keepMic?: boolean;
   /** Reconnect attempts on an unexpected socket drop (default 3; 0 disables). */
@@ -89,6 +87,8 @@ export type RtcCallEvent =
   | { type: "connecting" }
   | { type: "connected" }
   | { type: "answered" }
+  | ({ type: "local-video" } & LocalVideoState)
+  | { type: "remote-video"; stream: MediaStream | null }
   | { type: "track"; kind: "audio" | "video"; stream: MediaStream; track: MediaStreamTrack }
   | { type: "peer-joined"; participantId: string; name?: string }
   | { type: "peer-left"; participantId: string }
@@ -107,8 +107,12 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private ws: WebSocket | null = null;
   private pc: RTCPeerConnection | null = null;
   private mic: MediaStream | null = null;
-  private screen: MediaStream | null = null;
-  private screenSender: RTCRtpSender | null = null;
+  private remoteVideoTrack: MediaStreamTrack | null = null;
+  private video = new LocalVideo(
+    () => this.pc,
+    (publish) => this.send({ type: publish ? ClientMsgType.Publish : ClientMsgType.Unpublish, kind: "video" }),
+    (state) => this.emit({ type: "local-video", ...state }),
+  );
   private sessionToken = "";
   private remoteDescSet = false;
   private pendingIce: RTCIceCandidateInit[] = [];
@@ -127,18 +131,29 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   /** join captures the mic and connects. Call SYNCHRONOUSLY inside the user
    *  gesture (before any unrelated await) so iOS Safari grants the mic. */
   async join(): Promise<void> {
-    if (this.opts.mic) {
-      this.mic = this.opts.mic; // captured earlier in the gesture
-    } else {
-      const problem = secureContextProblem();
-      if (problem) throw new Error(problem);
-      try {
-        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (e) {
-        throw micError(e);
+    try {
+      if (this.opts.mic) {
+        this.mic = this.opts.mic; // captured earlier in the gesture
+      } else {
+        const problem = secureContextProblem();
+        if (problem) throw new Error(problem);
+        try {
+          this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (e) {
+          throw micError(e);
+        }
       }
+      // A permission prompt can resolve after hangup/disconnect. Release its
+      // late stream immediately instead of leaving an idle microphone active.
+      if (this.closedByUser) {
+        this.teardown();
+        return;
+      }
+      await this.openSocket();
+    } catch (error) {
+      this.teardown(); // includes credentials failures after mic capture
+      throw error;
     }
-    await this.openSocket();
   }
 
   private async openSocket(): Promise<void> {
@@ -175,6 +190,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
       case ServerMsgType.Offer: {
         const pc = this.ensurePC();
         await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
+        await this.video.answerOffer(m.sdp!);
         this.remoteDescSet = true;
         for (const c of this.pendingIce.splice(0)) await pc.addIceCandidate(c);
         const answer = await pc.createAnswer();
@@ -221,7 +237,7 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         this.emit({ type: "transfer-failed", reason: m.reason ?? "transfer failed" });
         break;
       case ServerMsgType.Answered:
-        // A click-to-call customer picked up (this leg auto-answered earlier).
+        // The other party accepted (web agent or click-to-call customer).
         this.emit({ type: "answered" });
         break;
       case ServerMsgType.Supervisor:
@@ -247,8 +263,8 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     pc.ontrack = (e) => {
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       // Auto-play incoming AUDIO (the IVR voice, the other party) — a calling SDK
-      // must sound the call without the integrator wiring an element. Video (a
-      // screen share) is left to the consumer's `track` event to render.
+      // must sound the call without the integrator wiring an element. Camera
+      // and screen video are exposed through remote-video for the UI to render.
       if (e.track.kind === "audio") {
         const el = document.createElement("audio");
         el.autoplay = true;
@@ -260,6 +276,19 @@ export class RtcCall extends Emitter<RtcCallEvent> {
         });
         this.audioEls.push(el);
         e.track.onended = () => el.remove();
+      }
+      if (e.track.kind === "video") {
+        const track = e.track;
+        this.remoteVideoTrack = track;
+        const videoStream = new MediaStream([track]);
+        const update = () => {
+          if (this.remoteVideoTrack !== track) return;
+          this.emit({ type: "remote-video", stream: track.muted || track.readyState === "ended" ? null : videoStream });
+        };
+        track.onmute = update;
+        track.onunmute = update;
+        track.onended = update;
+        update();
       }
       this.emit({ type: "track", kind: e.track.kind as "audio" | "video", stream, track: e.track });
     };
@@ -302,39 +331,14 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.send({ type: ClientMsgType.Transfer, to_sip: target.toSip, to_team: target.toTeam });
   }
 
-  /** Whether this leg is currently publishing a screen-share track. */
-  get sharingScreen(): boolean {
-    return this.screen !== null;
-  }
+  get sharingScreen(): boolean { return this.video.source === "screen"; }
+  get cameraEnabled(): boolean { return this.video.source === "camera"; }
+  get localVideoStream(): MediaStream | null { return this.video.stream; }
 
-  /** shareScreen publishes a screen/window video track (the server renegotiates,
-   *  staying the sole offerer). Pass {selfBrowserSurface:"exclude"} etc. via opts. */
-  async shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> {
-    if (!this.pc) throw new Error("not connected");
-    this.screen = await navigator.mediaDevices.getDisplayMedia(constraints ?? { video: true });
-    const track = this.screen.getVideoTracks()[0];
-    if (!track) throw new Error("no screen video track captured");
-    track.contentHint = "detail";
-    track.onended = () => void this.stopScreen();
-    this.screenSender = this.pc.addTrack(track, this.screen);
-    this.send({ type: ClientMsgType.Publish, kind: "video" });
-  }
-
-  stopScreen(): void {
-    if (this.screen) {
-      this.screen.getTracks().forEach((t) => t.stop());
-      this.screen = null;
-    }
-    if (this.screenSender && this.pc) {
-      try {
-        this.pc.removeTrack(this.screenSender);
-      } catch {
-        /* already gone */
-      }
-      this.screenSender = null;
-    }
-    this.send({ type: ClientMsgType.Unpublish, kind: "video" });
-  }
+  startCamera(constraints?: MediaTrackConstraints): Promise<void> { return this.video.startCamera(constraints); }
+  stopCamera(): void { this.video.stop("camera"); }
+  shareScreen(constraints?: DisplayMediaStreamOptions): Promise<void> { return this.video.shareScreen(constraints); }
+  stopScreen(): void { this.video.stop("screen"); }
 
   /** hangup ends the call (no reconnect). */
   hangup(): void {
@@ -353,6 +357,9 @@ export class RtcCall extends Emitter<RtcCallEvent> {
       this.emit({ type: "reconnecting" });
       this.remoteDescSet = false;
       this.pendingIce = [];
+      this.video.stop(); // release capture on reconnect; restarting is an explicit gesture
+      this.remoteVideoTrack = null;
+      this.emit({ type: "remote-video", stream: null });
       this.pc?.close();
       this.pc = null;
       setTimeout(() => {
@@ -383,14 +390,14 @@ export class RtcCall extends Emitter<RtcCallEvent> {
 
   private teardown(): void {
     this.stopKeepalive();
+    this.video.stop();
+    this.remoteVideoTrack = null;
+    this.emit({ type: "remote-video", stream: null });
     this.pc?.close();
     this.pc = null;
-    // Only stop a mic we own. A borrowed shared mic (keepMic — the agent's
-    // go-online stream) is stopped by its owner (RtcAgent.goOffline), not here;
-    // stopping it would leave the next call publishing a dead track.
+    // Borrowed streams are released by their owner; normal calls own the mic.
     if (!this.opts.keepMic) this.mic?.getTracks().forEach((t) => t.stop());
     this.mic = null;
-    this.stopScreenSilently();
     this.audioEls.forEach((el) => {
       el.srcObject = null;
       el.remove();
@@ -400,11 +407,6 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.ws = null;
   }
 
-  private stopScreenSilently(): void {
-    this.screen?.getTracks().forEach((t) => t.stop());
-    this.screen = null;
-    this.screenSender = null;
-  }
 
   private send(m: RtcMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
@@ -450,9 +452,9 @@ const AGENT_KEEPALIVE_MS = 25_000;
 export class RtcAgent extends Emitter<RtcAgentEvent> {
   private ws: WebSocket | null = null;
   private token = "";
-  private mic: MediaStream | null = null;
+  private micPermissionChecked = false;
   private incoming: { room: string; from?: string } | null = null;
-  private activeCall: { room: string } | null = null; // includes the async answer handshake
+  private activeCall: { room: string; call: RtcCall } | null = null; // includes the async answer handshake
   private closedByUser = false;
   private keepaliveTimer: ReturnType<typeof setInterval> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -463,19 +465,22 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
   }
 
   /** goOnline registers the agent's presence socket and waits for `incoming`.
-   *  It also captures the mic now (in the go-online gesture) so accepting a call
-   *  later — including auto-answer — needs no fresh gesture. Best-effort: if the
-   *  mic is denied here, accept() captures it then. The socket auto-reconnects
+   *  It checks mic permission once and immediately stops the temporary stream.
+   *  accept() captures a fresh mic for each call, including auto-answer. If the
+   *  check is denied, accepting a call retries. The socket auto-reconnects
    *  (re-minting the token) until goOffline(), surviving drops + token expiry. */
   async goOnline(): Promise<void> {
-    if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+    this.closedByUser = false;
+    if (!this.micPermissionChecked && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
       try {
-        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+        probe.getTracks().forEach((track) => track.stop());
+        this.micPermissionChecked = true;
       } catch {
         /* will capture on accept instead */
       }
     }
-    this.closedByUser = false;
+    if (this.closedByUser) return;
     // Also how a superseded agent takes the rings back (which supersedes the
     // other tab). Retire any current socket so it can't linger registered.
     this.backoffMs = 1000;
@@ -490,6 +495,7 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
    *  (re)connect, so a dropped socket comes back without the agent reloading. */
   private async openSocket(): Promise<void> {
     this.token = this.opts.getToken ? await this.opts.getToken() : this.opts.token ?? "";
+    if (this.closedByUser) return;
     if (!this.token) throw new Error("agent token required (token or getToken)");
     const ws = new WebSocket(wsURL(this.opts.gatewayUrl, this.token));
     this.ws = ws;
@@ -589,41 +595,26 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     if (!this.incoming) return null;
     const room = this.incoming.room;
     this.incoming = null;
-    const active = { room };
+    const call = new RtcCall({
+      gatewayUrl: this.opts.gatewayUrl,
+      room,
+      // The presence socket is long-lived, so this.token was minted whenever it
+      // last connected — likely well past the agent JWT's ~5-min TTL. Mint a
+      // fresh one for the call socket (and for its reconnects), else the join
+      // 401s and the ring rolls on to the next agent.
+      token: this.token,
+      getToken: this.opts.getToken,
+      name: this.opts.name,
+      iceServers: this.opts.iceServers,
+    });
+    const active = { room, call };
     this.activeCall = active;
     try {
-      // The go-online mic is reused across calls. If it died while the agent waited
-      // (device reclaimed, OS sleep, another app grabbed it), drop it so we don't
-      // publish a dead track — re-acquire now, inside the Accept gesture.
-      if (this.mic && !this.mic.getAudioTracks().some((t) => t.readyState === "live")) {
-        this.mic.getTracks().forEach((t) => t.stop());
-        this.mic = null;
-      }
-      if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
-        try {
-          this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch {
-          /* RtcCall.join() will surface the mic error */
-        }
-      }
-      const call = new RtcCall({
-        gatewayUrl: this.opts.gatewayUrl,
-        room,
-        // The presence socket is long-lived, so this.token was minted whenever it
-        // last connected — likely well past the agent JWT's ~5-min TTL. Mint a
-        // fresh one for the call socket (and for its reconnects), else the join
-        // 401s and the ring rolls on to the next agent.
-        token: this.token,
-        getToken: this.opts.getToken,
-        name: this.opts.name,
-        iceServers: this.opts.iceServers,
-        mic: this.mic ?? undefined, // reuse the go-online mic (gesture-safe)
-        keepMic: true, // RtcAgent owns this shared mic; goOffline() stops it
-      });
       call.on("ended", () => {
         if (this.activeCall === active) this.activeCall = null;
       });
       await call.join();
+      if (this.activeCall !== active) return null; // disconnected during capture
       return call;
     } catch (error) {
       if (this.activeCall === active) this.activeCall = null;
@@ -654,6 +645,8 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
 
   goOffline(): void {
     this.closedByUser = true;
+    this.incoming = null;
+    this.activeCall?.call.hangup();
     this.stopKeepalive();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -661,8 +654,6 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     }
     this.ws?.close();
     this.ws = null;
-    this.mic?.getTracks().forEach((t) => t.stop());
-    this.mic = null;
   }
 }
 

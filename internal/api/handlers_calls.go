@@ -266,6 +266,8 @@ func (s *Server) handleGetCallEvents(w http.ResponseWriter, r *http.Request) {
 // platforms. Mirrors the orchestrator's mapping in runner.go.
 func recordingMIME(ext string) string {
 	switch strings.ToLower(ext) {
+	case ".mp4":
+		return "video/mp4"
 	case ".mp3":
 		return "audio/mpeg"
 	case ".opus", ".ogg":
@@ -326,9 +328,10 @@ func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tena
 	// Local spool fallback (S3 disabled, or not yet uploaded). The gateway writes
 	// <leg_id>.<format> in the tenant's format at the time of the call
 	// (internal/callcdr), so look for each; http.ServeFile sets Content-Type.
-	for _, format := range recordingFormats {
+	for _, format := range append([]string{"mp4"}, recordingFormats...) {
 		path := filepath.Join(s.recordingsDir, fsUUID+"."+format)
 		if _, err := os.Stat(path); err == nil {
+			w.Header().Set("Content-Type", recordingMIME("."+format))
 			http.ServeFile(w, r, path)
 			return
 		}

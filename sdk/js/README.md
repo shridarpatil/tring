@@ -16,6 +16,11 @@ Drop-in browser voice SDK for the Tring CPaaS — WebRTC calling on any web page
 > [**How it works — protocol reference**](#how-it-works--protocol-reference-port-the-sdk-to-any-platform)
 > below. It's the full wire spec; the TypeScript is just the reference implementation.
 
+The agent requests microphone permission at startup and immediately releases the
+temporary stream. It captures a fresh microphone only when answering a call
+(including auto-answer), and releases it on hangup or failed setup. Being online
+or receiving a ring does not keep the microphone active.
+
 ## Quickstart — agent widget (`agent.js`)
 
 Drop **one script tag** in your agent app. It connects the gateway WebSocket and
@@ -170,6 +175,42 @@ inbound (IVR transfer / inbound DID) rings per `autoAnswer` (default `true`; set
 `false` to gate on Accept/Decline). `call.to` carries the backend-supplied label,
 never the dialed number.
 
+## Camera video and recording
+
+Both widgets include a Camera button with a local preview. The visitor widget opens in a compact floating panel with minimize and explicit Full screen video controls. Cameras are off until
+each person enables theirs. For a connected web `Call`, use `startCamera()` and
+`stopCamera()`; `cameraEnabled` and `localVideoStream` expose the current state.
+`TringGuest` offers the same methods plus `toggleCamera()` and `isCameraEnabled`.
+
+For visitor call timers, listen to `TringGuest`'s `answered` event, which fires
+once an agent accepts the call. `connected` means the gateway/IVR media is ready
+and can occur while the caller is still waiting. The built-in visitor widget
+shows **Calling…** until `answered`, then starts at **00:00**. Configure tenant
+or team hold music to play while routing waits for an agent.
+
+```js
+cameraButton.onclick = () => call.startCamera().catch(showError);
+tring.on('call:local-video', ({ stream, source }) => {
+  preview.muted = true;
+  preview.srcObject = source === 'camera' ? stream : null;
+});
+tring.on('call:remote-video', ({ stream }) => {
+  remoteVideo.muted = true; // the SDK already plays remote audio
+  remoteVideo.srcObject = stream;
+});
+```
+
+Use `autoplay playsinline` on the video elements. Guest events are `local-video`
+and `remote-video` (without the `call:` prefix). A null stream clears the view.
+Camera access requires HTTPS/localhost and browser permission. Camera and screen
+share use one outgoing video track: starting one replaces the other. Stopping
+video leaves audio connected; hangup/reconnect releases video capture.
+
+With tenant `record_calls` enabled, calls with captured video become an MP4 after
+hangup: agent left, client right, both voices, and labelled camera-off avatars when video is off.
+Screen sharing occupies the same panel. The call log plays this video; calls
+without video keep the tenant's audio recording format.
+
 ## Development
 
 ```bash
@@ -177,6 +218,7 @@ npm install
 npm run build      # produces dist/tring.{iife,esm}.js + .map + .d.ts
 npm run watch      # rebuild on change
 npm run typecheck  # tsc --noEmit
+npm run test:browser-video # real Chromium negotiation test (remote debugging on :9222)
 ```
 
 ## Smoke test in a real browser

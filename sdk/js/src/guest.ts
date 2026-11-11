@@ -41,7 +41,8 @@ export class TringGuest extends Emitter<GuestEvent> {
 
   /**
    * Acquire the mic, connect to the media plane over /rtc, and place the call
-   * into the IVR. Emits connecting → ringing → connected → ended. Throws
+   * into the IVR. `connected` means IVR media is ready; `answered` means an
+   * agent accepted the call. Start conversation timers on `answered`. Throws
    * (and emits `error`) on credential resolution or media failure.
    */
   async call(): Promise<void> {
@@ -114,19 +115,20 @@ export class TringGuest extends Emitter<GuestEvent> {
     });
     this.rtc = call;
     this.muted = false;
+    let answered = false;
     call.on("connected", () => this.emit({ type: "connected" }));
+    call.on("answered", () => {
+      if (answered) return; // renegotiation/reconnect must not restart the timer
+      answered = true;
+      this.emit({ type: "answered" });
+    });
     call.on("ended", (e) => {
       this.emit({ type: "ended", reason: e.reason });
       void this.cleanup();
     });
     call.on("error", (e) => this.emit({ type: "error", error: e.error }));
-    // The agent's screen-share arrives as a video track; surface it to the UI,
-    // and clear it when that track ends (the agent stopped sharing).
-    call.on("track", (e) => {
-      if (e.kind !== "video") return;
-      this.emit({ type: "remote-video", stream: e.stream });
-      e.track.onended = () => this.emit({ type: "remote-video", stream: null });
-    });
+    call.on("local-video", (state) => this.emit(state));
+    call.on("remote-video", (state) => this.emit(state));
 
     try {
       await call.join();
@@ -149,6 +151,22 @@ export class TringGuest extends Emitter<GuestEvent> {
   /** Send a DTMF digit (0-9, *, #) to the IVR mid-call. */
   async sendDTMF(digit: string): Promise<void> {
     this.rtc?.sendDtmf(digit);
+  }
+
+  get isCameraEnabled(): boolean { return this.rtc?.cameraEnabled ?? false; }
+  get localVideoStream(): MediaStream | null { return this.rtc?.localVideoStream ?? null; }
+
+  async startCamera(constraints?: MediaTrackConstraints): Promise<void> {
+    if (!this.rtc) throw new Error("not in a call");
+    await this.rtc.startCamera(constraints);
+  }
+
+  stopCamera(): void { this.rtc?.stopCamera(); }
+
+  async toggleCamera(): Promise<boolean> {
+    if (this.isCameraEnabled) { this.stopCamera(); return false; }
+    await this.startCamera();
+    return true;
   }
 
   /** Start sharing the visitor's screen with the agent. Prompts the OS
