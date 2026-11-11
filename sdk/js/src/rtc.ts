@@ -452,6 +452,7 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
   private token = "";
   private mic: MediaStream | null = null;
   private incoming: { room: string; from?: string } | null = null;
+  private activeCall: { room: string } | null = null; // includes the async answer handshake
   private closedByUser = false;
   private keepaliveTimer: ReturnType<typeof setInterval> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -504,11 +505,18 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
       } else if (m.type === ServerMsgType.Availability) {
         this.emit({ type: "availability", available: m.available ?? true });
       } else if (m.type === ServerMsgType.Incoming) {
-        this.incoming = { room: m.room ?? "", from: m.from };
+        const room = m.room ?? "";
+        const busyRoom = this.incoming?.room ?? this.activeCall?.room;
+        if (busyRoom !== undefined) {
+          if (room !== busyRoom) this.declineRoom(room);
+          return; // duplicate or overlapping ring must not replace the current call
+        }
+        this.incoming = { room, from: m.from };
         this.emit({ type: "incoming", room: this.incoming.room, from: m.from, auto: m.auto, phone: m.phone });
       } else if (m.type === ServerMsgType.ResumeCall) {
         // The page reloaded mid-call: the gateway names the room still holding
         // this agent's slot. Arm it like a ring so accept() rejoins that room.
+        if (this.activeCall !== null || this.incoming !== null) return;
         this.incoming = { room: m.room ?? "" };
         this.emit({ type: "resume-call", room: this.incoming.room, auto: m.auto, phone: m.phone });
       } else if (m.type === ServerMsgType.IncomingCancel) {
@@ -516,6 +524,7 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
         // strategy, or someone else answered). Drop the pending ring so a later
         // accept() no-ops, and tell the UI to dismiss the popup.
         const room = m.room ?? this.incoming?.room ?? "";
+        if (!this.incoming || this.incoming.room !== room) return;
         this.incoming = null;
         this.emit({ type: "incoming-canceled", room });
       } else if (m.type === ServerMsgType.Superseded) {
@@ -580,36 +589,47 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
     if (!this.incoming) return null;
     const room = this.incoming.room;
     this.incoming = null;
-    // The go-online mic is reused across calls. If it died while the agent waited
-    // (device reclaimed, OS sleep, another app grabbed it), drop it so we don't
-    // publish a dead track — re-acquire now, inside the Accept gesture.
-    if (this.mic && !this.mic.getAudioTracks().some((t) => t.readyState === "live")) {
-      this.mic.getTracks().forEach((t) => t.stop());
-      this.mic = null;
-    }
-    if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
-      try {
-        this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch {
-        /* RtcCall.join() will surface the mic error */
+    const active = { room };
+    this.activeCall = active;
+    try {
+      // The go-online mic is reused across calls. If it died while the agent waited
+      // (device reclaimed, OS sleep, another app grabbed it), drop it so we don't
+      // publish a dead track — re-acquire now, inside the Accept gesture.
+      if (this.mic && !this.mic.getAudioTracks().some((t) => t.readyState === "live")) {
+        this.mic.getTracks().forEach((t) => t.stop());
+        this.mic = null;
       }
+      if (!this.mic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+        try {
+          this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch {
+          /* RtcCall.join() will surface the mic error */
+        }
+      }
+      const call = new RtcCall({
+        gatewayUrl: this.opts.gatewayUrl,
+        room,
+        // The presence socket is long-lived, so this.token was minted whenever it
+        // last connected — likely well past the agent JWT's ~5-min TTL. Mint a
+        // fresh one for the call socket (and for its reconnects), else the join
+        // 401s and the ring rolls on to the next agent.
+        token: this.token,
+        getToken: this.opts.getToken,
+        name: this.opts.name,
+        iceServers: this.opts.iceServers,
+        mic: this.mic ?? undefined, // reuse the go-online mic (gesture-safe)
+        keepMic: true, // RtcAgent owns this shared mic; goOffline() stops it
+      });
+      call.on("ended", () => {
+        if (this.activeCall === active) this.activeCall = null;
+      });
+      await call.join();
+      return call;
+    } catch (error) {
+      if (this.activeCall === active) this.activeCall = null;
+      this.declineRoom(room);
+      throw error;
     }
-    const call = new RtcCall({
-      gatewayUrl: this.opts.gatewayUrl,
-      room,
-      // The presence socket is long-lived, so this.token was minted whenever it
-      // last connected — likely well past the agent JWT's ~5-min TTL. Mint a
-      // fresh one for the call socket (and for its reconnects), else the join
-      // 401s and the ring rolls on to the next agent.
-      token: this.token,
-      getToken: this.opts.getToken,
-      name: this.opts.name,
-      iceServers: this.opts.iceServers,
-      mic: this.mic ?? undefined, // reuse the go-online mic (gesture-safe)
-      keepMic: true, // RtcAgent owns this shared mic; goOffline() stops it
-    });
-    await call.join();
-    return call;
   }
 
   /** decline rejects the current ring: it tells the edge so the router advances to
@@ -618,6 +638,10 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
   decline(): void {
     const room = this.incoming?.room;
     this.incoming = null;
+    if (room) this.declineRoom(room);
+  }
+
+  private declineRoom(room: string): void {
     if (room && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: ClientMsgType.Decline, room }));
     }

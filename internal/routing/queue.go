@@ -27,66 +27,89 @@ func ResKey(tenantID, sip string) string    { return tenantID + "/" + sip }
 
 // ─── Reservations ───────────────────────────────────────────────────
 
-// Reservations marks an agent as "being rung right now". Presence only flips to
-// on_call when the agent ANSWERS, so without this two callers dequeuing at once
-// both see the same idle agent as free and double-ring it. The Redis backend is
-// shared across processes (FreeSWITCH + pion) serving the same agents; the
-// in-memory backend is the no-Redis fallback (host dev / unit tests).
+// Reservations atomically claims an agent across ringing and active calls.
+// Every mutation is scoped to a unique owner, so stale cleanup cannot free a
+// newer call. Implementations fail closed when acquisition or renewal fails.
 type Reservations interface {
-	Reserve(ctx context.Context, key string, ttl time.Duration)
-	Release(ctx context.Context, key string)
+	Reserve(ctx context.Context, key, owner string, ttl time.Duration) bool
+	Renew(ctx context.Context, key, owner string, ttl time.Duration) bool
+	Release(ctx context.Context, key, owner string)
 	Reserved(ctx context.Context, key string) bool
 }
 
-// memReservations is the in-memory fallback (single process, no Redis).
+type reservation struct {
+	owner   string
+	expires time.Time
+}
+
 type memReservations struct {
 	mu sync.Mutex
-	m  map[string]time.Time // key -> expiry
+	m  map[string]reservation
 }
 
-// NewMemReservations returns the in-memory Reservations backend.
-func NewMemReservations() Reservations { return &memReservations{m: map[string]time.Time{}} }
+func NewMemReservations() Reservations { return &memReservations{m: map[string]reservation{}} }
 
-func (r *memReservations) Reserve(_ context.Context, key string, ttl time.Duration) {
+func (r *memReservations) Reserve(ctx context.Context, key, owner string, ttl time.Duration) bool {
 	r.mu.Lock()
-	r.m[key] = time.Now().Add(ttl)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	if ctx.Err() != nil || ttl <= 0 || time.Now().Before(r.m[key].expires) {
+		return false
+	}
+	r.m[key] = reservation{owner, time.Now().Add(ttl)}
+	return true
 }
 
-func (r *memReservations) Release(_ context.Context, key string) {
+func (r *memReservations) Renew(ctx context.Context, key, owner string, ttl time.Duration) bool {
 	r.mu.Lock()
-	delete(r.m, key)
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	v, ok := r.m[key]
+	if ctx.Err() != nil || ttl <= 0 || !ok || v.owner != owner || !time.Now().Before(v.expires) {
+		return false
+	}
+	r.m[key] = reservation{owner, time.Now().Add(ttl)}
+	return true
+}
+
+func (r *memReservations) Release(_ context.Context, key, owner string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m[key].owner == owner {
+		delete(r.m, key)
+	}
 }
 
 func (r *memReservations) Reserved(_ context.Context, key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	exp, ok := r.m[key]
-	if !ok {
-		return false
-	}
-	if time.Now().After(exp) {
+	if !time.Now().Before(r.m[key].expires) {
 		delete(r.m, key)
 		return false
 	}
 	return true
 }
 
-// redisReservations is the production backend: a TTL'd Redis key per agent,
-// visible to every process sharing the cache. Redis handles expiry.
+// Redis claims are shared by every process using this cache.
 type redisReservations struct{ c *cache.Cache }
 
-// NewRedisReservations returns the Redis-backed Reservations (shared, durable).
 func NewRedisReservations(c *cache.Cache) Reservations { return &redisReservations{c: c} }
+func resvRedisKey(key string) string                   { return "tring:resv:" + key }
 
-func resvRedisKey(key string) string { return "tring:resv:" + key }
-
-func (r *redisReservations) Reserve(ctx context.Context, key string, ttl time.Duration) {
-	r.c.Set(ctx, resvRedisKey(key), []byte("1"), ttl)
+func (r *redisReservations) Reserve(ctx context.Context, key, owner string, ttl time.Duration) bool {
+	if ttl <= 0 {
+		return false
+	}
+	ok, err := r.c.SetNX(ctx, resvRedisKey(key), []byte(owner), ttl)
+	return err == nil && ok
 }
-func (r *redisReservations) Release(ctx context.Context, key string) {
-	_ = r.c.Delete(ctx, resvRedisKey(key))
+func (r *redisReservations) Renew(ctx context.Context, key, owner string, ttl time.Duration) bool {
+	if ttl <= 0 {
+		return false
+	}
+	ok, err := r.c.CompareExpire(ctx, resvRedisKey(key), owner, ttl)
+	return err == nil && ok
+}
+func (r *redisReservations) Release(ctx context.Context, key, owner string) {
+	_, _ = r.c.CompareDelete(ctx, resvRedisKey(key), owner)
 }
 func (r *redisReservations) Reserved(ctx context.Context, key string) bool {
 	_, ok := r.c.Get(ctx, resvRedisKey(key))
