@@ -50,6 +50,7 @@ const routes: RouteRecordRaw[] = [
       { path: "agents", name: "agents", redirect: { name: "users" } },
       { path: "teams", name: "teams", component: () => import("../views/TeamsView.vue"), meta: { admin: true } },
       { path: "teams/:name", name: "team", component: () => import("../views/TeamDetailView.vue"), meta: { admin: true } },
+      { path: "campaigns/:id?", name: "campaigns", component: () => import("../views/CampaignsView.vue"), meta: { admin: true } },
       { path: "sounds", name: "sounds", component: () => import("../views/SoundsView.vue"), meta: { admin: true } },
       { path: "numbers", name: "numbers", component: () => import("../views/NumbersView.vue"), meta: { admin: true } },
       // calls/:id opens that call's detail (?view=log → full log), so a call

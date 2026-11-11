@@ -15,6 +15,7 @@ import (
 
 	"github.com/shridarpatil/tring/internal/api"
 	"github.com/shridarpatil/tring/internal/bootstrap"
+	"github.com/shridarpatil/tring/internal/campaign"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
@@ -23,11 +24,12 @@ import (
 )
 
 type apiRole struct {
-	d          *deps
-	srv, fsSrv *http.Server
-	hub        *events.Hub
-	cancel     context.CancelFunc // stops the hub
-	db         *db.DB
+	d            *deps
+	srv, fsSrv   *http.Server
+	hub          *events.Hub
+	cancel       context.CancelFunc // stops the hub
+	db           *db.DB
+	campaignDone chan struct{}
 }
 
 // openDB migrates, connects and runs first-boot bootstrap: what both the api
@@ -110,6 +112,7 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 
 	apiSrv := api.NewServer(api.Config{
 		DB:                database,
+		CampaignLimits:    campaign.Limits{Concurrent: k.Int("campaign_max_concurrent"), PerTenant: k.Int("campaign_tenant_concurrent"), StartsPerSecond: k.Int("campaign_starts_per_second"), TotalCalls: k.Int("campaign_total_call_capacity"), ReservedCalls: k.Int("campaign_reserved_calls")},
 		TTS:               ttsEngine,
 		JWTSecret:         k.String("jwt_secret"),
 		FSBasicAuth:       k.String("fs_basic_auth"),
@@ -138,6 +141,9 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		Version:           version,
 		Logger:            logger,
 	})
+
+	a.campaignDone = make(chan struct{})
+	go func() { defer close(a.campaignDone); apiSrv.StartCampaignWorker(ctx) }()
 
 	// Register live forwards + coalesced recomputers, then start the subscriber.
 	// Forward/Recompute write hub maps lock-free and MUST complete before Run
@@ -224,6 +230,9 @@ func (a *apiRole) shutdown(ctx context.Context) {
 
 func (a *apiRole) close() {
 	a.cancel()
+	if a.campaignDone != nil {
+		<-a.campaignDone
+	}
 	a.hub.Close()
 	a.db.Close()
 }

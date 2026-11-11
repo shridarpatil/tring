@@ -23,7 +23,8 @@ type session struct {
 	done   chan struct{} // closed when the walk finished and path is set
 	path   []ivr.Step    // read only after <-done
 	driver ivr.CallDriver
-	onJrn  Journey
+	onJrn  func([]ivr.Step, error)
+	err    error
 	onDone func()
 }
 
@@ -51,6 +52,15 @@ func NewRunner(log *slog.Logger) *Runner {
 // onDone after teardown — both via Stop, so callers see one consistent ordering.
 // setup may be nil (no media wiring needed).
 func (r *Runner) Start(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, driver ivr.CallDriver, setup func() error, onJourney Journey, onDone func()) bool {
+	return r.StartWithResult(ctx, roomID, flow, driver, setup, func(path []ivr.Step, _ error) {
+		if onJourney != nil {
+			onJourney(path)
+		}
+	}, onDone)
+}
+
+// StartWithResult is Start with the final walker error, used for durable campaign outcomes.
+func (r *Runner) StartWithResult(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, driver ivr.CallDriver, setup func() error, onJourney func([]ivr.Step, error), onDone func()) bool {
 	cctx, cancel := context.WithCancel(ctx)
 	sess := &session{cancel: cancel, done: make(chan struct{}), driver: driver, onJrn: onJourney, onDone: onDone}
 
@@ -80,6 +90,7 @@ func (r *Runner) Start(ctx context.Context, roomID room.RoomID, flow *ivr.Flow, 
 		path, err := ivr.Walk(cctx, flow, flow.EntryNode, driver)
 		r.log.Info("ivr flow ended", "room", roomID, "steps", len(path), "err", err)
 		sess.path = path
+		sess.err = err
 		close(sess.done) // publish path (happens-before Stop's read)
 		r.Stop(roomID)
 	}()
@@ -121,7 +132,7 @@ func (r *Runner) Stop(roomID room.RoomID) {
 	select {
 	case <-sess.done:
 		if sess.onJrn != nil {
-			sess.onJrn(sess.path)
+			sess.onJrn(sess.path, sess.err)
 		}
 	case <-time.After(2 * time.Second):
 		r.log.Warn("ivr walk did not unwind in time; skipping journey", "room", roomID)

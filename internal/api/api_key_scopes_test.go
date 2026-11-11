@@ -51,6 +51,7 @@ func TestAPIKeyScopes(t *testing.T) {
 	full := mint("full").Key
 
 	admin := [][3]string{
+		{"GET", "/v1/campaigns", ""},
 		{"POST", "/v1/api-keys", `{"name":"x"}`},
 		{"GET", "/v1/api-keys", ""},
 		{"GET", "/v1/trunks", ""},

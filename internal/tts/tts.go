@@ -115,7 +115,15 @@ func (e *Engine) Synthesize(ctx context.Context, text, voice string) (string, er
 		return out, nil
 	}
 
-	tmpWav := out + ".tmp.wav"
+	wav, err := os.CreateTemp(e.cacheDir, "synthesis-*.wav")
+	if err != nil {
+		return "", fmt.Errorf("tts: temporary audio: %w", err)
+	}
+	tmpWav := wav.Name()
+	if err = wav.Close(); err != nil {
+		os.Remove(tmpWav)
+		return "", err
+	}
 	defer os.Remove(tmpWav)
 	pargs := []string{"-q", "-m", e.model, "-f", tmpWav}
 	if voice != "" {
@@ -129,7 +137,8 @@ func (e *Engine) Synthesize(ctx context.Context, text, voice string) (string, er
 
 	// WAV → 48 kHz mono Opus-Ogg (same flags as the upload transcode path), to a
 	// temp file then atomic-renamed so a concurrent reader never sees a partial.
-	tmpOgg := out + ".tmp.ogg"
+	tmpOgg := tmpWav + ".ogg"
+	defer os.Remove(tmpOgg)
 	fcmd := exec.CommandContext(ctx, e.ffmpeg, "-y", "-i", tmpWav,
 		"-ac", "1", "-ar", "48000", "-c:a", "libopus", tmpOgg)
 	if b, err := fcmd.CombinedOutput(); err != nil {
