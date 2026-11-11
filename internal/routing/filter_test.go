@@ -6,8 +6,8 @@ import (
 )
 
 // With presence off (the common no-Redis fallback both planes rely on),
-// FilterAvailable passes the candidate list through unchanged — routing never
-// drops agents it can't verify. (Presence-on filtering is covered by the
+// FilterAvailable keeps unreserved candidates — routing never drops agents
+// just because it cannot verify their presence. (Presence-on filtering is covered by the
 // Redis-gated tests + the presence package.)
 func TestFilterAvailablePassthroughWhenPresenceOff(t *testing.T) {
 	sips := []string{"a", "b", "c"}

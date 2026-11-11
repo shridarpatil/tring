@@ -59,21 +59,31 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 type agentLeg struct {
 	tenant, sip string
 	p           *room.Participant
+	claim       *routing.Claim
 }
 
 // holdAgentLeg counts p as one of the agent's active call legs until
 // releaseAgentLeg runs on p's terminal leave. If p already left (the Left event
 // fired before this registration), it releases at once so the count can't leak.
-func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string) {
+func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *routing.Claim) {
 	s.setAgentOnCall(tenant, sip, true)
 	s.mu.Lock()
 	gone := p.State() == room.StateLeft
 	if !gone {
-		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip, p: p}
+		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip, p: p, claim: claim}
 	}
 	s.mu.Unlock()
 	if gone {
 		s.setAgentOnCall(tenant, sip, false)
+		claim.Release()
+	} else if claim != nil {
+		go func() {
+			select {
+			case <-claim.Lost():
+				p.Leave()
+			case <-claim.Done():
+			}
+		}()
 	}
 }
 
@@ -86,6 +96,7 @@ func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
 	s.mu.Unlock()
 	if ok {
 		s.setAgentOnCall(leg.tenant, leg.sip, false)
+		leg.claim.Release()
 	}
 }
 
@@ -499,6 +510,9 @@ type pionRing struct {
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
+	// claims are owned by this ring attempt and retained by the answering agent.
+	claims map[string]*routing.Claim
+
 	// labels memoizes the caller label as each agent may see it (masked or not),
 	// so the router's repeated Ring calls look an agent up once. Only Ring
 	// touches it, and the router calls Ring serially.
@@ -507,6 +521,8 @@ type pionRing struct {
 	holdOnce sync.Once // starts hold music at most once per transfer
 	holdStop func()    // stops it; set by ensureHold, called by stopHold/cleanup
 }
+
+func (p *pionRing) BindClaims(claims map[string]*routing.Claim) { p.claims = claims }
 
 // ensureHold starts the caller's hold music the first time the caller is rung or
 // held, and keeps it playing for the rest of the transfer (across ring/hold
@@ -557,6 +573,10 @@ func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == n
 // single rung agent's popup is withdrawn so only one agent ever rings at a time;
 // the Router's next iteration re-orders and Ring advances to the next.
 func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.Duration) (routing.RingOutcome, error) {
+	// Withdraw every outstanding popup before the router releases its claims.
+	// Keeping ring-all popups alive across attempts would expose an unclaimed
+	// ringing agent to another caller.
+	defer p.cancelSips(ordered)
 	p.ensureHold() // caller hears hold music from the first ring, not just once queued
 	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
 
@@ -586,19 +606,25 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 
 	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
+		if p.s.onCall[p.tenant+"|"+sip] > 0 || p.s.away[p.tenant+"|"+sip] || ctx.Err() != nil {
+			return
+		}
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgIncoming, Room: p.roomName, From: p.labels[sip], Phone: phone})
 			if p.s.invites[p.roomID] == nil {
 				p.s.invites[p.roomID] = map[string]bool{}
 			}
 			p.s.invites[p.roomID][sip] = true
+			if p.s.inviteClaims[p.roomID] == nil {
+				p.s.inviteClaims[p.roomID] = map[string]*routing.Claim{}
+			}
+			p.s.inviteClaims[p.roomID][sip] = p.claims[sip]
 			p.rung[sip] = true
 			p.active[sip] = true
 			poppedNow = append(poppedNow, sip)
 		}
 	}
 
-	var rungNow string // the single agent rung this attempt (one-at-a-time only)
 	if oneAtATime {
 		next := ""
 		for _, sip := range ordered {
@@ -613,13 +639,10 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		}
 		if next != "" {
 			pop(next)
-			rungNow = next
 		}
 	} else {
 		for _, sip := range ordered {
-			if !p.rung[sip] {
-				pop(sip)
-			}
+			pop(sip)
 		}
 	}
 	p.s.mu.Unlock()
@@ -640,12 +663,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 		case <-p.ring:
 			return routing.RingOutcome{Answered: true}, nil
 		case <-timer.C:
-			// One-at-a-time: withdraw this agent's popup before the Router advances, so
-			// only ever one agent is ringing. (ring_all keeps everyone popped.)
-			if oneAtATime && rungNow != "" {
-				p.cancelSips([]string{rungNow})
-			}
-			return routing.RingOutcome{}, nil
+			return routing.RingOutcome{}, nil // deferred withdrawal precedes claim release
 		case <-p.declineCh:
 			// An agent rejected. decline() already withdrew that popup and dropped it
 			// from `active` (+ marked it declined so it won't be re-rung). If nobody
@@ -673,6 +691,10 @@ func (p *pionRing) cancelSips(sips []string) {
 		// Revoke the invite with the popup: a late (auto-)answer from an agent
 		// the ring has moved on from must not join the call.
 		delete(p.s.invites[p.roomID], sip)
+		delete(p.s.inviteClaims[p.roomID], sip)
+		if len(p.s.inviteClaims[p.roomID]) == 0 {
+			delete(p.s.inviteClaims, p.roomID)
+		}
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
 		}
@@ -763,14 +785,20 @@ func (s *Server) roomOccupied(roomID room.RoomID) bool {
 // takeInvite consumes the room's ring invitations if sip is one of the agents
 // rung for it. The first answer takes them all, so with ring_all only one agent
 // gets in.
-func (s *Server) takeInvite(roomID room.RoomID, sip string) bool {
+func (s *Server) takeInvite(roomID room.RoomID, sip string) (bool, *routing.Claim) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.invites[roomID][sip] {
-		return false
+		return false, nil
+	}
+	original := s.inviteClaims[roomID][sip]
+	claim := original.Retain()
+	if original != nil && claim == nil {
+		return false, nil
 	}
 	delete(s.invites, roomID)
-	return true
+	delete(s.inviteClaims, roomID)
+	return true, claim
 }
 
 // ensure the server satisfies the brain's ring-transport + handoff-wait seams.

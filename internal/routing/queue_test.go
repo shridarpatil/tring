@@ -68,17 +68,17 @@ func TestReservations(t *testing.T) {
 	if r.Reserved(ctx, k) {
 		t.Fatal("fresh key should not be reserved")
 	}
-	r.Reserve(ctx, k, time.Minute)
+	r.Reserve(ctx, k, "owner", time.Minute)
 	if !r.Reserved(ctx, k) {
 		t.Fatal("reserved key should read reserved")
 	}
-	r.Release(ctx, k)
+	r.Release(ctx, k, "owner")
 	if r.Reserved(ctx, k) {
 		t.Fatal("released key should read free")
 	}
 
 	// Expiry: a zero-TTL reservation is already past when checked.
-	r.Reserve(ctx, k, -time.Second)
+	r.Reserve(ctx, k, "owner", -time.Second)
 	if r.Reserved(ctx, k) {
 		t.Fatal("expired reservation should read free")
 	}

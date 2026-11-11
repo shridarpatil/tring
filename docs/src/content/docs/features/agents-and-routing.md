@@ -115,7 +115,11 @@ A caller who hangs up leaves the queue. Live queue depth per team is published t
 
 ## Reservations
 
-Presence only flips to `on_call` when an agent **answers**. Without extra care, two callers leaving the queue at the same moment could both ring the same idle agent. To prevent this, the engine **reserves** each agent it is ringing for the ring time plus 5 seconds. A reserved agent is skipped by other calls until the ring ends. Reservations live in Redis, so every gateway sharing that Redis respects them; without Redis they are in-memory per process.
+An agent can receive only one ringing or active call at a time. Inbound routing and outbound click-to-call share an atomic reservation: simultaneous requests cannot both claim the same agent. Another inbound caller waits or reaches another available agent; another outbound request returns an agent-busy error.
+
+The reservation stays held through answering, the connected call, and the reconnect grace window. It is released after decline, cancellation, timeout, or hangup. Only the owning call can renew or release it, so delayed cleanup cannot free a newer call's slot.
+
+Reservations live in Redis and are shared by gateways using that Redis; without Redis they are in-memory per process. Their 30-second expiry is refreshed every 10 seconds while held. If renewal fails, the gateway stops the affected ring or call rather than allowing overlapping ownership.
 
 ## Transfers without a team
 
