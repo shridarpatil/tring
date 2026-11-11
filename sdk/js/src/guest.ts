@@ -41,7 +41,8 @@ export class TringGuest extends Emitter<GuestEvent> {
 
   /**
    * Acquire the mic, connect to the media plane over /rtc, and place the call
-   * into the IVR. Emits connecting → ringing → connected → ended. Throws
+   * into the IVR. `connected` means IVR media is ready; `answered` means an
+   * agent accepted the call. Start conversation timers on `answered`. Throws
    * (and emits `error`) on credential resolution or media failure.
    */
   async call(): Promise<void> {
@@ -114,7 +115,13 @@ export class TringGuest extends Emitter<GuestEvent> {
     });
     this.rtc = call;
     this.muted = false;
+    let answered = false;
     call.on("connected", () => this.emit({ type: "connected" }));
+    call.on("answered", () => {
+      if (answered) return; // renegotiation/reconnect must not restart the timer
+      answered = true;
+      this.emit({ type: "answered" });
+    });
     call.on("ended", (e) => {
       this.emit({ type: "ended", reason: e.reason });
       void this.cleanup();

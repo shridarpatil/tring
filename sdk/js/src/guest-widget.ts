@@ -1,5 +1,5 @@
 // Drop-in guest call widget. Renders a "Call support" launcher and a
-// full-screen call UI (calling → connected → ended) driven by TringGuest.
+// floating call UI (calling → connected → ended) driven by TringGuest.
 // The customer taps once and is in the IVR over WebRTC — no number, no app.
 //
 // A page can either let the widget render its own floating launcher
@@ -27,13 +27,24 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
   document.body.appendChild(ui.root);
 
   const ringer = new Ringer();
+  let answered = false;
 
-  guest.on("connecting", () => ui.setState("connecting", "Connecting…"));
+  guest.on("connecting", () => {
+    answered = false;
+    ui.setState("connecting", "Connecting…");
+  });
   guest.on("ringing", () => {
     ui.setState("ringing", "Calling…");
     ringer.start();
   });
   guest.on("connected", () => {
+    // The gateway/IVR is reachable; it does not mean an agent has picked up.
+    // Stop local ringback so it cannot mask IVR prompts or server hold music.
+    ringer.stop();
+    if (!answered) ui.setState("connected", "Calling…");
+  });
+  guest.on("answered", () => {
+    answered = true;
     ringer.stop();
     ui.startTimer();
   });
@@ -113,7 +124,7 @@ function createLauncher(label: string, onClick: () => void): HTMLButtonElement {
   return b;
 }
 
-// ---- Full-screen call UI ------------------------------------------------
+// ---- Floating call UI ------------------------------------------------
 
 interface GuestUI {
   root: HTMLElement;
@@ -149,24 +160,34 @@ function createGuestUI(title: string): GuestUI {
   const micIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
   const phoneIcon = `<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
   const cameraIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="12" height="14" rx="2"/><path d="m15 10 6-4v12l-6-4z"/></svg>`;
+  const keypadIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M4 3h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 9h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4zM4 15h4v4H4zm6 0h4v4h-4zm6 0h4v4h-4z"/></svg>`;
   const screenIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v2H8v2h8v-2h-2v-2h6a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 12H4V6h16v10z"/></svg>`;
 
   root.innerHTML = `
     <div class="tring-guest-card">
       <div class="tring-guest-top">
         <div class="tring-guest-avatar">${escapeHtml(title.slice(0, 1).toUpperCase())}</div>
-        <div class="tring-guest-title">${escapeHtml(title)}</div>
-        <div class="tring-guest-sub">Connecting…</div>
+        <div class="tring-guest-heading"><div class="tring-guest-title">${escapeHtml(title)}</div>
+          <div class="tring-guest-sub">Connecting…</div></div>
+        <button type="button" class="tring-guest-minimize" aria-label="Minimize call" aria-expanded="true">−</button>
       </div>
       <div class="tring-guest-mid">
-        <video class="tring-guest-remote" autoplay playsinline muted></video>
-        <video class="tring-guest-local" autoplay playsinline muted aria-label="Your camera preview"></video>
+        <div class="tring-guest-video">
+          <div class="tring-guest-pictures">
+            <video class="tring-guest-remote" autoplay playsinline muted aria-label="Agent video"></video>
+            <video class="tring-guest-local" autoplay playsinline muted aria-label="Your camera preview"></video>
+          </div>
+          <div class="tring-guest-video-bar"><span>Live video</span><button type="button" class="tring-guest-fullscreen">Full screen</button></div>
+        </div>
         <div class="tring-guest-dialed"></div>
         <div class="tring-guest-keypad">${keypadHTML}</div>
       </div>
       <div class="tring-guest-actions">
         <button type="button" class="tring-guest-btn tring-guest-mute" aria-pressed="false">
           <span class="tring-guest-ic">${micIcon}</span><span class="tring-guest-lbl">Mute</span>
+        </button>
+        <button type="button" class="tring-guest-btn tring-guest-keypad-toggle" aria-label="Keypad" aria-expanded="false" aria-pressed="false">
+          <span class="tring-guest-ic">${keypadIcon}</span><span class="tring-guest-lbl">Keypad</span>
         </button>
         <button type="button" class="tring-guest-btn tring-guest-camera" aria-pressed="false" aria-label="Turn camera on">
           <span class="tring-guest-ic">${cameraIcon}</span><span class="tring-guest-lbl">Camera</span>
@@ -185,6 +206,17 @@ function createGuestUI(title: string): GuestUI {
   const subEl = $(".tring-guest-sub");
   const dialedEl = $(".tring-guest-dialed");
   const keypadEl = $(".tring-guest-keypad");
+  const keypadBtn = $<HTMLButtonElement>(".tring-guest-keypad-toggle");
+  function setKeypad(open: boolean) {
+    root.classList.toggle("tring-guest-keypad-open", open);
+    keypadBtn.classList.toggle("is-active", open);
+    keypadBtn.setAttribute("aria-expanded", String(open));
+    keypadBtn.setAttribute("aria-pressed", String(open));
+  }
+  keypadBtn.addEventListener("click", () => {
+    if (root.getAttribute("data-state") !== "connected") return;
+    setKeypad(!root.classList.contains("tring-guest-keypad-open"));
+  });
   const muteBtn = $<HTMLButtonElement>(".tring-guest-mute");
   const muteLbl = muteBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
   const shareBtn = $<HTMLButtonElement>(".tring-guest-share");
@@ -194,6 +226,33 @@ function createGuestUI(title: string): GuestUI {
   const cameraBtn = $<HTMLButtonElement>(".tring-guest-camera");
   const cameraLbl = cameraBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
   const videoError = $(".tring-guest-video-error");
+  const videoStage = $(".tring-guest-video");
+  const fullscreenBtn = $<HTMLButtonElement>(".tring-guest-fullscreen");
+  const minimizeBtn = $<HTMLButtonElement>(".tring-guest-minimize");
+  function setMinimized(minimized: boolean) {
+    root.classList.toggle("tring-guest-min", minimized);
+    minimizeBtn.textContent = minimized ? "+" : "−";
+    minimizeBtn.setAttribute("aria-label", minimized ? "Expand call" : "Minimize call");
+    minimizeBtn.setAttribute("aria-expanded", String(!minimized));
+  }
+  minimizeBtn.addEventListener("click", () => setMinimized(!root.classList.contains("tring-guest-min")));
+  fullscreenBtn.addEventListener("click", async () => {
+    try {
+      if (document.fullscreenElement === videoStage) await document.exitFullscreen();
+      else if (videoStage.requestFullscreen) await videoStage.requestFullscreen();
+      else {
+        const video = (remoteVid.srcObject ? remoteVid : localVid) as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+        if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+        else throw new Error("Full-screen video is unavailable in this browser.");
+      }
+    } catch (error) { videoError.textContent = videoErrorMessage(error); }
+  });
+  document.addEventListener("fullscreenchange", () => {
+    fullscreenBtn.textContent = document.fullscreenElement === videoStage ? "Exit full screen" : "Full screen";
+  });
+  function exitVideoFullscreen() {
+    if (document.fullscreenElement === videoStage) void document.exitFullscreen().catch(() => {});
+  }
   let generation = 0;
   const endBtn = $<HTMLButtonElement>(".tring-guest-end");
 
@@ -211,6 +270,7 @@ function createGuestUI(title: string): GuestUI {
     const camera = source === "camera";
     const screen = source === "screen";
     localVid.srcObject = camera ? stream : null;
+    if (!camera && !remoteVid.srcObject) exitVideoFullscreen();
     root.classList.toggle("tring-guest-camera-on", camera);
     cameraBtn.setAttribute("aria-pressed", String(camera));
     cameraBtn.classList.toggle("is-active", camera);
@@ -235,6 +295,11 @@ function createGuestUI(title: string): GuestUI {
     root,
     open() {
       ++generation;
+      if (tick !== undefined) clearInterval(tick);
+      tick = undefined;
+      setMinimized(false);
+      setKeypad(false);
+      exitVideoFullscreen();
       setLocalVideo(null, null);
       cameraBtn.disabled = false;
       videoError.textContent = "";
@@ -258,6 +323,7 @@ function createGuestUI(title: string): GuestUI {
       subEl.textContent = sub;
     },
     startTimer() {
+      if (tick !== undefined) return;
       root.setAttribute("data-state", "connected");
       // performance.now is monotonic and gesture-independent — fine here.
       startedAt = performance.now();
@@ -268,6 +334,9 @@ function createGuestUI(title: string): GuestUI {
     },
     end(message) {
       ++generation;
+      setMinimized(false);
+      setKeypad(false);
+      exitVideoFullscreen();
       setLocalVideo(null, null);
       videoError.textContent = "";
       if (tick) {
@@ -300,6 +369,7 @@ function createGuestUI(title: string): GuestUI {
       } else {
         remoteVid.srcObject = null;
         root.classList.remove("tring-guest-has-video");
+        if (!localVid.srcObject) exitVideoFullscreen();
       }
     },
     onDigit(fn) {
@@ -387,108 +457,81 @@ function injectStyles(): void {
     .tring-guest-launcher:hover { background: #1d4ed8; }
     .tring-guest-launcher-icon { font-size: 18px; }
 
-    /* Full-screen native-style call sheet. Opaque so the host page
-       doesn't bleed through; safe-area insets respect the notch/home bar. */
+    /* Compact call card, matching the agent widget and leaving the host page usable. */
     #${UI_ID} {
-      position: fixed; inset: 0; z-index: 999999; display: none;
-      background: linear-gradient(180deg, #243042 0%, #0b1220 100%); overflow-y: auto;
-      font: 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
+      position: fixed; right: max(1rem, env(safe-area-inset-right)); bottom: max(1rem, env(safe-area-inset-bottom));
+      width: 400px; max-width: calc(100vw - 2rem); z-index: 999999; display: none;
+      color: #1f2420; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
       -webkit-tap-highlight-color: transparent;
     }
+    #${UI_ID} * { box-sizing: border-box; }
     #${UI_ID}.tring-guest-visible { display: block; }
+    #${UI_ID} button { font: inherit; cursor: pointer; }
+    #${UI_ID} button:focus-visible { outline: 2px solid #0f5c46; outline-offset: 2px; }
     #${UI_ID} .tring-guest-card {
-      box-sizing: border-box; width: 100%; max-width: 460px; height: 100%;
-      margin: 0 auto; display: flex; flex-direction: column; align-items: center;
-      padding: max(3rem, env(safe-area-inset-top)) 1.5rem
-               max(1.75rem, env(safe-area-inset-bottom));
+      width: 100%; max-height: calc(100dvh - 2rem); overflow-y: auto;
+      background: #fbfaf7; border: 1px solid #e4e0d5; border-radius: 22px;
+      box-shadow: 0 18px 40px rgba(31,36,32,.12), 0 2px 6px rgba(31,36,32,.06);
+      padding: 20px; display: flex; flex-direction: column; gap: 16px;
     }
-
-    /* Caller block — upper third, like an incoming/active call. */
-    #${UI_ID} .tring-guest-top { margin-top: 7vh; text-align: center; }
+    #${UI_ID} .tring-guest-top { display: flex; align-items: center; gap: 14px; }
     #${UI_ID} .tring-guest-avatar {
-      width: 104px; height: 104px; margin: 0 auto 1.1rem; border-radius: 50%;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      display: grid; place-items: center; font-size: 44px; font-weight: 600;
-      box-shadow: 0 8px 30px rgba(37,99,235,.35);
+      width: 52px; height: 52px; border-radius: 14px; flex: none;
+      background: #0f5c46; color: #fff; display: grid; place-items: center;
+      font: 600 24px/1 Georgia, "Times New Roman", serif;
     }
-    #${UI_ID} .tring-guest-title { font-size: 28px; font-weight: 600; }
-    #${UI_ID} .tring-guest-sub {
-      font-size: 17px; opacity: .6; margin-top: .35rem;
-      font-variant-numeric: tabular-nums;
-    }
-
-    /* Middle — dialed digits + dialpad, fills the gap and centers. */
-    #${UI_ID} .tring-guest-mid {
-      flex: 1; width: 100%; display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-    }
-    #${UI_ID} .tring-guest-dialed {
-      min-height: 1.4em; margin-bottom: 1rem; font-size: 26px;
-      letter-spacing: .15em; font-variant-numeric: tabular-nums;
-    }
-    #${UI_ID} .tring-guest-local { display: none; width: 124px; height: 93px; object-fit: cover; transform: scaleX(-1); border-radius: 12px; margin: 0 0 1rem auto; background: #000; }
-    #${UI_ID}.tring-guest-camera-on .tring-guest-local { display: block; }
-    #${UI_ID}.tring-guest-camera-on .tring-guest-top,
-    #${UI_ID}.tring-guest-has-video .tring-guest-top { margin-top: 0; }
-    #${UI_ID}.tring-guest-camera-on .tring-guest-avatar,
-    #${UI_ID}.tring-guest-has-video .tring-guest-avatar { width: 56px; height: 56px; font-size: 26px; margin-bottom: .5rem; }
-    #${UI_ID}.tring-guest-camera-on .tring-guest-dialed,
-    #${UI_ID}.tring-guest-has-video .tring-guest-dialed { display: none; }
-    #${UI_ID} .tring-guest-video-error { color: #fca5a5; font-size: 13px; text-align: center; }
-    #${UI_ID} .tring-guest-video-error:empty { display: none; }
-    #${UI_ID} .tring-guest-camera .tring-guest-ic { background: rgba(255,255,255,.15); }
-    #${UI_ID} .tring-guest-camera.is-active .tring-guest-ic { background: #fff; color: #111827; }
-    /* Remote screen-share — hidden until the other party shares. */
-    #${UI_ID} .tring-guest-remote {
-      display: none; width: 100%; max-height: 36vh; border-radius: 12px;
-      background: #000; object-fit: contain; margin-bottom: 1rem;
-    }
+    #${UI_ID} .tring-guest-heading { flex: 1; min-width: 0; }
+    #${UI_ID} .tring-guest-title { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+    #${UI_ID} .tring-guest-sub { color: #5c6058; font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 4px; }
+    #${UI_ID} .tring-guest-minimize { border: 0; border-radius: 8px; background: transparent; color: #5c6058; width: 32px; height: 32px; font-size: 22px; }
+    #${UI_ID}.tring-guest-min { width: 280px; }
+    #${UI_ID}.tring-guest-min .tring-guest-card { padding: 12px 16px; }
+    #${UI_ID}.tring-guest-min .tring-guest-mid,
+    #${UI_ID}.tring-guest-min .tring-guest-actions,
+    #${UI_ID}.tring-guest-min .tring-guest-video-error { display: none; }
+    #${UI_ID} .tring-guest-mid { width: 100%; }
+    #${UI_ID} .tring-guest-video { display: none; padding: 8px; background: #f6f3ea; border-radius: 14px; }
+    #${UI_ID}.tring-guest-camera-on .tring-guest-video,
+    #${UI_ID}.tring-guest-has-video .tring-guest-video { display: block; }
+    #${UI_ID} .tring-guest-pictures { position: relative; background: #18241f; border-radius: 10px; overflow: hidden; }
+    #${UI_ID} .tring-guest-remote,
+    #${UI_ID} .tring-guest-local { display: none; width: 100%; height: 220px; object-fit: contain; background: #18241f; }
     #${UI_ID}.tring-guest-has-video .tring-guest-remote { display: block; }
-    /* When the agent is sharing, hide the keypad so the screen has room. */
-    #${UI_ID}.tring-guest-has-video[data-state="connected"] .tring-guest-keypad { display: none; }
-    #${UI_ID} .tring-guest-share.is-active .tring-guest-ic { background: #fff; color: #111827; }
-    #${UI_ID} .tring-guest-share .tring-guest-ic { background: rgba(255,255,255,.15); }
+    #${UI_ID}.tring-guest-camera-on .tring-guest-local { display: block; transform: scaleX(-1); }
+    #${UI_ID}.tring-guest-has-video.tring-guest-camera-on .tring-guest-local {
+      position: absolute; right: 8px; bottom: 8px; width: 96px; height: 72px; object-fit: cover;
+      border: 2px solid #fbfaf7; border-radius: 8px;
+    }
+    #${UI_ID} .tring-guest-video-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 4px 0; font-size: 12px; }
+    #${UI_ID} .tring-guest-fullscreen { padding: 6px 10px; color: #1f2420; background: #fbfaf7; border: 1px solid #dcd8cc; border-radius: 8px; }
+    #${UI_ID} .tring-guest-video:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; background: #111; border-radius: 0; padding: 12px; }
+    #${UI_ID} .tring-guest-video:fullscreen .tring-guest-pictures { flex: 1; min-height: 0; background: #111; }
+    #${UI_ID} .tring-guest-video:fullscreen .tring-guest-remote,
+    #${UI_ID}:not(.tring-guest-has-video) .tring-guest-video:fullscreen .tring-guest-local { height: 100%; background: #111; }
+    #${UI_ID}.tring-guest-has-video .tring-guest-video:fullscreen .tring-guest-local { width: min(24vw, 240px); height: auto; aspect-ratio: 4/3; }
+    #${UI_ID} .tring-guest-video:fullscreen .tring-guest-video-bar { color: #fff; }
+    #${UI_ID} .tring-guest-dialed { min-height: 0; margin-bottom: 8px; text-align: center; font: 17px/1.4 monospace; letter-spacing: .15em; }
+    #${UI_ID} .tring-guest-dialed:empty { display: none; }
+    #${UI_ID} .tring-guest-keypad { display: none; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 10px; background: #f6f3ea; border-radius: 14px; }
+    #${UI_ID}[data-state="connected"].tring-guest-keypad-open .tring-guest-keypad { display: grid; }
+    #${UI_ID}.tring-guest-keypad-open .tring-guest-video { display: none; }
+    #${UI_ID}:not(.tring-guest-keypad-open) .tring-guest-dialed { display: none; }
+    #${UI_ID} .tring-guest-key { min-height: 42px; border: 0; border-radius: 8px; background: #fbfaf7; color: #1f2420; display: flex; align-items: center; justify-content: center; gap: 4px; }
+    #${UI_ID} .tring-guest-key .num { font-size: 18px; }
+    #${UI_ID} .tring-guest-key .sub { font-size: 8px; color: #5c6058; }
+    #${UI_ID} .tring-guest-actions { display: flex; gap: 8px; }
+    #${UI_ID} .tring-guest-btn { flex: 1; min-width: 0; border: 0; padding: 8px 0; border-radius: 12px; background: #ece9e0; color: #1f2420; display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; }
+    #${UI_ID} .tring-guest-btn:not(.tring-guest-end) { display: none; }
+    #${UI_ID}[data-state="connected"] .tring-guest-btn { display: flex; }
+    #${UI_ID}[data-state="ended"] .tring-guest-actions { display: none; }
+    #${UI_ID} .tring-guest-btn.is-active { background: #0f5c46; color: #fff; }
     #${UI_ID} .tring-guest-btn:disabled { opacity: .5; cursor: default; }
-    /* Dialpad is visible by default once connected — no extra tap. */
-    #${UI_ID} .tring-guest-keypad {
-      display: none; grid-template-columns: repeat(3, 1fr);
-      gap: 1.1rem 1.8rem; width: min(80vw, 290px);
-    }
-    #${UI_ID}[data-state="connected"] .tring-guest-keypad { display: grid; }
-    #${UI_ID} .tring-guest-key {
-      aspect-ratio: 1; width: 100%; max-width: 76px; justify-self: center;
-      border: 0; border-radius: 50%; cursor: pointer; color: #fff;
-      background: rgba(255,255,255,.1);
-      display: flex; flex-direction: column; align-items: center;
-      justify-content: center; transition: background .1s;
-    }
-    #${UI_ID} .tring-guest-key:active { background: rgba(255,255,255,.28); }
-    #${UI_ID} .tring-guest-key .num { font-size: 29px; font-weight: 500; line-height: 1; }
-    #${UI_ID} .tring-guest-key .sub {
-      font-size: 9px; letter-spacing: .12em; opacity: .65;
-      margin-top: 3px; min-height: 10px;
-    }
-
-    /* Bottom — circular call controls, like a native dialer. */
-    #${UI_ID} .tring-guest-actions {
-      display: none; width: 100%; justify-content: center; gap: clamp(.5rem, 4vw, 1.5rem);
-      padding-top: 1.5rem;
-    }
-    #${UI_ID}[data-state="connected"] .tring-guest-actions { display: flex; }
-    #${UI_ID} .tring-guest-btn {
-      background: none; border: 0; padding: 0; cursor: pointer; color: #fff;
-      display: flex; flex-direction: column; align-items: center; gap: .55rem;
-      font: 13px -apple-system, system-ui, sans-serif;
-    }
-    #${UI_ID} .tring-guest-ic {
-      width: 56px; height: 56px; border-radius: 50%;
-      display: grid; place-items: center;
-    }
-    #${UI_ID} .tring-guest-mute .tring-guest-ic { background: rgba(255,255,255,.15); }
-    #${UI_ID} .tring-guest-mute.is-active .tring-guest-ic { background: #fff; color: #111827; }
-    #${UI_ID} .tring-guest-end .tring-guest-ic { background: #ef4444; }
-    /* Rotate the phone glyph so End reads as "hang up". */
+    #${UI_ID} .tring-guest-ic { display: grid; place-items: center; height: 26px; }
+    #${UI_ID} .tring-guest-ic svg { width: 22px; height: 22px; }
+    #${UI_ID} .tring-guest-end { background: #c93627; color: #fff; }
     #${UI_ID} .tring-guest-end .tring-guest-ic svg { transform: rotate(135deg); }
+    #${UI_ID} .tring-guest-video-error { color: #a3271b; font-size: 12px; }
+    #${UI_ID} .tring-guest-video-error:empty { display: none; }
   `;
   document.head.appendChild(style);
 }

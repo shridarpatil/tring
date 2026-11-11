@@ -66,7 +66,7 @@ static init(opts: InitOpts): Promise<Tring>
 
 Creates the client and starts connecting. The promise resolves once the token has been fetched and the WebSocket has been created. It does **not** wait for the agent to be online, so listen for `registered` to know when they are. It **throws** if `gatewayUrl` is missing, or if you pass neither `getToken` nor `token`.
 
-At start-up, `init` also asks for the microphone, so later calls (including auto-answered ones) don't need a new permission prompt. If the user denies it, the SDK asks again when they accept a call.
+At start-up, `init` checks microphone permission and immediately stops the temporary stream. The microphone stays off while idle or ringing. Accepting a call (including auto-answer or call recovery) captures a fresh stream, which is released when the call ends or setup fails. If permission was denied or is no longer granted, the browser may prompt again on acceptance.
 
 | Option | Type | Default | Meaning |
 |---|---|---|---|
@@ -95,7 +95,7 @@ const tring = await Tring.init({
 disconnect(): Promise<void>
 ```
 
-Takes the agent offline: closes the connection, stops reconnecting, and releases the microphone. Emits `unregistered`. A call already in progress uses its own connection and isn't hung up, so hang it up first.
+Takes the agent offline: closes the presence connection, stops reconnecting, ends any active or connecting call, and releases its microphone. Emits `unregistered`.
 
 ```js
 await tring.disconnect();
@@ -333,6 +333,7 @@ Shares the visitor's screen with the agent. Call it from a click. `shareScreen` 
 | `connecting` | `{}` | `call()` started: asking for the microphone and fetching credentials |
 | `ringing` | `{}` | The connection to the gateway is being opened, and the call is waiting to be answered |
 | `connected` | `{}` | Audio is flowing: the visitor is in the IVR |
+| `answered` | `{}` | An agent accepted the call. Start conversation timers here, rather than on `connected`. Emitted once per call, including across media reconnects. |
 | `ended` | `{ reason?: string }` | The call ended. `reason` is set when the server ended the call (`"ended"`, `"peer left"`, `"disconnected"`, …). **This can fire more than once for one call**, so make your handler idempotent. |
 | `remote-video` | `{ stream: MediaStream \| null }` | The agent started or stopped sharing their screen |
 | `error` | `{ error: Error }` | Something failed. See [Errors](#errors). |
@@ -443,11 +444,11 @@ new RtcAgent(opts: RtcAgentOpts)
 
 | Method | Description |
 |---|---|
-| `goOnline(): Promise<void>` | Asks for the microphone (best effort) and connects. It reconnects with backoff until `goOffline()`. It throws `"agent token required (token or getToken)"` if it has no token. |
-| `accept(): Promise<RtcCall \| null>` | Joins the ringing call and returns its `RtcCall`, or `null` if nothing is ringing |
+| `goOnline(): Promise<void>` | Checks microphone permission (best effort), immediately stops the temporary stream, and connects. It reconnects with backoff until `goOffline()`. It throws `"agent token required (token or getToken)"` if it has no token. |
+| `accept(): Promise<RtcCall \| null>` | Captures a fresh microphone stream, joins the ringing call and returns its `RtcCall`, or `null` if nothing is ringing or acceptance was cancelled by going offline |
 | `decline(): void` | Rejects the ringing call, so Tring rings the next agent straight away |
 | `hasIncoming(): boolean` | Whether a call is ringing |
-| `goOffline(): void` | Disconnects, stops reconnecting, and releases the microphone |
+| `goOffline(): void` | Disconnects, stops reconnecting, ends any active or connecting call, and releases the microphone |
 
 | Event | Payload |
 |---|---|

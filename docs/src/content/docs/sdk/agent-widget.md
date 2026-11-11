@@ -63,7 +63,7 @@ The widget fetches with `credentials: "same-origin"`, so it sends cookies only i
 
 ## Taking calls
 
-1. When the agent's page loads, the widget fetches a token, connects to the gateway, and shows **Online**. It also asks for the microphone now, so later calls can be answered without a new permission prompt. If the agent denies it here, the widget asks again when they accept a call.
+1. When the agent's page loads, the widget fetches a token, connects to the gateway, and shows **Online**. It also checks microphone permission, then immediately stops that temporary stream. The microphone stays off while idle or ringing and is captured when the agent accepts a call (including auto-answer). It is released on hangup or failed call setup. If the agent denies permission or it is no longer granted, the browser may prompt again when they accept.
 2. When a call rings this agent, the panel slides in with the caller's label and **Accept** / **Decline**, and plays a ring tone.
    - **Accept** joins the call. The panel shows "Connecting…", then a timer once audio is flowing.
    - **Decline** rejects the call. Tring moves on to the next agent straight away instead of waiting for the ring timeout.

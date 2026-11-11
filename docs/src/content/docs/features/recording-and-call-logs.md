@@ -35,7 +35,7 @@ How it works:
 
 ### Web video recordings
 
-If either participant publishes camera or screen video after answer, the final recording is an **MP4 (H.264 video and AAC audio)**. It contains two panels, **agent left and client right**, with both microphones on their respective stereo channels. Each panel is 640 × 480, for a 1280 × 480 recording. Dark panels fill periods when a camera is off; switching cameras, sharing a screen, and agent transfers retain their position on the call timeline.
+If either participant publishes camera or screen video after answer, the final recording is an **MP4 (H.264 video and AAC audio)**. It contains two panels, **agent left and client right**, with both microphones on their respective stereo channels. Each panel is 640 × 480, for a 1280 × 480 recording. Labelled avatars (Agent/Client, Camera off) fill periods when a camera is off; switching cameras, sharing a screen, and agent transfers retain their position on the call timeline.
 
 Video calls use MP4 regardless of `recording_format`; the tenant's audio sample rate still applies. Calls without captured video keep the audio format described above. The call log automatically displays a video player for MP4 recordings.
 

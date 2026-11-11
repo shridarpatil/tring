@@ -2,15 +2,24 @@ package record
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 )
 
+// Rasterized from the adjacent SVG sources so recording hosts do not need
+// installed fonts, librsvg, or FFmpeg's optional drawtext filter.
+//
+//go:embed placeholders/*.png
+var videoPlaceholders embed.FS
+
 // ComposeVideo produces one MP4: agent on the left, client on the right, with
-// both audio channels. A dark panel fills camera-off intervals. Every segment
+// both audio channels. A labelled avatar fills camera-off intervals. Every segment
 // is positioned on the answer-relative timeline, including transfers/restarts.
 func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoTrack, duration time.Duration, rate int) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
@@ -26,6 +35,22 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 	seconds := func(d time.Duration) string { return strconv.FormatFloat(d.Seconds(), 'f', 6, 64) }
 	total := seconds(duration)
 	args := []string{"-y", "-hide_banner", "-loglevel", "error", "-filter_complex_threads", "1"}
+	placeholderDir, err := os.MkdirTemp(filepath.Dir(out), ".video-placeholders-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(placeholderDir)
+	for _, role := range []string{"agent", "client"} {
+		data, err := videoPlaceholders.ReadFile("placeholders/" + role + "-camera-off.png")
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(placeholderDir, role+".png")
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			return err
+		}
+		args = append(args, "-loop", "1", "-framerate", "24", "-i", path)
+	}
 	var videos []VideoTrack
 	var audios []Track
 	for _, v := range video {
@@ -41,7 +66,7 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 		}
 	}
 	var fc strings.Builder
-	fmt.Fprintf(&fc, "color=c=0x18241f:s=640x480:r=24:d=%s[left0];color=c=0x20242c:s=640x480:r=24:d=%s[right0];", total, total)
+	fmt.Fprintf(&fc, "[0:v]trim=duration=%s,setpts=PTS-STARTPTS[left0];[1:v]trim=duration=%s,setpts=PTS-STARTPTS[right0];", total, total)
 	left, right := "left0", "right0"
 	for i, v := range videos {
 		if v.Duration <= 0 {
@@ -49,7 +74,7 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 		}
 		// tpad holds the final picture only until camera-off, never through the
 		// rest of the call. Delayed starts expose the placeholder beneath it.
-		fmt.Fprintf(&fc, "[%d:v]setpts=PTS-STARTPTS,scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=%s,trim=duration=%s,setpts=PTS+%s/TB[v%d];", i, seconds(v.Duration), seconds(v.Duration), seconds(v.Offset), i)
+		fmt.Fprintf(&fc, "[%d:v]setpts=PTS-STARTPTS,scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=%s,trim=duration=%s,setpts=PTS+%s/TB[v%d];", i+2, seconds(v.Duration), seconds(v.Duration), seconds(v.Offset), i)
 		base := right
 		if v.Role == "agent" {
 			base = left
@@ -70,7 +95,7 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 		if a.Role == "customer" {
 			pan = "c0=0*c0|c1=c0"
 		}
-		fmt.Fprintf(&fc, "[%d:a]pan=stereo|%s,adelay=%d|%d[a%d];", len(videos)+i, pan, a.Offset.Milliseconds(), a.Offset.Milliseconds(), i)
+		fmt.Fprintf(&fc, "[%d:a]pan=stereo|%s,adelay=%d|%d[a%d];", 2+len(videos)+i, pan, a.Offset.Milliseconds(), a.Offset.Milliseconds(), i)
 		labels += fmt.Sprintf("[a%d]", i)
 	}
 	fmt.Fprintf(&fc, "%samix=inputs=%d:duration=first:normalize=0[a]", labels, len(audios)+1)

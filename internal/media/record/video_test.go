@@ -1,9 +1,11 @@
 package record_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
+	"image/png"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,67 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/shridarpatil/tring/internal/media/record"
 )
+
+// Even when one participant never enables video, their labelled camera-off
+// panel must remain visible for the full recording, rather than a blank half.
+func TestComposeVideoOneCameraKeepsOtherPlaceholder(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "camera.ivf")
+	if b, err := exec.Command("ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=160x120:r=24:d=1", "-c:v", "libvpx", "-threads", "1", clip).CombinedOutput(); err != nil {
+		t.Fatalf("generate video: %v: %s", err, b)
+	}
+	for _, role := range []string{"agent", "customer"} {
+		t.Run(role, func(t *testing.T) {
+			out := filepath.Join(dir, role+".mp4")
+			if err := record.ComposeVideo(context.Background(), out, nil, []record.VideoTrack{{Role: role, Path: clip, Duration: time.Second}}, 2*time.Second, 8000); err != nil {
+				t.Fatal(err)
+			}
+			for _, at := range []string{"0.5", "1.5"} {
+				raw, err := exec.Command("ffmpeg", "-v", "error", "-ss", at, "-i", out, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-").Output()
+				if err != nil || len(raw) != 1280*480*3 {
+					t.Fatalf("decode: %v (%d bytes)", err, len(raw))
+				}
+				for side, placeholder := range []string{"agent", "client"} {
+					if at == "0.5" && ((side == 0 && role == "agent") || (side == 1 && role == "customer")) {
+						continue
+					}
+					data, err := os.ReadFile("placeholders/" + placeholder + "-camera-off.png")
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected, err := png.Decode(bytes.NewReader(data))
+					if err != nil {
+						t.Fatal(err)
+					}
+					pixels, difference := 0, 0
+					for y := 0; y < 480; y++ {
+						for x := 0; x < 640; x++ {
+							r, g, b, _ := expected.At(x, y).RGBA()
+							if r>>8 < 150 || g>>8 < 150 || b>>8 < 150 {
+								continue
+							}
+							pixels++
+							index := (y*1280 + side*640 + x) * 3
+							for channel, want := range []uint32{r >> 8, g >> 8, b >> 8} {
+								delta := int(raw[index+channel]) - int(want)
+								if delta < 0 {
+									delta = -delta
+								}
+								difference += delta
+							}
+						}
+					}
+					if pixels < 1000 || difference/(pixels*3) > 20 {
+						t.Fatalf("%s at %ss: avatar/label missing or wrong, pixels=%d difference=%d", placeholder, at, pixels, difference)
+					}
+				}
+			}
+		})
+	}
+}
 
 func videoPacket(ts uint32, keyframe bool) *rtp.Packet {
 	frame := byte(1)

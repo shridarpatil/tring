@@ -23,7 +23,8 @@
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.mjs"
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "test:browser-video": "node test/browser-video.mjs"
   },
   "dependencies": {},
   "devDependencies": {
