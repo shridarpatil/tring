@@ -35,6 +35,20 @@ the same fetch — your endpoint just passes the JSON through. (For a static tok
 on a server-rendered page, use `data-token="<jwt>"` **and** `data-gateway-url="…"`,
 since there's no fetch to carry the gateway URL.)
 
+### Incoming call notifications
+
+Click **Enable call notifications** in the agent's connection badge and allow
+notifications in the browser. While the agent's tab is in the background or
+another app has focus, an incoming call shows a desktop notification with the
+caller label. Clicking it brings the call tab forward; use **Accept** to answer.
+The alert clears when the agent returns, accepts, declines, or the call ends.
+Outbound calls do not show these alerts.
+
+Desktop alerts require a supported browser and a secure context (HTTPS or
+localhost). If permission was blocked, allow it in the browser's site settings.
+The agent tab must stay open and connected; browser/OS notification settings can
+also suppress alerts. The call panel and ringtone still work without permission.
+
 ### Placing an outbound call (backend-originated — the agent never sees the number)
 
 The SDK has **no Tring API access**, so your own "Call" button hits **your**
