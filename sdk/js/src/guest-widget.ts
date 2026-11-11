@@ -7,6 +7,7 @@
 
 import { TringGuest } from "./guest";
 import type { GuestInitOpts } from "./types";
+import { videoErrorMessage, type VideoSource } from "./video";
 
 const UI_ID = "tring-guest-ui";
 
@@ -46,13 +47,15 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
     ui.setRemoteVideo(null);
     ui.end(error.message || "Call failed");
   });
-  // The agent's screen arrives as a video track — show/hide it.
+  guest.on("local-video", ({ stream, source }) => ui.setLocalVideo(stream, source));
+  // The agent's camera or screen arrives as a video track.
   guest.on("remote-video", ({ stream }) => ui.setRemoteVideo(stream));
 
   // Wire UI controls back to the guest session.
   ui.onHangup(() => guest.hangup());
   ui.onMute(() => guest.toggleMute());
   ui.onShare(() => guest.toggleScreen());
+  ui.onCamera(() => guest.toggleCamera());
 
   ui.onDigit((digit) => guest.sendDTMF(digit));
 
@@ -121,6 +124,8 @@ interface GuestUI {
   onHangup(fn: () => void): void;
   onMute(fn: () => boolean | void): void;
   onShare(fn: () => Promise<boolean> | boolean | void): void;
+  onCamera(fn: () => Promise<boolean> | boolean | void): void;
+  setLocalVideo(stream: MediaStream | null, source: VideoSource | null): void;
   setRemoteVideo(stream: MediaStream | null): void;
   onDigit(fn: (digit: string) => void): void;
 }
@@ -143,6 +148,7 @@ function createGuestUI(title: string): GuestUI {
   // Inline SVGs so the controls look native with no asset dependency.
   const micIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>`;
   const phoneIcon = `<svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
+  const cameraIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="12" height="14" rx="2"/><path d="m15 10 6-4v12l-6-4z"/></svg>`;
   const screenIcon = `<svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M20 4H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6v2H8v2h8v-2h-2v-2h6a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 12H4V6h16v10z"/></svg>`;
 
   root.innerHTML = `
@@ -153,13 +159,17 @@ function createGuestUI(title: string): GuestUI {
         <div class="tring-guest-sub">Connecting…</div>
       </div>
       <div class="tring-guest-mid">
-        <video class="tring-guest-remote" autoplay playsinline></video>
+        <video class="tring-guest-remote" autoplay playsinline muted></video>
+        <video class="tring-guest-local" autoplay playsinline muted aria-label="Your camera preview"></video>
         <div class="tring-guest-dialed"></div>
         <div class="tring-guest-keypad">${keypadHTML}</div>
       </div>
       <div class="tring-guest-actions">
         <button type="button" class="tring-guest-btn tring-guest-mute" aria-pressed="false">
           <span class="tring-guest-ic">${micIcon}</span><span class="tring-guest-lbl">Mute</span>
+        </button>
+        <button type="button" class="tring-guest-btn tring-guest-camera" aria-pressed="false" aria-label="Turn camera on">
+          <span class="tring-guest-ic">${cameraIcon}</span><span class="tring-guest-lbl">Camera</span>
         </button>
         <button type="button" class="tring-guest-btn tring-guest-share" aria-pressed="false">
           <span class="tring-guest-ic">${screenIcon}</span><span class="tring-guest-lbl">Share</span>
@@ -168,6 +178,7 @@ function createGuestUI(title: string): GuestUI {
           <span class="tring-guest-ic">${phoneIcon}</span><span class="tring-guest-lbl">End</span>
         </button>
       </div>
+      <div class="tring-guest-video-error" role="status"></div>
     </div>`;
 
   const $ = <T extends HTMLElement>(s: string) => root.querySelector<T>(s)!;
@@ -179,6 +190,11 @@ function createGuestUI(title: string): GuestUI {
   const shareBtn = $<HTMLButtonElement>(".tring-guest-share");
   const shareLbl = shareBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
   const remoteVid = $<HTMLVideoElement>(".tring-guest-remote");
+  const localVid = $<HTMLVideoElement>(".tring-guest-local");
+  const cameraBtn = $<HTMLButtonElement>(".tring-guest-camera");
+  const cameraLbl = cameraBtn.querySelector<HTMLElement>(".tring-guest-lbl")!;
+  const videoError = $(".tring-guest-video-error");
+  let generation = 0;
   const endBtn = $<HTMLButtonElement>(".tring-guest-end");
 
   let tick: number | undefined;
@@ -191,9 +207,37 @@ function createGuestUI(title: string): GuestUI {
     return `${String(m).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
   };
 
+  function setLocalVideo(stream: MediaStream | null, source: VideoSource | null) {
+    const camera = source === "camera";
+    const screen = source === "screen";
+    localVid.srcObject = camera ? stream : null;
+    root.classList.toggle("tring-guest-camera-on", camera);
+    cameraBtn.setAttribute("aria-pressed", String(camera));
+    cameraBtn.classList.toggle("is-active", camera);
+    cameraBtn.setAttribute("aria-label", camera ? "Turn camera off" : "Turn camera on");
+    cameraLbl.textContent = camera ? "Camera off" : "Camera";
+    shareBtn.setAttribute("aria-pressed", String(screen));
+    shareBtn.classList.toggle("is-active", screen);
+    shareLbl.textContent = screen ? "Stop share" : "Share";
+  }
+  function bindVideo(button: HTMLButtonElement, fn: () => Promise<boolean> | boolean | void) {
+    button.addEventListener("click", async () => {
+      const current = generation;
+      cameraBtn.disabled = shareBtn.disabled = true;
+      videoError.textContent = "";
+      try { await fn(); }
+      catch (error) { if (current === generation) videoError.textContent = videoErrorMessage(error); }
+      finally { if (current === generation) cameraBtn.disabled = shareBtn.disabled = false; }
+    });
+  }
+
   return {
     root,
     open() {
+      ++generation;
+      setLocalVideo(null, null);
+      cameraBtn.disabled = false;
+      videoError.textContent = "";
       muteBtn.setAttribute("aria-pressed", "false");
       muteBtn.classList.remove("is-active");
       muteLbl.textContent = "Mute";
@@ -223,6 +267,9 @@ function createGuestUI(title: string): GuestUI {
       }, 500);
     },
     end(message) {
+      ++generation;
+      setLocalVideo(null, null);
+      videoError.textContent = "";
       if (tick) {
         clearInterval(tick);
         tick = undefined;
@@ -243,21 +290,9 @@ function createGuestUI(title: string): GuestUI {
         muteLbl.textContent = on ? "Unmute" : "Mute";
       });
     },
-    onShare(fn) {
-      shareBtn.addEventListener("click", async () => {
-        shareBtn.disabled = true;
-        try {
-          const on = (await fn()) === true;
-          shareBtn.setAttribute("aria-pressed", String(on));
-          shareBtn.classList.toggle("is-active", on);
-          shareLbl.textContent = on ? "Stop" : "Share";
-        } catch {
-          /* user cancelled the screen-picker */
-        } finally {
-          shareBtn.disabled = false;
-        }
-      });
-    },
+    onShare(fn) { bindVideo(shareBtn, fn); },
+    onCamera(fn) { bindVideo(cameraBtn, fn); },
+    setLocalVideo,
     setRemoteVideo(stream) {
       if (stream) {
         remoteVid.srcObject = stream;
@@ -356,7 +391,7 @@ function injectStyles(): void {
        doesn't bleed through; safe-area insets respect the notch/home bar. */
     #${UI_ID} {
       position: fixed; inset: 0; z-index: 999999; display: none;
-      background: linear-gradient(180deg, #243042 0%, #0b1220 100%);
+      background: linear-gradient(180deg, #243042 0%, #0b1220 100%); overflow-y: auto;
       font: 16px/1.4 -apple-system, system-ui, sans-serif; color: #fff;
       -webkit-tap-highlight-color: transparent;
     }
@@ -391,9 +426,21 @@ function injectStyles(): void {
       min-height: 1.4em; margin-bottom: 1rem; font-size: 26px;
       letter-spacing: .15em; font-variant-numeric: tabular-nums;
     }
+    #${UI_ID} .tring-guest-local { display: none; width: 124px; height: 93px; object-fit: cover; transform: scaleX(-1); border-radius: 12px; margin: 0 0 1rem auto; background: #000; }
+    #${UI_ID}.tring-guest-camera-on .tring-guest-local { display: block; }
+    #${UI_ID}.tring-guest-camera-on .tring-guest-top,
+    #${UI_ID}.tring-guest-has-video .tring-guest-top { margin-top: 0; }
+    #${UI_ID}.tring-guest-camera-on .tring-guest-avatar,
+    #${UI_ID}.tring-guest-has-video .tring-guest-avatar { width: 56px; height: 56px; font-size: 26px; margin-bottom: .5rem; }
+    #${UI_ID}.tring-guest-camera-on .tring-guest-dialed,
+    #${UI_ID}.tring-guest-has-video .tring-guest-dialed { display: none; }
+    #${UI_ID} .tring-guest-video-error { color: #fca5a5; font-size: 13px; text-align: center; }
+    #${UI_ID} .tring-guest-video-error:empty { display: none; }
+    #${UI_ID} .tring-guest-camera .tring-guest-ic { background: rgba(255,255,255,.15); }
+    #${UI_ID} .tring-guest-camera.is-active .tring-guest-ic { background: #fff; color: #111827; }
     /* Remote screen-share — hidden until the other party shares. */
     #${UI_ID} .tring-guest-remote {
-      display: none; width: 100%; max-height: 46vh; border-radius: 12px;
+      display: none; width: 100%; max-height: 36vh; border-radius: 12px;
       background: #000; object-fit: contain; margin-bottom: 1rem;
     }
     #${UI_ID}.tring-guest-has-video .tring-guest-remote { display: block; }
@@ -424,7 +471,7 @@ function injectStyles(): void {
 
     /* Bottom — circular call controls, like a native dialer. */
     #${UI_ID} .tring-guest-actions {
-      display: none; width: 100%; justify-content: center; gap: 2.25rem;
+      display: none; width: 100%; justify-content: center; gap: clamp(.5rem, 4vw, 1.5rem);
       padding-top: 1.5rem;
     }
     #${UI_ID}[data-state="connected"] .tring-guest-actions { display: flex; }
@@ -434,7 +481,7 @@ function injectStyles(): void {
       font: 13px -apple-system, system-ui, sans-serif;
     }
     #${UI_ID} .tring-guest-ic {
-      width: 66px; height: 66px; border-radius: 50%;
+      width: 56px; height: 56px; border-radius: 50%;
       display: grid; place-items: center;
     }
     #${UI_ID} .tring-guest-mute .tring-guest-ic { background: rgba(255,255,255,.15); }

@@ -103,8 +103,9 @@ type sfuRoom struct {
 // of every RTP packet teed off the copy loop; stored atomically so the hot loop
 // reads them without locking.
 type publication struct {
-	tracks map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP
-	sinks  atomic.Pointer[[]room.TrackSink]
+	tracks      map[webrtc.RTPCodecType]*webrtc.TrackLocalStaticRTP
+	videoStream string // current video capture generation; guarded by SFU.mu
+	sinks       atomic.Pointer[[]room.TrackSink]
 }
 
 // audience controls which subscribers may hear one publisher. A nil *audience,

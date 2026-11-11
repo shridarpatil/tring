@@ -26,9 +26,10 @@ const props = withDefaults(
 const emit = defineEmits<{ select: [call: Call] }>();
 
 // Recordings are served behind auth, so a plain <a href>/<audio src> can't send
-// the bearer token. Fetch the WAV as a blob and bind it to an inline <audio>
-// player (a blob URL opened in a new tab would just download).
+// the bearer token. Fetch the recording as a blob, then choose audio or video
+// playback from its MIME type.
 const recUrl = ref<Record<string, string>>({});
+const recIsVideo = ref<Record<string, boolean>>({});
 let unmounted = false;
 async function playRecording(c: Call) {
   const url = props.recordingUrl(c);
@@ -39,11 +40,13 @@ async function playRecording(c: Call) {
     toast.error("recording not available yet");
     return;
   }
-  const blobUrl = URL.createObjectURL(await res.blob());
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
   if (unmounted) {
     URL.revokeObjectURL(blobUrl);
     return;
   }
+  recIsVideo.value = { ...recIsVideo.value, [c.id]: blob.type.startsWith("video/") };
   recUrl.value = { ...recUrl.value, [c.id]: blobUrl };
 }
 onUnmounted(() => {
@@ -94,8 +97,15 @@ const cols = () => 7 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
           <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
           <td class="align-right mono">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
           <td>
+            <video
+              v-if="recUrl[c.id] && recIsVideo[c.id]"
+              :src="recUrl[c.id]"
+              controls autoplay playsinline
+              style="width: min(480px, 70vw); border-radius: 8px; background: #111"
+              @click.stop
+            ></video>
             <audio
-              v-if="recUrl[c.id]"
+              v-else-if="recUrl[c.id]"
               :src="recUrl[c.id]"
               controls
               autoplay

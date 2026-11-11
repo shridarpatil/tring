@@ -595,6 +595,10 @@ func (l *Log) end(roomID, status, cause string) {
 	if ac == nil {
 		return
 	}
+	// Bound the recording timeline at hangup, before database/webhook I/O.
+	if ac.rec != nil {
+		_ = ac.rec.Close()
+	}
 	defer logging.ClearCall(roomID, ac.id.String())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -775,7 +779,7 @@ func (l *Log) timelineEvent(tenant, callID uuid.UUID, typ string, detail map[str
 }
 
 // recordingMIME is the Content-Type of each served recording format.
-var recordingMIME = map[string]string{".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".wav": "audio/wav"}
+var recordingMIME = map[string]string{".mp4": "video/mp4", ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".wav": "audio/wav"}
 
 // finalizeRecording closes the per-leg captures and produces the single served
 // file <dir>/<legID>.<format>: agent-left/customer-right stereo when both legs
@@ -785,6 +789,10 @@ var recordingMIME = map[string]string{".ogg": "audio/ogg", ".mp3": "audio/mpeg",
 func (l *Log) finalizeRecording(ac *activeCall) {
 	_ = ac.rec.Close()
 	tracks := ac.rec.Tracks()
+	if videos := ac.rec.VideoTracks(); len(videos) > 0 {
+		l.finalizeVideoRecording(ac, tracks, videos)
+		return
+	}
 	var customer string
 	var agents []record.AgentLeg // one per agent leg; a blind transfer yields >1
 	for _, t := range tracks {
@@ -847,6 +855,12 @@ func (l *Log) finalizeRecording(ac *activeCall) {
 		}
 	}
 
+	l.publishRecording(ac, out)
+}
+
+func (l *Log) publishRecording(ac *activeCall, out string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	// The file is on disk now → publish the serve URL. Doing it here (not at
 	// Started) means a call with no captured media never advertises a recording.
 	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecording, ac.legID); err != nil {
