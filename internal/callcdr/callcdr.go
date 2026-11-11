@@ -325,14 +325,30 @@ func (l *Log) agentBySIP(ctx context.Context, tenant uuid.UUID, sip string) (uui
 // own join is ignored (pid == callerPID), as are unknown rooms. agentSip may be
 // empty (then only status/answered_at are stamped, no agent attribution).
 func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink {
+	// Answered is reserved for a real agent leg; a carrier answer without an
+	// agent uses CarrierAnswered and must not arm the recorder.
+	if agentPID == "" {
+		return nil
+	}
+	return l.answered(roomID, agentPID, agentSip)
+}
+
+// CarrierAnswered records the customer's answer to a campaign without treating
+// the IVR player as an agent. It updates the CDR and dashboard but leaves capture
+// disarmed until a real agent answers a transfer via Answered.
+func (l *Log) CarrierAnswered(roomID string) {
+	l.answered(roomID, "", "")
+}
+
+func (l *Log) answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink {
 	l.mu.Lock()
 	ac := l.calls[roomID]
-	if ac != nil && agentPID != ac.callerPID {
+	if ac != nil && agentPID != "" && agentPID != ac.callerPID {
 		ac.answered = true // gate RingStop's revert-to-ivr (a late cleanup mustn't undo "talking")
 		ac.ringDone = true
 	}
 	l.mu.Unlock()
-	if ac == nil || agentPID == ac.callerPID {
+	if ac == nil || (agentPID != "" && agentPID == ac.callerPID) {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -362,7 +378,7 @@ func (l *Log) Answered(roomID string, agentPID room.ParticipantID, agentSip stri
 	if l.events != nil {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallAnswered, answeredEvent(ac.id, answeredAgentID, answeredAgentName, time.Now()))
 	}
-	if ac.rec == nil {
+	if ac.rec == nil || agentPID == "" {
 		return nil
 	}
 	ac.rec.Label(agentPID, "agent")

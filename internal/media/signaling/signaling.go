@@ -164,6 +164,9 @@ type CallLog interface {
 	// instead of Started's hardcoded 'inbound'.
 	StartedOutbound(ctx context.Context, tenant uuid.UUID, roomID, from, to, clientRef string, callerPID room.ParticipantID) room.TrackSink
 	Answered(roomID string, agentPID room.ParticipantID, agentSip string) room.TrackSink
+	// CarrierAnswered updates call status for an answered campaign customer,
+	// without starting agent recording or registering the IVR as an agent.
+	CarrierAnswered(roomID string)
 	// RingStart/RingStop drive the live-dashboard "ringing → <target>" phase for a
 	// transfer: RingStart when routing to a team/agent begins (so the row shows who
 	// it's ringing instead of the IVR label), RingStop when the ring ends with no

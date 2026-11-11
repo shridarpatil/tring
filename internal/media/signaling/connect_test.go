@@ -114,6 +114,7 @@ func (c *connectCallLog) Answered(_ string, pid room.ParticipantID, _ string) ro
 	c.add("answered:" + string(pid))
 	return nil
 }
+func (c *connectCallLog) CarrierAnswered(string) { c.add("carrier_answered") }
 func (c *connectCallLog) Customer(_ string, pid room.ParticipantID) room.TrackSink {
 	c.add("customer:" + string(pid))
 	return nil
