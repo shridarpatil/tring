@@ -2,6 +2,7 @@ package fsplug
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -104,6 +105,21 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	}
 	if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
 		m.Close()
+		var response *sipgo.ErrDialogResponse
+		if errors.As(err, &response) && response.Res != nil {
+			outcome := ""
+			switch response.Res.StatusCode {
+			case 486, 600:
+				outcome = "busy"
+			case 408, 480:
+				outcome = "no_answer"
+			case 500, 502, 503, 504:
+				outcome = "temporary_failure"
+			}
+			if outcome != "" {
+				return nil, &room.DialFailure{Outcome: outcome, Err: err}
+			}
+		}
 		return nil, fmt.Errorf("fsplug: outbound not answered: %w", err) // busy/no-answer/failed
 	}
 	// Subscribe to the dialog state BEFORE Ack (and before touching the answer

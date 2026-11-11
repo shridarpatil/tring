@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/shridarpatil/tring/internal/callcdr"
+	"github.com/shridarpatil/tring/internal/campaign"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
@@ -97,6 +98,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 	var holdMusic signaling.HoldMusicResolver
 	var transferMessage signaling.TransferMessageResolver
 	var calls signaling.CallLog
+	var campaignStore *campaign.Store
 	var supervisors signaling.SupervisorLog
 	var webhooks signaling.Webhooks
 	var didResolver signaling.DIDResolver
@@ -106,6 +108,8 @@ func startGateway(d *deps) (*gatewayRole, error) {
 	if database, dberr := db.Connect(context.Background(), k.String("dsn")); dberr != nil {
 		logger.Warn("gateway DB unavailable, IVR on web calls disabled", "err", dberr)
 	} else {
+		campaignStore = campaign.New(database.Pool)
+		campaignStore.Limits = campaign.Limits{Concurrent: k.Int("campaign_max_concurrent"), PerTenant: k.Int("campaign_tenant_concurrent"), StartsPerSecond: k.Int("campaign_starts_per_second"), TotalCalls: k.Int("campaign_total_call_capacity"), ReservedCalls: k.Int("campaign_reserved_calls")}
 		store := flowstore.New(database).WithCache(redisCache) // DID + flow reads on every inbound call
 		flows, teams, holdMusic, didResolver = store, store, store, store
 		transferMessage = store
@@ -146,8 +150,9 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		AudioDir:        k.String("audio_dir"),
 		Tokens:          redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
 		Presence:        presence.New(redisCache), // publish agent online/offline for the dashboard
-		Calls:           calls,                    // CDRs + recordings (one path for web + phone)
-		Cache:           redisCache,               // publish web team-queue depth for the dashboard
+		Calls:           calls,
+		Campaigns:       campaignStore, // CDRs + recordings (one path for web + phone)
+		Cache:           redisCache,    // publish web team-queue depth for the dashboard
 		Events:          d.pub,
 		Supervisors:     supervisors,  // supervisor session audit (nil DB → nil, no audit)
 		HTTP:            ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes

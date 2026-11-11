@@ -19,6 +19,7 @@ import (
 	"github.com/shridarpatil/tring/internal/blobstore"
 	"github.com/shridarpatil/tring/internal/brain"
 	"github.com/shridarpatil/tring/internal/cache"
+	"github.com/shridarpatil/tring/internal/campaign"
 	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/freeswitch"
@@ -35,11 +36,12 @@ import (
 // Wiring it explicitly (vs. picking env vars inside api/) keeps the package
 // testable and lets cmd/tring drive defaults.
 type Config struct {
-	DB          *db.DB
-	JWTSecret   string
-	FSBasicAuth string // "user:pass" — shared with FreeSWITCH mod_xml_curl
-	ESLAddr     string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
-	ESLPassword string // FreeSWITCH ESL password (default ClueCon)
+	CampaignLimits campaign.Limits
+	DB             *db.DB
+	JWTSecret      string
+	FSBasicAuth    string // "user:pass" — shared with FreeSWITCH mod_xml_curl
+	ESLAddr        string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
+	ESLPassword    string // FreeSWITCH ESL password (default ClueCon)
 
 	// WebRTC ICE servers. STUN gives the browser its srflx (public)
 	// candidate. TURN relays media through a public-IP server when both
@@ -128,14 +130,15 @@ type Config struct {
 }
 
 type Server struct {
-	db          *db.DB
-	q           *queries.Queries // named SQL loaded from queries.sql at startup
-	jwtSecret   []byte
-	fsBasicUser string
-	fsBasicPass string
-	fs          *freeswitch.Client
-	cache       *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
-	presence    *presence.Store // agent online status published by the gateway
+	campaignLimits campaign.Limits
+	db             *db.DB
+	q              *queries.Queries // named SQL loaded from queries.sql at startup
+	jwtSecret      []byte
+	fsBasicUser    string
+	fsBasicPass    string
+	fs             *freeswitch.Client
+	cache          *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
+	presence       *presence.Store // agent online status published by the gateway
 
 	// agentTransport / agentGateway: how an agent's own call leg is routed
 	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
@@ -218,6 +221,9 @@ type iceServer struct {
 }
 
 func NewServer(cfg Config) *Server {
+	if cfg.CampaignLimits.Concurrent == 0 {
+		cfg.CampaignLimits = campaign.DefaultLimits()
+	}
 	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
 	logger := cfg.Logger
 	if logger == nil {
@@ -240,6 +246,7 @@ func NewServer(cfg Config) *Server {
 		gatewayControlURL: strings.TrimRight(cfg.GatewayControlURL, "/"),
 		gatewayHTTP:       &http.Client{Timeout: 10 * time.Second},
 		tts:               cfg.TTS,
+		campaignLimits:    cfg.CampaignLimits,
 		audioDir:          cfg.AudioDir,
 		recordingsDir:     cfg.RecordingsDir,
 		blob:              cfg.Blob,
@@ -451,6 +458,18 @@ func (s *Server) Router() http.Handler {
 				// mint more keys, read trunk config or repoint webhooks.
 				r.Group(func(r chi.Router) {
 					r.Use(s.RequireFullScope)
+					r.Post("/campaigns", s.handleCreateCampaign)
+					r.Get("/campaigns", s.handleListCampaigns)
+					r.Get("/campaigns/{id}", s.handleGetCampaign)
+					r.Put("/campaigns/{id}", s.handleUpdateCampaign)
+					r.Post("/campaigns/{id}/prepare", s.handlePrepareCampaign)
+					r.Post("/campaigns/{id}/test", s.handleTestCampaign)
+					r.Post("/campaigns/{id}/recipients", s.handleImportCampaign)
+					r.Get("/campaigns/{id}/recipients", s.handleCampaignRecipients)
+					r.Get("/campaigns/{id}/attempts", s.handleCampaignAttempts)
+					r.Get("/campaigns/{id}/export", s.handleExportCampaign)
+					r.Post("/campaigns/{id}/{action}", s.handleCampaignAction)
+
 					r.Get("/tenants/me", s.handleGetMyTenant)
 					r.Get("/version", s.handleVersion)
 					r.Patch("/tenants/me", s.handlePatchMyTenant)

@@ -148,7 +148,12 @@ var defaults = map[string]any{
 	// (one host dir into both the api and gateway containers at the same path).
 	// FreeSWITCH no longer plays these — the gateway does — so the path is no
 	// longer FS-specific.
-	"audio_dir": "/var/lib/tring/sounds",
+	"audio_dir":                    "/var/lib/tring/sounds",
+	"campaign_max_concurrent":      50,
+	"campaign_tenant_concurrent":   10,
+	"campaign_starts_per_second":   5,
+	"campaign_total_call_capacity": 100,
+	"campaign_reserved_calls":      20,
 	// recordings_dir: where the gateway (internal/callcdr) writes call
 	// recordings and the API reads them back to serve (GET /v1/calls/{id}/
 	// recording). A shared mount, like audio_dir; FreeSWITCH no longer writes

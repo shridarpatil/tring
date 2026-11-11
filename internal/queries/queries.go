@@ -25,6 +25,51 @@ var sqlFile = tring.QueriesSQL
 // The api and gateway roles share this one struct; fields are grouped by the
 // domain (and owning role) they serve.
 type Queries struct {
+	CampaignRunningSlots string `query:"campaign-running-slots"`
+	CampaignWebhookOwned string `query:"campaign-webhook-owned"`
+	CampaignRecentStarts string `query:"campaign-recent-starts"`
+	CampaignStartAt      string `query:"campaign-start-at"`
+	CampaignRecoverCall  string `query:"campaign-recover-call"`
+	CampaignMetrics      string `query:"campaign-metrics"`
+
+	// Campaigns: durable scheduling and gateway attempt ownership.
+	CampaignCreate           string `query:"campaign-create"`
+	CampaignGet              string `query:"campaign-get"`
+	CampaignLock             string `query:"campaign-lock"`
+	CampaignList             string `query:"campaign-list"`
+	CampaignCount            string `query:"campaign-count"`
+	CampaignUpdate           string `query:"campaign-update"`
+	CampaignPrepare          string `query:"campaign-prepare"`
+	CampaignState            string `query:"campaign-state"`
+	CampaignCounts           string `query:"campaign-counts"`
+	CampaignImport           string `query:"campaign-import"`
+	CampaignRecipients       string `query:"campaign-recipients"`
+	CampaignRecipientCount   string `query:"campaign-recipient-count"`
+	CampaignAttempts         string `query:"campaign-attempts"`
+	CampaignAttemptCount     string `query:"campaign-attempt-count"`
+	CampaignAttemptGet       string `query:"campaign-attempt-get"`
+	CampaignAttemptCreate    string `query:"campaign-attempt-create"`
+	CampaignAttemptClaim     string `query:"campaign-attempt-claim"`
+	CampaignAttemptCall      string `query:"campaign-attempt-call"`
+	CampaignAttemptAnswered  string `query:"campaign-attempt-answered"`
+	CampaignHeartbeat        string `query:"campaign-heartbeat"`
+	CampaignAttemptFinish    string `query:"campaign-attempt-finish"`
+	CampaignRecipientFinish  string `query:"campaign-recipient-finish"`
+	CampaignCancelQueued     string `query:"campaign-cancel-queued"`
+	CampaignCancelRecipients string `query:"campaign-cancel-recipients"`
+	CampaignWorkerLock       string `query:"campaign-worker-lock"`
+	CampaignTenants          string `query:"campaign-tenants"`
+	CampaignDue              string `query:"campaign-due"`
+	CampaignSlots            string `query:"campaign-slots"`
+	CampaignLiveCalls        string `query:"campaign-live-calls"`
+	CampaignOwnSlots         string `query:"campaign-own-slots"`
+	CampaignNextRecipient    string `query:"campaign-next-recipient"`
+	CampaignReserveRecipient string `query:"campaign-reserve-recipient"`
+	CampaignDispatchAt       string `query:"campaign-dispatch-at"`
+	CampaignQueued           string `query:"campaign-queued"`
+	CampaignStale            string `query:"campaign-stale"`
+	CampaignComplete         string `query:"campaign-complete"`
+
 	// ---- api: agents ----
 	CreateAgent          string `query:"create-agent"`
 	ListAgents           string `query:"list-agents"`

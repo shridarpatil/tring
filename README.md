@@ -23,6 +23,9 @@ Open-source, API-first voice calling for any CRM. Bring your own SIP trunk.
 - **WhatsApp calls**
   Take WhatsApp Business calls over SIP into the same flows and agents.
 
+- **Campaigns and voice blasts**
+  Schedule recipient lists with uploaded audio, local text-to-speech, or interactive IVR; control concurrency, retries, and per-recipient reporting.
+
 - **Call control**
   Hold, transfer and live supervision (monitor, whisper, barge).
 

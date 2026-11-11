@@ -180,6 +180,7 @@ type controlClaims struct {
 // on its own loopback listener (gateway_control_addr), never on the public one.
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /control/campaign", s.handleControlCampaign)
 	mux.HandleFunc("POST /control/connect", s.handleControlConnect)
 	mux.HandleFunc("POST /control/call", s.handleControlCall)
 	mux.HandleFunc("POST /control/agent-kick", s.handleControlAgentKick)
