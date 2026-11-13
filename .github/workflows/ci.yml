@@ -113,6 +113,13 @@ jobs:
         # build them before `go test` (mirrors the Dockerfile's sdk stage).
         run: make sdk
 
+      - name: Install FFmpeg for recording tests
+        # Recording finalization requires a real merge. Failed encodes retain
+        # their captures for recovery instead of publishing a raw-leg fallback.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
       - name: go test
         env:
           # The dbtest harness reads this; unset == skip DB-dependent tests.
