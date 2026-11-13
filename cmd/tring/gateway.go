@@ -40,6 +40,7 @@ type gatewayRole struct {
 	sig         *signaling.Server
 	srv, ctlSrv *http.Server
 	hub         *events.Hub
+	cdr         *callcdr.Log
 }
 
 func startGateway(d *deps) (*gatewayRole, error) {
@@ -128,8 +129,10 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		webhooks = notifier
 		// CDRs + recordings for media-plane calls (web + phone): same calls
 		// table, spool dir, and S3 scheme. S3 stays opt-in.
-		cdrLog := callcdr.New(database, d.blob, k.String("recordings_dir"), logger, d.pub).
+		cdrLog := callcdr.New(database, d.blob, k.String("recordings_dir"), logger, d.pub,
+			callcdr.WithRecordingWorkers(k.Int("recording_workers"))).
 			WithWebhooks(notifier).WithCache(redisCache)
+		g.cdr = cdrLog
 		calls = cdrLog
 		supervisors = cdrLog
 	}
@@ -271,6 +274,9 @@ func startGateway(d *deps) (*gatewayRole, error) {
 			os.Exit(1)
 		}
 	}()
+	if g.cdr != nil {
+		g.cdr.ResumeRecordings()
+	}
 	return g, nil
 }
 
@@ -290,9 +296,16 @@ func (g *gatewayRole) drain(ctx context.Context) int {
 }
 
 func (g *gatewayRole) shutdown(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	httpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	_ = g.srv.Shutdown(ctx)
-	_ = g.ctlSrv.Shutdown(ctx)
+	_ = g.srv.Shutdown(httpCtx)
+	_ = g.ctlSrv.Shutdown(httpCtx)
 	g.hub.Close()
+	if g.cdr != nil {
+		recordingCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+		defer stop()
+		if err := g.cdr.CloseRecordings(recordingCtx); err != nil {
+			g.d.log.Warn("recordings left on disk for next startup", "err", err)
+		}
+	}
 }

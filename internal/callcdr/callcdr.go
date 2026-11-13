@@ -18,8 +18,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +54,7 @@ type Log struct {
 	// stintCalls maps an open queue stint to its call, captured at QueueEnter:
 	// the call usually ends (and leaves calls) before QueueLeave runs.
 	stintCalls map[uuid.UUID]uuid.UUID
+	recordings *recordingQueue
 }
 
 type activeCall struct {
@@ -143,7 +142,7 @@ func (l *Log) emitCall(ctx context.Context, ac *activeCall, webhookID uuid.UUID,
 
 // New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
 // pub may be nil (events disabled).
-func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub events.Sink) *Log {
+func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub events.Sink, opts ...Option) *Log {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -160,7 +159,7 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub e
 		probe.Close()
 		_ = os.Remove(probe.Name())
 	}
-	return &Log{
+	l := &Log{
 		db:     d,
 		q:      queries.MustLoad(),
 		blob:   blob,
@@ -171,6 +170,12 @@ func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub e
 
 		stintCalls: map[uuid.UUID]uuid.UUID{},
 	}
+	workers := 1
+	for _, opt := range opts {
+		opt(&workers)
+	}
+	l.recordings = newRecordingQueue(dir, workers, l.processRecording, l.log)
+	return l
 }
 
 // Started opens the CDR for a call (status ringing) and, when the tenant records
@@ -630,10 +635,10 @@ func (l *Log) end(roomID, status, cause string) {
 		l.events.Publish(ctx, ac.tenant.String(), events.TypeCallEnded, endedEvent(ac.id, duration, cause, time.Now()))
 	}
 	// recording_url isn't in this payload yet: the recording is merged and
-	// stamped after the call ends (finalizeRecording, below).
+	// stamped after the queued recording has finished.
 	l.emitCall(ctx, ac, ac.endHook, webhook.EventCallEnded)
 	if ac.rec != nil {
-		go l.finalizeRecording(ac)
+		l.queueRecording(ac)
 	}
 }
 
@@ -796,104 +801,3 @@ func (l *Log) timelineEvent(tenant, callID uuid.UUID, typ string, detail map[str
 
 // recordingMIME is the Content-Type of each served recording format.
 var recordingMIME = map[string]string{".mp4": "video/mp4", ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".wav": "audio/wav"}
-
-// finalizeRecording closes the per-leg captures and produces the single served
-// file <dir>/<legID>.<format>: agent-left/customer-right stereo when both legs
-// exist, or the customer's leg alone for an IVR-only call, in the tenant's
-// format and sample rate. If ffmpeg fails, the customer's capture is kept as
-// <legID>.ogg. Uploads to S3 when enabled.
-func (l *Log) finalizeRecording(ac *activeCall) {
-	_ = ac.rec.Close()
-	tracks := ac.rec.Tracks()
-	if videos := ac.rec.VideoTracks(); len(videos) > 0 {
-		l.finalizeVideoRecording(ac, tracks, videos)
-		return
-	}
-	var customer string
-	var agents []record.AgentLeg // one per agent leg; a blind transfer yields >1
-	for _, t := range tracks {
-		switch t.Role {
-		case "agent":
-			agents = append(agents, record.AgentLeg{Path: t.Path, Delay: t.Offset})
-		case "customer":
-			customer = t.Path
-		}
-	}
-	if customer == "" {
-		l.log.Info("cdr: no media captured, skipping recording", "call", ac.id)
-		return
-	}
-	// Earliest-answering agent first, so the offsets read left-to-right on the timeline.
-	sort.Slice(agents, func(i, j int) bool { return agents[i].Delay < agents[j].Delay })
-
-	out := filepath.Join(l.dir, ac.legID+"."+ac.recFormat)
-	// keepCapture is the fallback when ffmpeg fails: the customer's capture,
-	// which is Ogg/Opus whatever the tenant's format.
-	keepCapture := func() error {
-		out = filepath.Join(l.dir, ac.legID+".ogg")
-		return os.Rename(customer, out)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	switch {
-	case len(agents) == 0:
-		// IVR-only call: the caller's leg IS the recording, re-encoded in the
-		// tenant's format and sample rate (kept as captured if ffmpeg fails).
-		if err := record.Encode(ctx, out, customer, ac.recRate); err != nil {
-			l.log.Error("cdr: recording encode failed, keeping capture", "err", err)
-			if err := keepCapture(); err != nil {
-				l.log.Error("cdr: recording finalize failed", "err", err)
-				return
-			}
-		} else {
-			_ = os.Remove(customer)
-		}
-	default:
-		// One agent → agent L / customer R. More than one (blind transfer) → every
-		// agent laid onto L at its real offset so no leg is lost or misaligned.
-		var mergeErr error
-		if len(agents) == 1 {
-			mergeErr = record.MergeStereo(ctx, out, agents[0].Path, customer, ac.recRate)
-		} else {
-			mergeErr = record.MergeCall(ctx, out, customer, agents, ac.recRate)
-		}
-		if mergeErr != nil {
-			l.log.Error("cdr: stereo merge failed, keeping customer leg", "err", mergeErr, "agents", len(agents))
-			if err := keepCapture(); err != nil {
-				l.log.Error("cdr: recording finalize failed", "err", err)
-				return
-			}
-		} else {
-			for _, a := range agents {
-				_ = os.Remove(a.Path)
-			}
-			_ = os.Remove(customer)
-		}
-	}
-
-	l.publishRecording(ac, out)
-}
-
-func (l *Log) publishRecording(ac *activeCall, out string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	// The file is on disk now → publish the serve URL. Doing it here (not at
-	// Started) means a call with no captured media never advertises a recording.
-	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecording, ac.legID); err != nil {
-		l.log.Warn("cdr: set recording url failed", "err", err)
-	}
-
-	if l.blob.Enabled() {
-		key := l.blob.Key(ac.tenant.String(), ac.startedAt, filepath.Base(out))
-		if err := l.blob.PutFile(ctx, key, out, recordingMIME[filepath.Ext(out)]); err != nil {
-			l.log.Error("cdr: s3 upload failed, recording stays local", "err", err)
-		} else {
-			if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecordingS3, ac.legID, key); err != nil {
-				l.log.Warn("cdr: stamp s3 key failed", "err", err)
-			} else {
-				_ = os.Remove(out)
-			}
-		}
-	}
-	l.log.Info("cdr: recording finalized", "call", ac.id, "file", filepath.Base(out))
-}
