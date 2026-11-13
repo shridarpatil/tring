@@ -30,7 +30,7 @@ var opusBitrate = map[int]string{8000: "24k", 12000: "32k", 16000: "40k", 24000:
 // tenant's recording sample rate (Hz). The per-leg captures are always 48 kHz
 // (opusRate); this is where the served file drops to e.g. 8 kHz narrowband.
 func encodeArgs(rate int, out string) []string {
-	args := []string{"-ar", strconv.Itoa(rate)}
+	args := []string{"-threads", "1", "-ar", strconv.Itoa(rate)}
 	switch filepath.Ext(out) {
 	case ".mp3":
 		args = append(args, "-c:a", "libmp3lame")
@@ -53,7 +53,8 @@ func Encode(ctx context.Context, out, in string, rate int) error {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		return ErrFFmpegMissing
 	}
-	args := append([]string{"-y", "-i", in}, encodeArgs(rate, out)...)
+	args := append(audioFFmpegArgs(), "-threads", "1", "-i", in)
+	args = append(args, encodeArgs(rate, out)...)
 	if b, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg encode: %w: %s", err, b)
 	}
@@ -79,11 +80,12 @@ func MergeStereo(ctx context.Context, out, left, right string, rate int) error {
 	// fills the stereo output entirely from input 0 — silently dropping input 1
 	// (the customer), so both channels come out as the agent. `0.0`/`1.0` take
 	// channel 0 of each leg regardless of its declared channel count.
-	args := append([]string{"-y",
-		"-i", left, "-i", right,
+	args := append(audioFFmpegArgs(),
+		"-threads", "1", "-i", left, "-threads", "1", "-i", right,
 		"-filter_complex", "[0:a][1:a]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[a]",
 		"-map", "[a]",
-	}, encodeArgs(rate, out)...)
+	)
+	args = append(args, encodeArgs(rate, out)...)
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg merge: %w: %s", err, b)
@@ -115,11 +117,11 @@ func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg, rat
 		return errors.New("MergeCall: no agent legs")
 	}
 
-	args := []string{"-y"}
+	args := audioFFmpegArgs()
 	for _, a := range agents {
-		args = append(args, "-i", a.Path)
+		args = append(args, "-threads", "1", "-i", a.Path)
 	}
-	args = append(args, "-i", customer) // customer is the LAST input
+	args = append(args, "-threads", "1", "-i", customer) // customer is the LAST input
 
 	// Each agent leg → mono (channel 0 of its 2-channel header, per opusChannels),
 	// delayed to its offset. amix sums them onto one LEFT channel (normalize=0 keeps
@@ -153,4 +155,11 @@ func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg, rat
 		return fmt.Errorf("ffmpeg merge-call: %w: %s", err, b)
 	}
 	return nil
+}
+
+// Avoid FFmpeg sizing its filter pools to every host CPU. This limits parallel
+// work, without changing bitrate, sample rate or encoder quality settings.
+func audioFFmpegArgs() []string {
+	return []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+		"-filter_threads", "1", "-filter_complex_threads", "1"}
 }
