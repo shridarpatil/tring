@@ -172,12 +172,26 @@ Recording and its sample rate are per-tenant settings (see [Recording and call l
 | Variable | Default | What it does |
 |---|---|---|
 | `TRING_RECORDINGS_DIR` | `/var/lib/tring/recordings` | Local spool shared by the gateway (writes) and the api (serves). Compose bind-mounts `./recordings` here. |
+| `TRING_RECORDING_WORKERS` | `1` | Maximum concurrent post-call merges/uploads per gateway, including video. Start with one on a two-core server. |
 | `TRING_S3_BUCKET` | empty | When set, finished recordings are uploaded to this bucket and the local copy is deleted. Empty keeps recordings local only. |
 | `TRING_S3_REGION` | empty | Bucket region. |
 | `TRING_S3_ENDPOINT` | empty | Empty for AWS S3. Set to your host for an S3-compatible store (MinIO, Cloudflare R2). |
 | `TRING_S3_ACCESS_KEY` / `TRING_S3_SECRET_KEY` | empty | Static credentials. Leave **both** empty on AWS to use the instance's IAM role. |
 | `TRING_S3_PREFIX` | `recordings` | Key prefix. Objects are stored as `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>`. |
 | `TRING_S3_USE_SSL` | `true` | Use HTTPS to the S3 endpoint. Keep `true`. |
+
+Merges run through a queue persisted in `TRING_RECORDINGS_DIR/.pending-recordings`.
+Audio decoders, filters and encoders use explicit single-thread settings; codec
+quality, bitrate and stereo channel mapping are unchanged. This bounds parallel
+work, not CPU usage as a percentage. A burst of hangups can delay recording
+availability. Logs report queue depth, wait time and processing time.
+
+The gateway drains recordings for up to 20 seconds during shutdown, then cancels
+active work. Unfinished jobs resume on startup. Failed merges/uploads retain
+their job and source files and are retried on the next gateway start; monitor
+`recording job retained for restart recovery` errors and spool disk space.
+Use one gateway writer per spool (the API can share it for serving recordings).
+No database schema change is required.
 
 :::tip[Least privilege for S3]
 Recordings are personal data. Prefer an IAM role over static keys, scope it to `s3:PutObject` and `s3:GetObject` on this bucket and prefix only, keep the bucket private (Block Public Access on), and turn on default encryption and access logging.

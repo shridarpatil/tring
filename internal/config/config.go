@@ -158,7 +158,8 @@ var defaults = map[string]any{
 	// recordings and the API reads them back to serve (GET /v1/calls/{id}/
 	// recording). A shared mount, like audio_dir; FreeSWITCH no longer writes
 	// recordings.
-	"recordings_dir": "/var/lib/tring/recordings",
+	"recordings_dir":    "/var/lib/tring/recordings",
+	"recording_workers": 1, // concurrent post-call merges/uploads per gateway
 
 	// Text-to-speech (local Piper). On flow save, the API synthesizes IVR node
 	// prompt text (with no uploaded audio) to 48 kHz mono Opus-Ogg (piper + the
