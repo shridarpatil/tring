@@ -32,8 +32,8 @@ type roomPort struct {
 
 	mu     sync.Mutex
 	active room.ParticipantID
-	pinned room.ParticipantID // when set, the only feed forwarded (hold music) until it leaves
-	yield  room.ParticipantID // released by ReleasePortFeed: may not re-claim the feed until a publisher leaves
+	pinned room.ParticipantID              // when set, the only feed forwarded (hold music) until it leaves
+	yield  room.ParticipantID              // released by ReleasePortFeed: may not re-claim the feed until a publisher leaves
 	gone   map[room.ParticipantID]struct{} // removed publishers; their copy-loop tail packets must not re-claim the feed
 	seq    uint16
 	ts     uint32
@@ -301,16 +301,39 @@ func (s *SFU) PinPortFeed(roomID room.RoomID, pid room.ParticipantID) {
 	}
 }
 
-// ReleasePortFeed frees every port's forwarded feed so another publisher claims
-// it. A transfer that connects someone needs this: the IVR's voice stays the
-// phone leg's feed after its last prompt (or ringing music), idle but still
-// active, so the caller would never hear the agent or dialed number while the
-// IVR waits out the call. The released feed yields — a late packet of it can't
-// take the feed back — until a publisher leaves; then the IVR can speak again.
+// ReleasePortFeed frees every port whose forwarded feed is a server-played
+// source (IVR prompts, ringing music) so another publisher claims it. A
+// transfer that connects someone needs this: the IVR's voice stays the phone
+// leg's feed after its last prompt (or ringing music), idle but still active,
+// so the caller would never hear the agent or dialed number while the IVR waits
+// out the call. The released feed yields — a late packet of it can't take the
+// feed back — until a publisher leaves; then the IVR can speak again.
+//
+// A port already forwarding a person (a WebRTC participant or another port) is
+// left alone: a number the IVR just dialed has typically latched onto the
+// caller by the time this runs, and yielding the caller would leave the callee
+// in silence for the rest of the call.
 func (s *SFU) ReleasePortFeed(roomID room.RoomID) {
-	for _, p := range s.roomPorts(roomID) {
+	s.mu.Lock()
+	r := s.rooms[roomID]
+	if r == nil || r.ports == nil {
+		s.mu.Unlock()
+		return
+	}
+	ports := make([]*roomPort, 0, len(r.ports))
+	person := make(map[room.ParticipantID]bool, len(r.peers)+len(r.ports))
+	for pid, p := range r.ports {
+		ports = append(ports, p)
+		person[pid] = true
+	}
+	for pid := range r.peers {
+		person[pid] = true
+	}
+	s.mu.Unlock()
+
+	for _, p := range ports {
 		p.mu.Lock()
-		if p.pinned == "" {
+		if p.pinned == "" && !person[p.active] {
 			p.yield, p.active = p.active, ""
 		}
 		p.mu.Unlock()
