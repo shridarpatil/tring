@@ -225,3 +225,29 @@ func TestResumeCallMarksOwnPhoneCall(t *testing.T) {
 		t.Fatalf("resume-call %+v, want phone + auto (the agent's own outbound call)", m)
 	}
 }
+
+// A refreshed agent resuming their call must not mark it answered again: the
+// SFU keeps their publication (and its recording sink) across the reattach, so
+// re-running Answered attached a second sink and every agent packet was
+// recorded twice — a stretched, stuttering agent channel — plus a duplicate
+// "answered" timeline row and call.answered event.
+func TestResumedAgentIsNotAnsweredTwice(t *testing.T) {
+	h := newCallHarness(t)
+	dropCall(h)
+	_ = h.pres.Close()
+
+	c := h.dial()
+	h.send(c, msg{Type: msgJoin, Room: "r1"})
+	h.readUntil(c, msgJoined)
+	time.Sleep(50 * time.Millisecond) // handleWS runs the answer step after joined
+
+	answered := 0
+	for _, e := range h.cl.snapshot() {
+		if strings.HasPrefix(e, "answered:") {
+			answered++
+		}
+	}
+	if answered != 1 {
+		t.Fatalf("call marked answered %d times across a refresh, want 1 (events %v)", answered, h.cl.snapshot())
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,7 +116,8 @@ func TestDrainTimesOutWithCallsLeft(t *testing.T) {
 }
 
 func TestDrainingRejectsInboundPhoneAndWaitsForLiveOne(t *testing.T) {
-	sig, _ := newDrainServer(t, signaling.Config{}) // no flows: the call just stays up
+	// The flow queues the caller for a team with no agents: the call stays up.
+	sig, _ := newDrainServer(t, signaling.Config{Flows: transferFlows{}})
 	fp := &answeringPstn{fakePstn: newFakePstn(), answered: make(chan struct{}, 2)}
 	sig.AttachPstn(fp, fakeDIDs{tenant: uuid.New(), flow: "f1"})
 
@@ -165,4 +167,71 @@ type answeringPstn struct {
 func (a *answeringPstn) Answer(id room.CallID) (*room.Leg, error) {
 	a.answered <- struct{}{}
 	return a.fakePstn.Answer(id)
+}
+
+// When the drain times out, EndAll must actually end the calls still up: the
+// phone leg is hung up (no billed dead air until FreeSWITCH's RTP timeout), the
+// CDR settles as a system end, and the call stops counting as live.
+func TestEndAllHangsUpAndSettlesLiveCalls(t *testing.T) {
+	cl := &fakeCallLog{}
+	sig, _ := newDrainServer(t, signaling.Config{Flows: transferFlows{}, Calls: cl})
+	fp := &answeringPstn{fakePstn: newFakePstn(), answered: make(chan struct{}, 2)}
+	sig.AttachPstn(fp, fakeDIDs{tenant: uuid.New(), flow: "f1"})
+
+	fp.inbound(room.InboundCall{CallID: "c1", From: "+919900112233", To: "+916600112233"})
+	select {
+	case <-fp.answered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("phone call never answered")
+	}
+	if n := <-drainAsync(sig, 300*time.Millisecond); n == 0 {
+		t.Fatal("drain reported no live calls with a phone call up")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if left := sig.EndAll(ctx); left != 0 {
+		t.Fatalf("calls left after EndAll = %d, want 0", left)
+	}
+	select {
+	case id := <-fp.hangups:
+		if id != "c1" {
+			t.Fatalf("hung up %q, want c1", id)
+		}
+	default:
+		t.Fatal("the phone leg was never hung up")
+	}
+	// callcdr keeps the first settlement; later Ended calls from the teardown
+	// are no-ops there (the fake records them all).
+	if _, _, ended := cl.snapshot(); ended == 0 {
+		t.Fatal("CDR never settled")
+	}
+	cl.mu.Lock()
+	first := cl.ended[0]
+	cl.mu.Unlock()
+	if !strings.HasSuffix(first, "|system") {
+		t.Fatalf("CDR first settled as %q, want a system end", first)
+	}
+}
+
+// A browser call still up when the drain times out is ended too: the
+// participant gets a terminal `ended` (so the SDK doesn't reconnect into a
+// dying gateway) and the room is gone.
+func TestEndAllEndsWebCalls(t *testing.T) {
+	sig, ts := newDrainServer(t, signaling.Config{})
+	c := dial(t, ts.URL, mintToken(t, uuid.New(), "alice"))
+	c.send(map[string]any{"type": "join", "room": "r1", "name": "Alice"})
+	c.readUntil("joined")
+	if n := <-drainAsync(sig, 300*time.Millisecond); n != 1 {
+		t.Fatalf("calls left after drain = %d, want 1", n)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if left := sig.EndAll(ctx); left != 0 {
+		t.Fatalf("calls left after EndAll = %d, want 0", left)
+	}
+	if m := c.readUntil("ended"); m["reason"] != "gateway restarting" {
+		t.Fatalf("ended reason = %v, want gateway restarting", m["reason"])
+	}
 }
