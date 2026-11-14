@@ -77,7 +77,9 @@ export interface Call {
   hold(): void;
   /** Take the other party off hold. */
   resume(): void;
-  /** Blind-transfer the call to another agent or team; this leg then ends. */
+  /** Transfer the call to another agent or team. This agent stays on the call
+   *  (muted, hearing nothing) until the target answers, then leaves; if nobody
+   *  answers within the transfer timeout, the call comes back to them. */
   transfer(target: { toSip?: string; toTeam?: string }): void;
   /** Turn on the camera for a web call. Must be called from a user gesture. */
   startCamera(constraints?: MediaTrackConstraints): Promise<void>;
@@ -118,6 +120,12 @@ export type TringEvent =
   // A supervisor (console operator) is monitoring/whispering/barging on this
   // call, or has stopped. The customer is never notified — this is agent-only.
   | { type: "call:supervisor"; call: Call; present: boolean; mode: string; name: string }
+  // This agent's transfer is ringing the target; they stay on the call (muted,
+  // hearing nothing) until it's answered (call:ended) or not (below).
+  | { type: "call:transferring"; call: Call }
+  // The transfer didn't happen and the call is still this agent's: refused up
+  // front (target unavailable, …) or nobody answered (reason "no answer").
+  | { type: "call:transfer-failed"; call: Call; reason: string }
   | { type: "error"; error: Error };
 
 // ---- Guest (web-to-web customer) calling --------------------------------

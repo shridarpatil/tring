@@ -24,6 +24,7 @@ const form = ref({
   recordingSampleRate: "8000", // a string because <Select> emits one
   maxCallMinutes: 240, // stored as seconds on the tenant
   transferFailedMessage: "",
+  transferTimeoutSeconds: 60,
   maskAgents: false,
   maskManagers: false,
   maskSupervisors: false,
@@ -84,6 +85,7 @@ function fromTenant(t: Tenant) {
     recordingSampleRate: String(t.recording_sample_rate ?? 8000),
     maxCallMinutes: Math.round((t.max_call_seconds ?? 14400) / 60),
     transferFailedMessage: t.transfer_failed_message || "",
+    transferTimeoutSeconds: t.transfer_timeout_seconds ?? 60,
     maskAgents: t.mask_numbers_agents ?? false,
     maskManagers: t.mask_numbers_managers ?? false,
     maskSupervisors: t.mask_numbers_supervisors ?? false,
@@ -126,6 +128,7 @@ async function save() {
       recording_sample_rate: Number(f.recordingSampleRate),
       max_call_seconds: Math.round(f.maxCallMinutes * 60),
       transfer_failed_message: f.transferFailedMessage,
+      transfer_timeout_seconds: Math.round(f.transferTimeoutSeconds),
       mask_numbers_agents: f.maskAgents,
       mask_numbers_managers: f.maskManagers,
       mask_numbers_supervisors: f.maskSupervisors,
@@ -215,6 +218,18 @@ onMounted(load);
             <p class="srow-desc">Spoken to the caller when a transfer finds no one available.</p>
           </div>
           <textarea id="transfer-failed-message" v-model="form.transferFailedMessage" rows="3"></textarea>
+        </div>
+        <div class="srow">
+          <div>
+            <label class="srow-label" for="transfer-timeout">Transfer timeout</label>
+            <p class="srow-desc">
+              How long an agent's transfer rings before the call goes back to them. 5–600 seconds.
+            </p>
+          </div>
+          <div class="hstack">
+            <input id="transfer-timeout" v-model.number="form.transferTimeoutSeconds" type="number" min="5" max="600" class="num" />
+            <span class="text-light">seconds</span>
+          </div>
         </div>
       </Card>
 

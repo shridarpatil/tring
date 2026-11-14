@@ -32,7 +32,7 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// current selection.
 	t := *tenantFromCtx(r.Context())
 	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat,
-		&t.MaskNumbersAgents, &t.MaskNumbersManagers, &t.MaskNumbersSupervisors)
+		&t.MaskNumbersAgents, &t.MaskNumbersManagers, &t.MaskNumbersSupervisors, &t.TransferTimeoutSeconds)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -614,6 +614,9 @@ type patchTenantRequest struct {
 	MaxCallSeconds *int `json:"max_call_seconds,omitempty"`
 	// TransferFailedMessage sets the blind-transfer no-answer copy. nil = unchanged.
 	TransferFailedMessage *string `json:"transfer_failed_message,omitempty"`
+	// TransferTimeoutSeconds sets how long a transfer rings before the call
+	// goes back to the transferring agent. nil = unchanged.
+	TransferTimeoutSeconds *int `json:"transfer_timeout_seconds,omitempty"`
 	// RecordingSampleRate sets the recording's sample rate in Hz (one of
 	// recordingSampleRates). nil = unchanged.
 	RecordingSampleRate *int `json:"recording_sample_rate,omitempty"`
@@ -645,8 +648,8 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.OutboundStrategy == nil && req.FailoverCauses == nil && req.HoldMusic == nil && req.RecordCalls == nil && req.MaxCallSeconds == nil && req.TransferFailedMessage == nil && req.RecordingSampleRate == nil && req.RecordingFormat == nil &&
-		req.MaskNumbersAgents == nil && req.MaskNumbersManagers == nil && req.MaskNumbersSupervisors == nil {
-		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format or mask_numbers_* is required")
+		req.MaskNumbersAgents == nil && req.MaskNumbersManagers == nil && req.MaskNumbersSupervisors == nil && req.TransferTimeoutSeconds == nil {
+		writeError(w, http.StatusBadRequest, "at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, transfer_timeout_seconds, recording_sample_rate, recording_format or mask_numbers_* is required")
 		return
 	}
 	if req.RecordingSampleRate != nil && !slices.Contains(recordingSampleRates, *req.RecordingSampleRate) {
@@ -655,6 +658,10 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RecordingFormat != nil && !slices.Contains(recordingFormats, *req.RecordingFormat) {
 		writeError(w, http.StatusBadRequest, "recording_format must be one of ogg, mp3, wav")
+		return
+	}
+	if req.TransferTimeoutSeconds != nil && (*req.TransferTimeoutSeconds < 5 || *req.TransferTimeoutSeconds > 600) {
+		writeError(w, http.StatusBadRequest, "transfer_timeout_seconds must be between 5 and 600")
 		return
 	}
 	if req.MaxCallSeconds != nil && (*req.MaxCallSeconds < 60 || *req.MaxCallSeconds > 86400) {
@@ -722,9 +729,9 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
 		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
 		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat,
-		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors).
+		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors, req.TransferTimeoutSeconds).
 		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat,
-			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors)
+			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors, &out.TransferTimeoutSeconds)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return

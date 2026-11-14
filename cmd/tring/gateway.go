@@ -98,6 +98,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 	var teams signaling.TeamResolver
 	var holdMusic signaling.HoldMusicResolver
 	var transferMessage signaling.TransferMessageResolver
+	var transferTimeouts signaling.TransferTimeoutResolver
 	var calls signaling.CallLog
 	var campaignStore *campaign.Store
 	var supervisors signaling.SupervisorLog
@@ -114,6 +115,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		store := flowstore.New(database).WithCache(redisCache) // DID + flow reads on every inbound call
 		flows, teams, holdMusic, didResolver = store, store, store, store
 		transferMessage = store
+		transferTimeouts = store
 		availability = store
 		numberMask = store
 		trunkRes = outboundtrunks.New(database)
@@ -138,31 +140,32 @@ func startGateway(d *deps) (*gatewayRole, error) {
 	}
 
 	sig := signaling.New(signaling.Config{
-		SFU:             mediaSFU,
-		JWTSecret:       []byte(k.String("jwt_secret")),
-		STUNURL:         k.String("stun_url"),
-		TURNURL:         turnURL,
-		TURNSecret:      turnSecret,
-		TURNTTL:         time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
-		Grace:           time.Duration(k.Int("media_grace_seconds")) * time.Second,
-		DevTokens:       k.Bool("rtc_dev_tokens"),
-		Flows:           flows,
-		Teams:           teams,
-		HoldMusic:       holdMusic,       // tenant hold music for agent-initiated hold (msgHold)
-		TransferMessage: transferMessage, // tenant no-answer prompt for blind transfer
-		AudioDir:        k.String("audio_dir"),
-		Tokens:          redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
-		Presence:        presence.New(redisCache), // publish agent online/offline for the dashboard
-		Calls:           calls,
-		Campaigns:       campaignStore, // CDRs + recordings (one path for web + phone)
-		Cache:           redisCache,    // publish web team-queue depth for the dashboard
-		Events:          d.pub,
-		Supervisors:     supervisors,  // supervisor session audit (nil DB → nil, no audit)
-		HTTP:            ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes
-		Webhooks:        webhooks,     // IVR node webhooks (nil without a DB)
-		Availability:    availability, // agent's Away flag sent on connect (nil without a DB)
-		NumberMask:      numberMask,   // masks the caller number on masked agents' rings (nil without a DB)
-		Logger:          logger,
+		SFU:              mediaSFU,
+		JWTSecret:        []byte(k.String("jwt_secret")),
+		STUNURL:          k.String("stun_url"),
+		TURNURL:          turnURL,
+		TURNSecret:       turnSecret,
+		TURNTTL:          time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Grace:            time.Duration(k.Int("media_grace_seconds")) * time.Second,
+		DevTokens:        k.Bool("rtc_dev_tokens"),
+		Flows:            flows,
+		Teams:            teams,
+		HoldMusic:        holdMusic,       // tenant hold music for agent-initiated hold (msgHold)
+		TransferMessage:  transferMessage, // tenant no-answer prompt for blind transfer
+		TransferTimeouts: transferTimeouts,
+		AudioDir:         k.String("audio_dir"),
+		Tokens:           redisCache,               // single-use burn for visitor /rtc tokens (anti-replay)
+		Presence:         presence.New(redisCache), // publish agent online/offline for the dashboard
+		Calls:            calls,
+		Campaigns:        campaignStore, // CDRs + recordings (one path for web + phone)
+		Cache:            redisCache,    // publish web team-queue depth for the dashboard
+		Events:           d.pub,
+		Supervisors:      supervisors,  // supervisor session audit (nil DB → nil, no audit)
+		HTTP:             ivrHTTP,      // SSRF-guarded client for IVR http_callback nodes
+		Webhooks:         webhooks,     // IVR node webhooks (nil without a DB)
+		Availability:     availability, // agent's Away flag sent on connect (nil without a DB)
+		NumberMask:       numberMask,   // masks the caller number on masked agents' rings (nil without a DB)
+		Logger:           logger,
 	})
 	g.sig = sig
 

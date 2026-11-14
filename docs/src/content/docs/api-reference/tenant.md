@@ -20,6 +20,7 @@ All endpoints on this page act on the tenant the credential belongs to. They acc
 | `record_calls` | boolean | Record calls once the agent and caller are connected. Default `true`. |
 | `max_call_seconds` | integer | Maximum call duration, in seconds. Default `14400` (4 hours). Also sets how long the TURN credentials handed to browsers stay valid. |
 | `transfer_failed_message` | string | What a caller hears when a transfer finds no one available. |
+| `transfer_timeout_seconds` | integer | How long an agent's transfer rings the target before the call goes back to the transferring agent. Default `60`. |
 | `recording_sample_rate` | integer | Sample rate, in Hz, that call recordings are encoded at. Default `8000`. |
 | `recording_format` | string | Format of call recordings: `ogg` (default), `mp3` or `wav`. |
 | `mask_numbers_agents` | boolean | Mask client phone numbers (the caller on inbound calls, the callee on outbound calls, and `client_ref`) for agents who manage no team. Default `false`. |
@@ -60,6 +61,7 @@ curl -sS "$TRING_URL/v1/tenants/me" \
   "record_calls": true,
   "max_call_seconds": 14400,
   "transfer_failed_message": "Sorry, no one is available to take your call right now. Please try again later.",
+  "transfer_timeout_seconds": 60,
   "recording_sample_rate": 8000,
   "recording_format": "ogg",
   "mask_numbers_agents": false,
@@ -86,6 +88,7 @@ Update one or more tenant settings. Fields you leave out keep their current valu
 | `record_calls` | boolean | no | Turn call recording on or off. |
 | `max_call_seconds` | integer | no | Maximum call duration in seconds, from `60` to `86400` (1 minute to 24 hours). |
 | `transfer_failed_message` | string | no | Text played when a transfer finds no one available. It's turned into speech when you save it. Sending `""` makes that moment silent. |
+| `transfer_timeout_seconds` | integer | no | How long an agent's transfer rings before the call goes back to them, from `5` to `600`. |
 | `recording_sample_rate` | integer | no | Recording sample rate in Hz: `8000`, `12000`, `16000`, `24000` or `48000`. Applies to calls that start after the change. |
 | `recording_format` | string | no | Recording format: `ogg`, `mp3` or `wav`. Applies to calls that start after the change. |
 | `mask_numbers_agents` | boolean | no | Mask client numbers for agents. |
@@ -111,7 +114,8 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 | Status | `error` |
 |---|---|
 | `400` | `invalid JSON body` |
-| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format or mask_numbers_* is required` |
+| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, transfer_timeout_seconds, recording_sample_rate, recording_format or mask_numbers_* is required` |
+| `400` | `transfer_timeout_seconds must be between 5 and 600` |
 | `400` | `recording_sample_rate must be one of 8000, 12000, 16000, 24000, 48000` |
 | `400` | `recording_format must be one of ogg, mp3, wav` |
 | `400` | `max_call_seconds must be between 60 and 86400 (1 min–24 h)` |
