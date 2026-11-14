@@ -577,9 +577,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// Restore answer state when a visitor reconnects to an existing call.
 		_ = c.send(msg{Type: msgAnswered})
 	}
-	// If a transfer is ringing for this room, this join is the agent answering:
-	// signalRing resolves the pending ring.
-	s.signalRing(roomID)
+	// If a transfer is ringing for this room, an agent's fresh join is the agent
+	// answering: signalRing resolves the pending ring. A rung agent always takes
+	// a new slot (takeInvite). A reattach — the caller's socket blipping while
+	// they wait, or an agent's own page refresh — answers nothing, and resolving
+	// the ring on it withdrew the invites so the real agent could no longer join.
+	if freshJoin && !princ.isVisitor && flowID == "" {
+		s.signalRing(roomID)
+	}
 
 	s.log.Info("participant joined", "room", roomID, "participant", p.ID())
 	s.readLoop(c, p, princ.tenant, !princ.isVisitor, princ.sip)

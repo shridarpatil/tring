@@ -1242,3 +1242,80 @@ func TestJoinLogsAgentRoleAndSIP(t *testing.T) {
 		t.Fatalf("participant joined line %q lacks role=agent sip=alice", line)
 	}
 }
+
+// A web caller's socket can blip while a transfer rings them to an agent (a
+// Wi-Fi or mobile handover); the SDK rejoins with its session token. That
+// reattach is the caller, not an agent answering: it must not resolve the ring.
+// It used to — the ring was recorded as answered, its invites withdrawn, and
+// the real agent's accept refused, leaving the caller with nobody.
+func TestCallerReattachDoesNotAnswerTransferRing(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{Flows: transferFlows{}})
+	tenant := uuid.New()
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	joined := visitor.readUntil("joined")
+	agent.readUntil("incoming")
+
+	// The caller's socket drops and the SDK reattaches with its session token
+	// (retrying, as the SDK does, until the server has seen the drop).
+	_ = visitor.conn.Close()
+	var again *wsClient
+	for deadline := time.Now().Add(3 * time.Second); ; {
+		again = dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+		again.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller", "session_token": joined["session_token"]})
+		_ = again.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		data, err := wsutil.ReadServerText(again.conn)
+		var m map[string]any
+		_ = json.Unmarshal(data, &m)
+		if err == nil && m["type"] == "joined" {
+			if m["participant_id"] != joined["participant_id"] {
+				t.Fatalf("caller rejoined as %v, want their slot %v", m["participant_id"], joined["participant_id"])
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("caller could not reattach: %v %v", m, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The ring is still live: the rung agent's popup is not withdrawn (the ring
+	// window is 30s, so any cancel this soon is the reattach resolving it).
+	_ = agent.conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	for {
+		data, err := wsutil.ReadServerText(agent.conn)
+		if err != nil {
+			break // nothing more: the ring is untouched
+		}
+		var m map[string]any
+		_ = json.Unmarshal(data, &m)
+		if m["type"] == "incoming-cancel" {
+			t.Fatal("the caller's reattach withdrew the agent's ring")
+		}
+	}
+
+	// The rung agent can still answer.
+	answer := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	answer.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
+	for {
+		_ = answer.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		data, err := wsutil.ReadServerText(answer.conn)
+		if err != nil {
+			t.Fatalf("agent's answer got no reply: %v", err)
+		}
+		var m map[string]any
+		_ = json.Unmarshal(data, &m)
+		if m["type"] == "error" {
+			t.Fatalf("agent's answer refused after the caller reattached: %v", m["reason"])
+		}
+		if m["type"] == "joined" {
+			break
+		}
+	}
+	again.readUntil("peer-joined")
+}
