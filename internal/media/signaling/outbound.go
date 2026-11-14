@@ -243,6 +243,11 @@ func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
 		// follow-up.
 		s.sfu.DetachPort(roomID, pid)
 	}
+	// A click-to-call customer who hangs up while a blind transfer rings stops
+	// the ring. Not for an IVR-dialed callee: the phone caller's port remains.
+	if !s.sfu.HasPort(roomID) {
+		s.endTransfer(roomID)
+	}
 	if s.cfg.Calls != nil {
 		s.cfg.Calls.Ended(string(roomID), cause)
 	}
@@ -260,6 +265,14 @@ func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
 		s.closeSupervisors(roomID)
 	}
 	s.log.Info("outbound: room ended", "room", roomID)
+}
+
+// outboundLive reports whether roomID has an outbound carrier leg attached.
+func (s *Server) outboundLive(roomID room.RoomID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.outboundLegs[roomID]
+	return ok
 }
 
 // hangupOutboundIfAbandoned hangs up the outbound carrier leg when its room
