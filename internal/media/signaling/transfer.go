@@ -125,10 +125,19 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 		s.endIfAlone(rid) // hang up the stranded web caller
 		// A phone caller is the port, so endIfAlone leaves it. Its IVR may still be
 		// parked behind the voided handoff; stopping it hangs up the abandoned leg.
-		if s.brain.Running(rid) {
+		switch {
+		case s.brain.Running(rid):
 			s.stopIVR(rid)
-		} else {
+		case s.phoneLive(rid):
 			s.hangupPstnIfAbandoned(rid)
+		case s.outboundLive(rid):
+			// A click-to-call customer is the port too. Settle the CDR as a
+			// system end first — the leg's Done would otherwise settle it as
+			// callee_hangup — then hang up (endOutboundRoom finishes teardown).
+			if s.cfg.Calls != nil {
+				s.cfg.Calls.Ended(string(rid), "system")
+			}
+			s.hangupOutboundIfAbandoned(rid)
 		}
 		s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
 		return

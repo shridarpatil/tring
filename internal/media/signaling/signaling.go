@@ -779,11 +779,12 @@ func (s *Server) routeEvent(e room.Event) {
 			// ended the conversation, so they stay who hung up when the flow ends.
 			s.setHangupBy(e.Room, leaverBy)
 			return
-		} else if (!ok || len(r.Participants()) == 0) && s.transferActive(e.Room) && s.phoneLive(e.Room) {
-			// A blind transfer of a phone call: the transferring agent just left, but
-			// the caller is the port and still on the line. Keep the call and the ring
-			// (the target joins, or the no-answer message plays and handleTransfer
-			// hangs up). The transfer goes on, so this agent didn't end the call.
+		} else if (!ok || len(r.Participants()) == 0) && s.transferActive(e.Room) && (s.phoneLive(e.Room) || s.outboundLive(e.Room)) {
+			// A blind transfer of a phone call or click-to-call: the transferring
+			// agent just left, but the caller / customer is the port and still on
+			// the line. Keep the call and the ring (the target joins, or the
+			// no-answer message plays and handleTransfer hangs up). The transfer
+			// goes on, so this agent didn't end the call.
 			s.clearHangupBy(e.Room)
 			return
 		} else if !ok || len(r.Participants()) == 0 {
