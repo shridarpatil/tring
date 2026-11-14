@@ -120,6 +120,21 @@ func TestRingNoHandoffNoCandidates(t *testing.T) {
 	}
 }
 
+// A transfer whose max_wait runs out reports "queue_timeout" — the Transfer
+// node's "queue T/O" handle — so a flow wired to it runs. It used to be folded
+// into "no_answer", leaving that handle dead.
+func TestAgentRouterRingReportsQueueTimeout(t *testing.T) {
+	tp := effTransport{eff: noAnswerEffects{}}
+	r := NewAgentRouter(fakeTeams{sips: []string{"alice"}, maxWait: 1}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil, nil)
+	got, err := r.Ring(context.Background(), uuid.New().String()+"/room", ivrdrive.Target{Team: "sales"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "queue_timeout" {
+		t.Fatalf("outcome = %q, want queue_timeout", got)
+	}
+}
+
 func TestAgentRouterRoutesTeamTransfer(t *testing.T) {
 	tenant := uuid.New()
 	eff := &answerEffects{}

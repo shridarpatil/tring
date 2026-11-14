@@ -122,6 +122,10 @@ func simulate(flow *ivrFlowData, in SimInput) *SimResult {
 			return res
 		}
 		step, outcome := stepFor(node, &in, &dtmfIdx, res.Vars)
+		if node.Type == nodeTransfer {
+			outcome = resolveTransferOutcome(flow, node.ID, outcome)
+			step.Outcome = outcome
+		}
 		res.Steps = append(res.Steps, step)
 
 		if outcome == "" {

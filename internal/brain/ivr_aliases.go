@@ -36,4 +36,7 @@ var (
 	mapFromConfig     = ivr.MapFromConfig
 	substituteVars    = ivr.SubstituteVars
 	evalTimingOutcome = ivr.EvalTimingOutcome
+	// resolveTransferOutcome falls a queue_timeout back to no_answer when the
+	// node doesn't wire it, as ivr.Walk does for a live call.
+	resolveTransferOutcome = ivr.TransferOutcome
 )
