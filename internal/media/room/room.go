@@ -264,6 +264,17 @@ func (m *Manager) Len() int {
 	return len(m.rooms)
 }
 
+// IDs snapshots the ids of the live rooms.
+func (m *Manager) IDs() []RoomID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]RoomID, 0, len(m.rooms))
+	for id := range m.rooms {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // room returns the room for id, creating it on first use. The room's onEmpty
 // removes it from the manager when its last participant leaves.
 func (m *Manager) room(id RoomID) *Room {
