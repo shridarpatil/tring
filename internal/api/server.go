@@ -143,6 +143,10 @@ type Server struct {
 	cache           *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
 	presence        *presence.Store // agent online status published by the gateway
 
+	// gwSync rescans sofia after trunk writes and retries a failed rescan in
+	// the background (StartGatewaySync).
+	gwSync *freeswitch.GatewaySync
+
 	// agentTransport / agentGateway: how an agent's own call leg is routed
 	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
 	agentTransport string
@@ -233,13 +237,15 @@ func NewServer(cfg Config) *Server {
 		logger = slog.Default()
 	}
 	logger = logger.With("component", "api")
+	fs := freeswitch.New(cfg.ESLAddr, cfg.ESLPassword)
 	return &Server{
 		db:                cfg.DB,
 		q:                 queries.MustLoad(),
 		jwtSecret:         []byte(cfg.JWTSecret),
 		fsBasicUser:       user,
 		fsBasicPass:       pass,
-		fs:                freeswitch.New(cfg.ESLAddr, cfg.ESLPassword),
+		fs:                fs,
+		gwSync:            freeswitch.NewGatewaySync(fs.RescanExternalProfile, nil, logger),
 		cache:             cfg.Cache,
 		presence:          presence.New(cfg.Cache),
 		agentTransport:    cfg.AgentTransport,

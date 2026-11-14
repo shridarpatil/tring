@@ -30,6 +30,7 @@ type apiRole struct {
 	cancel       context.CancelFunc // stops the hub
 	db           *db.DB
 	campaignDone chan struct{}
+	gwSyncDone   chan struct{}
 }
 
 // openDB migrates, connects and runs first-boot bootstrap: what both the api
@@ -144,6 +145,8 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 
 	a.campaignDone = make(chan struct{})
 	go func() { defer close(a.campaignDone); apiSrv.StartCampaignWorker(ctx) }()
+	a.gwSyncDone = make(chan struct{})
+	go func() { defer close(a.gwSyncDone); apiSrv.StartGatewaySync(ctx) }()
 
 	// Register live forwards + coalesced recomputers, then start the subscriber.
 	// Forward/Recompute write hub maps lock-free and MUST complete before Run
@@ -232,6 +235,9 @@ func (a *apiRole) close() {
 	a.cancel()
 	if a.campaignDone != nil {
 		<-a.campaignDone
+	}
+	if a.gwSyncDone != nil {
+		<-a.gwSyncDone
 	}
 	a.hub.Close()
 	a.db.Close()
