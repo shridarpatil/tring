@@ -95,6 +95,7 @@ export type RtcCallEvent =
   | { type: "reconnecting" }
   | { type: "ended"; reason?: string }
   | { type: "supervisor"; present: boolean; mode: string; name: string }
+  | { type: "transferring" }
   | { type: "transfer-failed"; reason: string }
   | { type: "error"; error: Error };
 
@@ -121,6 +122,9 @@ export class RtcCall extends Emitter<RtcCallEvent> {
   private audioEls: HTMLAudioElement[] = []; // auto-played remote audio elements
   private attemptsLeft: number;
   private closedByUser = false;
+  // While a transfer rings: the mic state to restore if the call comes back
+  // (null = no transfer waiting).
+  private micBeforeTransfer: boolean | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly opts: RtcCallOpts) {
@@ -230,10 +234,25 @@ export class RtcCall extends Emitter<RtcCallEvent> {
       case ServerMsgType.Error:
         this.emit({ type: "error", error: new Error(m.reason ?? "edge error") });
         break;
+      case ServerMsgType.TransferOK:
+        // The target is ringing. This leg stays on the call, muted and deafened
+        // server-side, until they answer (`ended`) or don't (`transfer-failed`).
+        // Mute the mic here too, as hold does: the server stops the customer
+        // hearing this agent, but the call recording taps the mic directly.
+        this.micBeforeTransfer = this.micEnabled();
+        this.setMuted(true);
+        this.emit({ type: "transferring" });
+        break;
       case ServerMsgType.TransferFailed:
-        // Pre-flight rejection (target unavailable / double-transfer / self): the
-        // server keeps this leg on the call, so this is informational, not an
-        // "ended"/"error" teardown signal — the call continues.
+        if (this.micBeforeTransfer !== null) {
+          // The call came back: restore the mic as it was before the transfer.
+          this.setMuted(!this.micBeforeTransfer);
+          this.micBeforeTransfer = null;
+        }
+        // The transfer was refused up front (target unavailable / double-transfer
+        // / self) or nobody answered ("no answer"): either way this leg still has
+        // the call, so this is informational, not an "ended"/"error" teardown
+        // signal — the call continues.
         this.emit({ type: "transfer-failed", reason: m.reason ?? "transfer failed" });
         break;
       case ServerMsgType.Answered:
@@ -307,6 +326,11 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.send({ type: ClientMsgType.DTMF, digit });
   }
 
+  /** micEnabled reports whether the outgoing mic is live (not muted). */
+  private micEnabled(): boolean {
+    return this.mic?.getAudioTracks().some((t) => t.enabled) ?? false;
+  }
+
   /** mute/unmute the outgoing mic. */
   setMuted(muted: boolean): void {
     this.mic?.getAudioTracks().forEach((t) => (t.enabled = !muted));
@@ -325,8 +349,9 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.setMuted(false);
   }
 
-  /** transfer re-routes the call to another agent or team; when they answer, this
-   *  leg is dropped by the brain (the call socket closes → "ended"). */
+  /** transfer re-routes the call to another agent or team. This leg waits
+   *  ("transferring") until they answer — then it ends ("ended") — or don't,
+   *  and the call comes back to it ("transfer-failed", reason "no answer"). */
   transfer(target: { toSip?: string; toTeam?: string }): void {
     this.send({ type: ClientMsgType.Transfer, to_sip: target.toSip, to_team: target.toTeam });
   }

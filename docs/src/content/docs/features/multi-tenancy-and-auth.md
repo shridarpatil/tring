@@ -9,7 +9,7 @@ A **tenant** is one organization. Every agent, team, number, trunk, flow, sound,
 
 The first tenant and its console admin are created on first boot from `TRING_BOOTSTRAP_TENANT`, `TRING_ADMIN_EMAIL` and `TRING_ADMIN_PASSWORD` (see [Configuration](/tring/getting-started/configuration/#3-first-boot-bootstrap)). There is no API for creating more tenants. Admins manage a tenant's users with the [Users API](/tring/api-reference/users/).
 
-Tenant-wide settings (`GET` / `PATCH /v1/tenants/me`): `outbound_strategy`, `failover_causes`, `hold_music`, `record_calls`, `max_call_seconds` (60–86400, default 14400; also the lifetime of ephemeral TURN credentials) and `transfer_failed_message`. The default visitor flow lives at `/v1/guest-config`. See the [Tenant API](/tring/api-reference/tenant/).
+Tenant-wide settings (`GET` / `PATCH /v1/tenants/me`): `outbound_strategy`, `failover_causes`, `hold_music`, `record_calls`, `max_call_seconds` (60–86400, default 14400; also the lifetime of ephemeral TURN credentials), `transfer_failed_message` and `transfer_timeout_seconds` (5–600, default 60). The default visitor flow lives at `/v1/guest-config`. See the [Tenant API](/tring/api-reference/tenant/).
 
 Trunks are configured in the database per tenant, but they are all loaded into the one shared FreeSWITCH. Per-tenant trunk isolation and multi-region deployments are on the roadmap.
 

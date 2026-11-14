@@ -243,6 +243,16 @@ func (s *Store) TenantTransferFailedAudio(ctx context.Context, tenantID uuid.UUI
 	return a.TransferFailFile, err
 }
 
+// TenantTransferTimeout returns how long an agent's transfer rings before the
+// call goes back to them (tenants.transfer_timeout_seconds).
+func (s *Store) TenantTransferTimeout(ctx context.Context, tenantID uuid.UUID) (time.Duration, error) {
+	var secs int
+	if err := s.db.Pool.QueryRow(ctx, s.q.GetTenantTransferTimeout, tenantID).Scan(&secs); err != nil {
+		return 0, err
+	}
+	return time.Duration(secs) * time.Second, nil
+}
+
 // AgentAvailable reports the agent's backend-managed availability
 // (available_for_calls — the integrator's Away/Break toggle). The gateway reads
 // it when the agent's presence socket connects so the SDK can show Away.

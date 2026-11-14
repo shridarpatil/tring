@@ -218,21 +218,27 @@ SET outbound_strategy       = COALESCE($1, outbound_strategy),
     recording_format        = COALESCE($10, recording_format),
     mask_numbers_agents      = COALESCE($11, mask_numbers_agents),
     mask_numbers_managers    = COALESCE($12, mask_numbers_managers),
-    mask_numbers_supervisors = COALESCE($13, mask_numbers_supervisors)
+    mask_numbers_supervisors = COALESCE($13, mask_numbers_supervisors),
+    transfer_timeout_seconds = COALESCE($14, transfer_timeout_seconds)
 WHERE id = $3
 RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
-          mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors;
+          mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds;
 
 -- name: get-tenant-settings
 -- Tenant-level settings the Settings page reads (not carried in the auth context).
 SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
-       mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors
+       mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds
 FROM tenants WHERE id = $1;
 
 -- name: get-tenant-mask-numbers
 -- Which roles see masked client numbers (internal/mask): read by the api per
 -- scoped request and by the gateway (cached) when it rings an agent.
 SELECT mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors FROM tenants WHERE id = $1;
+
+-- name: get-tenant-transfer-timeout
+-- How long an agent's transfer rings before the call goes back to them. Read
+-- by the gateway once per transfer (rare enough to skip the cache).
+SELECT transfer_timeout_seconds FROM tenants WHERE id = $1;
 
 -- name: get-tenant-max-call-seconds
 -- Tenant's max call duration — the ephemeral TURN credential lifetime basis.

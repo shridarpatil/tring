@@ -114,6 +114,8 @@ await tring.disconnect();
 | `call:answered` | `{ call: Call }` | Audio is flowing. `call.status` is now `"connected"`. On a click-to-call (`POST /v1/calls`), this fires when the customer picks up, not when the agent's own leg answers. |
 | `call:ended` | `{ call: Call, cause?: string }` | The call ended: hung up, declined, taken by another agent, or ended by the server. `cause` is currently not set. |
 | `call:remote-video` | `{ call: Call, stream: MediaStream \| null }` | The other party started sharing their screen (`stream`) or stopped (`null`). |
+| `call:transferring` | `{ call: Call }` | This agent's transfer is ringing the target. The agent stays on the call, muted and hearing nothing, until the target answers (`call:ended`) or doesn't (`call:transfer-failed`). |
+| `call:transfer-failed` | `{ call: Call, reason: string }` | The transfer didn't happen and the call is still this agent's: it was refused up front (for example the target is unavailable), or nobody answered in time (`reason: "no answer"`). |
 | `call:supervisor` | `{ call: Call, present: boolean, mode: string, name: string }` | A supervisor started (`present: true`) or stopped watching this call. `mode` is, for example, `"whisper"`. The customer is never told. |
 | `error` | `{ error: Error }` | A signaling, microphone or token error. If accepting a call fails, you get `error`, then `call:ended` for that call. |
 
@@ -203,7 +205,7 @@ holdBtn.onclick = () => {
 transfer(target: { toSip?: string; toTeam?: string }): void
 ```
 
-Blind-transfers the call to one agent (`toSip`, their `sip_username`) or to a team (`toTeam`, its name). When the target answers, this agent's call ends and you get `call:ended`. If the server rejects the transfer (target unavailable, or a transfer to yourself), the call carries on, and **this class doesn't currently report the failure**. Use `RtcCall`'s `transfer-failed` event if you need it.
+Transfers the call to one agent (`toSip`, their `sip_username`) or to a team (`toTeam`, its name). While the target rings you get `call:transferring`, and this agent stays on the call, muted and hearing nothing. When the target answers, this agent's call ends and you get `call:ended`. If the transfer is refused (target unavailable, or a transfer to yourself) or nobody answers within the transfer timeout, the call carries on with this agent and you get `call:transfer-failed` with the reason (`"no answer"` for a timeout). See [Blind transfer](/tring/features/call-control/#blind-transfer).
 
 To list targets, call `GET /v1/sdk/transfer-targets` with the agent JWT (see [Agent widget](/tring/sdk/agent-widget/#how-hold-and-transfer-work)).
 

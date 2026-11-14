@@ -211,6 +211,8 @@ export class Tring extends Emitter<TringEvent> {
           this.emit({ type: "call:ended", call });
         });
         rtc.on("error", ({ error }) => this.emit({ type: "error", error }));
+        rtc.on("transferring", () => this.emit({ type: "call:transferring", call }));
+        rtc.on("transfer-failed", ({ reason }) => this.emit({ type: "call:transfer-failed", call, reason }));
         rtc.on("supervisor", ({ present, mode, name }) =>
           this.emit({ type: "call:supervisor", call, present, mode, name }),
         );
