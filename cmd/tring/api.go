@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +31,7 @@ type apiRole struct {
 	cancel       context.CancelFunc // stops the hub
 	db           *db.DB
 	campaignDone chan struct{}
+	gwSyncDone   chan struct{}
 }
 
 // openDB migrates, connects and runs first-boot bootstrap: what both the api
@@ -67,7 +69,7 @@ func runSeed(d *deps, o options) error {
 		return err
 	}
 	defer database.Close()
-	return seedTenant(ctx, database, o.seedTenant)
+	return seedTenant(ctx, database, o.seedTenant, os.Stdout)
 }
 
 func startAPI(d *deps, o options) (*apiRole, error) {
@@ -144,6 +146,8 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 
 	a.campaignDone = make(chan struct{})
 	go func() { defer close(a.campaignDone); apiSrv.StartCampaignWorker(ctx) }()
+	a.gwSyncDone = make(chan struct{})
+	go func() { defer close(a.gwSyncDone); apiSrv.StartGatewaySync(ctx) }()
 
 	// Register live forwards + coalesced recomputers, then start the subscriber.
 	// Forward/Recompute write hub maps lock-free and MUST complete before Run
@@ -233,25 +237,45 @@ func (a *apiRole) close() {
 	if a.campaignDone != nil {
 		<-a.campaignDone
 	}
+	if a.gwSyncDone != nil {
+		<-a.gwSyncDone
+	}
 	a.hub.Close()
 	a.db.Close()
 }
 
-func seedTenant(ctx context.Context, database *db.DB, name string) error {
+func seedTenant(ctx context.Context, database *db.DB, name string, out io.Writer) error {
 	plaintext, hash, prefix, err := api.GenerateKey("live")
 	if err != nil {
 		return err
 	}
 	sipDomain := "t_" + strings.ToLower(strings.ReplaceAll(name, " ", "_")) + ".tring.local"
 
-	var id string
-	err = database.Pool.QueryRow(ctx, queries.MustLoad().InsertTenant,
-		name, hash, prefix, sipDomain).Scan(&id)
+	// Auth resolves keys from api_keys only; tenants.api_key_hash is legacy.
+	// Without the api_keys row the printed key never authenticated. One tx so
+	// a failure doesn't leave a tenant with no usable key.
+	q := queries.MustLoad()
+	tx, err := database.Pool.Begin(ctx)
 	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var id string
+	if err := tx.QueryRow(ctx, q.InsertTenant, name, hash, prefix, sipDomain).Scan(&id); err != nil {
 		return fmt.Errorf("insert tenant: %w", err)
 	}
+	var (
+		keyID     string
+		createdAt time.Time
+	)
+	if err := tx.QueryRow(ctx, q.CreateAPIKey, id, "Seed key", hash, prefix, "full").Scan(&keyID, &createdAt); err != nil {
+		return fmt.Errorf("insert api key: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
 
-	fmt.Printf(`
+	fmt.Fprintf(out, `
 Tenant created.
 
   ID:         %s

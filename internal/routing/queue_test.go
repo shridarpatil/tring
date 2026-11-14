@@ -92,3 +92,31 @@ func TestKeys(t *testing.T) {
 		t.Fatalf("ResKey = %q", ResKey("t1", "alice"))
 	}
 }
+
+// testRejoinFront checks a caller rejoining after an unanswered ring goes back
+// to the head of its own tier: ahead of later normal callers, still behind a
+// priority caller.
+func testRejoinFront(t *testing.T, q Queue, key string) {
+	t.Helper()
+	ctx := context.Background()
+	later := q.Enqueue(ctx, key, false)
+	defer q.Remove(ctx, key, later)
+	back := q.EnqueueFront(ctx, key, false)
+	defer q.Remove(ctx, key, back)
+	if !q.IsHead(ctx, key, back) {
+		t.Fatal("rejoining caller should be head, ahead of a later caller")
+	}
+	p := q.Enqueue(ctx, key, true)
+	if !q.IsHead(ctx, key, p) {
+		t.Fatal("a priority caller should still be served first")
+	}
+	q.Remove(ctx, key, p)
+	if !q.IsHead(ctx, key, back) {
+		t.Fatal("rejoining caller should be head again once priority drains")
+	}
+	if d := q.Depth(ctx, key); d != 2 {
+		t.Fatalf("depth = %d, want 2", d)
+	}
+}
+
+func TestQueueEnqueueFront(t *testing.T) { testRejoinFront(t, NewMemQueue(), "sales") }

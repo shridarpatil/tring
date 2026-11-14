@@ -62,11 +62,13 @@ curl -sS -X POST https://api.example.com/v1/calls/<call-id>/resume \
 
 The call must be `answered` (else `409`). Hold plays the tenant's hold music, or FreeSWITCH's built-in music, into the customer's leg on FreeSWITCH. Response: `{"id": "<call-id>", "held": true}`.
 
-:::note
-The REST hold, resume and transfer endpoints act on a call's **FreeSWITCH** leg. For calls that live only on the gateway (browser visitor calls, IVR transfers, `POST /v1/calls` click-to-calls), use the agent SDK controls above.
+:::caution
+The REST hold and resume endpoints act on a call's **FreeSWITCH** leg. Calls now run on the media gateway (browser visitor calls, phone calls, IVR transfers, `POST /v1/calls` click-to-calls), which have no such leg, so REST hold and resume fail for them. Use the agent SDK controls above to hold a call.
 :::
 
-The agent-token REST endpoints `POST /v1/sdk/calls/hold`, `POST /v1/sdk/calls/resume` and `POST /v1/sdk/calls/transfer` (`{"to_sip": …}` or `{"to_team": …}`) do the same on the agent's own newest answered call, resolved from the token. A team transfer through this path rings all reachable members at once. See the [Calls API](/tring/api-reference/calls/).
+The agent-token REST endpoints `POST /v1/sdk/calls/hold` and `POST /v1/sdk/calls/resume` do the same on the agent's own newest answered call, resolved from the token, with the same limitation.
+
+`POST /v1/sdk/calls/transfer` (`{"to_sip": …}` or `{"to_team": …}`, agent token) blind-transfers the agent's own newest answered call through the media gateway. It works for web, phone and click-to-call calls and behaves exactly like the widget's Transfer button (see [Blind transfer](#blind-transfer)): an unreachable target leaves the agent on the call with `409`; otherwise the agent's call ends and the target rings. See the [agent widget endpoints](/tring/sdk/agent-widget/) for its error codes.
 
 ## Supervision
 

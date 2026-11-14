@@ -234,6 +234,31 @@ func TestSimulateGatherBelowMinDigitsTimesOut(t *testing.T) {
 	}
 }
 
+// The simulator takes a forced queue_timeout down the no_answer edge when the
+// flow has no queue_timeout edge, exactly as a live call does (ivr.Walk).
+func TestSimulateQueueTimeoutFallsBackToNoAnswer(t *testing.T) {
+	flow := `{
+  "version": 2,
+  "entry_node": "start",
+  "nodes": [
+    {"id":"start","type":"start","config":{}},
+    {"id":"t","type":"transfer","config":{"team":"sales"}},
+    {"id":"na","type":"hangup","config":{}}
+  ],
+  "edges": [
+    {"from":"start","to":"t","condition":"default"},
+    {"from":"t","to":"na","condition":"no_answer"}
+  ]
+}`
+	res, err := SimulateFlow([]byte(flow), SimInput{TransferOutcome: "queue_timeout"})
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	if res.Error != "" || res.EndedAt != "na" || res.Steps[1].Outcome != "no_answer" {
+		t.Errorf("error=%q ended_at=%s transfer outcome=%q, want no error / na / no_answer", res.Error, res.EndedAt, res.Steps[1].Outcome)
+	}
+}
+
 func TestInteractiveGatherBelowMinDigitsTimesOut(t *testing.T) {
 	node := &ivrNode{ID: "pin", Type: nodeGather, Config: map[string]interface{}{
 		"min_digits": float64(4), "store_as": "pin",

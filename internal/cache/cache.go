@@ -172,6 +172,18 @@ func (c *Cache) RPush(ctx context.Context, key, val string, ttl time.Duration) {
 	_, _ = pipe.Exec(ctx)
 }
 
+// LPush prepends val to the list at key (FIFO head) and refreshes the list's
+// TTL, for an element that must go back to the front. Best-effort.
+func (c *Cache) LPush(ctx context.Context, key, val string, ttl time.Duration) {
+	if c == nil {
+		return
+	}
+	pipe := c.rdb.TxPipeline()
+	pipe.LPush(ctx, key, val)
+	pipe.Expire(ctx, key, ttl)
+	_, _ = pipe.Exec(ctx)
+}
+
 // LHead returns the first (oldest) element of the list at key — the head of
 // line. ok=false on a nil cache, empty list, or Redis error.
 func (c *Cache) LHead(ctx context.Context, key string) (string, bool) {

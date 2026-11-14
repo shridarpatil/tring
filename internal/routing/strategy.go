@@ -36,6 +36,14 @@ func (r *memRR) Next(key string, n int) int {
 	return i
 }
 
+// OneAtATime reports whether a team strategy rings one agent per attempt
+// (round_robin / sequential / longest_wait) rather than all at once (ring_all,
+// or no strategy). The Router reserves and the transport rings by this, so
+// the two must agree.
+func OneAtATime(strategy string) bool {
+	return strategy != "" && strategy != "ring_all"
+}
+
 // OrderByStrategy reorders a team's available members for ringing:
 //   - round_robin: rotate the start by a per-team counter (load spreading)
 //   - longest_wait: idle-longest first (by Redis freed-at; missing = longest)

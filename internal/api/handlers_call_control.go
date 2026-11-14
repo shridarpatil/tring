@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-
-	"github.com/shridarpatil/tring/internal/agentleg"
 )
 
 // Call control (hold/resume; later transfer/conference). Two entry points reach
@@ -160,13 +159,12 @@ type sdkTransferRequest struct {
 }
 
 // handleSdkTransfer blind-transfers the agent's current call to another agent or
-// a team: the client is re-bridged to the target (hearing the tenant's hold
-// music as ringback while it rings) and the requesting agent's leg drops. A
-// re-bridge — NOT uuid_hold — avoids a SIP re-INVITE, so the media-gateway legs
-// survive. The bridge runs in the tring_transfer dialplan extension, fed the
-// dial-string via a channel var (so a ring-all team's commas don't break it).
-// Blind has no fallback, so the target must be reachable. Attended transfer and
-// conference (3-way + everyone-recorded) come later.
+// a team. Every call lives in a media-gateway room, so the gateway runs it
+// (POST /control/transfer) exactly as it runs the widget's own /rtc transfer:
+// target pre-flight, the agent's leg ends, the target rings, and on no answer
+// the caller hears the tenant's message. This used to drive FreeSWITCH over ESL
+// on calls.leg_id, which is no FreeSWITCH channel for a media-plane call, so it
+// always failed.
 func (s *Server) handleSdkTransfer(w http.ResponseWriter, r *http.Request) {
 	claims := agentFromCtx(r.Context())
 	if claims == nil {
@@ -180,44 +178,14 @@ func (s *Server) handleSdkTransfer(w http.ResponseWriter, r *http.Request) {
 	}
 	var req sdkTransferRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
-
-	// Resolve the target into a FreeSWITCH bridge dial-string.
-	var dest string
-	switch {
-	case strings.TrimSpace(req.ToTeam) != "":
-		dest = s.teamDialString(r.Context(), claims.TenantID, strings.TrimSpace(req.ToTeam))
-		if dest == "" {
-			writeError(w, http.StatusConflict, "no available members in that team")
-			return
-		}
-	case strings.TrimSpace(req.ToSip) != "":
-		sip := strings.TrimSpace(req.ToSip)
-		var targetID uuid.UUID
-		var label string
-		if err := s.db.Pool.QueryRow(r.Context(), s.q.GetAgentBySIP, claims.TenantID, sip).Scan(&targetID, &label); err != nil {
-			writeError(w, http.StatusNotFound, "unknown target agent")
-			return
-		}
-		if targetID == agentID {
-			writeError(w, http.StatusBadRequest, "cannot transfer to yourself")
-			return
-		}
-		if !s.agentReachable(r.Context(), claims.TenantID, sip) {
-			writeError(w, http.StatusConflict, "target agent is not available")
-			return
-		}
-		dest = agentleg.Build(agentleg.Options{
-			Transport: "gateway", Gateway: s.agentGateway, SIP: sip,
-			TenantID: claims.TenantID.String(), Attribute: true,
-		})
-	default:
-		writeError(w, http.StatusBadRequest, "to_sip or to_team required")
+	req.ToSip, req.ToTeam = strings.TrimSpace(req.ToSip), strings.TrimSpace(req.ToTeam)
+	if (req.ToSip == "") == (req.ToTeam == "") {
+		writeError(w, http.StatusBadRequest, "exactly one of to_sip or to_team required")
 		return
 	}
 
-	// The client leg (the party to move) + the tenant's hold music for ringback.
-	var leg, holdMusic string
-	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentActiveCallLeg, claims.TenantID, agentID).Scan(&leg, &holdMusic)
+	var roomID string
+	err = s.db.Pool.QueryRow(r.Context(), s.q.GetAgentActiveCallRoom, claims.TenantID, agentID).Scan(&roomID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "no active call")
 		return
@@ -226,60 +194,35 @@ func (s *Server) handleSdkTransfer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "query failed")
 		return
 	}
-	if leg == "" {
-		writeError(w, http.StatusConflict, "call has no media leg yet")
+	if roomID == "" {
+		writeError(w, http.StatusConflict, "call has no media room")
 		return
-	}
-	moh := holdMusic
-	if moh == "" {
-		moh = defaultMOH
 	}
 
-	// Feed the bridge target + ringback to the tring_transfer dialplan extension,
-	// then re-route the client there (the original agent's leg ends).
-	if _, err := s.fs.Command(r.Context(), "uuid_setvar", leg+" transfer_target "+dest); err != nil {
-		s.log.Error("transfer setvar failed", "err", err)
-		writeError(w, http.StatusBadGateway, "transfer failed")
-		return
-	}
-	_, _ = s.fs.Command(r.Context(), "uuid_setvar", leg+" transfer_ringback "+moh)
-	// Mark the leg so the orchestrator's IVR executor knows this bridge ended
-	// because of a blind transfer (caller handed to a new bridge), not a normal
-	// hangup — so it doesn't walk on to a hangup node or post-walk HangupCall and
-	// drop the transferred caller. Read back via wasBlindTransferred.
-	_, _ = s.fs.Command(r.Context(), "uuid_setvar", leg+" tring_blind_transfer true")
-	if _, err := s.fs.Command(r.Context(), "uuid_transfer", leg+" tring_transfer XML default"); err != nil {
-		s.log.Error("transfer failed", "agent", agentID, "err", err)
-		writeError(w, http.StatusBadGateway, "transfer command failed")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"transferred": true})
-}
-
-// teamDialString builds a ring-all bridge dial-string for a team's reachable
-// members (comma-joined = all ring at once), or "" if none are available.
-func (s *Server) teamDialString(ctx context.Context, tenant uuid.UUID, team string) string {
-	rows, err := s.db.Pool.Query(ctx, s.q.ListTeamAgentSips, tenant, team)
+	resp, err := s.gatewayPost(r.Context(), claims.TenantID, "/control/transfer", map[string]string{
+		"room": roomID, "sip": claims.SipUsername, "to_sip": req.ToSip, "to_team": req.ToTeam,
+	})
 	if err != nil {
-		return ""
+		s.log.Error("transfer: gateway unreachable", "url", s.gatewayControlURL, "err", err)
+		writeError(w, http.StatusBadGateway, "media gateway unavailable")
+		return
 	}
-	defer rows.Close()
-	legs := []string{}
-	for rows.Next() {
-		var sip string
-		var pos int
-		if rows.Scan(&sip, &pos) != nil {
-			continue
-		}
-		if !s.agentReachable(ctx, tenant, sip) {
-			continue
-		}
-		legs = append(legs, agentleg.Build(agentleg.Options{
-			Transport: "gateway", Gateway: s.agentGateway, SIP: sip,
-			TenantID: tenant.String(), Attribute: true,
-		}))
+	defer resp.Body.Close()
+	var out struct {
+		Error string `json:"error"`
 	}
-	return strings.Join(legs, ",")
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out)
+	switch {
+	case resp.StatusCode < 300:
+		writeJSON(w, http.StatusOK, map[string]any{"transferred": true})
+	case resp.StatusCode == http.StatusBadRequest, resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusConflict:
+		// The gateway's refusals (bad target, agent not on that call, target
+		// unavailable, transfer already running); the agent keeps the call.
+		writeError(w, resp.StatusCode, out.Error)
+	default:
+		s.log.Error("transfer: gateway refused", "status", resp.StatusCode, "error", out.Error)
+		writeError(w, http.StatusBadGateway, "transfer failed")
+	}
 }
 
 // ── CRM backend (tenant API key) — control any call by id ────────────────────

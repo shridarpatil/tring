@@ -388,3 +388,29 @@ func TestDrainWaitsForConnectCall(t *testing.T) {
 		t.Fatal("Drain never saw the connect call end")
 	}
 }
+
+// Connect's up-front trunk check is the agent leg's selection too: two
+// carrier legs, two selections — not a third for the check.
+func TestConnectSelectsTrunkOncePerLeg(t *testing.T) {
+	agent, client := newConnectLeg("out-agent"), newConnectLeg("out-client")
+	o := newConnectOriginator(agent, client)
+	cl := newConnectCallLog()
+	srv := newConnectServer(t, o, cl)
+	rr := &rrTrunkResolver{fakeTrunkResolver: fakeTrunkResolver{trunks: []trunkselect.Trunk{
+		{E164: "+912200000001", Name: "t_a"}, {E164: "+912200000002", Name: "t_b"},
+	}}}
+	srv.cfg.Trunks = rr
+	if _, err := srv.Connect(context.Background(), uuid.New(), "9876543210", "09812345678"); err != nil {
+		t.Fatal(err)
+	}
+	<-o.dialed
+	<-o.dialed
+	rr.mu.Lock()
+	calls := rr.calls
+	rr.mu.Unlock()
+	close(client.done)
+	waitEnd(t, cl)
+	if calls != 2 {
+		t.Fatalf("OutboundTrunks called %d times for a two-leg connect, want 2", calls)
+	}
+}

@@ -51,7 +51,8 @@ type Target struct {
 
 // Agents rings an agent into the call's room — the transfer membership change.
 // It blocks until an agent joins the room (outcome "completed") or nobody
-// answers in time / there are no agents ("no_answer"). The IVR participant
+// answers in time / there are no agents ("no_answer"), or the team queue's
+// max_wait runs out ("queue_timeout"). The IVR participant
 // leaves once an agent is admitted; from the caller's side the IVR voice is
 // simply replaced by the agent. The signaling layer implements this against
 // agent presence; tests fake it. A nil Agents means transfer reports no_answer.

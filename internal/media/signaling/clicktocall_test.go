@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/gobwas/ws/wsutil"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+
+	"github.com/shridarpatil/tring/internal/trunkselect"
 )
 
 // callHarness is a gateway with one tenant agent ("alice") whose presence socket
@@ -225,5 +228,46 @@ func TestControlCall(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || out.CallID != h.cl.id {
 		t.Errorf("body %s, want call_id %s", rec.Body, h.cl.id)
+	}
+}
+
+// rrTrunkResolver is a round-robin tenant's resolver: every OutboundTrunks
+// call advances the rotation, as internal/outboundtrunks' does.
+type rrTrunkResolver struct {
+	fakeTrunkResolver
+	mu    sync.Mutex
+	calls int
+}
+
+func (r *rrTrunkResolver) OutboundTrunks(context.Context, uuid.UUID) ([]trunkselect.Trunk, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t := r.trunks[r.calls%len(r.trunks)]
+	r.calls++
+	return []trunkselect.Trunk{t}, nil
+}
+
+// One click-to-call is one selection: advancing the rotation twice (a
+// pre-check, then the dial) skips a trunk every call — with two trunks every
+// call goes out on the same one — and the CDR's "from" names a different
+// trunk's number than the one the customer sees.
+func TestCallSelectsTrunkOnce(t *testing.T) {
+	client := newConnectLeg("out-client")
+	h := newCallHarness(t, client)
+	rr := &rrTrunkResolver{fakeTrunkResolver: fakeTrunkResolver{trunks: []trunkselect.Trunk{
+		{E164: "+912200000001", Name: "t_a"}, {E164: "+912200000002", Name: "t_b"},
+	}}}
+	h.srv.cfg.Trunks = rr
+	h.call()
+	agent := h.answer()
+	<-h.o.dialed
+	h.readUntil(agent, msgAnswered)
+	rr.mu.Lock()
+	calls := rr.calls
+	rr.mu.Unlock()
+	close(client.done)
+	waitEnd(t, h.cl)
+	if calls != 1 {
+		t.Fatalf("OutboundTrunks called %d times for one click-to-call, want 1", calls)
 	}
 }

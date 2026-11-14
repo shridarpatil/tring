@@ -22,6 +22,7 @@ import (
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/trunkselect"
 )
 
 // connectRingTimeout bounds how long each number rings.
@@ -46,7 +47,8 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("%w: client_number: %v", errDialInvalidNumber, err)
 	}
-	if trunks, err := s.cfg.Trunks.OutboundTrunks(ctx, tenant); err != nil || len(trunks) == 0 {
+	trunks, err := s.cfg.Trunks.OutboundTrunks(ctx, tenant)
+	if err != nil || len(trunks) == 0 {
 		return uuid.Nil, fmt.Errorf("%w: %v", errDialNoTrunk, err)
 	}
 
@@ -62,16 +64,17 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 		s.endPortCall()
 		return uuid.Nil, errConnectNoCDR
 	}
-	go s.runConnect(roomID, tenant, agent, client)
+	go s.runConnect(roomID, tenant, agent, client, trunks)
 	return callID, nil
 }
 
 // runConnect places a Connect call: agent first, then client, then waits for
-// either side to hang up.
-func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client string) {
+// either side to hang up. The agent leg dials on Connect's up-front selection
+// (trunks) so that check doesn't advance a round_robin rotation on its own.
+func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client string, trunks []trunkselect.Trunk) {
 	defer s.endPortCall()
 	octx, cancel := context.WithTimeout(context.Background(), connectRingTimeout)
-	agentLeg, callerID, _, err := s.originateOut(octx, tenant, agent, "", nil)
+	agentLeg, callerID, _, err := s.originateOn(octx, tenant, trunks, agent, "", nil)
 	cancel()
 	if err != nil {
 		s.log.Warn("connect: agent's number not answered", "room", roomID, "to", agent, "err", err)
@@ -184,7 +187,53 @@ func (s *Server) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /control/connect", s.handleControlConnect)
 	mux.HandleFunc("POST /control/call", s.handleControlCall)
 	mux.HandleFunc("POST /control/agent-kick", s.handleControlAgentKick)
+	mux.HandleFunc("POST /control/transfer", s.handleControlTransfer)
 	return mux
+}
+
+// handleControlTransfer is POST /control/transfer {room, sip, to_sip | to_team}
+// → 204: the API's REST blind transfer of agent sip's leg in room. It runs the
+// agent's own msgTransfer (commitTransfer), so the agent's SDK gets the same
+// transfer-ok + ended. 404 when this gateway has no such agent leg in the
+// token's tenant (which is also what keeps one tenant off another's rooms);
+// 400/409 for a refused transfer, with the agent still on the call.
+func (s *Server) handleControlTransfer(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := s.controlTenant(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Room   string `json:"room"`
+		SIP    string `json:"sip"`
+		ToSip  string `json:"to_sip"`
+		ToTeam string `json:"to_team"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.Room == "" || req.SIP == "" {
+		controlError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	p, c := s.agentCallLeg(tenant.String(), req.SIP, room.RoomID(req.Room))
+	if p == nil {
+		controlError(w, http.StatusNotFound, "agent is not on that call")
+		return
+	}
+	if c == nil {
+		// Mid-reconnect (page refresh): there's no socket to tell the agent the
+		// call left them, so its SDK would rejoin and break the transfer.
+		controlError(w, http.StatusConflict, "agent is reconnecting")
+		return
+	}
+	ring, err := s.commitTransfer(c, p, tenant, req.SIP, req.ToSip, req.ToTeam)
+	switch {
+	case errors.Is(err, errTransferTarget), errors.Is(err, errTransferSelf):
+		controlError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
+		controlError(w, http.StatusConflict, err.Error())
+		return
+	}
+	go ring()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleControlConnect is POST /control/connect {agent_number, client_number}

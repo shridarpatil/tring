@@ -51,7 +51,8 @@ type call struct {
 	media   *mediaSession
 	offerIP string
 	offerPt int
-	rate    int // carrier leg's audio rate for the Opus answer (0 = full band)
+	rate    int    // carrier leg's audio rate for the Opus answer (0 = full band)
+	answer  []byte // our SDP answer, set with media in Answer (under Plug.mu)
 
 	// responded is closed once Answer or Reject has sent the final
 	// response, unblocking onInvite's wait (see ringTimeout above).
@@ -241,6 +242,10 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusForbidden, "Forbidden", nil))
 		return
 	}
+	if req.To() != nil && req.To().Params.Has("tag") {
+		p.onReInvite(req, tx)
+		return
+	}
 	p.mu.Lock()
 	full := len(p.calls) >= p.maxCalls()
 	p.mu.Unlock()
@@ -258,6 +263,7 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	if err != nil {
 		p.log.Warn("fsplug: bad offer, rejecting", "err", err)
 		_ = sess.Respond(sip.StatusBadRequest, "Bad SDP", nil)
+		_ = sess.Close() // never registered in p.calls, so forget can't
 		return
 	}
 	id := room.CallID(req.CallID().Value())
@@ -282,6 +288,48 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	}
 }
 
+// onReInvite answers an in-dialog INVITE (its To carries our tag). Without
+// this it would be read as a brand-new call: OnInbound would run the DID/IVR
+// again and the new entry would overwrite the live call's in p.calls. The
+// plug doesn't renegotiate media, so a re-INVITE whose offer keeps the media
+// address (a session refresh) gets our existing answer back, while one that
+// moves it gets 488 — RFC 3261 §14.2: a rejected re-INVITE leaves the
+// session as it was, which is exactly what we keep running, rather than a
+// 200 claiming we now send somewhere we don't.
+func (p *Plug) onReInvite(req *sip.Request, tx sip.ServerTransaction) {
+	sess, _ := p.ds.MatchDialogRequest(req)
+	var answer []byte
+	p.mu.Lock()
+	c := p.calls[room.CallID(req.CallID().Value())]
+	if c != nil && sess != nil && c.sess == sess {
+		answer = c.answer
+	}
+	p.mu.Unlock()
+	if answer == nil {
+		if _, err := p.dc.MatchRequestDialog(req); err == nil {
+			// A Tring-originated (outbound) call: same no-renegotiation rule,
+			// and 481 here would end a live call.
+			_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil))
+			return
+		}
+		// Not one of our live, answered dialogs.
+		_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusCallTransactionDoesNotExists, "Call/Transaction Does Not Exist", nil))
+		return
+	}
+	if len(req.Body()) > 0 {
+		ip, port, err := parseOffer(req.Body())
+		if err != nil || ip != c.offerIP || port != c.offerPt { // offerIP/offerPt are immutable
+			_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil))
+			return
+		}
+	}
+	res := sip.NewSDPResponseFromRequest(req, answer)
+	if res.Contact() == nil {
+		res.AppendHeader(&p.contact)
+	}
+	_ = tx.Respond(res)
+}
+
 func (p *Plug) get(id room.CallID) *call {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -300,11 +348,11 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 		return nil, err
 	}
 	m.setRemote(c.offerIP, c.offerPt)
+	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
 	p.mu.Lock()
 	c.media = m
+	c.answer = answer
 	p.mu.Unlock()
-
-	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
 
 	// Deliberately NOT c.sess.RespondSDP(answer): DialogServerSession.WriteResponse
 	// (which RespondSDP wraps) sends the 200 and then BLOCKS the caller for up to
@@ -400,10 +448,20 @@ func (p *Plug) Hangup(id room.CallID) error {
 	return err
 }
 
+// forget unregisters an inbound call and closes its sipgo dialog session.
+// The Close is what drops the session from the DialogServerCache: sipgo only
+// does that itself on a remote BYE, so every call Tring ends (Reject, Hangup,
+// ring timeout, a failed answer) would otherwise stay cached forever. Taking
+// the call out of p.calls under the lock makes the Close happen exactly once
+// however many teardown paths race here (Hangup and watchDialog both do).
 func (p *Plug) forget(id room.CallID) {
 	p.mu.Lock()
+	c, ok := p.calls[id]
 	delete(p.calls, id)
 	p.mu.Unlock()
+	if ok && c.sess != nil {
+		_ = c.sess.Close()
+	}
 }
 
 // HangupOutbound BYEs the carrier for a room-initiated outbound call,
