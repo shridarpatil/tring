@@ -13,11 +13,15 @@ import (
 
 type fakeTeams struct {
 	sips    []string
-	maxWait int // seconds; 0 → 30
+	maxWait int  // seconds; 0 → 30
+	missing bool // the team doesn't exist
 }
 
 func (f fakeTeams) TeamSIPs(context.Context, uuid.UUID, string) ([]string, error) { return f.sips, nil }
 func (f fakeTeams) TeamConfig(context.Context, uuid.UUID, string) (routing.TeamConfig, bool, error) {
+	if f.missing {
+		return routing.TeamConfig{}, false, nil
+	}
 	mw := f.maxWait
 	if mw == 0 {
 		mw = 30
@@ -132,6 +136,27 @@ func TestAgentRouterRingReportsQueueTimeout(t *testing.T) {
 	}
 	if got != "queue_timeout" {
 		t.Fatalf("outcome = %q, want queue_timeout", got)
+	}
+}
+
+// A transfer to a team that doesn't exist (a typo, a deleted team, a bad
+// {{var}}) fails over to no_answer at once instead of holding the caller for
+// the default 2-minute max_wait; nobody can ever be added to it.
+func TestAgentRouterUnknownTeamFailsFast(t *testing.T) {
+	tp := effTransport{eff: noAnswerEffects{}}
+	r := NewAgentRouter(fakeTeams{missing: true}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	got, err := r.Ring(ctx, uuid.New().String()+"/room", ivrdrive.Target{Team: "no-such-team"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("unknown team held the caller %v, want immediate failover", took)
+	}
+	if got != "no_answer" {
+		t.Fatalf("outcome = %q, want no_answer", got)
 	}
 }
 
