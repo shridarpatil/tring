@@ -84,6 +84,9 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 	}()
 
 	deadline := time.Now().Add(cfg.MaxWait)
+	// tried is the one-at-a-time round: agents already rung for this caller, so
+	// each attempt rings the next one in strategy order (see reserveNext).
+	tried := map[string]bool{}
 	// holdReady breaks the hold early: an available candidate is head-of-line, or
 	// the wait is up. The Hold effect polls this each tick (FS watcher / pion
 	// ticker), so it's also where we refresh the published depth's TTL — a single
@@ -108,23 +111,12 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 		avail := r.available(ctx, cfg, candidates)
 		if len(avail) > 0 && r.queue.IsHead(ctx, qkey, waiter) {
 			ordered := OrderByStrategy(ctx, r.pres, r.rr, cfg.TenantID, cfg.Team, cfg.Strategy, avail)
-			claimed, claims := r.reserveAgents(ctx, cfg.TenantID, ordered)
-			// Availability may have changed after the first read (e.g. an answer
-			// or Away update). Recheck while we own the agent, ignoring our own
-			// reservation. Only successful claimants may send a ring.
-			fresh := FilterAvailable(ctx, r.pres, nil, cfg.TenantID, candidates(ctx))
-			allowed := make(map[string]bool, len(fresh))
-			for _, sip := range fresh {
-				allowed[sip] = true
-			}
-			ordered = nil
-			for _, sip := range claimed {
-				if allowed[sip] {
-					ordered = append(ordered, sip)
-				} else {
-					claims[sip].Release()
-					delete(claims, sip)
-				}
+			var claims map[string]*Claim
+			if OneAtATime(cfg.Strategy) {
+				ordered, claims = r.reserveNext(ctx, cfg, candidates, ordered, tried)
+			} else {
+				ordered, claims = r.reserveAgents(ctx, cfg.TenantID, ordered)
+				ordered = r.recheck(ctx, cfg, candidates, ordered, claims)
 			}
 			if len(ordered) > 0 {
 				r.queue.Remove(ctx, qkey, waiter)
@@ -194,6 +186,68 @@ func (r *Router) reserveAgents(ctx context.Context, tenantID string, sips []stri
 		}
 	}
 	return claimed, claims
+}
+
+// reserveNext claims the single agent a one-at-a-time attempt rings: the first
+// in strategy order not yet tried this round, starting a new round once all
+// have been. Only that agent is reserved, so the rest of the team stays free
+// for other queued callers (and other teams) for the whole ring window.
+// tried is the caller's round, updated in place; agents no longer available
+// drop out of it so they're rung again once freed, as they were before.
+func (r *Router) reserveNext(ctx context.Context, cfg RouteConfig, candidates func(context.Context) []string, ordered []string, tried map[string]bool) ([]string, map[string]*Claim) {
+	in := make(map[string]bool, len(ordered))
+	var next, done []string
+	for _, sip := range ordered {
+		in[sip] = true
+		if tried[sip] {
+			done = append(done, sip)
+		} else {
+			next = append(next, sip)
+		}
+	}
+	for sip := range tried {
+		if !in[sip] {
+			delete(tried, sip)
+		}
+	}
+	for i, sip := range append(next, done...) {
+		claim := Acquire(ctx, r.reserve, cfg.TenantID, sip)
+		if claim == nil {
+			continue // claimed elsewhere since the availability read
+		}
+		claims := map[string]*Claim{sip: claim}
+		if len(r.recheck(ctx, cfg, candidates, []string{sip}, claims)) == 0 {
+			continue
+		}
+		if i >= len(next) { // everyone was tried: this starts a new round
+			clear(tried)
+		}
+		tried[sip] = true
+		return []string{sip}, claims
+	}
+	return nil, nil
+}
+
+// recheck keeps the claimed agents that are still available, releasing the
+// rest. Availability may have changed after the first read (e.g. an answer or
+// Away update), so it's re-read while we own the agents, ignoring our own
+// reservation. Only agents that pass may be rung.
+func (r *Router) recheck(ctx context.Context, cfg RouteConfig, candidates func(context.Context) []string, claimed []string, claims map[string]*Claim) []string {
+	fresh := FilterAvailable(ctx, r.pres, nil, cfg.TenantID, candidates(ctx))
+	allowed := make(map[string]bool, len(fresh))
+	for _, sip := range fresh {
+		allowed[sip] = true
+	}
+	var ok []string
+	for _, sip := range claimed {
+		if allowed[sip] {
+			ok = append(ok, sip)
+		} else {
+			claims[sip].Release()
+			delete(claims, sip)
+		}
+	}
+	return ok
 }
 
 func (r *Router) publishDepth(ctx context.Context, cfg RouteConfig) {
