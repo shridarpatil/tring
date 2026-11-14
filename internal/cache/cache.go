@@ -185,6 +185,29 @@ func (c *Cache) LHead(ctx context.Context, key string) (string, bool) {
 	return s, true
 }
 
+// LHeadLive returns the head of the list at key, first popping every leading
+// element whose liveness key (leasePrefix+element) no longer exists. Atomic
+// (one Lua script), so a concurrent RPush or LRem can't interleave with the
+// sweep. ok=false on a nil cache, an empty list, or a Redis error. The lease
+// keys are computed in the script, so this assumes a single Redis node, not
+// Redis Cluster.
+func (c *Cache) LHeadLive(ctx context.Context, key, leasePrefix string) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	s, err := c.rdb.Eval(ctx, `
+while true do
+  local h = redis.call('LINDEX', KEYS[1], 0)
+  if not h then return false end
+  if redis.call('EXISTS', ARGV[1] .. h) == 1 then return h end
+  redis.call('LPOP', KEYS[1])
+end`, []string{key}, leasePrefix).Text()
+	if err != nil {
+		return "", false
+	}
+	return s, true
+}
+
 // LRem removes all occurrences of val from the list at key (tickets are unique,
 // so this drops exactly the one waiter). Best-effort.
 func (c *Cache) LRem(ctx context.Context, key, val string) {

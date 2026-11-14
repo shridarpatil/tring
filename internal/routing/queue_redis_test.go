@@ -89,3 +89,30 @@ func TestRedisReservations(t *testing.T) {
 		t.Fatal("reservation should expire via Redis TTL")
 	}
 }
+
+// A waiter whose gateway died (crash, SIGKILL, drain timeout) or whose Remove
+// was lost to a Redis error leaves its ticket in the list. Once its lease
+// lapses it must stop blocking the line; otherwise IsHead is false for every
+// later caller and nobody is rung even with idle agents.
+func TestRedisQueueSkipsDeadHead(t *testing.T) {
+	c := testRedis(t)
+	ctx := context.Background()
+	q := newRedisQueue(c, 300*time.Millisecond)
+	key := "test:" + uuid.NewString()
+
+	dead := q.Enqueue(ctx, key, false)
+	live := q.Enqueue(ctx, key, false)
+	defer q.Remove(ctx, key, live)
+	q.stopHeartbeat(dead) // the owning process is gone; nothing renews its lease
+
+	if q.IsHead(ctx, key, live) {
+		t.Fatal("live waiter jumped a head whose lease is still valid")
+	}
+	time.Sleep(time.Second) // dead lease expires; the live one keeps renewing
+	if !q.IsHead(ctx, key, live) {
+		t.Fatal("dead ticket still blocks the head of line after its lease expired")
+	}
+	if d := q.Depth(ctx, key); d != 1 {
+		t.Fatalf("depth = %d, want 1 once the dead ticket is swept", d)
+	}
+}
