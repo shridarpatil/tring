@@ -56,7 +56,12 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 	for _, v := range video {
 		if v.Role == "agent" || v.Role == "customer" {
 			videos = append(videos, v)
-			args = append(args, "-i", v.Path)
+			// A camera→screen switch changes resolution mid-stream. By default
+			// FFmpeg rebuilds the whole filtergraph on that and discards the
+			// frames buffered in it (~0.5s of video vanishes before the switch).
+			// scale and pad re-fit every frame (eval=frame), so everything after
+			// them sees a fixed 640x480 and the rebuild is never needed.
+			args = append(args, "-reinit_filter", "0", "-i", v.Path)
 		}
 	}
 	for _, a := range audio {
@@ -74,7 +79,7 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 		}
 		// tpad holds the final picture only until camera-off, never through the
 		// rest of the call. Delayed starts expose the placeholder beneath it.
-		fmt.Fprintf(&fc, "[%d:v]setpts=PTS-STARTPTS,scale=640:480:force_original_aspect_ratio=decrease,pad=640:480:(ow-iw)/2:(oh-ih)/2,setsar=1,tpad=stop_mode=clone:stop_duration=%s,trim=duration=%s,setpts=PTS+%s/TB[v%d];", i+2, seconds(v.Duration), seconds(v.Duration), seconds(v.Offset), i)
+		fmt.Fprintf(&fc, "[%d:v]setpts=PTS-STARTPTS,scale=640:480:force_original_aspect_ratio=decrease:eval=frame,pad=640:480:(ow-iw)/2:(oh-ih)/2:eval=frame,setsar=1,tpad=stop_mode=clone:stop_duration=%s,trim=duration=%s,setpts=PTS+%s/TB[v%d];", i+2, seconds(v.Duration), seconds(v.Duration), seconds(v.Offset), i)
 		base := right
 		if v.Role == "agent" {
 			base = left

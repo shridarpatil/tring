@@ -1,6 +1,9 @@
 package brain
 
 import (
+	"encoding/json"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -124,4 +127,49 @@ func TestSessionInputFromAnotherTenantIsNotFound(t *testing.T) {
 	if err != nil || len(got.Steps) <= len(snap.Steps) {
 		t.Fatalf("owner input after foreign attempt: err=%v steps %d→%d", err, len(snap.Steps), len(got.Steps))
 	}
+}
+
+// A gather looping back on itself: every input writes vars["x"] and pauses
+// again, so overlapping inputs keep mutating the session.
+const interactiveGatherLoop = `{
+  "version": 2,
+  "entry_node": "start",
+  "nodes": [
+    {"id":"start","type":"start","config":{}},
+    {"id":"g","type":"gather","config":{"store_as":"x"}}
+  ],
+  "edges": [
+    {"from":"start","to":"g","condition":"default"},
+    {"from":"g","to":"g","condition":"default"}
+  ]
+}`
+
+// Overlapping inputs on one session (a double submit, a script) must not
+// race: an unsynchronised map write during the response's JSON encoding is
+// a fatal runtime error that takes down the whole process.
+func TestSessionConcurrentInputsDoNotRace(t *testing.T) {
+	m := NewSimManager()
+	snap, err := m.Start(simOwner, []byte(interactiveGatherLoop), SimInput{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range 20 {
+				got, err := m.Input(simOwner, snap.SessionID, strconv.Itoa(i*100+j+1))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if _, err := json.Marshal(got); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
