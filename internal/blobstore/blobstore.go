@@ -94,3 +94,9 @@ func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	}
 	return obj, nil
 }
+
+// IsNotFound reports whether an error from Get means the object doesn't exist,
+// as opposed to the store being unreachable or refusing the request.
+func IsNotFound(err error) bool {
+	return minio.ToErrorResponse(err).Code == "NoSuchKey"
+}

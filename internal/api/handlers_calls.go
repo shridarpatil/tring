@@ -12,12 +12,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/shridarpatil/tring/internal/blobstore"
 	"github.com/shridarpatil/tring/internal/callrow"
 )
 
@@ -312,16 +314,7 @@ func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tena
 	// Stored in S3: stream it through (same-origin, header auth — no presign, no
 	// CORS, no token in the URL).
 	if s3Key != nil && *s3Key != "" && s.blob.Enabled() {
-		obj, err := s.blob.Get(r.Context(), *s3Key)
-		if err != nil {
-			writeError(w, http.StatusNotFound, "recording not available")
-			return
-		}
-		defer obj.Close()
-		// Content-Type from the stored key's extension (mp3/wav/opus), not a
-		// hardcoded WAV — the format is configurable and may differ per object.
-		w.Header().Set("Content-Type", recordingMIME(filepath.Ext(*s3Key)))
-		_, _ = io.Copy(w, obj)
+		s.streamS3Recording(w, r, *s3Key)
 		return
 	}
 
@@ -337,6 +330,52 @@ func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tena
 		}
 	}
 	writeError(w, http.StatusNotFound, "recording not available")
+}
+
+// streamS3Recording copies a recording object from S3 to the client.
+//
+// The recording routes run under middleware.Timeout(30s), which is meant to
+// bound opening the object, not streaming it: a deadline firing mid-copy cut
+// the body after the 200 had gone out, and the client saved a truncated file
+// as a success. So the object is read on a context that the request deadline
+// cancels only until streaming starts; after that only a client disconnect
+// cancels it. minio's transport still bounds the dial and response headers.
+func (s *Server) streamS3Recording(w http.ResponseWriter, r *http.Request, key string) {
+	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	defer cancel()
+	var streaming atomic.Bool
+	stop := context.AfterFunc(r.Context(), func() {
+		if !streaming.Load() || !errors.Is(r.Context().Err(), context.DeadlineExceeded) {
+			cancel()
+		}
+	})
+	defer stop()
+
+	obj, err := s.blob.Get(ctx, key)
+	if err != nil {
+		switch {
+		case blobstore.IsNotFound(err):
+			writeError(w, http.StatusNotFound, "recording not available")
+		case errors.Is(r.Context().Err(), context.DeadlineExceeded):
+			writeError(w, http.StatusGatewayTimeout, "recording store timed out")
+		default:
+			s.log.Error("open recording from s3 failed", "key", key, "err", err)
+			writeError(w, http.StatusBadGateway, "recording store unavailable")
+		}
+		return
+	}
+	defer obj.Close()
+	streaming.Store(true)
+
+	// Content-Type from the stored key's extension (mp3/wav/opus), not a
+	// hardcoded WAV — the format is configurable and may differ per object.
+	w.Header().Set("Content-Type", recordingMIME(filepath.Ext(key)))
+	if _, err := io.Copy(w, obj); err != nil {
+		// The 200 and part of the body are already out. Aborting drops the
+		// connection without the final chunk, so the client sees a failed
+		// download instead of a clean, truncated file.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // activeCallsList returns in-progress calls (ringing/answered) for a tenant,
