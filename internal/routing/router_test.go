@@ -115,3 +115,120 @@ func TestRouterAsyncAnswerBackstop(t *testing.T) {
 		t.Fatalf("out=%q label=%q, want completed/backstop", out, label)
 	}
 }
+
+// reservationSpy records, per Ring, which agents the router had reserved while
+// that ring was live; it never answers and cancels the route after n rings.
+type reservationSpy struct {
+	res      Reservations
+	tenant   string
+	all      []string
+	n        int
+	cancel   context.CancelFunc
+	rings    [][]string
+	reserved [][]string
+}
+
+func (*reservationSpy) Answered() (bool, string)                         { return false, "" }
+func (*reservationSpy) CallerAlive(ctx context.Context) bool             { return ctx.Err() == nil }
+func (*reservationSpy) Hold(context.Context, time.Duration, func() bool) {}
+func (s *reservationSpy) Ring(ctx context.Context, ordered []string, _ time.Duration) (RingOutcome, error) {
+	var held []string
+	for _, sip := range s.all {
+		if s.res.Reserved(ctx, ResKey(s.tenant, sip)) {
+			held = append(held, sip)
+		}
+	}
+	s.rings = append(s.rings, append([]string{}, ordered...))
+	s.reserved = append(s.reserved, held)
+	if len(s.rings) >= s.n {
+		s.cancel()
+	}
+	return RingOutcome{}, nil
+}
+
+// A one-at-a-time strategy rings one agent per attempt, so it must reserve only
+// that agent: reserving the whole team hid the other idle agents from every
+// other queued caller for the full ring window. Successive attempts still walk
+// the team, then start a new round.
+func TestRouterOneAtATimeReservesOnlyTheRungAgent(t *testing.T) {
+	for _, strategy := range []string{"sequential", "round_robin", "longest_wait"} {
+		t.Run(strategy, func(t *testing.T) {
+			res := NewMemReservations()
+			r := NewRouter(NewMemQueue(), res, NewMemRR(), nil, nil, nil, nil)
+			team := []string{"a", "b", "c"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// Four attempts: a full round plus the wrap into the next.
+			spy := &reservationSpy{res: res, tenant: "t1", all: team, n: 4, cancel: cancel}
+			cfg := RouteConfig{TenantID: "t1", Team: "sales", Strategy: strategy, RingSeconds: time.Millisecond, MaxWait: time.Minute}
+			r.Run(ctx, cfg, func(context.Context) []string { return team }, spy)
+
+			if len(spy.rings) != 4 {
+				t.Fatalf("ring attempts = %d, want 4", len(spy.rings))
+			}
+			seen := map[string]bool{}
+			for i, rung := range spy.rings {
+				if len(rung) != 1 {
+					t.Fatalf("attempt %d rang %v, want exactly one agent", i+1, rung)
+				}
+				if len(spy.reserved[i]) != 1 || spy.reserved[i][0] != rung[0] {
+					t.Fatalf("attempt %d rang %v but reserved %v, want only the rung agent", i+1, rung, spy.reserved[i])
+				}
+				if i < 3 {
+					seen[rung[0]] = true
+				}
+			}
+			if len(seen) != 3 {
+				t.Fatalf("first round rang %v, want every agent once", spy.rings[:3])
+			}
+		})
+	}
+}
+
+// lineJumper queues a later caller while the head caller's ring is live, and
+// never answers.
+type lineJumper struct {
+	q     Queue
+	key   string
+	rings int
+}
+
+func (*lineJumper) Answered() (bool, string)                         { return false, "" }
+func (*lineJumper) CallerAlive(ctx context.Context) bool             { return ctx.Err() == nil }
+func (*lineJumper) Hold(context.Context, time.Duration, func() bool) {}
+func (l *lineJumper) Ring(ctx context.Context, _ []string, _ time.Duration) (RingOutcome, error) {
+	l.rings++
+	if l.rings == 1 {
+		l.q.Enqueue(ctx, l.key, false) // a later caller joins mid-ring
+	}
+	return RingOutcome{}, nil
+}
+
+// A head-of-line caller whose ring goes unanswered keeps its place: a caller
+// who queued during that ring must not jump ahead of it. (It used to rejoin at
+// the tail, so FIFO broke on every unanswered attempt.)
+func TestRouterUnansweredCallerKeepsHeadOfLine(t *testing.T) {
+	q := NewMemQueue()
+	r := NewRouter(q, NewMemReservations(), NewMemRR(), nil, nil, nil, nil)
+	eff := &lineJumper{q: q, key: QueueKey("t1", "sales")}
+	cfg := RouteConfig{TenantID: "t1", Team: "sales", RingSeconds: time.Millisecond, MaxWait: 50 * time.Millisecond}
+	r.Run(context.Background(), cfg, func(context.Context) []string { return []string{"a"} }, eff)
+	if eff.rings < 2 {
+		t.Fatalf("head caller rang %d time(s), want it rung again ahead of the later caller", eff.rings)
+	}
+}
+
+// ring_all still reserves every agent it rings.
+func TestRouterRingAllReservesEveryRungAgent(t *testing.T) {
+	res := NewMemReservations()
+	r := NewRouter(NewMemQueue(), res, NewMemRR(), nil, nil, nil, nil)
+	team := []string{"a", "b", "c"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	spy := &reservationSpy{res: res, tenant: "t1", all: team, n: 1, cancel: cancel}
+	cfg := RouteConfig{TenantID: "t1", Team: "sales", Strategy: "ring_all", RingSeconds: time.Millisecond, MaxWait: time.Minute}
+	r.Run(ctx, cfg, func(context.Context) []string { return team }, spy)
+	if len(spy.rings) != 1 || len(spy.rings[0]) != 3 || len(spy.reserved[0]) != 3 {
+		t.Fatalf("rings = %v reserved = %v, want all three rung and reserved", spy.rings, spy.reserved)
+	}
+}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -326,4 +328,168 @@ func TestPlugAnswerAfterCancelFreesSlot(t *testing.T) {
 	if c := p.get(ic.CallID); c != nil {
 		t.Fatal("call still registered after Answer failed; it leaks a capacity slot")
 	}
+}
+
+// fakeFS is a sipgo UA standing in for FreeSWITCH: it INVITEs the plug and
+// listens on fsPort so in-dialog requests the plug sends (BYE) get answered.
+func fakeFS(t *testing.T, ctx context.Context, fsPort int) *sipgo.DialogClientCache {
+	t.Helper()
+	ua, _ := sipgo.NewUA()
+	client, _ := sipgo.NewClient(ua)
+	srv, _ := sipgo.NewServer(ua)
+	dc := sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: fsPort}})
+	srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = dc.ReadBye(req, tx) })
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: fsPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { <-ctx.Done(); _ = conn.Close() }()
+	go func() { _ = srv.ServeUDP(conn) }()
+	return dc
+}
+
+// Every inbound dialog Tring ends itself must leave sipgo's dialog cache:
+// only a remote BYE (ReadBye) closes the session on its own, so without an
+// explicit Close each Reject / Hangup leaks the session for the process's
+// lifetime.
+func TestPlugTeardownClosesDialog(t *testing.T) {
+	for i, tc := range []struct {
+		name     string
+		answer   bool
+		teardown func(p *Plug, id room.CallID) error
+	}{
+		{"hangup answered", true, func(p *Plug, id room.CallID) error { return p.Hangup(id) }},
+		{"hangup unanswered", false, func(p *Plug, id room.CallID) error { return p.Hangup(id) }},
+		{"reject", false, func(p *Plug, id room.CallID) error { return p.Reject(id) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port := 15930 + 4*i
+			cfg := Config{SIPListen: "127.0.0.1:" + strconv.Itoa(port), SIPAdvertise: "127.0.0.1", RTPMin: 14000 + 100*i, RTPMax: 14099 + 100*i, OpusPT: 111, DTMFPT: 101}
+			p, err := New(cfg, slog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			go p.Run(ctx)
+			inbound := make(chan room.InboundCall, 1)
+			p.OnInbound(func(ic room.InboundCall) { inbound <- ic })
+
+			dc := fakeFS(t, ctx, port+1)
+			dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000004", Host: "127.0.0.1", Port: port}, []byte(fsOffer), sip.NewHeader("Content-Type", "application/sdp"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ic room.InboundCall
+			select {
+			case ic = <-inbound:
+			case <-time.After(2 * time.Second):
+				t.Fatal("OnInbound never fired")
+			}
+			sess := p.get(ic.CallID).sess
+			if tc.answer {
+				leg, err := p.Answer(ic.CallID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer leg.Source.Close()
+				if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				if err := dlg.Ack(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := p.ds.MatchDialogRequest(sess.InviteRequest); err != nil {
+				t.Fatalf("dialog not cached before teardown: %v", err)
+			}
+
+			if err := tc.teardown(p, ic.CallID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.ds.MatchDialogRequest(sess.InviteRequest); !errors.Is(err, sipgo.ErrDialogDoesNotExists) {
+				t.Fatalf("dialog still cached after teardown (err=%v); it leaks", err)
+			}
+		})
+	}
+}
+
+// An in-dialog re-INVITE (a session refresh, or a hold/media change) belongs to
+// the call already up, not to a new caller: it must not reach OnInbound (which
+// would run the DID/IVR again and overwrite the live call's entry), and the
+// live call keeps going. A refresh with the same media gets our existing
+// answer back; a media change we can't apply gets 488 with the session
+// unchanged.
+func TestPlugReInviteIsNotANewCall(t *testing.T) {
+	cfg := Config{SIPListen: "127.0.0.1:15990", SIPAdvertise: "127.0.0.1", RTPMin: 14400, RTPMax: 14499, OpusPT: 111, DTMFPT: 101}
+	p, err := New(cfg, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go p.Run(ctx)
+	inbound := make(chan room.InboundCall, 2)
+	p.OnInbound(func(ic room.InboundCall) { inbound <- ic })
+
+	dc := fakeFS(t, ctx, 15991)
+	dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000005", Host: "127.0.0.1", Port: 15990}, []byte(fsOffer), sip.NewHeader("Content-Type", "application/sdp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ic := <-inbound
+	leg, err := p.Answer(ic.CallID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leg.Source.Close()
+	if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dlg.Ack(ctx); err != nil {
+		t.Fatal(err)
+	}
+	answer := string(dlg.InviteResponse.Body())
+	live := p.get(ic.CallID)
+
+	reinvite := func(offer string) *sip.Response {
+		t.Helper()
+		req := sip.NewRequest(sip.INVITE, dlg.InviteResponse.Contact().Address)
+		req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+		req.SetBody([]byte(offer))
+		res, err := dlg.Do(ctx, req)
+		if err != nil {
+			t.Fatalf("re-INVITE: %v", err)
+		}
+		return res
+	}
+
+	// Same media: a session refresh.
+	if res := reinvite(fsOffer); res.StatusCode != sip.StatusOK || string(res.Body()) != answer {
+		t.Fatalf("refresh re-INVITE: got %d %q, want 200 with the existing answer", res.StatusCode, res.Body())
+	}
+	// Moved media: not something the plug renegotiates.
+	moved := strings.Replace(fsOffer, "m=audio 30000", "m=audio 30002", 1)
+	if moved == fsOffer {
+		t.Fatal("test offer has no m=audio 30000 line to move")
+	}
+	if res := reinvite(moved); res.StatusCode != sip.StatusNotAcceptableHere {
+		t.Fatalf("media-change re-INVITE: got %d, want 488", res.StatusCode)
+	}
+
+	select {
+	case again := <-inbound:
+		t.Fatalf("re-INVITE surfaced as a new inbound call %+v", again)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if p.get(ic.CallID) != live {
+		t.Fatal("re-INVITE replaced the live call's entry")
+	}
+	select {
+	case <-leg.Done:
+		t.Fatal("re-INVITE ended the live call")
+	default:
+	}
+	go dlg.Bye(ctx)
+	<-leg.Done
 }

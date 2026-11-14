@@ -123,8 +123,13 @@ func (r *redisReservations) Reserved(ctx context.Context, key string) bool {
 // when it is the front of the priority tier (if any priority waiters exist) or
 // otherwise the front of the normal tier — the only waiter allowed to claim a
 // freed agent, keeping dispatch strictly priority-then-FIFO.
+//
+// EnqueueFront is Enqueue at the front of the tier, for a head-of-line caller
+// whose ring went unanswered: it left the line while ringing (so the next
+// caller could take another free agent) and rejoins in the place it held.
 type Queue interface {
 	Enqueue(ctx context.Context, key string, priority bool) string
+	EnqueueFront(ctx context.Context, key string, priority bool) string
 	IsHead(ctx context.Context, key, ticket string) bool
 	Remove(ctx context.Context, key, ticket string)
 	Depth(ctx context.Context, key string) int
@@ -143,12 +148,24 @@ func NewMemQueue() Queue {
 }
 
 func (q *memQueue) Enqueue(_ context.Context, key string, priority bool) string {
+	return q.enqueue(key, priority, false)
+}
+
+func (q *memQueue) EnqueueFront(_ context.Context, key string, priority bool) string {
+	return q.enqueue(key, priority, true)
+}
+
+func (q *memQueue) enqueue(key string, priority, front bool) string {
 	t := uuid.NewString()
-	q.mu.Lock()
+	tier := q.normal
 	if priority {
-		q.priority[key] = append(q.priority[key], t)
+		tier = q.priority
+	}
+	q.mu.Lock()
+	if front {
+		tier[key] = append([]string{t}, tier[key]...)
 	} else {
-		q.normal[key] = append(q.normal[key], t)
+		tier[key] = append(tier[key], t)
 	}
 	q.mu.Unlock()
 	return t
@@ -233,13 +250,21 @@ func queueNKey(key string) string   { return "tring:queue:n:" + key }
 func queueLeaseKey(t string) string { return queueLeasePrefix + t }
 
 func (q *redisQueue) Enqueue(ctx context.Context, key string, priority bool) string {
+	return q.enqueue(ctx, key, priority, q.c.RPush)
+}
+
+func (q *redisQueue) EnqueueFront(ctx context.Context, key string, priority bool) string {
+	return q.enqueue(ctx, key, priority, q.c.LPush)
+}
+
+func (q *redisQueue) enqueue(ctx context.Context, key string, priority bool, push func(context.Context, string, string, time.Duration)) string {
 	t := uuid.NewString()
 	// Lease first, so the ticket is never in the list without one.
 	q.c.Set(ctx, queueLeaseKey(t), []byte("1"), q.lease)
 	if priority {
-		q.c.RPush(ctx, queuePKey(key), t, queueTTL)
+		push(ctx, queuePKey(key), t, queueTTL)
 	} else {
-		q.c.RPush(ctx, queueNKey(key), t, queueTTL)
+		push(ctx, queueNKey(key), t, queueTTL)
 	}
 
 	// Renewal ends with the call's ctx too, so a caller that leaves without

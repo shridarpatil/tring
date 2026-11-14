@@ -104,3 +104,112 @@ func TestStatsQueueBreaches(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// A failed outbound call (dialed, never answered) has no talk time: it must not
+// pull avg talk down, even though its row has the same NULL answered_at as an
+// agent-dialed outbound call whose row only exists once the callee answered.
+func TestStatsTodayAvgTalkSkipsFailedOutbound(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	s := newTestServer(f)
+
+	seed := `INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id,
+		started_at, ended_at, duration_seconds)
+		VALUES ($1, 'outbound', $2::call_status, '+919800000001', '+919800000089', $3,
+		date_trunc('day', now()) + make_interval(secs => $4),
+		date_trunc('day', now()) + make_interval(secs => $5), $6)`
+	for _, c := range []struct {
+		status, leg string
+		start, end  float64
+		duration    int
+	}{
+		{"ended", "talked", 200, 260, 60},     // 60 s talk
+		{"failed", "no-answer", 300, 330, 30}, // rang 30 s, nobody picked up
+	} {
+		if _, err := f.DB.Pool.Exec(ctx, seed, f.TenantID, c.status, c.leg, c.start, c.end, c.duration); err != nil {
+			t.Fatalf("seed %s: %v", c.leg, err)
+		}
+	}
+
+	out, err := s.statsOverview(ctx, f.TenantID)
+	if err != nil {
+		t.Fatalf("statsOverview: %v", err)
+	}
+	if out.AvgTalkSeconds != 60 {
+		t.Fatalf("avg_talk_seconds = %d, want 60 (a failed call's ring time is not talk)", out.AvgTalkSeconds)
+	}
+}
+
+// Abandoned is a caller transferred to a team/agent who hung up before anyone
+// connected. A transfer to a phone NUMBER that the callee answered connects no
+// agent (agent_id stays NULL) but is not abandoned; one whose callee never
+// answered is.
+func TestStatsTodayAbandonedNumberTransfer(t *testing.T) {
+	f := dbtest.Setup(t)
+	skipNearMidnight(t, f)
+	ctx := context.Background()
+	s := newTestServer(f)
+
+	seed := `INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id,
+		started_at, answered_at, ended_at, duration_seconds, ivr_path)
+		VALUES ($1, 'inbound', 'ended', '+919800000001', '+919800000089', $2,
+		now() - interval '10 minutes', CASE WHEN $3 THEN now() - interval '9 minutes' END,
+		now() - interval '5 minutes', 300, $4::jsonb)`
+	for _, c := range []struct {
+		leg      string
+		answered bool
+		path     string
+	}{
+		{"team-bailed", false, `[{"node_id":"t","node_type":"transfer","action":"transfer","detail":"sales","outcome":""}]`},
+		{"number-connected", true, `[{"node_id":"t","node_type":"transfer","action":"transfer","detail":"+919800000077","outcome":"completed"}]`},
+		{"number-bailed", false, `[{"node_id":"t","node_type":"transfer","action":"transfer","detail":"+919800000077","outcome":"no_answer"}]`},
+		// Nobody in the team picked up, so the flow fell back to a number that did.
+		{"team-then-number", true, `[{"node_id":"t1","node_type":"transfer","action":"transfer","detail":"sales","outcome":"no_answer"},
+			{"node_id":"t2","node_type":"transfer","action":"transfer","detail":"+919800000077","outcome":"completed"}]`},
+	} {
+		if _, err := f.DB.Pool.Exec(ctx, seed, f.TenantID, c.leg, c.answered, c.path); err != nil {
+			t.Fatalf("seed %s: %v", c.leg, err)
+		}
+	}
+
+	out, err := s.statsOverview(ctx, f.TenantID)
+	if err != nil {
+		t.Fatalf("statsOverview: %v", err)
+	}
+	if out.AbandonedToday != 2 {
+		t.Fatalf("abandoned_today = %d, want 2 (team-bailed, number-bailed; a connected number transfer is not abandoned)", out.AbandonedToday)
+	}
+}
+
+// "On call" counts live agent calls only: a CDR orphaned by a gateway crash
+// (still answered, never ended) must drop out after the same 4 h window
+// list-active-calls uses instead of counting forever.
+func TestCountActiveAgentCallsSkipsOrphans(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	s := newTestServer(f)
+
+	seed := `INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id,
+		agent_id, started_at, answered_at)
+		VALUES ($1, 'inbound', 'answered', '+919800000001', '+919800000089', $2, $3,
+		now() - make_interval(secs => $4), now() - make_interval(secs => $4) + interval '10 seconds')`
+	for _, c := range []struct {
+		leg string
+		ago float64
+	}{
+		{"live", 120},
+		{"orphan", 5 * 3600},
+	} {
+		if _, err := f.DB.Pool.Exec(ctx, seed, f.TenantID, c.leg, f.UserID, c.ago); err != nil {
+			t.Fatalf("seed %s: %v", c.leg, err)
+		}
+	}
+
+	var onCall int
+	if err := f.DB.Pool.QueryRow(ctx, s.q.CountActiveAgentCalls, f.TenantID).Scan(&onCall); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if onCall != 1 {
+		t.Fatalf("on call = %d, want 1 (a 5 h old orphaned CDR must not count)", onCall)
+	}
+}

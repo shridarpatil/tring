@@ -118,9 +118,11 @@ The API also has REST endpoints that accept the **agent JWT** (not the API key) 
 | `POST` | `/v1/sdk/calls/hold` | none | `200 {"held": true}` | `401` invalid agent token, `409` no active call / no media leg yet, `502` hold command failed |
 | `POST` | `/v1/sdk/calls/resume` | none | `200 {"held": false}` | same as hold |
 | `GET` | `/v1/sdk/transfer-targets` | none | `200 {"agents": [...], "teams": [...]}` | `401` |
-| `POST` | `/v1/sdk/calls/transfer` | `{"to_sip": "…"}` or `{"to_team": "…"}` | `200 {"transferred": true}` | `400` missing target / transfer to yourself, `404` unknown target agent, `409` target unavailable / no available team members / no active call, `502` |
+| `POST` | `/v1/sdk/calls/transfer` | `{"to_sip": "…"}` or `{"to_team": "…"}` | `200 {"transferred": true}` | `400` missing target, both targets, or transfer to yourself; `404` the agent isn't on that call; `409` no active call, target unavailable (including an unknown agent), transfer already in progress, or the agent is reconnecting; `502` media gateway unavailable |
 
-These endpoints look up the agent's active **FreeSWITCH** call leg. A call that runs entirely on the WebRTC media plane (a web visitor talking to an agent) may have no such leg, and then returns `409`. For those calls, use the widget's buttons or the `Call` methods in the [JavaScript API](/tring/sdk/javascript-api/#call). To control any call by id from your backend, use the API-key endpoints `POST /v1/calls/{id}/hold` and `/resume` (see [Call control](/tring/features/call-control/)).
+Transfer goes through the media gateway and works for every call the agent answered: web, phone and click-to-call. It behaves like the widget's Transfer button (see [Blind transfer](/tring/features/call-control/#blind-transfer)).
+
+Hold and resume still look up the agent's active **FreeSWITCH** call leg. Calls that run on the media gateway have no such leg, so they fail there. Use the widget's buttons or the `Call` methods in the [JavaScript API](/tring/sdk/javascript-api/#call) to hold a call.
 
 ## Placing outbound calls
 

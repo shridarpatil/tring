@@ -94,3 +94,15 @@ func FindNextNode(flow *Flow, fromID, condition string) string {
 	}
 	return ""
 }
+
+// TransferOutcome resolves the outcome a Transfer node takes. A queue that
+// timed out reports "queue_timeout" only when the node wires that handle;
+// otherwise it's "no_answer". The runtime used to report every failure as
+// no_answer, so flows wired only no_answer must keep failing over the same
+// way. Shared by Walk and the simulator so the two agree.
+func TransferOutcome(flow *Flow, nodeID, outcome string) string {
+	if outcome == "queue_timeout" && FindNextNode(flow, nodeID, outcome) == "" {
+		return "no_answer"
+	}
+	return outcome
+}

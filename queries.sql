@@ -287,9 +287,12 @@ DELETE FROM audio_assets WHERE id = $1 AND tenant_id = $2;
 
 -- name: count-active-agent-calls
 -- Live calls currently connected to an agent (answered + an agent stamped, not
--- yet ended) — powers the dashboard "on call" stat.
+-- yet ended) — powers the dashboard "on call" stat. Same 4 h started_at window
+-- as list-active-calls: a CDR orphaned by a gateway crash stays 'answered' with
+-- no ended_at and would otherwise count as on-call forever.
 SELECT COUNT(*) FROM calls
-WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
+WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL
+  AND ended_at IS NULL AND started_at > now() - interval '4 hours';
 
 -- name: stats-today
 -- Running "today so far" totals for the cockpit: calls started today, answered,
@@ -302,21 +305,29 @@ WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
 --     set-call-agent-id paths). Both planes persist the transfer step even when
 --     the caller bails (the web plane stamps the journey on IVR teardown before the
 --     CDR settles). There is no 'abandoned' call_status, so this IS the signal.
+--     A transfer to a phone NUMBER never stamps agent_id either, so a call with a
+--     "completed" transfer step (the dialed callee answered — ivrdial only
+--     reports completed after the callee connected) is not abandoned, even when
+--     an earlier team transfer in the same walk went unanswered.
 --   failed = status 'failed' (originate/connect error before the call got going).
 --   wait = time-to-answer (started_at→answered_at); not pure queue time (we don't
 --     persist a per-caller enqueue timestamp).
 --   talk = answer→end, over calls someone answered. IVR-only and unanswered
---     calls have no talk time. Outbound rows only exist once the callee picks
---     up, so they count from started_at.
+--     calls have no talk time. An agent-dialed outbound row only exists once the
+--     callee picks up and never gets answered_at, so it counts from started_at;
+--     other outbound rows (click-to-call, connect, campaigns) open while ringing
+--     and settle as 'failed' when nobody answers — their ring time isn't talk.
 SELECT
   count(*),
   count(*) FILTER (WHERE answered_at IS NOT NULL),
   count(*) FILTER (WHERE agent_id IS NULL AND ended_at IS NOT NULL
-                     AND ivr_path @> '[{"node_type":"transfer"}]'),
+                     AND ivr_path @> '[{"node_type":"transfer"}]'
+                     AND NOT ivr_path @> '[{"node_type":"transfer","outcome":"completed"}]'),
   count(*) FILTER (WHERE status = 'failed'),
   COALESCE(avg(EXTRACT(EPOCH FROM (answered_at - started_at))) FILTER (WHERE answered_at IS NOT NULL), 0)::float8,
   COALESCE(avg(EXTRACT(EPOCH FROM (ended_at - COALESCE(answered_at, started_at))))
-             FILTER (WHERE ended_at IS NOT NULL AND (answered_at IS NOT NULL OR direction = 'outbound')), 0)::float8
+             FILTER (WHERE ended_at IS NOT NULL
+                       AND (answered_at IS NOT NULL OR (direction = 'outbound' AND status <> 'failed'))), 0)::float8
 FROM calls
 WHERE tenant_id = $1 AND started_at >= date_trunc('day', now());
 
@@ -458,6 +469,14 @@ SELECT COALESCE(c.customer_leg_id, c.leg_id), t.hold_music
 FROM calls c JOIN tenants t ON t.id = c.tenant_id
 WHERE c.tenant_id = $1 AND c.agent_id = $2 AND c.status = 'answered'
 ORDER BY c.answered_at DESC NULLS LAST LIMIT 1;
+
+-- name: get-agent-active-call-room
+-- The media-gateway room of the agent's newest answered call, for SDK blind
+-- transfer (the gateway runs it). '' = no room (not a media-plane call).
+SELECT COALESCE(room_id, '')
+FROM calls
+WHERE tenant_id = $1 AND agent_id = $2 AND status = 'answered'
+ORDER BY answered_at DESC NULLS LAST LIMIT 1;
 
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute

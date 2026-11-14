@@ -80,8 +80,15 @@ func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, st
 }
 
 // Ring satisfies ivrdrive.Agents. roomID is the tenant-namespaced "<tenant>/<name>".
+// A max_wait that runs out is "queue_timeout" (the Transfer node's "queue T/O"
+// handle; ivr.Walk falls it back to no_answer when that isn't wired); any other
+// failure is "no_answer".
 func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
-	if a.runRing(ctx, roomID, t) != routing.OutcomeCompleted {
+	switch a.runRing(ctx, roomID, t) {
+	case routing.OutcomeCompleted:
+	case routing.OutcomeQueueTimeout:
+		return routing.OutcomeQueueTimeout, nil
+	default:
 		return "no_answer", nil
 	}
 	if t.Answered != nil {
@@ -111,8 +118,8 @@ func (a *AgentRouter) RingNoHandoff(ctx context.Context, roomID string, t ivrdri
 
 // runRing resolves the target (single agent or team) to candidates + a RouteConfig,
 // drives routing.Router.Run over the transport's Effects, and returns the raw
-// outcome. A malformed room → OutcomeAbandoned; a team with no free members
-// queues until max_wait like any other (both read as no_answer by callers).
+// outcome. A malformed room or a team that doesn't exist → OutcomeAbandoned at
+// once; a team with no free members queues until max_wait like any other.
 func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Target) string {
 	tenant, _, ok := strings.Cut(roomID, "/")
 	if !ok {
@@ -148,7 +155,19 @@ func (a *AgentRouter) runRing(ctx context.Context, roomID string, t ivrdrive.Tar
 		// TODO(plug): make per-plug when a 2nd plug lands
 		rc.Team, rc.Source = t.Team, queuekeys.SourceWeb
 		if tid, err := uuid.Parse(tenant); err == nil {
-			if tc, ok, _ := a.teams.TeamConfig(ctx, tid, t.Team); ok {
+			tc, ok, err := a.teams.TeamConfig(ctx, tid, t.Team)
+			switch {
+			case err != nil:
+				// A failed lookup isn't proof the team is gone: queue on the
+				// defaults rather than drop the caller over a DB blip.
+				a.log.Warn("transfer: team config lookup failed", "team", t.Team, "err", err)
+			case !ok:
+				// Unlike an empty team, a missing one (typo, deleted team, bad
+				// {{var}}) never gains members: fail over now instead of
+				// holding the caller for the whole max_wait.
+				a.log.Info("transfer: no such team", "team", t.Team)
+				return routing.OutcomeAbandoned
+			default:
 				rc.Strategy = tc.Strategy
 				rc.RingSeconds = time.Duration(tc.RingSeconds) * time.Second
 				rc.MaxWait = time.Duration(tc.MaxWait) * time.Second

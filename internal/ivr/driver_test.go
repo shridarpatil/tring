@@ -237,6 +237,53 @@ func TestWalkStampsStepTimesWhenDriverClocked(t *testing.T) {
 	}
 }
 
+// queueTimeoutFlow is start → transfer, with the transfer's edges given.
+func queueTimeoutFlow(edges ...ivr.Edge) *ivr.Flow {
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "t", Type: ivr.NodeTransfer},
+			{ID: "na", Type: ivr.NodeHangup},
+			{ID: "qt", Type: ivr.NodeHangup},
+		},
+		Edges: append([]ivr.Edge{{From: "s", To: "t", Condition: "default"}}, edges...),
+	}
+}
+
+// A transfer's queue_timeout takes the "queue T/O" edge when one is wired, and
+// otherwise the no_answer edge — flows built before queue_timeout fired at
+// runtime wired only no_answer and must keep failing over the same way.
+func TestWalkTransferQueueTimeout(t *testing.T) {
+	d := &scriptDriver{outcomes: map[string]string{"t": "queue_timeout"}}
+	noAnswer := ivr.Edge{From: "t", To: "na", Condition: "no_answer"}
+	queueTO := ivr.Edge{From: "t", To: "qt", Condition: "queue_timeout"}
+	cases := []struct {
+		name    string
+		edges   []ivr.Edge
+		want    []string
+		outcome string
+	}{
+		{"queue_timeout edge", []ivr.Edge{noAnswer, queueTO}, []string{"s", "t", "qt"}, "queue_timeout"},
+		{"only no_answer edge", []ivr.Edge{noAnswer}, []string{"s", "t", "na"}, "no_answer"},
+		{"no edge", nil, []string{"s", "t"}, "no_answer"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path, err := ivr.Walk(context.Background(), queueTimeoutFlow(c.edges...), "s", d)
+			if err != nil {
+				t.Fatalf("walk: %v", err)
+			}
+			if !eq(ids(path), c.want) {
+				t.Fatalf("path = %v, want %v", ids(path), c.want)
+			}
+			if path[1].Outcome != c.outcome {
+				t.Fatalf("transfer outcome = %q, want %q", path[1].Outcome, c.outcome)
+			}
+		})
+	}
+}
+
 func TestWalkLeavesStepTimesNilWhenDriverUnclocked(t *testing.T) {
 	d := &scriptDriver{outcomes: map[string]string{"g": "default", "m": "digit:1", "t": "completed"}}
 	path, err := ivr.Walk(context.Background(), sampleFlow(), "s", d)

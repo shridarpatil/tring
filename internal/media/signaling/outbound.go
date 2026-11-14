@@ -59,6 +59,14 @@ var (
 // tenant holds. Returns the answered leg, the caller-ID presented, and the
 // normalized number.
 func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
+	return s.originateOn(ctx, tenant, nil, to, callerID, onProgress)
+}
+
+// originateOn is originateOut over trunks the caller already selected (nil =
+// select now). Selecting advances a round_robin tenant's rotation, so a path
+// that had to select up front — to validate, or to stamp the CDR's "from" —
+// dials on that same selection instead of selecting again.
+func (s *Server) originateOn(ctx context.Context, tenant uuid.UUID, selected []trunkselect.Trunk, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
 	if s.cfg.Originator == nil || s.cfg.Trunks == nil {
 		return nil, "", to, errDialUnavailable
 	}
@@ -78,9 +86,11 @@ func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to, callerI
 	}
 	to = normalized
 
-	tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
-	selected, err := s.cfg.Trunks.OutboundTrunks(tctx, tenant)
-	tcancel()
+	if selected == nil {
+		tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
+		selected, err = s.cfg.Trunks.OutboundTrunks(tctx, tenant)
+		tcancel()
+	}
 	if err != nil || len(selected) == 0 {
 		return nil, "", to, fmt.Errorf("%w: %v", errDialNoTrunk, err)
 	}
@@ -238,9 +248,7 @@ func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
 	if hadLeg {
 		// Prune the room's SFU-side port publication — otherwise r.ports/r.pubs
 		// keep this leg's entry forever and the sfuRoom never gets pruned (a
-		// per-call leak). NOTE: endPstnRoom (inbound) has the SAME pre-existing
-		// leak; left untouched here — see the task report for the shared
-		// follow-up.
+		// per-call leak). endPstnRoom does the same for the inbound caller.
 		s.sfu.DetachPort(roomID, pid)
 	}
 	// A click-to-call customer who hangs up while a blind transfer rings stops
