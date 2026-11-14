@@ -330,7 +330,11 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	err = c.tx.Respond(res)
 	c.markResponded() // unblock onInvite's wait regardless of outcome
 	if err != nil {
+		// Typically FreeSWITCH CANCELled while the DID was resolving. No
+		// dialog was established and watchDialog never runs, so release the
+		// call here — otherwise it holds a maxCalls slot forever.
 		m.Close()
+		p.forget(id)
 		return nil, fmt.Errorf("fsplug: respond 200 failed: %w", err)
 	}
 
