@@ -185,6 +185,39 @@ func TestRouterOneAtATimeReservesOnlyTheRungAgent(t *testing.T) {
 	}
 }
 
+// lineJumper queues a later caller while the head caller's ring is live, and
+// never answers.
+type lineJumper struct {
+	q     Queue
+	key   string
+	rings int
+}
+
+func (*lineJumper) Answered() (bool, string)                         { return false, "" }
+func (*lineJumper) CallerAlive(ctx context.Context) bool             { return ctx.Err() == nil }
+func (*lineJumper) Hold(context.Context, time.Duration, func() bool) {}
+func (l *lineJumper) Ring(ctx context.Context, _ []string, _ time.Duration) (RingOutcome, error) {
+	l.rings++
+	if l.rings == 1 {
+		l.q.Enqueue(ctx, l.key, false) // a later caller joins mid-ring
+	}
+	return RingOutcome{}, nil
+}
+
+// A head-of-line caller whose ring goes unanswered keeps its place: a caller
+// who queued during that ring must not jump ahead of it. (It used to rejoin at
+// the tail, so FIFO broke on every unanswered attempt.)
+func TestRouterUnansweredCallerKeepsHeadOfLine(t *testing.T) {
+	q := NewMemQueue()
+	r := NewRouter(q, NewMemReservations(), NewMemRR(), nil, nil, nil, nil)
+	eff := &lineJumper{q: q, key: QueueKey("t1", "sales")}
+	cfg := RouteConfig{TenantID: "t1", Team: "sales", RingSeconds: time.Millisecond, MaxWait: 50 * time.Millisecond}
+	r.Run(context.Background(), cfg, func(context.Context) []string { return []string{"a"} }, eff)
+	if eff.rings < 2 {
+		t.Fatalf("head caller rang %d time(s), want it rung again ahead of the later caller", eff.rings)
+	}
+}
+
 // ring_all still reserves every agent it rings.
 func TestRouterRingAllReservesEveryRungAgent(t *testing.T) {
 	res := NewMemReservations()
