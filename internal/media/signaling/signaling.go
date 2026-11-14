@@ -563,8 +563,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// mid-Join before s.conns is set). callcdr no-ops on a non-call room or the
 	// caller's own join.
 	// A click-to-call is answered by the customer instead (clicktocall.go).
+	// A reattach (page refresh, reconnect) already answered on its fresh join,
+	// and the SFU kept its publication with the recording sink attached: running
+	// Answered again would tee every agent packet into the recording twice.
 	if agentCallLeg && !s.outboundPending(roomID) {
-		if s.cfg.Calls != nil {
+		if s.cfg.Calls != nil && freshJoin {
 			if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 				s.sfu.AddSink(roomID, p.ID(), sink)
 			}
