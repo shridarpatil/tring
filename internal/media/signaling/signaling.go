@@ -910,6 +910,8 @@ type conn struct {
 	pid     room.ParticipantID
 	peer    *sfu.Peer
 	writeMu sync.Mutex
+	// writeTimeout bounds one send (0 → sendTimeout). Tests shorten it.
+	writeTimeout time.Duration
 
 	// Agent presence sockets only: availMu orders the on-connect availability
 	// lookup against live pushes; availPushed means a push has landed, so the
@@ -980,14 +982,32 @@ func readClientText(rw io.ReadWriter, max int64) ([]byte, error) {
 	}
 }
 
+// sendTimeout bounds a single WebSocket write. Many sends happen under s.mu
+// (ringing agents, withdrawing popups), so one peer that stops reading must not
+// hold the gateway-wide lock for as long as TCP takes to give up.
+const sendTimeout = 5 * time.Second
+
 func (c *conn) send(m msg) error {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
+	timeout := c.writeTimeout
+	if timeout == 0 {
+		timeout = sendTimeout
+	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	return wsutil.WriteServerMessage(c.Conn, ws.OpText, b)
+	_ = c.SetWriteDeadline(time.Now().Add(timeout))
+	err = wsutil.WriteServerMessage(c.Conn, ws.OpText, b)
+	_ = c.SetWriteDeadline(time.Time{})
+	if err != nil {
+		// A frame may be half-written, so the stream is unusable anyway. Closing
+		// makes every later send fail at once and ends the read loop, which runs
+		// the socket's normal disconnect cleanup.
+		_ = c.Conn.Close()
+	}
+	return err
 }
 
 // SendOffer implements sfu.Signaler.

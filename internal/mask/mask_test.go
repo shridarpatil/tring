@@ -80,3 +80,18 @@ func TestCallNumbers(t *testing.T) {
 		}
 	}
 }
+
+func TestTextMasksNumbersInside(t *testing.T) {
+	cases := map[string]string{
+		"call +919800000001 now":       "call +91••••••0001 now",
+		"9800000001":                   "98••••0001",
+		"from +91 98000 00001, thanks": "from +91 ••••• •0001, thanks",
+		"press 1 or 22":                "press 1 or 22", // short runs stay
+		"":                             "",
+	}
+	for in, want := range cases {
+		if got := Text(in); got != want {
+			t.Errorf("Text(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

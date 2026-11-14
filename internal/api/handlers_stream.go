@@ -55,9 +55,18 @@ func (s *Server) buildDashboardSnapshot(ctx context.Context, t *Tenant) dashboar
 	return snap
 }
 
+// streamKeepalive is how often the dashboard stream pings — and re-checks the
+// credentials it was opened with.
+const streamKeepalive = 20 * time.Second
+
 // handleDashboardStream is the dashboard live feed (SSE). It sends a full
 // snapshot on connect, then forwards hub events for the caller's tenant, with a
 // keepalive comment so proxies don't close the idle connection.
+//
+// Auth ran once, when the stream opened. Each keepalive re-checks the same
+// credentials, so a revoked key, a deleted or demoted user, a password reset
+// (session epoch bump) or an expired console token ends the stream within one
+// keepalive instead of leaking every tenant event indefinitely.
 func (s *Server) handleDashboardStream(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
 	flusher, ok := w.(http.Flusher)
@@ -93,7 +102,12 @@ func (s *Server) handleDashboardStream(w http.ResponseWriter, r *http.Request) {
 	sub := s.hub.Subscribe(tenantID)
 	defer s.hub.Unsubscribe(sub)
 
-	ping := time.NewTicker(20 * time.Second)
+	every := s.streamKeepalive
+	if every == 0 {
+		every = streamKeepalive
+	}
+	token := bearerToken(r)
+	ping := time.NewTicker(every)
 	defer ping.Stop()
 	ctx := r.Context()
 	for {
@@ -114,6 +128,13 @@ func (s *Server) handleDashboardStream(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-ping.C:
+			if t != nil && token != "" {
+				tid, scope, fresh, ok := s.resolveCredentials(ctx, token)
+				if !ok || tid != t.ID || !mayStreamDashboard(scope, fresh) {
+					return // credentials revoked, expired or no longer allowed here
+				}
+				p = fresh // a role change applies to masking too
+			}
 			masked = s.masksNumbers(ctx, p)
 			if _, err := w.Write([]byte(": ping\n\n")); err != nil {
 				return
