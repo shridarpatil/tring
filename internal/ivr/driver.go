@@ -81,6 +81,9 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 			at = &t
 		}
 		res, err := runNode(ctx, node, d)
+		if node.Type == NodeTransfer {
+			res.Outcome = TransferOutcome(flow, node.ID, res.Outcome)
+		}
 		outcome := res.Outcome
 		// The call ended while this node ran (the caller hung up): its wait gave
 		// up on cancellation, so the outcome it reports ("timeout", "no_answer")

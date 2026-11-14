@@ -80,8 +80,15 @@ func NewAgentRouter(teams Teams, router *routing.Router, tport RingTransport, st
 }
 
 // Ring satisfies ivrdrive.Agents. roomID is the tenant-namespaced "<tenant>/<name>".
+// A max_wait that runs out is "queue_timeout" (the Transfer node's "queue T/O"
+// handle; ivr.Walk falls it back to no_answer when that isn't wired); any other
+// failure is "no_answer".
 func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
-	if a.runRing(ctx, roomID, t) != routing.OutcomeCompleted {
+	switch a.runRing(ctx, roomID, t) {
+	case routing.OutcomeCompleted:
+	case routing.OutcomeQueueTimeout:
+		return routing.OutcomeQueueTimeout, nil
+	default:
 		return "no_answer", nil
 	}
 	if t.Answered != nil {
