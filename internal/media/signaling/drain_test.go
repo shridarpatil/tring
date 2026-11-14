@@ -115,7 +115,8 @@ func TestDrainTimesOutWithCallsLeft(t *testing.T) {
 }
 
 func TestDrainingRejectsInboundPhoneAndWaitsForLiveOne(t *testing.T) {
-	sig, _ := newDrainServer(t, signaling.Config{}) // no flows: the call just stays up
+	// The flow queues the caller for a team with no agents: the call stays up.
+	sig, _ := newDrainServer(t, signaling.Config{Flows: transferFlows{}})
 	fp := &answeringPstn{fakePstn: newFakePstn(), answered: make(chan struct{}, 2)}
 	sig.AttachPstn(fp, fakeDIDs{tenant: uuid.New(), flow: "f1"})
 
