@@ -187,7 +187,53 @@ func (s *Server) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /control/connect", s.handleControlConnect)
 	mux.HandleFunc("POST /control/call", s.handleControlCall)
 	mux.HandleFunc("POST /control/agent-kick", s.handleControlAgentKick)
+	mux.HandleFunc("POST /control/transfer", s.handleControlTransfer)
 	return mux
+}
+
+// handleControlTransfer is POST /control/transfer {room, sip, to_sip | to_team}
+// → 204: the API's REST blind transfer of agent sip's leg in room. It runs the
+// agent's own msgTransfer (commitTransfer), so the agent's SDK gets the same
+// transfer-ok + ended. 404 when this gateway has no such agent leg in the
+// token's tenant (which is also what keeps one tenant off another's rooms);
+// 400/409 for a refused transfer, with the agent still on the call.
+func (s *Server) handleControlTransfer(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := s.controlTenant(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Room   string `json:"room"`
+		SIP    string `json:"sip"`
+		ToSip  string `json:"to_sip"`
+		ToTeam string `json:"to_team"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil || req.Room == "" || req.SIP == "" {
+		controlError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	p, c := s.agentCallLeg(tenant.String(), req.SIP, room.RoomID(req.Room))
+	if p == nil {
+		controlError(w, http.StatusNotFound, "agent is not on that call")
+		return
+	}
+	if c == nil {
+		// Mid-reconnect (page refresh): there's no socket to tell the agent the
+		// call left them, so its SDK would rejoin and break the transfer.
+		controlError(w, http.StatusConflict, "agent is reconnecting")
+		return
+	}
+	ring, err := s.commitTransfer(c, p, tenant, req.SIP, req.ToSip, req.ToTeam)
+	switch {
+	case errors.Is(err, errTransferTarget), errors.Is(err, errTransferSelf):
+		controlError(w, http.StatusBadRequest, err.Error())
+		return
+	case err != nil:
+		controlError(w, http.StatusConflict, err.Error())
+		return
+	}
+	go ring()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleControlConnect is POST /control/connect {agent_number, client_number}

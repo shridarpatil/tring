@@ -135,6 +135,7 @@ type Queries struct {
 	ListCallEvents          string `query:"list-call-events"`
 	GetCallControlLeg       string `query:"get-call-control-leg"`
 	GetAgentActiveCallLeg   string `query:"get-agent-active-call-leg"`
+	GetAgentActiveCallRoom  string `query:"get-agent-active-call-room"`
 	SetCallRecording        string `query:"set-call-recording"`
 	GetCallRecording        string `query:"get-call-recording"`
 	SetCallRecordingS3      string `query:"set-call-recording-s3"`

@@ -2,6 +2,7 @@ package signaling
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
@@ -57,34 +58,53 @@ func (s *Server) endTransfer(rid room.RoomID) {
 	}
 }
 
-// handleTransfer runs an agent-initiated blind transfer: validate + pre-flight the
-// target, drop the initiating agent immediately (true blind), re-ring the routing
-// engine into the SAME room, and on no-answer play the tenant message + hang up.
+// Why a blind transfer was refused before it committed. The messages are the
+// transfer-failed reasons the agent SDK shows.
+var (
+	errTransferTarget      = errors.New("specify exactly one of to_sip or to_team")
+	errTransferSelf        = errors.New("cannot transfer to yourself")
+	errTransferUnavailable = errors.New("target unavailable")
+	errTransferInProgress  = errors.New("transfer already in progress")
+)
+
+// handleTransfer runs an agent's msgTransfer: a refusal goes back to the agent as
+// transfer-failed (the agent keeps the call); otherwise the target rings.
 func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, sip string, m msg) {
+	ring, err := s.commitTransfer(c, p, tenant, sip, m.ToSip, m.ToTeam)
+	if err != nil {
+		_ = c.send(msg{Type: msgTransferFailed, Reason: err.Error()})
+		return
+	}
+	ring()
+}
+
+// commitTransfer starts an agent's blind transfer: validate + pre-flight the
+// target, then drop the initiating agent immediately (true blind). It returns
+// the ring step (re-ring the routing engine into the SAME room; on no-answer
+// play the tenant message + hang up), or why the transfer was refused, in which
+// case nothing changed. Shared by the agent's own msgTransfer and the API's
+// POST /control/transfer.
+func (s *Server) commitTransfer(c *conn, p *room.Participant, tenant uuid.UUID, sip, toSip, toTeam string) (func(), error) {
 	rid := p.Room().ID()
-	toSip, toTeam := strings.TrimSpace(m.ToSip), strings.TrimSpace(m.ToTeam)
+	toSip, toTeam = strings.TrimSpace(toSip), strings.TrimSpace(toTeam)
 
 	// Validate: exactly one target; not yourself.
 	if (toSip == "") == (toTeam == "") {
-		_ = c.send(msg{Type: msgTransferFailed, Reason: "specify exactly one of to_sip or to_team"})
-		return
+		return nil, errTransferTarget
 	}
 	if toSip != "" && toSip == sip {
-		_ = c.send(msg{Type: msgTransferFailed, Reason: "cannot transfer to yourself"})
-		return
+		return nil, errTransferSelf
 	}
 
 	// Pre-flight: if the target is entirely unreachable now, keep the agent on the
 	// call rather than dropping them into a dead ring.
 	if !s.targetReachable(context.Background(), tenant.String(), toSip, toTeam) {
-		_ = c.send(msg{Type: msgTransferFailed, Reason: "target unavailable"})
-		return
+		return nil, errTransferUnavailable
 	}
 
 	ctx, ok := s.beginTransfer(rid)
 	if !ok {
-		_ = c.send(msg{Type: msgTransferFailed, Reason: "transfer already in progress"})
-		return
+		return nil, errTransferInProgress
 	}
 
 	// Commit: drop the initiating agent immediately (true blind). Send a terminal
@@ -117,6 +137,12 @@ func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 	if s.cfg.Calls != nil {
 		s.cfg.Calls.Transferred(string(rid), sip, to)
 	}
+	return func() { s.ringTransfer(ctx, rid, tenant, sip, to, target) }, nil
+}
+
+// ringTransfer rings a committed transfer's target and, if nobody answers, plays
+// the tenant's no-answer message and hangs up the stranded caller.
+func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.UUID, sip, to string, target ivrdrive.Target) {
 	outcome, _ := s.agentRouter.RingNoHandoff(ctx, string(rid), target)
 	s.endTransfer(rid) // clear the guard (idempotent; also fired if the caller hung up)
 
