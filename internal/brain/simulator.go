@@ -14,10 +14,13 @@
 package brain
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/shridarpatil/tring/internal/ivr"
 )
 
 // SimInput is everything the operator can pre-stage to drive the
@@ -113,172 +116,163 @@ func simulate(flow *ivrFlowData, in SimInput) *SimResult {
 		in.Caller = "+10000000000"
 	}
 
-	dtmfIdx := 0
-	nodeID := flow.EntryNode
-	for depth := 0; depth < 64; depth++ {
-		node, ok := findNode(flow, nodeID)
-		if !ok {
-			res.Error = fmt.Sprintf("node %q not found", nodeID)
-			return res
+	// The same walker a live call uses (ivr.Walk): edge matching, the depth
+	// limit and the Transfer outcome rules can't drift from the runtime. Only
+	// the node effects are simulated (simDriver).
+	d := &simDriver{in: &in, vars: res.Vars}
+	for _, k := range in.DTMF {
+		for _, r := range k {
+			d.keys = append(d.keys, string(r)) // one keypress per digit, as a phone sends them
 		}
-		step, outcome := stepFor(node, &in, &dtmfIdx, res.Vars)
-		if node.Type == nodeTransfer {
-			outcome = resolveTransferOutcome(flow, node.ID, outcome)
-			step.Outcome = outcome
-		}
-		res.Steps = append(res.Steps, step)
-
-		if outcome == "" {
-			// Terminal node (hangup, or executor would have ended).
-			res.EndedAt = node.ID
-			if step.NodeType == nodeHangup {
-				res.HangupCause = "NORMAL_CLEARING"
-			} else {
-				res.HangupCause = "END_OF_FLOW"
-			}
-			return res
-		}
-		next, ok := nextNode(flow, node.ID, outcome)
-		if !ok {
-			res.Error = fmt.Sprintf("node %s has no edge for outcome %q", node.ID, outcome)
-			res.EndedAt = node.ID
-			res.HangupCause = "TEMPORARY_FAILURE"
-			return res
-		}
-		nodeID = next
 	}
-	res.Error = "exceeded max walk depth (64)"
+	path, err := ivr.Walk(context.Background(), flow, flow.EntryNode, d)
+	if path != nil {
+		res.Steps = path
+	}
+	if err != nil {
+		res.Error = err.Error()
+		if len(path) > 0 {
+			res.EndedAt = path[len(path)-1].NodeID
+			res.HangupCause = "TEMPORARY_FAILURE"
+		}
+		return res
+	}
+	if len(path) == 0 {
+		return res
+	}
+	last := path[len(path)-1]
+	res.EndedAt = last.NodeID
+	switch {
+	case last.Outcome == "" && last.NodeType == nodeHangup:
+		res.HangupCause = "NORMAL_CLEARING"
+	case last.Outcome == "":
+		res.HangupCause = "END_OF_FLOW"
+	default:
+		// Walk stopped because no edge matches the outcome. A live call ends
+		// here too, almost certainly not what the author meant: flag it.
+		res.Error = fmt.Sprintf("node %s has no edge for outcome %q; a live call ends here", last.NodeID, last.Outcome)
+		res.HangupCause = "TEMPORARY_FAILURE"
+	}
 	return res
 }
 
-// stepFor records what a node would do and returns the branch the
-// simulator should follow. Pure — no FS, no DB, no clock except via
-// the passed-in time.
-func stepFor(node *ivrNode, in *SimInput, dtmfIdx *int, vars map[string]string) (SimStep, string) {
-	step := SimStep{NodeID: node.ID, NodeType: node.Type}
+// simDriver is the simulator's ivr.CallDriver: node effects from the
+// operator's pre-staged input instead of a call — queued keypresses, forced
+// Transfer / HTTP outcomes and a fixed clock. Menu and Gather consume keys the
+// way the runtime driver (ivrdrive) does, so a trace matches a live call.
+type simDriver struct {
+	in   *SimInput
+	keys []string // remaining keypresses, one digit each
+	vars map[string]string
+}
 
-	switch node.Type {
-	case nodeStart:
-		step.Action = "passthrough"
-		step.Outcome = "default"
-		return step, "default"
+var _ ivr.CallDriver = (*simDriver)(nil)
 
-	case nodeGreeting:
-		if f, ok := node.Config["audio_file"].(string); ok && f != "" {
-			step.Action = "play_audio"
-			step.Detail = f
-		} else if t, ok := node.Config["greeting_text"].(string); ok && t != "" {
-			step.Action = "speak"
-			step.Detail = t
-		} else {
-			step.Action = "play_audio"
-			step.Detail = "(no audio configured)"
-		}
-		step.Outcome = "default"
-		return step, "default"
-
-	case nodeMenu:
-		step.Action = "prompt_dtmf"
-		if t, ok := node.Config["greeting_text"].(string); ok && t != "" {
-			step.Detail = t
-		} else if f, ok := node.Config["audio_file"].(string); ok && f != "" {
-			step.Detail = f
-		}
-		opts := mapFromConfig(node.Config, "options")
-		if *dtmfIdx >= len(in.DTMF) {
-			step.Outcome = "timeout"
-			return step, "timeout"
-		}
-		digit := in.DTMF[*dtmfIdx]
-		*dtmfIdx++
-		step.DTMFInput = digit
-		if _, ok := opts[digit]; ok {
-			step.Outcome = "digit:" + digit
-			return step, "digit:" + digit
-		}
-		// Operator pressed something not in the menu — production would
-		// retry max_retries times then take that branch. Simulator
-		// short-circuits to the same final branch for honesty.
-		step.Outcome = "max_retries"
-		return step, "max_retries"
-
-	case nodeGather:
-		step.Action = "prompt_dtmf"
-		if t, ok := node.Config["greeting_text"].(string); ok && t != "" {
-			step.Detail = t
-		}
-		maxDigits := intFromConfig(node.Config, "max_digits", 10)
-		gathered := ""
-		for *dtmfIdx < len(in.DTMF) && len(gathered) < maxDigits {
-			gathered += in.DTMF[*dtmfIdx]
-			*dtmfIdx++
-		}
-		if gathered == "" || len(gathered) < intFromConfig(node.Config, "min_digits", 1) {
-			step.DTMFInput = gathered
-			step.Outcome = "timeout"
-			return step, "timeout"
-		}
-		step.DTMFInput = gathered
-		if storeAs, ok := node.Config["store_as"].(string); ok && storeAs != "" {
-			vars[storeAs] = gathered
-		}
-		step.Outcome = "default"
-		return step, "default"
-
-	case nodeHTTPCallback:
-		step.Action = "http_call"
-		url, _ := node.Config["url"].(string)
-		method, _ := node.Config["method"].(string)
-		if method == "" {
-			method = "GET"
-		}
-		step.Detail = method + " " + url
-		// No real request — follow the operator's chosen branch so they can test
-		// both the success and failure routes (e.g. priority vs normal Transfer).
-		oc := httpOutcome(*in)
-		step.Outcome = oc
-		return step, oc
-
-	case nodeTransfer:
-		step.Action = "transfer"
-		step.Detail = transferDetail(node.Config)
-		oc := transferOutcome(*in)
-		step.Outcome = oc
-		return step, oc
-
-	case nodeGotoFlow:
-		step.Action = "branch"
-		flowID, _ := node.Config["flow_id"].(string)
-		step.Detail = "would jump to flow " + flowID
-		// Simulator doesn't recurse into linked flows — it ends here
-		// with a clear note so the operator knows to test the target
-		// flow separately.
-		step.Outcome = ""
-		return step, ""
-
-	case nodeTiming:
-		step.Action = "branch"
-		// Evaluate the node's per-day schedule against the simulator clock so the
-		// test panel matches a live call (see evalTimingOutcome).
-		step.Outcome = evalTimingOutcome(node.Config, in.Now)
-		open := "open"
-		if step.Outcome == "out_of_hours" {
-			open = "closed"
-		}
-		step.Detail = fmt.Sprintf("%s → %s", in.Now.Format("Mon 15:04"), open)
-		return step, step.Outcome
-
-	case nodeHangup:
-		step.Action = "hangup"
-		step.Outcome = ""
-		return step, ""
-
-	default:
-		step.Action = "unknown"
-		step.Detail = "unknown node type"
-		step.Outcome = ""
-		return step, ""
+// key pops the next queued keypress; ok=false when none is left (on a call,
+// the wait for a digit would time out).
+func (d *simDriver) key() (string, bool) {
+	if len(d.keys) == 0 {
+		return "", false
 	}
+	k := d.keys[0]
+	d.keys = d.keys[1:]
+	return k, true
+}
+
+func (d *simDriver) Greeting(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	if f := stringFromConfig(n.Config, "audio_file"); f != "" {
+		return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: f}, nil
+	}
+	if t := stringFromConfig(n.Config, "greeting_text"); t != "" {
+		return ivr.NodeResult{Outcome: "default", Action: "speak", Detail: t}, nil
+	}
+	return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: "(no audio configured)"}, nil
+}
+
+// Menu takes one key per attempt and re-prompts on an invalid one, up to
+// max_retries, as a live menu does.
+func (d *simDriver) Menu(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	detail := stringFromConfig(n.Config, "greeting_text")
+	if detail == "" {
+		detail = stringFromConfig(n.Config, "audio_file")
+	}
+	opts := mapFromConfig(n.Config, "options")
+	retries := intFromConfig(n.Config, "max_retries", 3)
+	last := ""
+	for attempt := 0; attempt <= retries; attempt++ {
+		k, ok := d.key()
+		if !ok {
+			return ivr.NodeResult{Outcome: "timeout", Action: "prompt_dtmf", Detail: detail, DTMF: last}, nil
+		}
+		if _, valid := opts[k]; valid {
+			return ivr.NodeResult{Outcome: "digit:" + k, Action: "prompt_dtmf", Detail: detail, DTMF: k}, nil
+		}
+		last = k // invalid → re-prompt
+	}
+	return ivr.NodeResult{Outcome: "max_retries", Action: "prompt_dtmf", Detail: detail, DTMF: last}, nil
+}
+
+// Gather collects keys until the terminator (# by default), max_digits (or
+// the older num_digits) or the end of the queue, as a live gather does.
+func (d *simDriver) Gather(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	maxDigits := intFromConfig(n.Config, "max_digits", intFromConfig(n.Config, "num_digits", 10))
+	minDigits := intFromConfig(n.Config, "min_digits", 1)
+	terminator := stringFromConfig(n.Config, "terminator")
+	if terminator == "" {
+		terminator = "#"
+	}
+	detail := stringFromConfig(n.Config, "greeting_text")
+	var got strings.Builder
+	for got.Len() < maxDigits {
+		k, ok := d.key()
+		if !ok || k == terminator {
+			break
+		}
+		got.WriteString(k)
+	}
+	if got.Len() == 0 || got.Len() < minDigits {
+		return ivr.NodeResult{Outcome: "timeout", Action: "prompt_dtmf", Detail: detail, DTMF: got.String()}, nil
+	}
+	if store := stringFromConfig(n.Config, "store_as"); store != "" {
+		d.vars[store] = got.String()
+	}
+	return ivr.NodeResult{Outcome: "default", Action: "prompt_dtmf", Detail: detail, DTMF: got.String()}, nil
+}
+
+// Transfer can't ring anyone: it takes the operator's forced outcome
+// (completed by default). Walk applies the queue_timeout → no_answer rule.
+func (d *simDriver) Transfer(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	return ivr.NodeResult{Outcome: transferOutcome(*d.in), Action: "transfer", Detail: transferDetail(n.Config)}, nil
+}
+
+// HTTPCallback makes no request — it follows the operator's chosen branch so
+// both the success and failure routes can be tested.
+func (d *simDriver) HTTPCallback(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	method := stringFromConfig(n.Config, "method")
+	if method == "" {
+		method = "GET"
+	}
+	return ivr.NodeResult{Outcome: httpOutcome(*d.in), Action: "http_call", Detail: method + " " + stringFromConfig(n.Config, "url")}, nil
+}
+
+// Timing evaluates the schedule against the simulator clock.
+func (d *simDriver) Timing(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	outcome := evalTimingOutcome(n.Config, d.in.Now)
+	open := "open"
+	if outcome == "out_of_hours" {
+		open = "closed"
+	}
+	return ivr.NodeResult{Outcome: outcome, Action: "branch", Detail: fmt.Sprintf("%s → %s", d.in.Now.Format("Mon 15:04"), open)}, nil
+}
+
+// GotoFlow doesn't recurse into the linked flow: the trace ends here with a
+// note, so the operator tests the target flow separately.
+func (d *simDriver) GotoFlow(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
+	return ivr.NodeResult{Action: "branch", Detail: "would jump to flow " + stringFromConfig(n.Config, "flow_id")}, nil
+}
+
+func (d *simDriver) Hangup(context.Context, *ivrNode) (ivr.NodeResult, error) {
+	return ivr.NodeResult{Action: "hangup"}, nil
 }
 
 // transferDetail renders the human label for a transfer node in a simulator
@@ -302,30 +296,12 @@ func transferDetail(c map[string]interface{}) string {
 }
 
 // nextNode resolves the next node id by matching an outgoing edge whose
-// condition equals the outcome. Returns ok=false if no edge matches
-// (flow author's bug — operator sees it in the trace).
+// condition equals the outcome — the same rule as a live call (ivr.Walk): no
+// fallback to a default edge. ok=false when nothing matches; the call ends.
 func nextNode(flow *ivrFlowData, from, outcome string) (string, bool) {
-	for _, e := range flow.Edges {
-		if e.From == from && e.Condition == outcome {
-			return e.To, true
-		}
-	}
-	// Fall back: if no exact match but there's a "default" edge, take
-	// that. Matches real-executor behavior for nodes that only define
-	// the happy branch.
-	if outcome != "default" {
-		for _, e := range flow.Edges {
-			if e.From == from && e.Condition == "default" {
-				return e.To, true
-			}
-		}
-	}
-	return "", false
+	next := ivr.FindNextNode(flow, from, outcome)
+	return next, next != ""
 }
 
 // mapFromConfig / intFromConfig are shared with ivr_executor.go in
 // this package, so no duplicate helper is needed here.
-
-// _ = strings.ToLower keeps the import wired in case a digit-
-// normalisation pass lands here in a follow-up (# / * handling, etc.).
-var _ = strings.ToLower

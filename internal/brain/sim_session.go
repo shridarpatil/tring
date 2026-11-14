@@ -9,6 +9,7 @@ package brain
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,7 @@ type simSession struct {
 	vars        map[string]string
 	steps       []SimStep
 	depth       int
+	tries       int // invalid digits pressed at the menu the session is paused on
 	caller      string
 	awaiting    *AwaitingNode
 	ended       bool
@@ -171,6 +173,17 @@ func (m *SimManager) runUntilPause(s *simSession, input string) {
 			}
 		}
 
+		// A live menu re-prompts on an invalid digit until max_retries is used
+		// up: stay paused on it, with nothing recorded yet.
+		if node.Type == nodeMenu {
+			if _, valid := mapFromConfig(node.Config, "options")[input]; !valid && s.tries < intFromConfig(node.Config, "max_retries", 3) {
+				s.tries++
+				s.awaiting = &AwaitingNode{NodeID: node.ID, NodeType: node.Type, Prompt: promptFor(node)}
+				return
+			}
+		}
+		s.tries = 0
+
 		step, outcome := stepForInteractive(node, input, s.vars, s.now)
 		input = "" // input is consumed by exactly one node
 		s.steps = append(s.steps, step)
@@ -206,7 +219,8 @@ func (m *SimManager) runUntilPause(s *simSession, input string) {
 	}
 }
 
-// stepForInteractive is the interactive counterpart of stepFor.
+// stepForInteractive is the interactive counterpart of simDriver: the same
+// node effects, for a session that pauses at each menu and gather.
 // `input` is the live DTMF for menu/gather; ignored for other nodes.
 func stepForInteractive(node *ivrNode, input string, vars map[string]string, now time.Time) (SimStep, string) {
 	step := SimStep{NodeID: node.ID, NodeType: node.Type}
@@ -246,6 +260,16 @@ func stepForInteractive(node *ivrNode, input string, vars map[string]string, now
 	case nodeGather:
 		step.Action = "prompt_dtmf"
 		step.Detail = promptFor(node)
+		// As a live gather reads keys: stop at the terminator (# by default)
+		// and at max_digits (or the older num_digits).
+		terminator := stringFromConfig(node.Config, "terminator")
+		if terminator == "" {
+			terminator = "#"
+		}
+		input, _, _ = strings.Cut(input, terminator)
+		if maxDigits := intFromConfig(node.Config, "max_digits", intFromConfig(node.Config, "num_digits", 10)); len(input) > maxDigits {
+			input = input[:maxDigits]
+		}
 		step.DTMFInput = input
 		// Too-short entry is treated like no input, as on a live call.
 		if input == "" || len(input) < intFromConfig(node.Config, "min_digits", 1) {

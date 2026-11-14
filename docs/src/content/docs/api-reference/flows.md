@@ -69,7 +69,7 @@ All routes on this page take a tenant API key or a console session. See [Authent
 4. Stop when a node is terminal (`hangup`, `goto_flow`), when no edge matches the outcome, or after 64 nodes (so a loop can't run forever).
 
 :::caution
-On a live call, an outcome with no matching edge ends the flow. The simulators are more forgiving: they fall back to the node's `default` edge if there is one. Wire every outcome you care about explicitly, so the simulator and real calls agree.
+An outcome with no matching edge ends the flow: there is no fallback to the node's `default` edge. The simulators behave the same way and flag it in the trace, so wire every outcome you care about explicitly.
 :::
 
 ### Variables
@@ -475,18 +475,17 @@ Run a batch simulation.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `caller` | string | no | Simulated caller. Default `+10000000000`. Not added to `vars`. |
-| `dtmf` | array of strings | no | Digits in order. Each `menu` takes one entry; each `gather` takes entries until `max_digits` is reached. When the list runs out, a menu or gather times out. |
+| `dtmf` | array of strings | no | Keypresses in order, one digit each (an entry like `"123"` counts as three). A `menu` takes one per attempt; a `gather` takes them until its terminator, `max_digits` (or `num_digits`), or the end of the list. When the list runs out, a menu or gather times out. |
 | `vars` | object | no | Starting variables (string values), so you can test a branch without walking the gather that sets them. |
 | `now` | timestamp | no | Clock for `timing` nodes, RFC 3339, for example `2026-10-17T20:30:00+05:30`. Default: the server's current time. |
 | `transfer_outcome` | string | no | Force every transfer's outcome: `no_answer` or `queue_timeout`. Anything else (or empty) is `completed`. |
 | `http_outcome` | string | no | `http:non2xx` forces every callback down its failure branch. Default `http:2xx`. |
 
-Differences from a live call:
+The batch simulator walks the flow with the same walker a live call uses, so edges, menu retries, gather input and the depth limit behave as they would on a call. What it can't do is simulated:
 
-- A menu digit that isn't an option goes straight to `max_retries`. There's no retry loop.
-- A `gather` reads `max_digits` only (not `num_digits`) and ignores `terminator`.
-- An outcome with no matching edge falls back to the node's `default` edge.
-- `queue_timeout` is a simulator-only outcome. On a live call an unanswered transfer is `no_answer`.
+- Nothing plays, no one rings and no HTTP request is made. Transfers and callbacks take `transfer_outcome` and `http_outcome`.
+- A `queue_timeout` outcome is reported only if the transfer node wires a `queue_timeout` edge; otherwise it's `no_answer`, as on a live call.
+- `goto_flow` stops the trace with "would jump to flow …".
 
 ```bash
 curl -sS -X POST "$TRING_URL/v1/flows/5c1a7b22-2222-4e3f-8b00-000000000001/simulate" \
@@ -581,7 +580,7 @@ Send digits to a paused session. The digits are consumed by the paused node, the
 |---|---|---|---|
 | `dtmf` | string | yes | For a `menu`, one digit. For a `gather`, the whole entry (for example `"123456"`). An empty string leaves the session paused where it is; it doesn't simulate a timeout. |
 
-A menu digit that isn't an option takes the `max_retries` outcome. Sending input to a session that has already ended returns its final snapshot unchanged.
+A menu digit that isn't an option re-prompts, as on a live call: the session stays paused at the menu until `max_retries` invalid digits have been used up, then takes the `max_retries` outcome. A `gather` entry stops at its terminator (`#` by default) and at `max_digits` (or `num_digits`). Sending input to a session that has already ended returns its final snapshot unchanged.
 
 ```bash
 curl -sS -X POST "$TRING_URL/v1/flows/simulate/sessions/8f0e4d2c-5555-4b00-9e00-000000000001/input" \
