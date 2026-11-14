@@ -415,3 +415,51 @@ func TestMaskFrame(t *testing.T) {
 		t.Error("unparsable transferred frame not dropped")
 	}
 }
+
+// The IVR journey carries numbers too: a callback URL with {{caller}}
+// substituted, a transfer-to-number target, digits a gather collected. A masked
+// user saw them in full through ivr_path while from_number was masked. Callback
+// query strings (where numbers and tokens ride) are dropped for them.
+func TestMaskCallMasksIVRPath(t *testing.T) {
+	path := `[
+		{"node_id":"cb","node_type":"http_callback","action":"http_call","detail":"GET https://crm.example.com/lookup?phone=%2B919800000001&token=s3cret","outcome":"http:2xx"},
+		{"node_id":"g","node_type":"gather","action":"prompt_dtmf","detail":"Enter your number","dtmf_input":"9800000001","outcome":"default"},
+		{"node_id":"x","node_type":"transfer","action":"transfer","detail":"+919800000002","outcome":"completed","at":"2026-11-14T10:00:00Z"},
+		{"node_id":"m","node_type":"menu","action":"prompt_dtmf","detail":"Press 1","dtmf_input":"1","outcome":"digit:1"}
+	]`
+	c := Call{Direction: "inbound", FromNumber: fullFrom, IVRPath: json.RawMessage(path)}
+	maskCall(&c)
+
+	out := string(c.IVRPath)
+	for _, leak := range []string{"9800000001", "9800000002", "s3cret", "phone="} {
+		if strings.Contains(out, leak) {
+			t.Errorf("masked ivr_path still contains %q: %s", leak, out)
+		}
+	}
+	var steps []map[string]any
+	if err := json.Unmarshal(c.IVRPath, &steps); err != nil || len(steps) != 4 {
+		t.Fatalf("masked ivr_path is not the same 4 steps: %v %s", err, out)
+	}
+	if d := steps[0]["detail"]; d != "GET https://crm.example.com/lookup" {
+		t.Errorf("callback detail = %v, want the URL without its query", d)
+	}
+	if d := steps[2]["detail"]; d != "+91••••••0002" {
+		t.Errorf("transfer detail = %v, want the number masked", d)
+	}
+	if d := steps[3]["dtmf_input"]; d != "1" {
+		t.Errorf("menu digit = %v, want it untouched", d)
+	}
+	if steps[2]["at"] != "2026-11-14T10:00:00Z" || steps[3]["outcome"] != "digit:1" {
+		t.Errorf("other step fields changed: %s", out)
+	}
+}
+
+// A path that can't be parsed is dropped for a masked user rather than passed
+// through with whatever it holds.
+func TestMaskCallDropsUnparseableIVRPath(t *testing.T) {
+	c := Call{Direction: "inbound", FromNumber: fullFrom, IVRPath: json.RawMessage(`{"not":"a list","n":"+919800000001"}`)}
+	maskCall(&c)
+	if len(c.IVRPath) != 0 {
+		t.Fatalf("unparseable ivr_path kept: %s", c.IVRPath)
+	}
+}

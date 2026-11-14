@@ -4,7 +4,10 @@
 // this one definition of who is masked and what a masked number looks like.
 package mask
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // dot replaces each hidden digit.
 const dot = '•'
@@ -73,6 +76,17 @@ func Number(s string) string {
 		i++
 	}
 	return b.String()
+}
+
+// numberRun matches a phone-number-shaped run inside text: an optional +,
+// then digits and the separators Number keeps.
+var numberRun = regexp.MustCompile(`\+?\d[\d\-(). ]*\d`)
+
+// Text masks every phone number inside free text (an IVR step's detail, a
+// gathered digit string) the way Number masks a whole value. Runs under
+// minDigits digits are left alone, so menu choices and short codes survive.
+func Text(s string) string {
+	return numberRun.ReplaceAllStringFunc(s, Number)
 }
 
 // CallNumbers masks the client side of a call: the caller on an inbound call,
