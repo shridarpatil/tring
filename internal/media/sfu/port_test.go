@@ -55,9 +55,17 @@ type slowSource struct {
 	sent    int
 	mu      sync.Mutex
 	stopped bool
+	paused  bool // sends nothing (an idle IVR player) without ending the source
 }
 
 func (f *slowSource) ID() room.ParticipantID { return f.id }
+
+// setPaused makes the source go quiet (or resume) while staying published.
+func (f *slowSource) setPaused(on bool) {
+	f.mu.Lock()
+	f.paused = on
+	f.mu.Unlock()
+}
 func (f *slowSource) Close() error {
 	f.mu.Lock()
 	f.stopped = true
@@ -66,6 +74,11 @@ func (f *slowSource) Close() error {
 }
 func (f *slowSource) ReadRTP() (*rtp.Packet, error) {
 	f.mu.Lock()
+	for f.paused && !f.stopped {
+		f.mu.Unlock()
+		time.Sleep(2 * time.Millisecond)
+		f.mu.Lock()
+	}
 	if f.stopped || f.sent >= f.total {
 		f.mu.Unlock()
 		return nil, errEOF
@@ -250,5 +263,59 @@ func TestPortReleasedFeedYieldsUntilMembershipChanges(t *testing.T) {
 	waitCount(t, out, mark+20, "port hears the IVR again")
 	if got := out.marksSince(mark); got[0xAA] == 0 {
 		t.Fatalf("after the agent left the port forwarded %v, want the IVR (0xAA)", got)
+	}
+}
+
+// An IVR transfer-to-number attaches the callee's port while the caller is
+// already talking, then releases the feeds so the caller stops hearing the IVR.
+// The callee's port must end up forwarding the caller whether it latched onto
+// the caller (the IVR was idle) or onto a tail of the ringing music: yielding a
+// live person left the callee in dead air for the whole call.
+func TestPortReleaseKeepsAFeedFromAPerson(t *testing.T) {
+	for name, ivrIdle := range map[string]bool{"ivr idle": true, "ringing tail": false} {
+		t.Run(name, func(t *testing.T) {
+			s, err := sfu.New(sfu.Config{})
+			if err != nil {
+				t.Fatalf("new sfu: %v", err)
+			}
+			callerOut := &pktCollector{}
+			caller := &slowSource{id: "caller-leg", mark: 0xCC, total: 1000}
+			if err := s.AttachPort("call", caller, callerOut.write); err != nil {
+				t.Fatalf("attach caller: %v", err)
+			}
+			ivrSrc := &slowSource{id: "ivr", mark: 0xAA, total: 1000}
+			if err := s.InjectSource("call", ivrSrc, opusCap()); err != nil {
+				t.Fatalf("inject ivr: %v", err)
+			}
+			waitCount(t, callerOut, 10, "caller hears the IVR")
+			if ivrIdle {
+				ivrSrc.setPaused(true)
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			calleeOut := &pktCollector{}
+			callee := &slowSource{id: "callee-leg", mark: 0xDD, total: 1000}
+			if err := s.AttachPort("call", callee, calleeOut.write); err != nil {
+				t.Fatalf("attach callee: %v", err)
+			}
+			waitCount(t, calleeOut, 5, "callee hears someone before the release")
+			if got := calleeOut.marksSince(0); ivrIdle && got[0xCC] == 0 {
+				t.Fatalf("callee port latched %v before the release, want the caller (0xCC)", got)
+			}
+
+			s.ReleasePortFeed("call")
+			ivrSrc.setPaused(true)            // the call is connected; the IVR has nothing more to say
+			time.Sleep(50 * time.Millisecond) // let in-flight packets drain
+			mark := calleeOut.count()
+			waitCount(t, calleeOut, mark+20, "callee hears the caller after the release")
+			if got := calleeOut.marksSince(mark); got[0xCC] == 0 || got[0xAA] > 0 {
+				t.Fatalf("after release the callee port forwarded %v, want only the caller (0xCC)", got)
+			}
+			mark = callerOut.count()
+			waitCount(t, callerOut, mark+20, "caller hears the callee after the release")
+			if got := callerOut.marksSince(mark); got[0xDD] == 0 || got[0xAA] > 0 {
+				t.Fatalf("after release the caller port forwarded %v, want only the callee (0xDD)", got)
+			}
+		})
 	}
 }
