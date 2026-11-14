@@ -116,3 +116,9 @@ func TestRedisQueueSkipsDeadHead(t *testing.T) {
 		t.Fatalf("depth = %d, want 1 once the dead ticket is swept", d)
 	}
 }
+
+// The rejoined ticket carries its own lease, so the dead-head sweep keeps it
+// at the front.
+func TestRedisQueueEnqueueFront(t *testing.T) {
+	testRejoinFront(t, NewRedisQueue(testRedis(t)), "test:"+uuid.NewString())
+}

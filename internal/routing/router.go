@@ -149,8 +149,17 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 				if res.Answered {
 					return OutcomeCompleted, false, res.Label
 				}
-				// Nobody answered. Rejoin the line before the next attempt.
-				waiter = r.queue.Enqueue(ctx, qkey, cfg.Priority)
+				// Nobody answered. Rejoin the line where we left it — at the
+				// front — so callers who queued during the ring stay behind us.
+				// Only while we still have someone to ring, though: a caller
+				// every available agent declined (the transport drops decliners
+				// from its candidates) would hold the head and block callers
+				// those agents could still take, so it goes to the back.
+				if len(r.available(ctx, cfg, candidates)) > 0 {
+					waiter = r.queue.EnqueueFront(ctx, qkey, cfg.Priority)
+				} else {
+					waiter = r.queue.Enqueue(ctx, qkey, cfg.Priority)
+				}
 			}
 		}
 
