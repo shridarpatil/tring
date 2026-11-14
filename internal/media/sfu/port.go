@@ -279,6 +279,19 @@ func (s *SFU) attachPortsLocked(r *sfuRoom, publisher room.ParticipantID, pub *p
 	}
 }
 
+// Ports snapshots every attached external leg, by room.
+func (s *SFU) Ports() map[room.RoomID][]room.ParticipantID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[room.RoomID][]room.ParticipantID)
+	for id, r := range s.rooms {
+		for pid := range r.ports {
+			out[id] = append(out[id], pid)
+		}
+	}
+	return out
+}
+
 // HasPort reports whether a room has an attached external leg (a phone/WhatsApp
 // caller). Such a room is "live" even with zero WebRTC participants — e.g. the
 // IVR must not wait for a browser to connect before its first prompt.

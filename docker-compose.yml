@@ -159,8 +159,9 @@ services:
     user: "${TRING_API_UID:-1000}:${TRING_API_GID:-1000}"
     # docker stop waits this long before SIGKILL. On SIGTERM the gateway role
     # stops taking new calls and lets live ones finish for up to
-    # TRING_GATEWAY_DRAIN_SECONDS (default 300); keep this above it.
-    stop_grace_period: 330s
+    # TRING_GATEWAY_DRAIN_SECONDS (default 300), then ends the rest (≤10s) and
+    # flushes recordings (≤20s); keep this above drain + ~40s.
+    stop_grace_period: 345s
     depends_on:
       postgres:
         condition: service_healthy

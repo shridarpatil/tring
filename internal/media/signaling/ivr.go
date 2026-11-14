@@ -24,6 +24,9 @@ const devFlowID = "dev"
 // errNoFlowLoader is logged when a flow is pinned but no loader is configured.
 var errNoFlowLoader = errors.New("no flow loader configured")
 
+// errNoFlow is returned when a loader finds no flow for the id.
+var errNoFlow = errors.New("flow not found")
+
 // devTransferFlow is start → transfer (ring all online agents). Dev only.
 func devTransferFlow() *ivr.Flow {
 	return &ivr.Flow{
@@ -72,22 +75,16 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 		},
 	})
 
-	var (
-		flow *ivr.Flow
-		err  error
-	)
-	switch {
-	case flowID == devFlowID && s.cfg.DevTokens:
-		flow = devTransferFlow() // built-in: ring an agent, no DB needed
-	case s.cfg.Flows != nil:
-		tenant, _, _ := strings.Cut(string(roomID), "/") // rooms are tenant-namespaced
-		flow, err = s.cfg.Flows.Load(context.Background(), tenant, flowID)
-	default:
-		err = errNoFlowLoader
-	}
-	if err != nil || flow == nil {
-		s.log.Warn("ivr: flow load failed", "room", roomID, "flow", flowID, "err", err)
+	tenant, _, _ := strings.Cut(string(roomID), "/") // rooms are tenant-namespaced
+	flow, err := s.loadFlow(context.Background(), tenant, flowID)
+	if err != nil {
+		s.log.Warn("ivr: flow load failed, ending the call", "room", roomID, "flow", flowID, "err", err)
 		_ = player.Close()
+		// Nothing will ever serve this caller (the flow was deactivated or
+		// emptied after the call was accepted): end it rather than leave it in
+		// silence. Web caller: terminal `ended`; phone caller: hang up the leg.
+		s.endIfAlone(roomID)
+		s.hangupPstnIfAbandoned(roomID)
 		return
 	}
 
@@ -124,6 +121,24 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 		_ = player.Close() // lost the race or setup failed — nothing injected for us to remove
 		logging.ClearParticipant(string(pid))
 		return
+	}
+}
+
+// loadFlow resolves the flow an IVR for tenant would run. Only an active flow
+// with an entry node loads (FlowLoader.Load), so an error means no IVR can serve
+// the call.
+func (s *Server) loadFlow(ctx context.Context, tenant, flowID string) (*ivr.Flow, error) {
+	switch {
+	case flowID == devFlowID && s.cfg.DevTokens:
+		return devTransferFlow(), nil // built-in: ring an agent, no DB needed
+	case s.cfg.Flows != nil:
+		flow, err := s.cfg.Flows.Load(ctx, tenant, flowID)
+		if err == nil && flow == nil {
+			err = errNoFlow
+		}
+		return flow, err
+	default:
+		return nil, errNoFlowLoader
 	}
 }
 
