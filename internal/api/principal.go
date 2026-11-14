@@ -110,12 +110,18 @@ func (s *Server) RejectSelfScope(next http.Handler) http.Handler {
 func (s *Server) AllowDashboardStream(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scope, _ := r.Context().Value(scopeCtxKey).(string)
-		if p := principalFromCtx(r.Context()); scope == scopeSelf && (p == nil || p.Role != "supervisor") {
+		if !mayStreamDashboard(scope, principalFromCtx(r.Context())) {
 			writeError(w, http.StatusForbidden, "not permitted")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// mayStreamDashboard reports whether a caller may hold the tenant-wide
+// dashboard stream: full-scope callers and supervisors.
+func mayStreamDashboard(scope string, p *Principal) bool {
+	return scope != scopeSelf || (p != nil && p.Role == "supervisor")
 }
 
 // RequirePrincipal admits only console sessions (API keys have no user), for

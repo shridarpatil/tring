@@ -236,3 +236,42 @@ func TestMeDashboardWithoutStats(t *testing.T) {
 		t.Fatalf("default still includes stats: %+v", full.Stats)
 	}
 }
+
+// The dashboard stream authenticates once at connect, so it must re-check on
+// its keepalive: revoking the user's sessions (a password reset bumps
+// session_epoch; so does deleting or demoting them) ends an open stream instead
+// of leaving it to deliver every tenant event indefinitely.
+func TestDashboardStreamEndsWhenSessionRevoked(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	s.streamKeepalive = 50 * time.Millisecond
+	sup := f.AddUser(t, "supervisor", "s@example.com")
+	tok := tokenFor(t, s, f, sup, "s@example.com", "supervisor")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r := httptest.NewRequest("GET", "/v1/stream/dashboard", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		s.Router().ServeHTTP(rec, r)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("stream ended while the session was still valid")
+	case <-time.After(300 * time.Millisecond): // several keepalives pass
+	}
+
+	if _, err := f.DB.Pool.Exec(context.Background(),
+		`UPDATE users SET session_epoch = session_epoch + 1 WHERE id = $1`, sup); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stream kept running after the session was revoked")
+	}
+}
