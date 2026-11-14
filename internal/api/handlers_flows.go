@@ -115,27 +115,10 @@ func (s *Server) prerenderFlowAudio(ctx context.Context, def json.RawMessage) js
 		if !ok {
 			continue
 		}
-		text := strings.TrimSpace(stringOf(cfg["greeting_text"]))
-		af := stringOf(cfg["audio_file"])
-		managed := strings.Contains(af, "/"+ttsSubdir+"/")
-		hasVars := strings.Contains(text, "{{")
-		switch {
-		case text != "" && !hasVars && (af == "" || managed):
-			fp, err := s.synthFlowText(ctx, text)
-			if err != nil {
-				s.log.Warn("tts: flow prompt synth failed; node stays silent", "err", err)
-				continue
-			}
-			if af != fp {
-				cfg["audio_file"] = fp
+		for _, p := range ttsPrompts {
+			if s.prerenderPrompt(ctx, cfg, p.text, p.file) {
 				changed = true
 			}
-		case (text == "" || hasVars) && managed:
-			// Text cleared, or edited to include {{vars}} (which can't be
-			// pre-rendered), on a node we'd synthesized for: the file still
-			// speaks the old text, so drop it.
-			delete(cfg, "audio_file")
-			changed = true
 		}
 	}
 	if !changed {
@@ -145,6 +128,43 @@ func (s *Server) prerenderFlowAudio(ctx context.Context, def json.RawMessage) js
 		return out
 	}
 	return def
+}
+
+// ttsPrompts are the node prompts a flow save renders: each text field and the
+// audio-file field its rendering is stored in. A menu's invalid-input message
+// plays before it re-prompts on a key that isn't an option.
+var ttsPrompts = []struct{ text, file string }{
+	{"greeting_text", "audio_file"},
+	{"invalid_text", "invalid_audio_file"},
+}
+
+// prerenderPrompt renders one text field of a node's config into its audio
+// field, and reports whether it changed the config. An uploaded file (not
+// under the TTS subdir) is the author's and is left alone.
+func (s *Server) prerenderPrompt(ctx context.Context, cfg map[string]any, textKey, fileKey string) bool {
+	text := strings.TrimSpace(stringOf(cfg[textKey]))
+	af := stringOf(cfg[fileKey])
+	managed := strings.Contains(af, "/"+ttsSubdir+"/")
+	hasVars := strings.Contains(text, "{{")
+	switch {
+	case text != "" && !hasVars && (af == "" || managed):
+		fp, err := s.synthFlowText(ctx, text)
+		if err != nil {
+			s.log.Warn("tts: flow prompt synth failed; node stays silent", "field", textKey, "err", err)
+			return false
+		}
+		if af != fp {
+			cfg[fileKey] = fp
+			return true
+		}
+	case (text == "" || hasVars) && managed:
+		// Text cleared, or edited to include {{vars}} (which can't be
+		// pre-rendered), on a prompt we'd synthesized: the file still speaks
+		// the old text, so drop it.
+		delete(cfg, fileKey)
+		return true
+	}
+	return false
 }
 
 // synthFlowText renders text to a cached audio file and returns its FS-visible

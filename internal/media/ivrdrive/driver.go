@@ -212,6 +212,21 @@ func (d *Driver) play(ctx context.Context, n *ivr.Node) (string, error) {
 	return file, d.prompts.Play(ctx, file)
 }
 
+// playInvalid plays a menu's invalid-input message (invalid_audio_file —
+// uploaded, or rendered from invalid_text when the flow is saved). No message
+// configured → nothing; the menu just re-prompts.
+func (d *Driver) playInvalid(ctx context.Context, n *ivr.Node) error {
+	file := ivr.StringFromConfig(n.Config, "invalid_audio_file")
+	if file == "" {
+		return nil
+	}
+	d.played = append(d.played, file)
+	if err := d.prompts.Play(ctx, file); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
 // drainDTMF clears any buffered digits so a menu doesn't consume a stale one.
 func (d *Driver) drainDTMF() {
 	for {
@@ -355,7 +370,14 @@ func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) 
 		if _, valid := options[digit]; valid {
 			return ivr.NodeResult{Outcome: "digit:" + digit, Action: "prompt_dtmf", Detail: file, DTMF: digit}, nil
 		}
-		// invalid → retry (replay prompt)
+		// Invalid → say so (the node's invalid-input message, if any), then
+		// re-prompt. Not after the last attempt: max_retries routes on, and that
+		// branch says what comes next.
+		if attempt < retries {
+			if err := d.playInvalid(ctx, n); err != nil {
+				return ivr.NodeResult{}, err
+			}
+		}
 	}
 	return ivr.NodeResult{Outcome: "max_retries", Action: "prompt_dtmf", Detail: file}, nil
 }

@@ -111,7 +111,7 @@ Outcome: `default`.
 
 #### `menu`
 
-Plays a prompt and waits for one digit. The caller can press a valid option while the prompt is still playing; invalid keys are ignored until the prompt ends. After the prompt, an invalid key replays the prompt.
+Plays a prompt and waits for one digit. The caller can press a valid option while the prompt is still playing; invalid keys are ignored until the prompt ends. After the prompt, an invalid key plays the invalid-input message (if set) and then replays the prompt. The message isn't played on the last allowed attempt, since `max_retries` routes on from there.
 
 | Config | Type | Default | Description |
 |---|---|---|---|
@@ -119,6 +119,7 @@ Plays a prompt and waits for one digit. The caller can press a valid option whil
 | `options` | object | `{}` | Valid digits as keys, for example `{"1": {"label": "Sales"}, "2": {"label": "Support"}}`. Only the keys matter at call time. |
 | `timeout_seconds` | integer | `10` | How long to wait for a digit after the prompt. |
 | `max_retries` | integer | `3` | Invalid choices allowed before giving up. |
+| `invalid_audio_file` / `invalid_text` | string | | Invalid-input message, for example "Sorry, that's not a valid option." `invalid_text` is turned into speech when the flow is saved (unless it contains `{{variables}}`); an uploaded `invalid_audio_file` takes precedence. Empty: the prompt is just replayed. |
 
 Outcomes: `digit:<d>` for a valid option (for example `digit:1`), `timeout` when no digit arrives, `max_retries` after too many invalid choices.
 

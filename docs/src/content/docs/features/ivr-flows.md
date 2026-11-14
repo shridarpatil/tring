@@ -82,8 +82,9 @@ Outcome: `default`.
 | `options` | `{}` | Map of digit to option, for example `{"1": {"label": "Sales"}}`. Only these digits are valid. |
 | `timeout_seconds` | `10` | How long to wait for a digit after the prompt ends. |
 | `max_retries` | `3` | How many times to replay the prompt after an invalid digit. |
+| `invalid_text` / `invalid_audio_file` | | Invalid-input message, for example "Sorry, that's not a valid option." Played after an invalid digit, before the prompt is replayed. Text is turned into speech when the flow is saved. Empty: the prompt is just replayed. |
 
-The caller can press a valid option while the prompt is still playing (barge-in); invalid keys are ignored until the prompt ends.
+The caller can press a valid option while the prompt is still playing (barge-in); invalid keys are ignored until the prompt ends. After the prompt, an invalid key plays the invalid-input message and replays the prompt, until `max_retries` is used up; the message isn't played on the last attempt.
 
 | Outcome | When |
 |---|---|
@@ -100,8 +101,9 @@ The caller can press a valid option while the prompt is still playing (barge-in)
 | `greeting_text` / `audio_file` | | The prompt, for example "Enter your account number followed by #". |
 | `store_as` | | Variable name to store the digits in, for example `account_number`. |
 | `timeout_seconds` | `10` | Wait for each digit. |
-| `num_digits` | `1` | Maximum digits the live call collects. |
-| `max_digits`, `terminator`, `max_retries` | `10`, `#`, `3` | Saved by the editor and used by the Test panel (`max_digits`). |
+| `max_digits` | `10` | Maximum digits collected. Flows from the older API may set `num_digits` instead; it's used when `max_digits` isn't set. |
+| `terminator` | `#` | Key that ends input early. |
+| `min_digits` | `1` | Fewer digits than this takes `timeout`. |
 
 Input ends at `#`, at the digit limit, or on timeout. Any key barges in on the prompt.
 
@@ -249,13 +251,11 @@ The editor's **Test** panel walks the saved flow without placing a call. Nothing
 2. The walk pauses at each Menu and Gather and shows the prompt. Type digits to continue.
 3. The trace shows each node, its action (`play_audio`, `speak`, `prompt_dtmf`, `http_call`, `transfer`, `branch`, `hangup`), what was entered and the outcome taken.
 
-Simulator behaviour to keep in mind:
+The simulator follows the flow exactly as a live call does: menus re-prompt on invalid digits (showing the invalid-input message), gathers stop at their terminator and digit limit, and an outcome with no edge ends the flow there (the trace flags it, so wire outcomes explicitly). What it can't do is simulated:
 
 - HTTP callbacks are not sent; they take `http:2xx` unless forced to `http:non2xx`.
-- Transfers take `completed` unless forced to `no_answer` or `queue_timeout`.
+- Transfers take `completed` unless forced to `no_answer` or `queue_timeout` (which falls back to `no_answer` unless the node wires a `queue_timeout` edge).
 - Timing nodes use the current time unless a time is supplied.
-- An invalid menu digit goes straight to `max_retries`.
-- When an outcome has no edge, the simulator falls back to the node's `default` edge if there is one. A live call does not; it ends. Wire outcomes explicitly.
 
 The same simulator is available over the API as a one-shot run (`POST /v1/flows/{id}/simulate` with `caller`, `dtmf[]`, `vars`, `now`, `transfer_outcome`, `http_outcome`) and as an interactive session (`POST /v1/flows/{id}/simulate/start`, then `POST /v1/flows/simulate/sessions/{sid}/input` with `{"dtmf": "1"}`). Idle sessions expire after 10 minutes. See the [Flows API](/tring/api-reference/flows/).
 

@@ -1021,3 +1021,54 @@ func TestNumberTransferWebhookFiresOnAnswer(t *testing.T) {
 		t.Fatalf("events = %v, want x:answered once", got)
 	}
 }
+
+// invalidMenuFlow: a menu with one option, one retry and an invalid-input
+// message; max_retries and digit:1 both hang up.
+func invalidMenuFlow(extra map[string]interface{}) *ivr.Flow {
+	cfg := map[string]interface{}{
+		"audio_file": "menu.ogg", "timeout_seconds": float64(1), "max_retries": float64(1),
+		"options": map[string]interface{}{"1": "sales"},
+	}
+	for k, v := range extra {
+		cfg[k] = v
+	}
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "m", Type: ivr.NodeMenu, Config: cfg},
+			{ID: "h", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "m", Condition: "default"},
+			{From: "m", To: "h", Condition: "digit:1"},
+			{From: "m", To: "h", Condition: "max_retries"},
+		},
+	}
+}
+
+// An invalid key plays the menu's invalid-input message before the menu
+// re-prompts; the last invalid attempt doesn't (max_retries routes on).
+func TestMenuInvalidInputPlaysMessageBeforeReprompt(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	path := runFlow(t, d, fake, invalidMenuFlow(map[string]interface{}{"invalid_audio_file": "invalid.ogg"}),
+		map[string][]string{"menu.ogg": {"9"}})
+
+	if want := []string{"menu.ogg", "invalid.ogg", "menu.ogg"}; !eq(d.Played(), want) {
+		t.Fatalf("played = %v, want %v", d.Played(), want)
+	}
+	if got := path[len(path)-2].Outcome; got != "max_retries" {
+		t.Fatalf("menu outcome = %q, want max_retries", got)
+	}
+}
+
+// Without an invalid-input message the menu just re-prompts, as before.
+func TestMenuInvalidInputWithoutMessageJustReprompts(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	runFlow(t, d, fake, invalidMenuFlow(nil), map[string][]string{"menu.ogg": {"9"}})
+	if want := []string{"menu.ogg", "menu.ogg"}; !eq(d.Played(), want) {
+		t.Fatalf("played = %v, want %v", d.Played(), want)
+	}
+}
