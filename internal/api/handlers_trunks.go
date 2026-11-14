@@ -152,9 +152,9 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 // triggers a sofia profile rescan so FreeSWITCH state matches the DB. Called
 // after any trunk create/update/delete. Returns an error if the XML can't be
 // written OR the rescan fails — callers MUST surface it. The DB row has
-// already been committed by then, so a failure here means FreeSWITCH is out of
-// sync with the DB until POST /v1/trunks/reload (or the next successful trunk
-// op) re-renders and rescans.
+// already been committed by then, so a failed rescan leaves FreeSWITCH out of
+// sync with the DB: gwSync retries it in the background, and POST
+// /v1/trunks/reload (or the next trunk op) re-renders and rescans at once.
 func (s *Server) rerenderAllGateways(ctx context.Context) error {
 	gws, err := s.activeGateways(ctx)
 	if err != nil {
@@ -164,11 +164,15 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("write gateway xml: %w", err)
 	}
-	if err := s.fs.RescanExternalProfile(ctx, stale); err != nil {
+	if err := s.gwSync.Sync(ctx, stale); err != nil {
 		return fmt.Errorf("freeswitch rescan: %w", err)
 	}
 	return nil
 }
+
+// StartGatewaySync retries failed sofia rescans (see freeswitch.GatewaySync).
+// Called once by the API role; returns when ctx ends.
+func (s *Server) StartGatewaySync(ctx context.Context) { s.gwSync.Run(ctx) }
 
 // activeGateways loads every active trunk with its SIP password decrypted,
 // ready to render. A trunk whose password can't be opened (wrong or missing
@@ -197,13 +201,13 @@ func (s *Server) activeGateways(ctx context.Context) ([]freeswitch.Gateway, erro
 }
 
 // syncTrunkError writes a 502 telling the caller their DB change committed but
-// FreeSWITCH didn't pick it up — so they don't read a 2xx as "live" and they
-// know POST /v1/trunks/reload is the retry. `did` is the past-tense verb, e.g.
+// FreeSWITCH didn't pick it up — so they don't read a 2xx as "live". A failed
+// rescan is retried in the background; POST /v1/trunks/reload retries now. `did` is the past-tense verb, e.g.
 // "saved" / "updated" / "deleted".
 // The underlying error (file paths, ESL replies) is logged, not returned.
 func (s *Server) syncTrunkError(w http.ResponseWriter, r *http.Request, did string, err error) {
 	s.writeServerError(w, r, http.StatusBadGateway,
-		"trunk "+did+" but FreeSWITCH did not reload — retry with POST /v1/trunks/reload", err)
+		"trunk "+did+" but FreeSWITCH did not reload — retrying in the background; POST /v1/trunks/reload to retry now", err)
 }
 
 func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
