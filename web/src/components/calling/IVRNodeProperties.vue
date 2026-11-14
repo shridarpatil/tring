@@ -232,6 +232,14 @@ if (props.node.type === "timing" && !Array.isArray(config.value.schedule)) {
             <input v-model.number="config.max_retries" type="number" min="0" />
           </label>
         </div>
+        <label class="fld">
+          <span class="fl">Invalid input message</span>
+          <textarea v-model="config.invalid_text" rows="2" placeholder="Sorry, that's not a valid option." />
+        </label>
+        <div>
+          <span class="fl">Invalid input audio (from your sound library)</span>
+          <AudioPicker v-model="config.invalid_audio_file" default-label="None (use message above)" />
+        </div>
 
         <div>
           <div class="fl" style="margin-bottom: 0.5rem">Options</div>

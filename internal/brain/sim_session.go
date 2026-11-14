@@ -178,7 +178,11 @@ func (m *SimManager) runUntilPause(s *simSession, input string) {
 		if node.Type == nodeMenu {
 			if _, valid := mapFromConfig(node.Config, "options")[input]; !valid && s.tries < intFromConfig(node.Config, "max_retries", 3) {
 				s.tries++
-				s.awaiting = &AwaitingNode{NodeID: node.ID, NodeType: node.Type, Prompt: promptFor(node)}
+				prompt := promptFor(node)
+				if msg := invalidPromptFor(node); msg != "" {
+					prompt = msg + " " + prompt // a live menu plays its invalid-input message, then re-prompts
+				}
+				s.awaiting = &AwaitingNode{NodeID: node.ID, NodeType: node.Type, Prompt: prompt}
 				return
 			}
 		}
@@ -339,6 +343,18 @@ func promptFor(node *ivrNode) string {
 		return "play: " + f
 	}
 	return node.Label
+}
+
+// invalidPromptFor is what a menu says on a key that isn't an option before it
+// re-prompts: invalid_text, else its audio file, else "" (no message).
+func invalidPromptFor(node *ivrNode) string {
+	if t := stringFromConfig(node.Config, "invalid_text"); t != "" {
+		return t
+	}
+	if f := stringFromConfig(node.Config, "invalid_audio_file"); f != "" {
+		return "play: " + f
+	}
+	return ""
 }
 
 // gcExpired drops sessions idle past TTL. Lazy / called from Start so

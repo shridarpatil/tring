@@ -3,6 +3,7 @@ package brain
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -199,5 +200,18 @@ func TestSessionMenuMaxRetries(t *testing.T) {
 	last := snap.Steps[len(snap.Steps)-1]
 	if last.NodeID != "m" || last.Outcome != "max_retries" {
 		t.Fatalf("last step %+v, want the menu taking max_retries", last)
+	}
+}
+
+// The re-prompt after an invalid key shows the menu's invalid-input message
+// first, as a live call plays it.
+func TestSessionMenuRepromptShowsInvalidMessage(t *testing.T) {
+	flow := strings.Replace(interactiveMenuFlow, `"greeting_text":"Press 1 for sales, 2 for support",`,
+		`"greeting_text":"Press 1 for sales, 2 for support","invalid_text":"Sorry, that's not an option.",`, 1)
+	m := NewSimManager()
+	snap, _ := m.Start(simOwner, []byte(flow), SimInput{})
+	snap, _ = m.Input(simOwner, snap.SessionID, "9")
+	if snap.AwaitingNode == nil || !strings.HasPrefix(snap.AwaitingNode.Prompt, "Sorry, that's not an option.") {
+		t.Fatalf("re-prompt = %+v, want the invalid-input message first", snap.AwaitingNode)
 	}
 }
