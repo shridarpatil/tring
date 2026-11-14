@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/pion/rtp"
 
 	"github.com/shridarpatil/tring/internal/media/room"
 )
@@ -140,5 +141,23 @@ func TestIVRDialCallerHangupIsCaller(t *testing.T) {
 	waitDial(t, res)
 	if got := cl.endedCauses(); len(got) == 0 || got[0] != "caller_hangup" {
 		t.Fatalf("causes = %v, want caller_hangup first", got)
+	}
+}
+
+// An inbound phone call that ends must detach the caller's port: otherwise the
+// sfuRoom keeps the port + its publication forever (a per-call leak) and the
+// room still reports a live leg.
+func TestEndPstnRoomDetachesCallerPort(t *testing.T) {
+	s := newOutboundServer(t, nil, nil)
+	rid := room.RoomID(uuid.NewString() + "/pstn-detach")
+	src := &fakeOutboundSource{id: "call-detach", stop: make(chan struct{})}
+	if err := s.sfu.AttachPort(rid, src, func(*rtp.Packet) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	pstnRoom(s, &hangupPlug{hangups: make(chan room.CallID, 1)}, rid, "call-detach")
+
+	s.endPstnRoom(rid)
+	if s.sfu.HasPort(rid) {
+		t.Fatalf("caller port still attached after endPstnRoom: %v", s.sfu.Ports()[rid])
 	}
 }

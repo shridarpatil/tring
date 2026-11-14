@@ -122,9 +122,8 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 // and the port.
 func (s *Server) endPstnRoom(roomID room.RoomID) {
 	s.mu.Lock()
-	callerPID := s.pstnCalls[roomID]
+	callerPID, hadCaller := s.pstnCalls[roomID]
 	s.mu.Unlock()
-	defer logging.ClearParticipant(string(callerPID)) // the caller's port is never detached on its own
 	s.forgetPstn(roomID)
 	s.endTransfer(roomID) // stop any blind-transfer ring the caller was waiting on
 	s.stopIVR(roomID)
@@ -150,6 +149,13 @@ func (s *Server) endPstnRoom(roomID room.RoomID) {
 			}
 			s.removeParticipant(roomID, p.ID())
 		}
+	}
+	if hadCaller {
+		// Prune the caller's SFU-side port + publication — otherwise r.ports /
+		// r.pubs keep it forever and the sfuRoom is never deleted (a per-call
+		// leak). The leg's id is its CallID (the plug contract); Leave also
+		// clears the participant's log tag. Mirrors endOutboundRoom.
+		s.sfu.DetachPort(roomID, room.ParticipantID(callerPID))
 	}
 	// A call that ended in its IVR had no participant to leave, so routeEvent
 	// never closed its supervisors.

@@ -238,9 +238,7 @@ func (s *Server) endOutboundRoom(roomID room.RoomID, cause string) {
 	if hadLeg {
 		// Prune the room's SFU-side port publication — otherwise r.ports/r.pubs
 		// keep this leg's entry forever and the sfuRoom never gets pruned (a
-		// per-call leak). NOTE: endPstnRoom (inbound) has the SAME pre-existing
-		// leak; left untouched here — see the task report for the shared
-		// follow-up.
+		// per-call leak). endPstnRoom does the same for the inbound caller.
 		s.sfu.DetachPort(roomID, pid)
 	}
 	// A click-to-call customer who hangs up while a blind transfer rings stops
