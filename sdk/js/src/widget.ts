@@ -232,6 +232,8 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   tring.on("call:local-video", ({ stream, source }) => panel.setLocalVideo(stream, source));
   tring.on("call:remote-video", ({ stream }) => panel.setRemoteVideo(stream));
   tring.on("call:supervisor", ({ present, mode, name }) => panel.setSupervisor(present, mode, name));
+  tring.on("call:transferring", () => panel.setTransfer("ringing"));
+  tring.on("call:transfer-failed", ({ reason }) => panel.setTransfer("failed", reason));
   tring.on("call:ended", () => panel.hide()); // hide() resets the supervisor badge too
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
 
@@ -328,6 +330,9 @@ interface Panel {
   setRemoteVideo(stream: MediaStream | null): void;
   setLocalVideo(stream: MediaStream | null, source: VideoSource | null): void;
   setSupervisor(present: boolean, mode: string, name: string): void;
+  /** Show a transfer's progress in the status line: ringing, failed (with the
+   *  server's reason), or cleared. */
+  setTransfer(state: "ringing" | "failed" | "idle", reason?: string): void;
   hide(): void;
 }
 
@@ -427,6 +432,10 @@ function createPanel(control?: CallControl): Panel {
   const declineBtn = root.querySelector<HTMLButtonElement>(".tring-decline")!;
 
   let held = false;
+  // A transfer's status replaces "Live call" in the status line while it rings,
+  // and briefly after it fails.
+  let transferNote: string | null = null;
+  let transferNoteTimer: number | undefined;
 
   // Drag: the status line and the minimized pill move the panel (their buttons
   // still click). Once moved it's pinned by left/top instead of the bottom-right
@@ -500,7 +509,7 @@ function createPanel(control?: CallControl): Panel {
   function renderTime() {
     if (!timerId) return;
     const t = elapsed();
-    subEl.textContent = `${held ? "On hold" : "Live call"} · ${t}`;
+    subEl.textContent = `${transferNote ?? (held ? "On hold" : "Live call")} · ${t}`;
     miniTimeEl.textContent = held ? "On hold" : t;
   }
   function startTimer() {
@@ -823,7 +832,22 @@ function createPanel(control?: CallControl): Panel {
       supervisorEl.textContent = mode === "whisper" ? `Whisper: ${name}` : "🎧 Supervising";
       supervisorEl.style.display = "block";
     },
+    setTransfer(state, reason) {
+      window.clearTimeout(transferNoteTimer);
+      transferBtn.disabled = state === "ringing";
+      if (state === "ringing") transferNote = "Transferring…";
+      else if (state === "failed") {
+        transferNote = reason === "no answer" ? "No answer · call is back with you" : `Transfer failed · ${reason ?? ""}`;
+        transferNoteTimer = window.setTimeout(() => {
+          transferNote = null;
+          renderTime();
+        }, 4000);
+      } else transferNote = null;
+      renderTime();
+    },
     hide() {
+      window.clearTimeout(transferNoteTimer);
+      transferNote = null;
       incomingNotification.stop();
       ringer.stop();
       // A call that was never connected (declined, missed, picked up

@@ -33,12 +33,15 @@ If the tenant has no playable hold-music file, the held party hears silence. See
 
 ### Blind transfer
 
-`transfer` takes exactly one target: `toSip` (another agent's `sip_username`) or `toTeam` (a team name).
+`transfer` takes exactly one target: `toSip` (another agent's `sip_username`) or `toTeam` (a team name). It is a blind transfer with fallback: the agent doesn't talk to the target first, but doesn't lose the call if nobody picks up.
 
 1. The gateway checks the target first. If it is unreachable now (agent offline or busy, team with nobody available), or the agent names themselves, the transfer is rejected with `transfer-failed` and **the agent keeps the call**.
-2. Otherwise the agent gets `transfer-ok` and leaves the call immediately (blind transfer). The customer stays connected and hears hold music.
-3. The routing engine rings the target into the same call, with the team's strategy and queue if it is a team (see [Agents and routing](/tring/features/agents-and-routing/)).
-4. If nobody answers, the customer hears the tenant's **transfer failed message** (Settings, or `transfer_failed_message` on `PATCH /v1/tenants/me`, synthesized to speech when saved), then the call ends.
+2. Otherwise the agent gets `transfer-ok` and **stays on the call** while the target rings. The customer hears hold music. The agent is muted and hears nothing; this is done by the gateway, so it also applies to a transfer started over REST or after a page refresh. The widget shows "Transferring…".
+3. The routing engine rings the target into the same call, with the team's strategy and queue if it is a team (see [Agents and routing](/tring/features/agents-and-routing/)), for up to the tenant's **transfer timeout** (Settings, or `transfer_timeout_seconds` on `PATCH /v1/tenants/me`; 60 seconds by default).
+4. When the target answers, the agent gets `ended` (reason `transferred`) and leaves; the customer is talking to the target.
+5. If nobody answers in time, **the call goes back to the agent**: they are unmuted and hear the customer again, and get `transfer-failed` with reason `no answer`. The customer hears no failure message.
+
+If the agent hangs up while the target rings, the transfer carries on without them. If nobody answers then, the customer hears the tenant's **transfer failed message** (Settings, or `transfer_failed_message` on `PATCH /v1/tenants/me`, synthesized to speech when saved), then the call ends. If the customer hangs up while the target rings, the ring stops and the call ends.
 
 Only one transfer can run per call at a time. The transfer is recorded on the call's timeline.
 

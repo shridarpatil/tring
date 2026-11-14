@@ -105,13 +105,14 @@ type Queries struct {
 	ListNumbers              string `query:"list-numbers"`
 
 	// ---- api: tenants ----
-	UpdateTenant            string `query:"update-tenant"`
-	GetTenantSipDomain      string `query:"get-tenant-sip-domain"`
-	GetTenantAudio          string `query:"get-tenant-audio"`
-	GetTenantSettings       string `query:"get-tenant-settings"`
-	GetTenantRecordCalls    string `query:"get-tenant-record-calls"`
-	GetTenantMaxCallSeconds string `query:"get-tenant-max-call-seconds"`
-	GetTenantMaskNumbers    string `query:"get-tenant-mask-numbers"`
+	UpdateTenant             string `query:"update-tenant"`
+	GetTenantSipDomain       string `query:"get-tenant-sip-domain"`
+	GetTenantAudio           string `query:"get-tenant-audio"`
+	GetTenantSettings        string `query:"get-tenant-settings"`
+	GetTenantRecordCalls     string `query:"get-tenant-record-calls"`
+	GetTenantMaxCallSeconds  string `query:"get-tenant-max-call-seconds"`
+	GetTenantTransferTimeout string `query:"get-tenant-transfer-timeout"`
+	GetTenantMaskNumbers     string `query:"get-tenant-mask-numbers"`
 
 	// ---- api: audio library (sound assets) ----
 	CreateAudio string `query:"create-audio"`

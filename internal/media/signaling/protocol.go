@@ -41,8 +41,8 @@ const (
 	msgAvailability   = "availability"    // s→agent: backend Away/Break toggle — {available}; sent after ready and on every change
 	msgEnded          = "ended"           // s→client: the call is over (terminal — don't reconnect)
 	msgError          = "error"           // {reason}
-	msgTransferOK     = "transfer-ok"     // s→agent: blind transfer accepted; this leg will end
-	msgTransferFailed = "transfer-failed" // s→agent: transfer rejected — {reason}; agent keeps the call
+	msgTransferOK     = "transfer-ok"     // s→agent: transfer ringing; this leg waits, cut off, until answered (→ ended) or not (→ transfer-failed)
+	msgTransferFailed = "transfer-failed" // s→agent: transfer refused or not answered ("no answer") — {reason}; agent keeps the call
 	msgSupervisor     = "supervisor"      // s→agent: a supervisor is present — {present, mode, name}
 	msgRinging        = "ringing"         // s→agent: the outbound PSTN call is ringing (pre-answer progress)
 	msgAnswered       = "answered"        // s→caller: the other party accepted (web agent / click-to-call customer)
