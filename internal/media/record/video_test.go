@@ -278,5 +278,9 @@ func TestComposeVideoResolutionChangePreservesTimeline(t *testing.T) {
 		if blue != tc.blue {
 			t.Errorf("at %ss blue=%v, want %v (timeline reset)", tc.at, blue, tc.blue)
 		}
+		// The 16:9 screen is letterboxed inside the 4:3 panel, not stretched.
+		if top := raw[(20*1280+320)*3:]; tc.blue && int(top[0])+int(top[1])+int(top[2]) > 60 {
+			t.Errorf("at %ss the screen share fills the panel (rgb %v); want it letterboxed", tc.at, top[:3])
+		}
 	}
 }
