@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,6 +17,22 @@ import (
 	"github.com/shridarpatil/tring/internal/flowstore"
 	"github.com/shridarpatil/tring/internal/ivr"
 )
+
+// nameParam is the {name} path param (a team name), unescaped. chi routes on
+// r.URL.RawPath when Go kept one (an escape that isn't canonical, e.g. "&" sent
+// as %26), and its params are then still escaped: "R&D" arrives as "R%26D".
+// Without a RawPath the param comes from the already-decoded Path, so decoding
+// it again would corrupt a literal "%".
+func nameParam(r *http.Request) string {
+	name := chi.URLParam(r, "name")
+	if r.URL.RawPath == "" {
+		return name
+	}
+	if u, err := url.PathUnescape(name); err == nil {
+		return u
+	}
+	return name
+}
 
 // ---- Teams --------------------------------------------------------------
 //
@@ -149,7 +166,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	tm, ok := s.loadTeam(w, r, t.ID, name)
 	if !ok {
 		return
@@ -175,7 +192,7 @@ type patchTeamRequest struct {
 
 func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	var req patchTeamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -244,7 +261,7 @@ func (s *Server) publishTeamMembers(ctx context.Context, tenantID uuid.UUID, tea
 
 func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	// Read before the delete: its managers may manage no team afterwards.
 	members, err := s.listTeamMembers(r, t.ID, name)
 	if err != nil {
@@ -277,7 +294,7 @@ type addTeamAgentRequest struct {
 // is malformed or not in this tenant.
 func (s *Server) handleAddTeamAgent(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	if _, ok := s.loadTeam(w, r, t.ID, name); !ok {
 		return
 	}
@@ -314,7 +331,7 @@ func (s *Server) handleAddTeamAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRemoveTeamAgent(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	agentID, err := uuid.Parse(chi.URLParam(r, "agentID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent id")
