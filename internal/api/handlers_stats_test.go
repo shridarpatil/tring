@@ -180,3 +180,36 @@ func TestStatsTodayAbandonedNumberTransfer(t *testing.T) {
 		t.Fatalf("abandoned_today = %d, want 2 (team-bailed, number-bailed; a connected number transfer is not abandoned)", out.AbandonedToday)
 	}
 }
+
+// "On call" counts live agent calls only: a CDR orphaned by a gateway crash
+// (still answered, never ended) must drop out after the same 4 h window
+// list-active-calls uses instead of counting forever.
+func TestCountActiveAgentCallsSkipsOrphans(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	s := newTestServer(f)
+
+	seed := `INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id,
+		agent_id, started_at, answered_at)
+		VALUES ($1, 'inbound', 'answered', '+919800000001', '+919800000089', $2, $3,
+		now() - make_interval(secs => $4), now() - make_interval(secs => $4) + interval '10 seconds')`
+	for _, c := range []struct {
+		leg string
+		ago float64
+	}{
+		{"live", 120},
+		{"orphan", 5 * 3600},
+	} {
+		if _, err := f.DB.Pool.Exec(ctx, seed, f.TenantID, c.leg, f.UserID, c.ago); err != nil {
+			t.Fatalf("seed %s: %v", c.leg, err)
+		}
+	}
+
+	var onCall int
+	if err := f.DB.Pool.QueryRow(ctx, s.q.CountActiveAgentCalls, f.TenantID).Scan(&onCall); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if onCall != 1 {
+		t.Fatalf("on call = %d, want 1 (a 5 h old orphaned CDR must not count)", onCall)
+	}
+}

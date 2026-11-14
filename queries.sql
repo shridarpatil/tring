@@ -287,9 +287,12 @@ DELETE FROM audio_assets WHERE id = $1 AND tenant_id = $2;
 
 -- name: count-active-agent-calls
 -- Live calls currently connected to an agent (answered + an agent stamped, not
--- yet ended) — powers the dashboard "on call" stat.
+-- yet ended) — powers the dashboard "on call" stat. Same 4 h started_at window
+-- as list-active-calls: a CDR orphaned by a gateway crash stays 'answered' with
+-- no ended_at and would otherwise count as on-call forever.
 SELECT COUNT(*) FROM calls
-WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL;
+WHERE tenant_id = $1 AND status = 'answered' AND agent_id IS NOT NULL
+  AND ended_at IS NULL AND started_at > now() - interval '4 hours';
 
 -- name: stats-today
 -- Running "today so far" totals for the cockpit: calls started today, answered,
