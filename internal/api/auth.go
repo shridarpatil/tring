@@ -71,34 +71,10 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 			return
 		}
 
-		var (
-			tenantID  uuid.UUID
-			principal *Principal
-		)
-		scope := scopeFull
-		if strings.HasPrefix(token, "tk_") {
-			// Tenant API key: look up its hash; reject if unknown/revoked.
-			id, keyScope, ok := s.tenantForAPIKey(r.Context(), token)
-			if !ok {
-				writeError(w, http.StatusUnauthorized, "invalid credentials")
-				return
-			}
-			tenantID, scope = id, keyScope
-		} else {
-			claims, err := s.parseConsoleToken(token)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "invalid credentials")
-				return
-			}
-			principal, err = s.loadPrincipal(r.Context(), claims)
-			if err != nil {
-				writeError(w, http.StatusUnauthorized, "invalid credentials")
-				return
-			}
-			tenantID = claims.TenantID
-			if !principal.IsAdmin() {
-				scope = scopeSelf
-			}
+		tenantID, scope, principal, ok := s.resolveCredentials(r.Context(), token)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
 		}
 
 		var t Tenant
@@ -115,6 +91,31 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// resolveCredentials checks a bearer token the way AuthRequired does: a tenant
+// API key must still exist unrevoked; a console JWT must be unexpired and its
+// user still present with a current session epoch. It returns the tenant, the
+// scope and (for a console session) the freshly loaded Principal. A long-lived
+// stream calls it again to re-check the credentials it was opened with.
+func (s *Server) resolveCredentials(ctx context.Context, token string) (uuid.UUID, string, *Principal, bool) {
+	if strings.HasPrefix(token, "tk_") {
+		id, scope, ok := s.tenantForAPIKey(ctx, token)
+		return id, scope, nil, ok
+	}
+	claims, err := s.parseConsoleToken(token)
+	if err != nil {
+		return uuid.Nil, "", nil, false
+	}
+	p, err := s.loadPrincipal(ctx, claims)
+	if err != nil {
+		return uuid.Nil, "", nil, false
+	}
+	scope := scopeFull
+	if !p.IsAdmin() {
+		scope = scopeSelf
+	}
+	return claims.TenantID, scope, p, true
 }
 
 // RequireFullScope admits only full-access callers (admin console sessions

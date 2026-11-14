@@ -130,15 +130,18 @@ type Config struct {
 }
 
 type Server struct {
-	campaignLimits campaign.Limits
-	db             *db.DB
-	q              *queries.Queries // named SQL loaded from queries.sql at startup
-	jwtSecret      []byte
-	fsBasicUser    string
-	fsBasicPass    string
-	fs             *freeswitch.Client
-	cache          *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
-	presence       *presence.Store // agent online status published by the gateway
+	// streamKeepalive overrides the dashboard stream's keepalive / auth
+	// re-check interval (0 → streamKeepalive). Tests shorten it.
+	streamKeepalive time.Duration
+	campaignLimits  campaign.Limits
+	db              *db.DB
+	q               *queries.Queries // named SQL loaded from queries.sql at startup
+	jwtSecret       []byte
+	fsBasicUser     string
+	fsBasicPass     string
+	fs              *freeswitch.Client
+	cache           *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
+	presence        *presence.Store // agent online status published by the gateway
 
 	// agentTransport / agentGateway: how an agent's own call leg is routed
 	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
