@@ -271,3 +271,102 @@ func TestInteractiveGatherBelowMinDigitsTimesOut(t *testing.T) {
 		t.Errorf("pin stored as %q, want unset", vars["pin"])
 	}
 }
+
+// The Test panel must walk a flow exactly as a live call does (ivr.Walk).
+// These pin the places the simulator's own loop used to disagree.
+
+// A live call whose outcome has no edge ends there; it does not fall back to
+// the node's default edge.
+func TestSimulateNoDefaultEdgeFallback(t *testing.T) {
+	flow := `{
+  "version": 2,
+  "entry_node": "start",
+  "nodes": [
+    {"id":"start","type":"start","config":{}},
+    {"id":"m","type":"menu","config":{"options":{"1":{"label":"A"}}}},
+    {"id":"other","type":"hangup","config":{}}
+  ],
+  "edges": [
+    {"from":"start","to":"m","condition":"default"},
+    {"from":"m","to":"other","condition":"default"}
+  ]
+}`
+	res, err := SimulateFlow([]byte(flow), SimInput{}) // no DTMF → the menu times out
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	for _, s := range res.Steps {
+		if s.NodeID == "other" {
+			t.Fatalf("a timeout with no timeout edge followed the default edge; steps %+v", res.Steps)
+		}
+	}
+	if res.EndedAt != "m" || res.Error == "" {
+		t.Fatalf("ended at %q (error %q), want the call ending at the menu with the missing edge flagged", res.EndedAt, res.Error)
+	}
+}
+
+// A live menu re-prompts on an invalid digit (up to max_retries), so a valid
+// digit pressed after an invalid one is taken.
+func TestSimulateMenuRetriesAfterInvalidDigit(t *testing.T) {
+	res, err := SimulateFlow([]byte(menuFlow), SimInput{DTMF: []string{"9", "1"}})
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	var menu SimStep
+	for _, s := range res.Steps {
+		if s.NodeType == nodeMenu {
+			menu = s
+		}
+	}
+	if menu.Outcome != "digit:1" {
+		t.Fatalf("menu outcome = %q, want digit:1 after re-prompting past the invalid 9", menu.Outcome)
+	}
+}
+
+// Invalid digits on every attempt (1 + max_retries) take max_retries.
+func TestSimulateMenuMaxRetries(t *testing.T) {
+	res, err := SimulateFlow([]byte(menuFlow), SimInput{DTMF: []string{"8", "8", "8", "8"}})
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	for _, s := range res.Steps {
+		if s.NodeType == nodeMenu && s.Outcome != "max_retries" {
+			t.Fatalf("menu outcome = %q, want max_retries", s.Outcome)
+		}
+	}
+}
+
+// A live gather stops at the terminator (# by default) and reads num_digits
+// when max_digits isn't set.
+func TestSimulateGatherHonoursTerminatorAndNumDigits(t *testing.T) {
+	flow := func(cfg string) string {
+		return `{
+  "version": 2,
+  "entry_node": "start",
+  "nodes": [
+    {"id":"start","type":"start","config":{}},
+    {"id":"g","type":"gather","config":` + cfg + `},
+    {"id":"end","type":"hangup","config":{}}
+  ],
+  "edges": [
+    {"from":"start","to":"g","condition":"default"},
+    {"from":"g","to":"end","condition":"default"},
+    {"from":"g","to":"end","condition":"timeout"}
+  ]
+}`
+	}
+	gathered := func(cfg string, dtmf ...string) string {
+		t.Helper()
+		res, err := SimulateFlow([]byte(flow(cfg)), SimInput{DTMF: dtmf})
+		if err != nil {
+			t.Fatalf("SimulateFlow: %v", err)
+		}
+		return res.Vars["acct"]
+	}
+	if got := gathered(`{"store_as":"acct"}`, "1", "2", "#", "3"); got != "12" {
+		t.Errorf("terminator: gathered %q, want 12", got)
+	}
+	if got := gathered(`{"store_as":"acct","num_digits":3}`, "1", "2", "3", "4"); got != "123" {
+		t.Errorf("num_digits: gathered %q, want 123", got)
+	}
+}

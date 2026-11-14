@@ -3,6 +3,7 @@ package brain
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -172,4 +173,45 @@ func TestSessionConcurrentInputsDoNotRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// Like a live menu, the interactive session re-prompts on an invalid digit
+// (staying paused on the menu) until max_retries is used up.
+func TestSessionMenuRepromptsOnInvalidDigit(t *testing.T) {
+	m := NewSimManager()
+	snap, _ := m.Start(simOwner, []byte(interactiveMenuFlow), SimInput{})
+	snap, _ = m.Input(simOwner, snap.SessionID, "9")
+	if snap.Status != StatusAwaitingDTMF || snap.AwaitingNode == nil || snap.AwaitingNode.NodeID != "m" {
+		t.Fatalf("after an invalid digit: status %s, awaiting %+v; want re-prompted at the menu", snap.Status, snap.AwaitingNode)
+	}
+	snap, _ = m.Input(simOwner, snap.SessionID, "1")
+	if snap.Status != StatusEnded || snap.EndedAt != "sales" {
+		t.Fatalf("valid digit after a retry: status %s ended_at %q, want ended at sales", snap.Status, snap.EndedAt)
+	}
+}
+
+// Invalid on every attempt (1 + max_retries) takes max_retries.
+func TestSessionMenuMaxRetries(t *testing.T) {
+	m := NewSimManager()
+	snap, _ := m.Start(simOwner, []byte(interactiveMenuFlow), SimInput{})
+	for i := 0; i < 4; i++ {
+		snap, _ = m.Input(simOwner, snap.SessionID, "9")
+	}
+	last := snap.Steps[len(snap.Steps)-1]
+	if last.NodeID != "m" || last.Outcome != "max_retries" {
+		t.Fatalf("last step %+v, want the menu taking max_retries", last)
+	}
+}
+
+// The re-prompt after an invalid key shows the menu's invalid-input message
+// first, as a live call plays it.
+func TestSessionMenuRepromptShowsInvalidMessage(t *testing.T) {
+	flow := strings.Replace(interactiveMenuFlow, `"greeting_text":"Press 1 for sales, 2 for support",`,
+		`"greeting_text":"Press 1 for sales, 2 for support","invalid_text":"Sorry, that's not an option.",`, 1)
+	m := NewSimManager()
+	snap, _ := m.Start(simOwner, []byte(flow), SimInput{})
+	snap, _ = m.Input(simOwner, snap.SessionID, "9")
+	if snap.AwaitingNode == nil || !strings.HasPrefix(snap.AwaitingNode.Prompt, "Sorry, that's not an option.") {
+		t.Fatalf("re-prompt = %+v, want the invalid-input message first", snap.AwaitingNode)
+	}
 }
