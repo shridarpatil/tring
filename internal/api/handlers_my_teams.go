@@ -135,7 +135,7 @@ func (s *Server) handleListMyTeams(w http.ResponseWriter, r *http.Request) {
 // like a missing one, so team names don't leak.
 func (s *Server) handleGetMyTeam(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	if !p.CanViewTeam(name) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
@@ -196,7 +196,7 @@ func (s *Server) teamCallsToday(r *http.Request, tenantID uuid.UUID, team string
 // belongs to (calls.team or a queue stint, not the answering agent's teams).
 func (s *Server) handleMyTeamCallRecording(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid id")
@@ -223,7 +223,7 @@ func (s *Server) handleMyTeamCallRecording(w http.ResponseWriter, r *http.Reques
 // touches position), so this can't grant manager rights.
 func (s *Server) handleAddMyTeamMember(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	if !p.ManagesTeam(name) {
 		writeError(w, http.StatusForbidden, "not permitted")
 		return
@@ -261,7 +261,7 @@ func (s *Server) handleAddMyTeamMember(w http.ResponseWriter, r *http.Request) {
 // re-adding would strip the flag, which only supervisors and admins change.
 func (s *Server) handleRemoveMyTeamMember(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	if !p.ManagesTeam(name) {
 		writeError(w, http.StatusForbidden, "not permitted")
 		return
@@ -309,7 +309,7 @@ func (s *Server) handleSetMyTeamManager(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusForbidden, "not permitted")
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid user id")
@@ -339,7 +339,7 @@ func (s *Server) handleSetMyTeamManager(w http.ResponseWriter, r *http.Request) 
 // manager's add-member picker (non-admins can't call GET /v1/users).
 func (s *Server) handleMyTeamCandidates(w http.ResponseWriter, r *http.Request) {
 	p := principalFromCtx(r.Context())
-	name := chi.URLParam(r, "name")
+	name := nameParam(r)
 	if !p.CanViewTeam(name) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
