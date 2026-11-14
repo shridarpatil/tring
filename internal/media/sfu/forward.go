@@ -410,10 +410,13 @@ func (s *SFU) onPublish(p *Peer, remote *webrtc.TrackRemote) {
 			p.log.Debug("publisher read loop ended", "err", err)
 			return
 		}
-		if err := track.WriteRTP(pkt); err != nil {
-			p.log.Debug("fan-out write ended", "err", err)
-			return
-		}
+		// The error is ignored on purpose: pion writes to every subscriber's
+		// binding and only aggregates the failures, so an error means SOME
+		// subscriber is broken (its PC closed while its sender is still bound,
+		// e.g. a dropped tab in the reconnect grace) — returning here would
+		// silence this publisher for everyone else for the rest of the call.
+		// The broken binding goes away when its sender is removed.
+		_ = track.WriteRTP(pkt)
 		if kind == webrtc.RTPCodecTypeVideo {
 			teeVideoSinks(pub, p.pid, videoStream, remote.Codec().MimeType, pkt)
 		} else {

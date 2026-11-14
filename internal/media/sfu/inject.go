@@ -68,9 +68,9 @@ func (s *SFU) InjectSource(roomID room.RoomID, src room.ParticipantSource, cap w
 				s.log.Debug("injected source read ended", "participant", src.ID(), "err", err)
 				return
 			}
-			if err := track.WriteRTP(pkt); err != nil {
-				return
-			}
+			// Ignored, as in onPublish's copy loop: one broken subscriber's
+			// error must not stop the source reaching everyone else.
+			_ = track.WriteRTP(pkt)
 			teeSinks(pub, src.ID(), pkt)
 		}
 	}()
