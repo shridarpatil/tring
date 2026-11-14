@@ -89,9 +89,9 @@ func TestTransferToTeam(t *testing.T) {
 	testTransfer(t, func(f *fixture, a1 *Agent) { a1.TransferToTeam(f.team) })
 }
 
-// testTransfer: agent one transfers an inbound call; agent two (the team's
-// only member) is rung, joins, and then hears the customer and is heard by
-// them, while agent one's leg ends.
+// testTransfer: agent one transfers an inbound call and stays on it while
+// agent two (the team's only member) is rung. Agent two joins and then hears
+// the customer and is heard by them; only then does agent one's leg end.
 func testTransfer(t *testing.T, transfer func(*fixture, *Agent)) {
 	live(t, func(t *testing.T) error {
 		f := seed(t) // this attempt's client
@@ -102,11 +102,23 @@ func testTransfer(t *testing.T, transfer func(*fixture, *Agent)) {
 		}
 		transfer(f, c.a1)
 		c.a1.WaitMsg("transfer-ok", 10*time.Second)
-		c.a1.WaitMsg("ended", 10*time.Second)
 		room, _, _ := a2.WaitIncoming(15 * time.Second)
+		// Transfer with fallback: agent one waits on the call until someone
+		// answers, so nothing may have ended its leg yet.
+		for drained := false; !drained; {
+			select {
+			case m := <-c.a1.ctrl:
+				if m.Type == "ended" {
+					t.Errorf("agent one's leg ended before agent two answered")
+				}
+			default:
+				drained = true
+			}
+		}
 		if err := a2.Join(room); err != nil {
 			return err
 		}
+		c.a1.WaitMsg("ended", 10*time.Second)
 		from := a2.JoinedAt().Add(settle)
 		hears(t, "transferred customer", c.customer.Got, 8000, from, FreqAgent2)
 		got := Between(a2.Got().Since(from), from, from.Add(2*time.Second))
