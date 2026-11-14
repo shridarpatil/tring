@@ -63,6 +63,26 @@ func transcodeToOpusOgg(ctx context.Context, src, dst string) error {
 
 var errNoFFmpeg = errors.New("ffmpeg not found")
 
+// isOggOpus reports whether the file's first Ogg page holds an OpusHead packet,
+// i.e. the stream is Opus rather than another codec in the same container
+// (Vorbis starts "\x01vorbis"). Page layout: 27-byte header whose last byte is
+// the segment count, then the segment table, then the first packet.
+func isOggOpus(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	b := make([]byte, 27+255+8)
+	n, _ := io.ReadFull(f, b)
+	b = b[:n]
+	if len(b) < 27 || string(b[:4]) != "OggS" {
+		return false
+	}
+	off := 27 + int(b[26])
+	return len(b) >= off+8 && string(b[off:off+8]) == "OpusHead"
+}
+
 type Audio struct {
 	ID        uuid.UUID `json:"id"`
 	TenantID  uuid.UUID `json:"tenant_id"`
@@ -140,18 +160,39 @@ func (s *Server) handleUploadAudio(w http.ResponseWriter, r *http.Request) {
 	// Transcode to Opus-Ogg so the prompt plays on the pion web plane (it decodes
 	// Opus only). Replaces the original on success; if ffmpeg is absent we keep
 	// the original (works for FreeSWITCH, just not the web plane).
+	// An .ogg is only already playable when it carries Opus: Ogg is just the
+	// container, and Ogg/Vorbis stored as-is reached callers through the Opus
+	// player as noise. So it's sniffed and transcoded like any other format.
 	storedExt, format := ext, strings.TrimPrefix(ext, ".")
-	if ext != ".ogg" {
+	if ext != ".ogg" || !isOggOpus(diskPath) {
 		oggPath := filepath.Join(tenantDir, fileID.String()+".ogg")
-		if terr := transcodeToOpusOgg(r.Context(), diskPath, oggPath); terr == nil {
-			_ = os.Remove(diskPath)
+		// A temp name: for an .ogg upload the source already sits at oggPath.
+		tmpPath := filepath.Join(tenantDir, fileID.String()+".tmp.ogg")
+		terr := transcodeToOpusOgg(r.Context(), diskPath, tmpPath)
+		if terr == nil {
+			terr = os.Rename(tmpPath, oggPath)
+		}
+		switch {
+		case terr == nil:
+			if diskPath != oggPath {
+				_ = os.Remove(diskPath)
+			}
 			diskPath, storedExt, format = oggPath, ".ogg", "ogg"
 			if fi, statErr := os.Stat(oggPath); statErr == nil {
 				written = fi.Size()
 			}
-		} else if errors.Is(terr, errNoFFmpeg) {
+		case ext == ".ogg":
+			// Unlike WAV/MP3, a non-Opus Ogg kept as-is would be fed to the
+			// Opus player (the .ogg name says it's ready), so refuse it.
+			_ = os.Remove(tmpPath)
+			_ = os.Remove(diskPath)
+			s.log.Warn("audio: non-Opus Ogg could not be transcoded", "file", hdr.Filename, "err", terr)
+			writeError(w, http.StatusUnprocessableEntity, "this .ogg is not Opus (e.g. Vorbis) and could not be converted; upload Ogg/Opus, WAV or MP3")
+			return
+		case errors.Is(terr, errNoFFmpeg):
 			s.log.Warn("audio: ffmpeg not found — stored as-is; won't play on the web plane", "file", hdr.Filename)
-		} else {
+		default:
+			_ = os.Remove(tmpPath)
 			s.log.Warn("audio: transcode failed — stored original", "err", terr)
 		}
 	} else {
