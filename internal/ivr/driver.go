@@ -52,6 +52,10 @@ type CallDriver interface {
 	Hangup(ctx context.Context, n *Node) (NodeResult, error) // terminal: Outcome ""
 }
 
+// OutcomeHangup is the step outcome recorded for a node interrupted by the
+// call ending (the caller hung up) — the walk stops there.
+const OutcomeHangup = "hangup"
+
 // Walk traverses the flow from entry, running each node's effect via the driver
 // and following the edge matching the returned outcome, until a terminal node
 // ("" outcome), a node with no matching outgoing edge, or MaxDepth. It records
@@ -64,6 +68,9 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 	obs, observed := d.(stepObserver)
 	nodeID := entry
 	for depth := 0; depth < MaxDepth; depth++ {
+		if ctx.Err() != nil {
+			return path, nil // the call ended; nothing more runs for it
+		}
 		node, ok := FindNode(flow, nodeID)
 		if !ok {
 			return path, fmt.Errorf("node %s not found", nodeID)
@@ -75,7 +82,14 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 		}
 		res, err := runNode(ctx, node, d)
 		outcome := res.Outcome
-		if err != nil {
+		// The call ended while this node ran (the caller hung up): its wait gave
+		// up on cancellation, so the outcome it reports ("timeout", "no_answer")
+		// never happened. Record the hangup and follow no edge.
+		hungUp := ctx.Err() != nil && !res.End
+		switch {
+		case hungUp:
+			outcome, err = OutcomeHangup, nil
+		case err != nil:
 			outcome = "error"
 		}
 		path = append(path, Step{
@@ -89,7 +103,7 @@ func Walk(ctx context.Context, flow *Flow, entry string, d CallDriver) ([]Step, 
 		if err != nil {
 			return path, fmt.Errorf("node %s (%s): %w", node.ID, node.Type, err)
 		}
-		if res.Outcome == "" || res.End {
+		if res.Outcome == "" || res.End || hungUp {
 			return path, nil // terminal node, or the call ended during it
 		}
 		next := FindNextNode(flow, nodeID, res.Outcome)
