@@ -280,17 +280,28 @@ func startGateway(d *deps) (*gatewayRole, error) {
 	return g, nil
 }
 
+// endCallsTimeout bounds the teardown of the calls a timed-out drain ends: BYEs,
+// CDR settles and webhook dispatch, before the HTTP servers stop.
+const endCallsTimeout = 10 * time.Second
+
 // drain takes no new calls and lets the live ones finish, up to
-// gateway_drain_seconds. Keep compose's stop_grace_period above that, or Docker
-// SIGKILLs mid-drain. It returns the calls still live when it gave up.
+// gateway_drain_seconds, then ends whatever is still up. Keep compose's
+// stop_grace_period above gateway_drain_seconds + endCallsTimeout + the
+// recording flush in shutdown, or Docker SIGKILLs mid-drain. It returns the
+// calls still live when it gave up.
 func (g *gatewayRole) drain(ctx context.Context) int {
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(g.d.k.Int("gateway_drain_seconds"))*time.Second)
+	dctx, cancel := context.WithTimeout(ctx, time.Duration(g.d.k.Int("gateway_drain_seconds"))*time.Second)
 	defer cancel()
-	left := g.sig.Drain(ctx)
-	if left > 0 {
-		g.d.log.Warn("drain timed out, ending live calls", "calls", left)
-	} else {
+	left := g.sig.Drain(dctx)
+	if left == 0 {
 		g.d.log.Info("drained, shutting down")
+		return 0
+	}
+	g.d.log.Warn("drain timed out, ending live calls", "calls", left)
+	ectx, ecancel := context.WithTimeout(ctx, endCallsTimeout)
+	defer ecancel()
+	if left = g.sig.EndAll(ectx); left > 0 {
+		g.d.log.Warn("calls still up after ending them", "calls", left)
 	}
 	return left
 }
