@@ -280,3 +280,50 @@ func TestPlugRejectsAtCapacity(t *testing.T) {
 		t.Fatalf("status = %d, want 503", got)
 	}
 }
+
+// A caller who hangs up while the DID is still resolving makes FreeSWITCH
+// CANCEL the INVITE before Answer runs. Answer's 200 then fails, and the call
+// must still release its slot — leaked entries count against maxCalls until
+// every new INVITE is refused 503 Busy.
+func TestPlugAnswerAfterCancelFreesSlot(t *testing.T) {
+	cfg := Config{SIPListen: "127.0.0.1:15890", SIPAdvertise: "127.0.0.1", RTPMin: 13800, RTPMax: 13900, OpusPT: 111, DTMFPT: 101}
+	p, err := New(cfg, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go p.Run(ctx)
+
+	inbound := make(chan room.InboundCall, 1)
+	p.OnInbound(func(ic room.InboundCall) { inbound <- ic })
+
+	ua, _ := sipgo.NewUA()
+	client, _ := sipgo.NewClient(ua)
+	contact := sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15891}}
+	dc := sipgo.NewDialogClientCache(client, contact)
+	dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000003", Host: "127.0.0.1", Port: 15890}, []byte(fsOffer), sip.NewHeader("Content-Type", "application/sdp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ic room.InboundCall
+	select {
+	case ic = <-inbound:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnInbound never fired")
+	}
+
+	// Cancelling WaitAnswer's ctx makes sipgo send CANCEL for the INVITE.
+	waitCtx, waitCancel := context.WithCancel(ctx)
+	waitCancel()
+	_ = dlg.WaitAnswer(waitCtx, sipgo.AnswerOptions{})
+
+	time.Sleep(200 * time.Millisecond) // let the CANCEL reach the plug (test-only)
+
+	if _, err := p.Answer(ic.CallID); err == nil {
+		t.Fatal("Answer after CANCEL succeeded; want the failed 200 to surface")
+	}
+	if c := p.get(ic.CallID); c != nil {
+		t.Fatal("call still registered after Answer failed; it leaks a capacity slot")
+	}
+}
