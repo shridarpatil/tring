@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/url"
+	"strings"
 
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/mask"
@@ -41,6 +43,56 @@ func maskCall(c *Call) {
 		ref := mask.Number(*c.ClientRef)
 		c.ClientRef = &ref
 	}
+	c.IVRPath = maskIVRPath(c.IVRPath)
+}
+
+// maskIVRPath masks the numbers an IVR journey carries: step details (a
+// transfer-to-number target, text with {{caller}} substituted) and gathered
+// digits. A callback step's URL loses its query string, where numbers and
+// tokens usually ride. Every other step field is kept as recorded. A path that
+// doesn't parse as a list of steps is dropped rather than passed through.
+func maskIVRPath(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var steps []map[string]any
+	if json.Unmarshal(raw, &steps) != nil {
+		return nil
+	}
+	for _, st := range steps {
+		if d, ok := st["detail"].(string); ok {
+			if st["action"] == "http_call" {
+				d = withoutQuery(d)
+			}
+			st["detail"] = mask.Text(d)
+		}
+		if in, ok := st["dtmf_input"].(string); ok {
+			st["dtmf_input"] = mask.Text(in)
+		}
+	}
+	out, err := json.Marshal(steps)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// withoutQuery drops the query and fragment from a callback detail
+// ("<METHOD> <url>").
+func withoutQuery(detail string) string {
+	method, rawURL, ok := strings.Cut(detail, " ")
+	if !ok {
+		method, rawURL = "", detail
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return method // unparseable: keep only the method
+	}
+	u.RawQuery, u.Fragment, u.User = "", "", nil
+	if method == "" {
+		return u.String()
+	}
+	return method + " " + u.String()
 }
 
 // maskCalls masks the client side of calls in place.
