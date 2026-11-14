@@ -55,9 +55,14 @@ type SimSnapshot struct {
 // session is the in-memory record. Not exported — clients see only
 // the SimSnapshot view.
 type simSession struct {
-	id          uuid.UUID
-	owner       uuid.UUID // tenant that started it; only it may drive the session
-	flow        *ivrFlowData
+	id    uuid.UUID
+	owner uuid.UUID // tenant that started it; only it may drive the session
+	flow  *ivrFlowData
+
+	// mu guards everything below. Overlapping requests on one session (a
+	// double submit) would otherwise write vars while another request's
+	// response encodes it — a fatal runtime error, not a recoverable panic.
+	mu          sync.Mutex
 	currentNode string // where to resume; "" once ended
 	vars        map[string]string
 	steps       []SimStep
@@ -103,10 +108,13 @@ func (m *SimManager) Start(owner uuid.UUID, flowJSON []byte, in SimInput) (*SimS
 		now:         in.Now,
 		lastTouched: time.Now(),
 	}
+	s.mu.Lock()
 	m.sessions.Store(s.id, s)
 	m.runUntilPause(s, "")
+	snap := snapshot(s)
+	s.mu.Unlock()
 	m.gcExpired()
-	return snapshot(s), nil
+	return snap, nil
 }
 
 // Input feeds the supplied DTMF into the paused node and continues
@@ -123,6 +131,8 @@ func (m *SimManager) Input(owner uuid.UUID, sessionID string, dtmf string) (*Sim
 		return nil, fmt.Errorf("session not found")
 	}
 	s := v.(*simSession)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.lastTouched = time.Now()
 	if s.ended {
 		return snapshot(s), nil
@@ -133,7 +143,7 @@ func (m *SimManager) Input(owner uuid.UUID, sessionID string, dtmf string) (*Sim
 
 // runUntilPause walks the flow from s.currentNode, applying `input`
 // to the first paused-on node (if any), then keeps going until the
-// next pause point or the flow ends.
+// next pause point or the flow ends. Caller holds s.mu.
 func (m *SimManager) runUntilPause(s *simSession, input string) {
 	// Reset pause state before each run.
 	s.awaiting = nil
@@ -313,7 +323,10 @@ func (m *SimManager) gcExpired() {
 	cutoff := time.Now().Add(-sessionTTL)
 	m.sessions.Range(func(k, v interface{}) bool {
 		s := v.(*simSession)
-		if s.lastTouched.Before(cutoff) {
+		s.mu.Lock()
+		idle := s.lastTouched.Before(cutoff)
+		s.mu.Unlock()
+		if idle {
 			m.sessions.Delete(k)
 		}
 		return true
@@ -321,12 +334,14 @@ func (m *SimManager) gcExpired() {
 }
 
 // snapshot is the in-memory→wire-shape projection. Keeps internal
-// fields (depth, lastTouched, flow pointer) off the response.
+// fields (depth, lastTouched, flow pointer) off the response, and copies
+// steps and vars so the response is encoded after s.mu is released without
+// sharing state a later request mutates. Caller holds s.mu.
 func snapshot(s *simSession) *SimSnapshot {
 	out := &SimSnapshot{
 		SessionID: s.id.String(),
-		Steps:     s.steps,
-		Vars:      s.vars,
+		Steps:     append([]SimStep(nil), s.steps...),
+		Vars:      copyVars(s.vars),
 	}
 	switch {
 	case s.errString != "":
