@@ -196,41 +196,100 @@ func removeTicket(q []string, t string) []string {
 // normal). RPUSH appends to the tail; the head (LINDEX 0) is the oldest waiter,
 // so the lists are the FIFO and the ticket just identifies a waiter for
 // IsHead/Remove. One global queue per team across all processes.
-type redisQueue struct{ c *cache.Cache }
+//
+// Every ticket also has a lease key its owning process renews while the
+// caller waits. A ticket whose owner died (crash, SIGKILL, drain timeout) or
+// whose Remove was lost to a Redis error stops being renewed, and IsHead
+// sweeps it once it reaches the front — otherwise it would sit at the head
+// forever and no later caller would ever be rung.
+type redisQueue struct {
+	c     *cache.Cache
+	lease time.Duration
+
+	mu    sync.Mutex
+	beats map[string]context.CancelFunc // ticket → stops its lease renewal
+}
 
 // NewRedisQueue returns the Redis-backed Queue (shared, durable).
-func NewRedisQueue(c *cache.Cache) Queue { return &redisQueue{c: c} }
+func NewRedisQueue(c *cache.Cache) Queue { return newRedisQueue(c, queueLease) }
+
+func newRedisQueue(c *cache.Cache, lease time.Duration) *redisQueue {
+	return &redisQueue{c: c, lease: lease, beats: map[string]context.CancelFunc{}}
+}
 
 // queueTTL is a safety net so a fully-abandoned queue key self-expires; it's
 // refreshed on every enqueue. Far longer than any real wait.
 const queueTTL = time.Hour
 
-func queuePKey(key string) string { return "tring:queue:p:" + key }
-func queueNKey(key string) string { return "tring:queue:n:" + key }
+// queueLease is how long a waiter's ticket survives without renewal — the
+// time a dead caller can block the head of line. Renewed every lease/3, so
+// two consecutive failed renewals are tolerated.
+const queueLease = 15 * time.Second
+
+const queueLeasePrefix = "tring:queue:live:"
+
+func queuePKey(key string) string   { return "tring:queue:p:" + key }
+func queueNKey(key string) string   { return "tring:queue:n:" + key }
+func queueLeaseKey(t string) string { return queueLeasePrefix + t }
 
 func (q *redisQueue) Enqueue(ctx context.Context, key string, priority bool) string {
 	t := uuid.NewString()
+	// Lease first, so the ticket is never in the list without one.
+	q.c.Set(ctx, queueLeaseKey(t), []byte("1"), q.lease)
 	if priority {
 		q.c.RPush(ctx, queuePKey(key), t, queueTTL)
 	} else {
 		q.c.RPush(ctx, queueNKey(key), t, queueTTL)
 	}
+
+	// Renewal ends with the call's ctx too, so a caller that leaves without
+	// reaching Remove still lets its lease lapse.
+	hb, stop := context.WithCancel(ctx)
+	q.mu.Lock()
+	q.beats[t] = stop
+	q.mu.Unlock()
+	go func() {
+		tick := time.NewTicker(q.lease / 3)
+		defer tick.Stop()
+		for {
+			select {
+			case <-hb.Done():
+				return
+			case <-tick.C:
+				q.c.Set(hb, queueLeaseKey(t), []byte("1"), q.lease)
+			}
+		}
+	}()
 	return t
 }
 
+// stopHeartbeat ends ticket t's lease renewal. Local and infallible, so it
+// takes effect even when the Redis cleanup in Remove fails.
+func (q *redisQueue) stopHeartbeat(t string) {
+	q.mu.Lock()
+	stop := q.beats[t]
+	delete(q.beats, t)
+	q.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
 func (q *redisQueue) IsHead(ctx context.Context, key, ticket string) bool {
-	if h, ok := q.c.LHead(ctx, queuePKey(key)); ok {
+	if h, ok := q.c.LHeadLive(ctx, queuePKey(key), queueLeasePrefix); ok {
 		return h == ticket // priority tier drains first
 	}
-	if h, ok := q.c.LHead(ctx, queueNKey(key)); ok {
+	if h, ok := q.c.LHeadLive(ctx, queueNKey(key), queueLeasePrefix); ok {
 		return h == ticket
 	}
 	return false
 }
 
 func (q *redisQueue) Remove(ctx context.Context, key, ticket string) {
+	q.stopHeartbeat(ticket)
 	q.c.LRem(ctx, queuePKey(key), ticket)
 	q.c.LRem(ctx, queueNKey(key), ticket)
+	_ = q.c.Delete(ctx, queueLeaseKey(ticket))
 }
 
 func (q *redisQueue) Depth(ctx context.Context, key string) int {
