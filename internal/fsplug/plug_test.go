@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -325,5 +327,89 @@ func TestPlugAnswerAfterCancelFreesSlot(t *testing.T) {
 	}
 	if c := p.get(ic.CallID); c != nil {
 		t.Fatal("call still registered after Answer failed; it leaks a capacity slot")
+	}
+}
+
+// fakeFS is a sipgo UA standing in for FreeSWITCH: it INVITEs the plug and
+// listens on fsPort so in-dialog requests the plug sends (BYE) get answered.
+func fakeFS(t *testing.T, ctx context.Context, fsPort int) *sipgo.DialogClientCache {
+	t.Helper()
+	ua, _ := sipgo.NewUA()
+	client, _ := sipgo.NewClient(ua)
+	srv, _ := sipgo.NewServer(ua)
+	dc := sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: fsPort}})
+	srv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = dc.ReadBye(req, tx) })
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: fsPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { <-ctx.Done(); _ = conn.Close() }()
+	go func() { _ = srv.ServeUDP(conn) }()
+	return dc
+}
+
+// Every inbound dialog Tring ends itself must leave sipgo's dialog cache:
+// only a remote BYE (ReadBye) closes the session on its own, so without an
+// explicit Close each Reject / Hangup leaks the session for the process's
+// lifetime.
+func TestPlugTeardownClosesDialog(t *testing.T) {
+	for i, tc := range []struct {
+		name     string
+		answer   bool
+		teardown func(p *Plug, id room.CallID) error
+	}{
+		{"hangup answered", true, func(p *Plug, id room.CallID) error { return p.Hangup(id) }},
+		{"hangup unanswered", false, func(p *Plug, id room.CallID) error { return p.Hangup(id) }},
+		{"reject", false, func(p *Plug, id room.CallID) error { return p.Reject(id) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port := 15930 + 4*i
+			cfg := Config{SIPListen: "127.0.0.1:" + strconv.Itoa(port), SIPAdvertise: "127.0.0.1", RTPMin: 14000 + 100*i, RTPMax: 14099 + 100*i, OpusPT: 111, DTMFPT: 101}
+			p, err := New(cfg, slog.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			go p.Run(ctx)
+			inbound := make(chan room.InboundCall, 1)
+			p.OnInbound(func(ic room.InboundCall) { inbound <- ic })
+
+			dc := fakeFS(t, ctx, port+1)
+			dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000004", Host: "127.0.0.1", Port: port}, []byte(fsOffer), sip.NewHeader("Content-Type", "application/sdp"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ic room.InboundCall
+			select {
+			case ic = <-inbound:
+			case <-time.After(2 * time.Second):
+				t.Fatal("OnInbound never fired")
+			}
+			sess := p.get(ic.CallID).sess
+			if tc.answer {
+				leg, err := p.Answer(ic.CallID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer leg.Source.Close()
+				if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				if err := dlg.Ack(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := p.ds.MatchDialogRequest(sess.InviteRequest); err != nil {
+				t.Fatalf("dialog not cached before teardown: %v", err)
+			}
+
+			if err := tc.teardown(p, ic.CallID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.ds.MatchDialogRequest(sess.InviteRequest); !errors.Is(err, sipgo.ErrDialogDoesNotExists) {
+				t.Fatalf("dialog still cached after teardown (err=%v); it leaks", err)
+			}
+		})
 	}
 }

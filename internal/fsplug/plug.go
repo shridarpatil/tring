@@ -258,6 +258,7 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 	if err != nil {
 		p.log.Warn("fsplug: bad offer, rejecting", "err", err)
 		_ = sess.Respond(sip.StatusBadRequest, "Bad SDP", nil)
+		_ = sess.Close() // never registered in p.calls, so forget can't
 		return
 	}
 	id := room.CallID(req.CallID().Value())
@@ -400,10 +401,20 @@ func (p *Plug) Hangup(id room.CallID) error {
 	return err
 }
 
+// forget unregisters an inbound call and closes its sipgo dialog session.
+// The Close is what drops the session from the DialogServerCache: sipgo only
+// does that itself on a remote BYE, so every call Tring ends (Reject, Hangup,
+// ring timeout, a failed answer) would otherwise stay cached forever. Taking
+// the call out of p.calls under the lock makes the Close happen exactly once
+// however many teardown paths race here (Hangup and watchDialog both do).
 func (p *Plug) forget(id room.CallID) {
 	p.mu.Lock()
+	c, ok := p.calls[id]
 	delete(p.calls, id)
 	p.mu.Unlock()
+	if ok && c.sess != nil {
+		_ = c.sess.Close()
+	}
 }
 
 // HangupOutbound BYEs the carrier for a room-initiated outbound call,
