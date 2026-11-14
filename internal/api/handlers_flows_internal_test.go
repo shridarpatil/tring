@@ -84,6 +84,35 @@ func TestPrerenderFlowAudio(t *testing.T) {
 	}
 }
 
+// Editing synthesized text to include {{vars}} must drop the audio rendered
+// from the old text; it used to stay attached and keep playing the old words.
+// The reverse edit (vars removed) synthesizes the new text.
+func TestPrerenderFlowAudioDropsStaleTTSForVars(t *testing.T) {
+	s := &Server{tts: stubPiperEngine(t), audioDir: "/sounds", log: slog.Default()}
+	nodeCfg := func(def string) map[string]any {
+		t.Helper()
+		var root map[string]any
+		if err := json.Unmarshal(s.prerenderFlowAudio(context.Background(), json.RawMessage(def)), &root); err != nil {
+			t.Fatal(err)
+		}
+		return root["nodes"].([]any)[0].(map[string]any)["config"].(map[string]any)
+	}
+
+	cfg := nodeCfg(`{"nodes":[{"id":"g","config":{"greeting_text":"Hello {{name}}","audio_file":"/sounds/tts/old.ogg"}}]}`)
+	if af, ok := cfg["audio_file"]; ok {
+		t.Fatalf("stale synthesized audio kept for {{vars}} text: %v", af)
+	}
+	// An uploaded file is not TTS-managed and stays.
+	cfg = nodeCfg(`{"nodes":[{"id":"g","config":{"greeting_text":"Hello {{name}}","audio_file":"/sounds/t/up.ogg"}}]}`)
+	if af := cfg["audio_file"]; af != "/sounds/t/up.ogg" {
+		t.Fatalf("uploaded audio_file dropped: %v", af)
+	}
+	cfg = nodeCfg(`{"nodes":[{"id":"g","config":{"greeting_text":"Hello there"}}]}`)
+	if af, _ := cfg["audio_file"].(string); !strings.HasPrefix(af, "/sounds/tts/") {
+		t.Fatalf("plain text not synthesized: %q", af)
+	}
+}
+
 func TestPrerenderFlowAudioDisabledIsPassThrough(t *testing.T) {
 	s := &Server{tts: nil, log: slog.Default()} // no engine
 	def := json.RawMessage(`{"nodes":[{"id":"g","config":{"greeting_text":"hi"}}]}`)

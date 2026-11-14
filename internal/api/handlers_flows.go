@@ -118,8 +118,9 @@ func (s *Server) prerenderFlowAudio(ctx context.Context, def json.RawMessage) js
 		text := strings.TrimSpace(stringOf(cfg["greeting_text"]))
 		af := stringOf(cfg["audio_file"])
 		managed := strings.Contains(af, "/"+ttsSubdir+"/")
+		hasVars := strings.Contains(text, "{{")
 		switch {
-		case text != "" && !strings.Contains(text, "{{") && (af == "" || managed):
+		case text != "" && !hasVars && (af == "" || managed):
 			fp, err := s.synthFlowText(ctx, text)
 			if err != nil {
 				s.log.Warn("tts: flow prompt synth failed; node stays silent", "err", err)
@@ -129,8 +130,10 @@ func (s *Server) prerenderFlowAudio(ctx context.Context, def json.RawMessage) js
 				cfg["audio_file"] = fp
 				changed = true
 			}
-		case text == "" && managed:
-			// Text cleared on a node we'd synthesized for — drop the stale audio.
+		case (text == "" || hasVars) && managed:
+			// Text cleared, or edited to include {{vars}} (which can't be
+			// pre-rendered), on a node we'd synthesized for: the file still
+			// speaks the old text, so drop it.
 			delete(cfg, "audio_file")
 			changed = true
 		}
