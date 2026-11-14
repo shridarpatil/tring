@@ -470,3 +470,109 @@ func TestFailedPhoneTransferHangsUpCaller(t *testing.T) {
 		t.Fatal("the phone caller was not hung up after the failed transfer")
 	}
 }
+
+// outboundRoom registers rid as a click-to-call room whose customer is the
+// carrier leg pid (the port, not a participant), as clicktocall.go does.
+func outboundRoom(s *Server, rid room.RoomID, pid room.ParticipantID) {
+	s.mu.Lock()
+	s.outboundLegs[rid] = pid
+	s.mu.Unlock()
+}
+
+// A click-to-call customer is the room's port, like a phone caller: the
+// transferring agent leaving empties the room, which must not cancel the ring
+// or hang up the customer.
+func TestOutboundTransferKeepsCustomerWhileRinging(t *testing.T) {
+	orig := newFakeOriginator(nil)
+	s := newOutboundServer(t, orig, nil)
+	rid := room.RoomID("t/out-guard")
+	outboundRoom(s, rid, "cust-guard")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+
+	ctx, ok := s.beginTransfer(rid)
+	if !ok {
+		t.Fatal("beginTransfer should succeed")
+	}
+	agent.Leave()
+
+	if ctx.Err() != nil || !s.transferActive(rid) {
+		t.Fatal("the transfer ring was cancelled when the transferring agent left")
+	}
+	select {
+	case pid := <-orig.hangups:
+		t.Fatalf("customer leg %q was hung up during the transfer ring", pid)
+	default:
+	}
+}
+
+// A click-to-call customer who hangs up while the transfer rings stops the ring.
+func TestOutboundCustomerHangupEndsTransferRing(t *testing.T) {
+	s := newOutboundServer(t, newFakeOriginator(nil), nil)
+	rid := room.RoomID("t/out-guard-2")
+	outboundRoom(s, rid, "cust-guard-2")
+	ctx, ok := s.beginTransfer(rid)
+	if !ok {
+		t.Fatal("beginTransfer should succeed")
+	}
+
+	s.endOutboundRoom(rid, "callee_hangup")
+
+	if ctx.Err() == nil || s.transferActive(rid) {
+		t.Fatal("the transfer ring kept going after the customer hung up")
+	}
+}
+
+// A blind transfer of a click-to-call that nobody answers plays the no-answer
+// message and then hangs up the customer's carrier leg.
+func TestFailedOutboundTransferHangsUpCustomer(t *testing.T) {
+	sf, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	orig := newFakeOriginator(nil)
+	xm := &failXferMsg{}
+	s := New(Config{
+		SFU:             sf,
+		Originator:      orig,
+		Teams:           shortTeams{members: map[string][]string{"sales": {"carol"}}},
+		TransferMessage: xm,
+	})
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/out-fail")
+	outboundRoom(s, rid, "cust-fail")
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	target := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"carol": target.conn("carol-pid")}
+	s.mu.Unlock()
+
+	fc := &fakeConn{}
+	done := make(chan struct{})
+	go func() {
+		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "agent", msg{Type: msgTransfer, ToTeam: "sales"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleTransfer did not return (the ring never timed out)")
+	}
+
+	if got := xm.count(); got != 1 {
+		t.Fatalf("no-answer message resolved %d times, want 1", got)
+	}
+	select {
+	case pid := <-orig.hangups:
+		if pid != "cust-fail" {
+			t.Fatalf("hung up %q, want cust-fail", pid)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the customer was not hung up after the failed transfer")
+	}
+}
