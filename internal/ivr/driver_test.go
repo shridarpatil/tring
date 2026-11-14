@@ -249,3 +249,58 @@ func TestWalkLeavesStepTimesNilWhenDriverUnclocked(t *testing.T) {
 		}
 	}
 }
+
+// hangupDriver is scriptDriver, except its menu blocks until the call ends and
+// then reports "timeout" — what a real collect does on ctx cancellation. It
+// records every node it was asked to run.
+type hangupDriver struct {
+	scriptDriver
+	ran []string
+}
+
+func (d *hangupDriver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	d.ran = append(d.ran, n.ID)
+	<-ctx.Done()
+	return ivr.NodeResult{Outcome: "timeout"}, nil
+}
+func (d *hangupDriver) Transfer(_ context.Context, n *ivr.Node) (ivr.NodeResult, error) {
+	d.ran = append(d.ran, n.ID)
+	return ivr.NodeResult{Outcome: "no_answer"}, nil
+}
+
+// A caller who hangs up mid-menu ends the walk there. The menu's wait returning
+// "timeout" on cancellation used to be followed like a real timeout — into a
+// transfer that rang, queued and fired webhooks for a caller who was gone.
+func TestWalkStopsWhenTheCallerHangsUp(t *testing.T) {
+	flow := &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "m", Type: ivr.NodeMenu},
+			{ID: "t", Type: ivr.NodeTransfer},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "m", Condition: "default"},
+			{From: "m", To: "t", Condition: "timeout"},
+		},
+	}
+	d := &hangupDriver{}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); cancel() }()
+
+	path, err := ivr.Walk(ctx, flow, "s", d)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	if got := ids(path); len(got) != 2 || got[1] != "m" {
+		t.Fatalf("path = %v, want [s m] (nothing after the hangup)", got)
+	}
+	if out := path[1].Outcome; out != ivr.OutcomeHangup {
+		t.Fatalf("menu outcome = %q, want %q", out, ivr.OutcomeHangup)
+	}
+	for _, id := range d.ran {
+		if id == "t" {
+			t.Fatal("the walk ran the transfer after the caller hung up")
+		}
+	}
+}

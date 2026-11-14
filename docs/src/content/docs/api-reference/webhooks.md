@@ -11,7 +11,7 @@ All management routes take a tenant API key with the `full` scope, or a console 
 
 | Event | Sent when | Picked in |
 |---|---|---|
-| `ivr.node` | An IVR step that names a webhook finishes. A transfer sends it when someone answers (`outcome: "answered"`) or nobody does. | A node's **Notify webhook** (`config.webhook_id`) |
+| `ivr.node` | An IVR step that names a webhook finishes. A transfer sends it when someone answers (`outcome: "answered"`) or nobody does. If the caller hangs up during the step, it is sent with `outcome: "hangup"` and the flow stops there. | A node's **Notify webhook** (`config.webhook_id`) |
 | `call.ended` | A call through the flow ends, however it ended: the caller hung up in the IVR or queue, after an agent, or the flow ended the call. | The flow's **On call end** (`end_webhook_id` in the definition) |
 
 A disabled or deleted webhook is skipped silently. Both events are sent by the gateway, in the background, so they never delay the call.
