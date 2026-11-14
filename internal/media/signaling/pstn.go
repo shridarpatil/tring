@@ -56,9 +56,15 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 	defer s.endPortCall()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	tenant, flowID, err := s.pstnDID.ResolveDID(ctx, ic.To)
+	if err == nil && flowID != "" {
+		// The number may point at a flow that is deactivated or has no entry
+		// node. Check before answering: once answered the carrier bills, and the
+		// caller would only hear silence.
+		_, err = s.loadFlow(ctx, tenant.String(), flowID)
+	}
 	cancel()
 	if err != nil || flowID == "" {
-		s.log.Warn("pstn: no flow for DID, rejecting", "did", ic.To, "err", err)
+		s.log.Warn("pstn: no runnable flow for DID, rejecting", "did", ic.To, "flow", flowID, "err", err)
 		_ = s.pstnGW.Reject(ic.CallID)
 		return
 	}

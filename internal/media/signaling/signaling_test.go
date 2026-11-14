@@ -630,6 +630,38 @@ func TestInboundPhoneCallWithoutFlowIsRejected(t *testing.T) {
 	}
 }
 
+// inactiveFlows fails every load, as flowstore does for a deactivated flow or
+// one saved without an entry node.
+type inactiveFlows struct{}
+
+func (inactiveFlows) Load(context.Context, string, string) (*ivr.Flow, error) {
+	return nil, errors.New("flow inactive")
+}
+func (inactiveFlows) FlowName(context.Context, string, string) (string, error) { return "", nil }
+
+// A number still pointing at a deactivated (or empty) flow must be rejected
+// before it is answered: answering bills the call, and with no IVR to serve it
+// the caller sat in silence until they gave up.
+func TestInboundPhoneCallToInactiveFlowIsRejected(t *testing.T) {
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: inactiveFlows{}})
+	fp := newFakePstn()
+	sig.AttachPstn(fp, fakeDIDs{tenant: uuid.New(), flow: "f-off"})
+
+	fp.inbound(room.InboundCall{CallID: "c3", From: "+91", To: "+1600"})
+	select {
+	case id := <-fp.rejected:
+		if id != "c3" {
+			t.Fatalf("rejected %q, want c3", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("call to an inactive flow was not rejected")
+	}
+}
+
 // fakeCallLog records CDR lifecycle hooks.
 type fakeCallLog struct {
 	mu       sync.Mutex
