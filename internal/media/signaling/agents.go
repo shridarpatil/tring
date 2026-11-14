@@ -573,7 +573,8 @@ func (p *pionRing) CallerAlive(ctx context.Context) bool { return ctx.Err() == n
 // Ring pops the incoming-call UI per the team strategy and waits up to perAttempt
 // for an agent to join the room. ring_all (or no strategy) pops ALL available
 // agents at once; the ordered strategies (round_robin / sequential / longest_wait)
-// pop exactly ONE — the next in OrderByStrategy order not yet tried this round —
+// pop exactly ONE — the Router already picked and reserved the next agent of the
+// round, so `ordered` holds just that one —
 // mirroring the FreeSWITCH plane's '|' one-at-a-time bridge. On no-answer the
 // single rung agent's popup is withdrawn so only one agent ever rings at a time;
 // the Router's next iteration re-orders and Ring advances to the next.
@@ -583,7 +584,7 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 	// ringing agent to another caller.
 	defer p.cancelSips(ordered)
 	p.ensureHold() // caller hears hold music from the first ring, not just once queued
-	oneAtATime := p.strategy != "" && p.strategy != "ring_all"
+	oneAtATime := routing.OneAtATime(p.strategy)
 
 	// A carrier caller is the room's SFU port: tell the widget it's a phone call
 	// (no screen share). Read before p.s.mu — the SFU has its own lock.

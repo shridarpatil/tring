@@ -115,3 +115,87 @@ func TestRouterAsyncAnswerBackstop(t *testing.T) {
 		t.Fatalf("out=%q label=%q, want completed/backstop", out, label)
 	}
 }
+
+// reservationSpy records, per Ring, which agents the router had reserved while
+// that ring was live; it never answers and cancels the route after n rings.
+type reservationSpy struct {
+	res      Reservations
+	tenant   string
+	all      []string
+	n        int
+	cancel   context.CancelFunc
+	rings    [][]string
+	reserved [][]string
+}
+
+func (*reservationSpy) Answered() (bool, string)                         { return false, "" }
+func (*reservationSpy) CallerAlive(ctx context.Context) bool             { return ctx.Err() == nil }
+func (*reservationSpy) Hold(context.Context, time.Duration, func() bool) {}
+func (s *reservationSpy) Ring(ctx context.Context, ordered []string, _ time.Duration) (RingOutcome, error) {
+	var held []string
+	for _, sip := range s.all {
+		if s.res.Reserved(ctx, ResKey(s.tenant, sip)) {
+			held = append(held, sip)
+		}
+	}
+	s.rings = append(s.rings, append([]string{}, ordered...))
+	s.reserved = append(s.reserved, held)
+	if len(s.rings) >= s.n {
+		s.cancel()
+	}
+	return RingOutcome{}, nil
+}
+
+// A one-at-a-time strategy rings one agent per attempt, so it must reserve only
+// that agent: reserving the whole team hid the other idle agents from every
+// other queued caller for the full ring window. Successive attempts still walk
+// the team, then start a new round.
+func TestRouterOneAtATimeReservesOnlyTheRungAgent(t *testing.T) {
+	for _, strategy := range []string{"sequential", "round_robin", "longest_wait"} {
+		t.Run(strategy, func(t *testing.T) {
+			res := NewMemReservations()
+			r := NewRouter(NewMemQueue(), res, NewMemRR(), nil, nil, nil, nil)
+			team := []string{"a", "b", "c"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			// Four attempts: a full round plus the wrap into the next.
+			spy := &reservationSpy{res: res, tenant: "t1", all: team, n: 4, cancel: cancel}
+			cfg := RouteConfig{TenantID: "t1", Team: "sales", Strategy: strategy, RingSeconds: time.Millisecond, MaxWait: time.Minute}
+			r.Run(ctx, cfg, func(context.Context) []string { return team }, spy)
+
+			if len(spy.rings) != 4 {
+				t.Fatalf("ring attempts = %d, want 4", len(spy.rings))
+			}
+			seen := map[string]bool{}
+			for i, rung := range spy.rings {
+				if len(rung) != 1 {
+					t.Fatalf("attempt %d rang %v, want exactly one agent", i+1, rung)
+				}
+				if len(spy.reserved[i]) != 1 || spy.reserved[i][0] != rung[0] {
+					t.Fatalf("attempt %d rang %v but reserved %v, want only the rung agent", i+1, rung, spy.reserved[i])
+				}
+				if i < 3 {
+					seen[rung[0]] = true
+				}
+			}
+			if len(seen) != 3 {
+				t.Fatalf("first round rang %v, want every agent once", spy.rings[:3])
+			}
+		})
+	}
+}
+
+// ring_all still reserves every agent it rings.
+func TestRouterRingAllReservesEveryRungAgent(t *testing.T) {
+	res := NewMemReservations()
+	r := NewRouter(NewMemQueue(), res, NewMemRR(), nil, nil, nil, nil)
+	team := []string{"a", "b", "c"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	spy := &reservationSpy{res: res, tenant: "t1", all: team, n: 1, cancel: cancel}
+	cfg := RouteConfig{TenantID: "t1", Team: "sales", Strategy: "ring_all", RingSeconds: time.Millisecond, MaxWait: time.Minute}
+	r.Run(ctx, cfg, func(context.Context) []string { return team }, spy)
+	if len(spy.rings) != 1 || len(spy.rings[0]) != 3 || len(spy.reserved[0]) != 3 {
+		t.Fatalf("rings = %v reserved = %v, want all three rung and reserved", spy.rings, spy.reserved)
+	}
+}
