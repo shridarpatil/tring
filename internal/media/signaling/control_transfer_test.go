@@ -71,12 +71,14 @@ func TestControlTransfer(t *testing.T) {
 	if code := post(tenant, body); code != http.StatusNoContent {
 		t.Fatalf("transfer: %d, want 204", code)
 	}
-	if !waitSaw(t, fc, msgEnded) {
-		t.Fatal("agent was not sent a terminal `ended`")
+	if !waitSaw(t, fc, msgTransferOK) {
+		t.Fatal("agent was not told the transfer is ringing")
 	}
-	waitGone(t, s, rid, agent.ID())
 	if !s.transferActive(rid) {
 		t.Fatal("target is not ringing")
+	}
+	if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, agent.ID()) {
+		t.Fatal("the agent left before anyone answered; it must wait for the fallback")
 	}
 	caller.Leave() // unblock the ring goroutine
 }

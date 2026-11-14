@@ -80,13 +80,43 @@ func waitSaw(t *testing.T, f *fakeConn, typ string) bool {
 	return false
 }
 
-// A committed blind transfer must terminate the initiating agent's leg with a
-// terminal `ended` (not just `transfer-ok`). Without it the agent SDK treats the
-// socket close as an unexpected drop and reconnects — rejoining the room (resetting
-// the call timer) and prematurely resolving the transfer ring so the real target
-// never receives the handed-off call.
-func TestTransferEndsInitiatingAgentLeg(t *testing.T) {
+// isolationSpy records the deaf / audience hooks a transfer drives, so a test
+// can see the waiting agent cut off from the call and restored.
+type isolationSpy struct {
+	mu   sync.Mutex
+	deaf map[room.ParticipantID]bool
+	all  map[room.ParticipantID]bool // audience: true = everyone hears them
+}
+
+func spyIsolation(s *Server) *isolationSpy {
+	sp := &isolationSpy{deaf: map[room.ParticipantID]bool{}, all: map[room.ParticipantID]bool{}}
+	s.setDeaf = func(_ room.RoomID, pid room.ParticipantID, on bool) {
+		sp.mu.Lock()
+		sp.deaf[pid] = on
+		sp.mu.Unlock()
+	}
+	s.setAudience = func(_ room.RoomID, pid room.ParticipantID, all bool, _ []room.ParticipantID) {
+		sp.mu.Lock()
+		sp.all[pid] = all
+		sp.mu.Unlock()
+	}
+	return sp
+}
+
+// isolated reports whether pid is cut off: deaf, and heard by nobody.
+func (sp *isolationSpy) isolated(pid room.ParticipantID) bool {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	all, set := sp.all[pid]
+	return sp.deaf[pid] && set && !all
+}
+
+// The transferring agent stays on the call — cut off from it — until the
+// target answers, and only then leaves with a terminal `ended` (so its SDK
+// doesn't reconnect into the room and resolve the ring early).
+func TestTransferKeepsAgentUntilAnswered(t *testing.T) {
 	s := newHandoffServer(t)
+	spy := spyIsolation(s)
 	tenant := uuid.New()
 	rid := room.RoomID(tenant.String() + "/xfer")
 
@@ -98,22 +128,51 @@ func TestTransferEndsInitiatingAgentLeg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("join agent: %v", err)
 	}
-
-	// A reachable target so the transfer clears pre-flight and commits.
 	target := &fakeConn{}
 	s.mu.Lock()
 	s.agents[tenant.String()] = map[string]*conn{"bob": target.conn("bob-pid")}
 	s.mu.Unlock()
 
 	fc := &fakeConn{}
+	s.mu.Lock()
+	s.conns[agent.ID()] = fc.conn(agent.ID())
+	s.mu.Unlock()
 	go s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
 
-	if !waitSaw(t, fc, msgEnded) {
-		t.Fatal("initiating agent was not sent a terminal `ended`; its SDK will reconnect and break the transfer")
+	if !waitSaw(t, fc, msgTransferOK) {
+		t.Fatal("agent was not told the transfer is ringing")
+	}
+	waitIncoming(t, target)
+	if fc.saw(msgEnded) {
+		t.Fatal("agent was dropped before anyone answered")
+	}
+	if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, agent.ID()) {
+		t.Fatal("agent left the call while the target rang")
+	}
+	if !spy.isolated(agent.ID()) {
+		t.Fatal("waiting agent still hears or is heard by the customer")
 	}
 
-	// Unblock the ringing goroutine: the caller hangs up → transfer ctx cancelled.
+	if _, err := s.rooms.Join(rid, "bob"); err != nil { // bob answers: joins the call…
+		t.Fatalf("join bob: %v", err)
+	}
+	s.signalRing(rid) // …which resolves the ring (handleWS does this on his join)
+	if !waitSaw(t, fc, msgEnded) {
+		t.Fatal("agent was not sent a terminal `ended` once the target answered")
+	}
+	waitGone(t, s, rid, agent.ID())
+	if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, caller.ID()) {
+		t.Fatal("caller was dropped by the answered transfer")
+	}
 	caller.Leave()
+}
+
+// waitIncoming blocks until the target agent has been rung.
+func waitIncoming(t *testing.T, target *fakeConn) {
+	t.Helper()
+	if !waitSaw(t, target, msgIncoming) {
+		t.Fatal("transfer target was never rung")
+	}
 }
 
 // hasParticipant reports whether pid is a current member of the room.
@@ -170,7 +229,12 @@ func TestTransferVoidsPendingHandoff(t *testing.T) {
 	fc := &fakeConn{}
 	go s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
 
-	waitGone(t, s, rid, agent.ID()) // the initiating agent is dropped (true blind)
+	waitIncoming(t, target)
+	if _, err := s.rooms.Join(rid, "bob"); err != nil { // bob answers: joins the call…
+		t.Fatalf("join bob: %v", err)
+	}
+	s.signalRing(rid)               // …which resolves the ring
+	waitGone(t, s, rid, agent.ID()) // only now does the transferring agent leave
 
 	// The paused IVR must NOT have been resumed (resuming ends the flow → caller
 	// torn down), and the caller must still be on the call for the transfer ring.
@@ -337,6 +401,10 @@ func TestFailedTransferPlaysNoAnswerMessage(t *testing.T) {
 		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "agent", msg{Type: msgTransfer, ToTeam: "sales"})
 		close(done)
 	}()
+	// The transferring agent hangs up while the target rings, so there is no
+	// one to fall back to: this is the plain blind-transfer failure.
+	waitIncoming(t, target)
+	agent.Leave()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -346,6 +414,180 @@ func TestFailedTransferPlaysNoAnswerMessage(t *testing.T) {
 	if got := xm.count(); got != 1 {
 		t.Fatalf("no-answer message resolved %d times, want 1 (a failed transfer did not play its message)", got)
 	}
+}
+
+// Nobody answers while the transferring agent still waits: the call goes back
+// to them — un-muted, hearing the caller again, told "no answer" — and the
+// caller keeps the call (no failure message, no hangup). An IVR handoff set
+// aside for the ring is restored, so the post-call flow still runs later.
+func TestTransferNoAnswerReturnsCallToAgent(t *testing.T) {
+	sf, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	xm := &failXferMsg{}
+	s := New(Config{
+		SFU:             sf,
+		Teams:           shortTeams{members: map[string][]string{"sales": {"carol"}}},
+		TransferMessage: xm,
+	})
+	spy := spyIsolation(s)
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/back")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	resume := make(chan struct{})
+	h := &handoff{caller: caller.ID(), resume: resume}
+	target := &fakeConn{}
+	fc := &fakeConn{}
+	s.mu.Lock()
+	s.handoffs[rid] = h
+	s.agents[tenant.String()] = map[string]*conn{"carol": target.conn("carol-pid")}
+	s.conns[agent.ID()] = fc.conn(agent.ID())
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToTeam: "sales"})
+		close(done)
+	}()
+	waitIncoming(t, target)
+	if !spy.isolated(agent.ID()) {
+		t.Fatal("waiting agent was not cut off from the call while the target rang")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ring never timed out")
+	}
+
+	if !fc.saw(msgTransferFailed) || fc.saw(msgEnded) {
+		t.Fatal("agent was not handed the call back (want transfer-failed, no ended)")
+	}
+	if spy.isolated(agent.ID()) {
+		t.Fatal("agent got the call back but is still deaf / unheard")
+	}
+	r, ok := s.rooms.Get(rid)
+	if !ok || !hasParticipant(r, agent.ID()) || !hasParticipant(r, caller.ID()) {
+		t.Fatal("agent and caller should both still be on the call")
+	}
+	if got := xm.count(); got != 0 {
+		t.Fatalf("no-answer message played %d times to a caller who is back with the agent", got)
+	}
+	s.mu.Lock()
+	restored := s.handoffs[rid] == h
+	s.mu.Unlock()
+	if !restored {
+		t.Fatal("the IVR handoff set aside for the ring was not restored")
+	}
+	select {
+	case <-resume:
+		t.Fatal("the IVR handoff was resumed by the failed transfer")
+	default:
+	}
+	caller.Leave()
+}
+
+// A web caller who hangs up while the agent waits on their transfer stops the
+// ring and ends the agent's call, instead of leaving the agent alone in a
+// room that is still ringing someone.
+func TestCallerHangupDuringFallbackTransferEndsCall(t *testing.T) {
+	s := newHandoffServer(t)
+	spyIsolation(s)
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/gone")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	target := &fakeConn{}
+	fc := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"bob": target.conn("bob-pid")}
+	s.conns[agent.ID()] = fc.conn(agent.ID())
+	s.mu.Unlock()
+
+	go s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
+	waitIncoming(t, target)
+
+	caller.Leave()
+	if s.transferActive(rid) {
+		t.Fatal("transfer kept ringing after the caller hung up")
+	}
+	waitGone(t, s, rid, agent.ID())
+	if !waitSaw(t, fc, msgEnded) {
+		t.Fatal("agent was not told the call ended")
+	}
+}
+
+// fixedTimeout is a tenant transfer timeout that every tenant shares.
+type fixedTimeout time.Duration
+
+func (f fixedTimeout) TenantTransferTimeout(context.Context, uuid.UUID) (time.Duration, error) {
+	return time.Duration(f), nil
+}
+
+// A transfer rings for the tenant's transfer timeout at most, not the target's
+// max_wait (2 minutes for a single agent by default): the waiting agent gets
+// the call back when it runs out.
+func TestTransferTimeoutReturnsCallToAgent(t *testing.T) {
+	sf, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	s := New(Config{SFU: sf, TransferTimeouts: fixedTimeout(300 * time.Millisecond)})
+	spyIsolation(s)
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/slow")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	target := &fakeConn{}
+	fc := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"bob": target.conn("bob-pid")}
+	s.conns[agent.ID()] = fc.conn(agent.ID())
+	s.mu.Unlock()
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("transfer rang past its timeout")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("transfer rang for %v, want about the 300ms timeout", d)
+	}
+	if !fc.saw(msgTransferFailed) {
+		t.Fatal("agent was not handed the call back when the transfer timed out")
+	}
+	if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, caller.ID()) {
+		t.Fatal("caller was dropped by a timed-out transfer")
+	}
+	caller.Leave()
 }
 
 func TestTransferGuardLifecycle(t *testing.T) {
@@ -420,8 +662,9 @@ func TestPhoneCallerHangupEndsTransferRing(t *testing.T) {
 	}
 }
 
-// A blind transfer of a phone call that nobody answers plays the no-answer
-// message and then hangs up the phone leg (endIfAlone can't: the caller is a port).
+// A blind transfer of a phone call that nobody answers, after the transferring
+// agent hung up mid-ring, plays the no-answer message and then hangs up the
+// phone leg (endIfAlone can't: the caller is a port).
 func TestFailedPhoneTransferHangsUpCaller(t *testing.T) {
 	sf, err := sfu.New(sfu.Config{})
 	if err != nil {
@@ -452,6 +695,9 @@ func TestFailedPhoneTransferHangsUpCaller(t *testing.T) {
 		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "agent", msg{Type: msgTransfer, ToTeam: "sales"})
 		close(done)
 	}()
+	// The agent hangs up mid-ring, so nobody can take the call back.
+	waitIncoming(t, target)
+	agent.Leave()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -525,8 +771,9 @@ func TestOutboundCustomerHangupEndsTransferRing(t *testing.T) {
 	}
 }
 
-// A blind transfer of a click-to-call that nobody answers plays the no-answer
-// message and then hangs up the customer's carrier leg.
+// A blind transfer of a click-to-call that nobody answers, after the
+// transferring agent hung up mid-ring, plays the no-answer message and then
+// hangs up the customer's carrier leg.
 func TestFailedOutboundTransferHangsUpCustomer(t *testing.T) {
 	sf, err := sfu.New(sfu.Config{})
 	if err != nil {
@@ -558,6 +805,9 @@ func TestFailedOutboundTransferHangsUpCustomer(t *testing.T) {
 		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "agent", msg{Type: msgTransfer, ToTeam: "sales"})
 		close(done)
 	}()
+	// The agent hangs up mid-ring, so nobody can take the call back.
+	waitIncoming(t, target)
+	agent.Leave()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):

@@ -54,6 +54,10 @@ type Config struct {
 	TURNTTL    time.Duration
 	// Grace is the room reconnect window (0 → room.DefaultGrace).
 	Grace time.Duration
+	// TransferTimeouts resolves a tenant's transfer timeout: how long an
+	// agent's transfer rings before the call goes back to them (flowstore.Store
+	// implements it). nil, or a failed read → defaultTransferTimeout.
+	TransferTimeouts TransferTimeoutResolver
 	// DevTokens mounts an UNAUTHENTICATED token-mint at /rtc/dev-token for the
 	// local test client. Dev only — never enable in production.
 	DevTokens bool
@@ -206,6 +210,10 @@ type Server struct {
 	// setDeaf deafens/undeafens a subscriber for the agent hold (sfu.SetDeaf; a
 	// field so tests can observe it without live media).
 	setDeaf func(room.RoomID, room.ParticipantID, bool)
+	// setAudience gates who hears a publisher (sfu.SetAudience; a field so tests
+	// can observe it). A transferring agent's audience is emptied while the
+	// target rings, so the customer never hears them.
+	setAudience func(room.RoomID, room.ParticipantID, bool, []room.ParticipantID)
 
 	// brain drives IVR sessions in-process — the brain is embedded in this server.
 	// One Runner shared across all rooms; state per-room inside the Runner.
@@ -231,6 +239,7 @@ type Server struct {
 	handoffs     map[room.RoomID]*handoff                             // rooms waiting for a transfer handoff to end (handoff.go)
 	holds        map[room.RoomID]func()                               // rooms with agent-initiated hold music playing → stop func (holdmusic.go)
 	transfers    map[room.RoomID]context.CancelFunc                   // rooms with a blind transfer ringing → cancel (transfer.go)
+	transferring map[room.RoomID]*pendingTransfer                     // the agent waiting on each ringing transfer (transfer.go)
 	roles        map[room.ParticipantID]partRole                      // signaling-only participant roles (supervisor.go)
 	supers       map[room.RoomID]map[room.ParticipantID]*superSession // supervisor sessions per room (supervisor.go)
 	hangupBy     map[room.RoomID]string                               // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
@@ -268,6 +277,7 @@ func New(cfg Config) *Server {
 		log:          cfg.Logger.With("component", "signaling"),
 		joinTimeout:  defaultJoinTimeout,
 		setDeaf:      cfg.SFU.SetDeaf,
+		setAudience:  cfg.SFU.SetAudience,
 		brain:        brain.NewRunner(cfg.Logger),
 		conns:        make(map[room.ParticipantID]*conn),
 		agents:       make(map[string]map[string]*conn),
@@ -282,6 +292,7 @@ func New(cfg Config) *Server {
 		handoffs:     make(map[room.RoomID]*handoff),
 		holds:        make(map[room.RoomID]func()),
 		transfers:    make(map[room.RoomID]context.CancelFunc),
+		transferring: make(map[room.RoomID]*pendingTransfer),
 		invites:      make(map[room.RoomID]map[string]bool),
 		inviteClaims: make(map[room.RoomID]map[string]*routing.Claim),
 		agentLegs:    make(map[room.ParticipantID]agentLeg),
@@ -820,7 +831,7 @@ func (s *Server) routeEvent(e room.Event) {
 			// on, so the agent's bye no longer decides who ends it.
 			s.clearHangupBy(e.Room)
 			return
-		} else if s.transferActive(e.Room) {
+		} else if s.transferActive(e.Room) && s.keepForTransfer(e.Room, e.Participant) {
 			// A blind transfer is ringing: the initiating agent just left and the
 			// caller is briefly alone. Keep the room (the target will join, or the
 			// no-answer message plays) and suppress peer-left to the caller — the
