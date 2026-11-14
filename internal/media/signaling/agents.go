@@ -115,6 +115,21 @@ func (s *Server) droppedAgentLeg(tenant, sip string) *room.Participant {
 	return nil
 }
 
+// agentCallLeg returns the agent's live call participant in room rid and its
+// current socket (nil while the agent reconnects), or a nil participant when
+// the agent has no leg there. Matching the tenant too means a control request
+// can only reach its own tenant's calls.
+func (s *Server) agentCallLeg(tenant, sip string, rid room.RoomID) (*room.Participant, *conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for pid, leg := range s.agentLegs {
+		if leg.tenant == tenant && leg.sip == sip && leg.p.Room().ID() == rid && leg.p.State() != room.StateLeft {
+			return leg.p, s.conns[pid]
+		}
+	}
+	return nil, nil
+}
+
 // publishPresence emits an agent.presence event for the dashboard live feed.
 // Called only on actual transitions (connect / on_call flip / disconnect /
 // back from Away), never on the TTL refresh tick. A non-zero idleSince (the

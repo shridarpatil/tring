@@ -470,6 +470,14 @@ FROM calls c JOIN tenants t ON t.id = c.tenant_id
 WHERE c.tenant_id = $1 AND c.agent_id = $2 AND c.status = 'answered'
 ORDER BY c.answered_at DESC NULLS LAST LIMIT 1;
 
+-- name: get-agent-active-call-room
+-- The media-gateway room of the agent's newest answered call, for SDK blind
+-- transfer (the gateway runs it). '' = no room (not a media-plane call).
+SELECT COALESCE(room_id, '')
+FROM calls
+WHERE tenant_id = $1 AND agent_id = $2 AND status = 'answered'
+ORDER BY answered_at DESC NULLS LAST LIMIT 1;
+
 -- name: get-agent-by-sip
 -- Resolve an agent id + display label from a SIP username, used to attribute
 -- the answered transfer leg. Label falls back to the SIP username.
