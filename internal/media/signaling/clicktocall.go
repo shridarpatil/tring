@@ -20,6 +20,7 @@ import (
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
 	"github.com/shridarpatil/tring/internal/routing"
+	"github.com/shridarpatil/tring/internal/trunkselect"
 )
 
 // callAgentTimeout bounds how long the agent's widget has to auto-answer. A var
@@ -110,13 +111,15 @@ func (s *Server) Call(ctx context.Context, tenant uuid.UUID, req CallRequest) (u
 		release()
 		return uuid.Nil, errConnectNoCDR
 	}
-	go s.runCall(roomID, name, tenant, req, to, claim, release)
+	go s.runCall(roomID, name, tenant, req, to, trunks, claim, release)
 	return callID, nil
 }
 
 // runCall places a Call: the agent's widget first, then the customer, then
-// waits for either side to hang up.
-func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req CallRequest, to string, claim *routing.Claim, release func()) {
+// waits for either side to hang up. trunks is Call's selection: dialing on it
+// (rather than selecting again) advances a round_robin rotation once per call
+// and keeps the CDR's "from" the number the customer actually sees.
+func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req CallRequest, to string, trunks []trunkselect.Trunk, claim *routing.Claim, release func()) {
 	defer s.endPortCall()
 	defer release()
 	ctx, cancelClaim := context.WithCancel(context.Background())
@@ -144,7 +147,7 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	stopMusic := s.playHold(roomID, s.tenantHoldMusic(roomID))
 	octx, cancel := context.WithTimeout(ctx, connectRingTimeout)
 	go s.cancelWhenEmpty(octx, roomID, cancel)
-	leg, _, _, err := s.originateOut(octx, tenant, to, req.CallerID, func(room.Progress) {
+	leg, _, _, err := s.originateOn(octx, tenant, trunks, to, req.CallerID, func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})
 		}

@@ -22,6 +22,7 @@ import (
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/trunkselect"
 )
 
 // connectRingTimeout bounds how long each number rings.
@@ -46,7 +47,8 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("%w: client_number: %v", errDialInvalidNumber, err)
 	}
-	if trunks, err := s.cfg.Trunks.OutboundTrunks(ctx, tenant); err != nil || len(trunks) == 0 {
+	trunks, err := s.cfg.Trunks.OutboundTrunks(ctx, tenant)
+	if err != nil || len(trunks) == 0 {
 		return uuid.Nil, fmt.Errorf("%w: %v", errDialNoTrunk, err)
 	}
 
@@ -62,16 +64,17 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 		s.endPortCall()
 		return uuid.Nil, errConnectNoCDR
 	}
-	go s.runConnect(roomID, tenant, agent, client)
+	go s.runConnect(roomID, tenant, agent, client, trunks)
 	return callID, nil
 }
 
 // runConnect places a Connect call: agent first, then client, then waits for
-// either side to hang up.
-func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client string) {
+// either side to hang up. The agent leg dials on Connect's up-front selection
+// (trunks) so that check doesn't advance a round_robin rotation on its own.
+func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client string, trunks []trunkselect.Trunk) {
 	defer s.endPortCall()
 	octx, cancel := context.WithTimeout(context.Background(), connectRingTimeout)
-	agentLeg, callerID, _, err := s.originateOut(octx, tenant, agent, "", nil)
+	agentLeg, callerID, _, err := s.originateOn(octx, tenant, trunks, agent, "", nil)
 	cancel()
 	if err != nil {
 		s.log.Warn("connect: agent's number not answered", "room", roomID, "to", agent, "err", err)
