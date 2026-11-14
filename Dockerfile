@@ -150,8 +150,11 @@ FROM gcr.io/distroless/cc-debian12:nonroot
 
 # A statically-linked ffmpeg (runs in distroless — no shell/libc needed). Used to
 # transcode uploaded prompts + synthesized TTS to Opus-Ogg (api role) and merge
-# stereo recordings (gateway role). /usr/local/bin is on the distroless PATH.
-COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+# stereo recordings and compose video recordings (gateway role). /usr/local/bin
+# is on the distroless PATH. Keep it on the major version CI tests with (the
+# ubuntu runner's apt ffmpeg): 7.1 drops a participant's camera from composed
+# video recordings (TestComposeVideoIncludesBothPeopleAndCameraOffGaps).
+COPY --from=mwader/static-ffmpeg:8.0.1 /ffmpeg /usr/local/bin/ffmpeg
 
 # Piper binary (+ its bundled .so's and espeak-ng-data) and the default voice.
 # LD_LIBRARY_PATH lets the binary resolve its sibling shared libs; espeak-ng-data
