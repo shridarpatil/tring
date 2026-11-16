@@ -43,7 +43,7 @@ func TestTwoInboundCallsDoNotDoubleRing(t *testing.T) {
 			alice.send(map[string]any{"type": "register"})
 			alice.readUntil("ready")
 			for _, room := range []string{"first", "second"} {
-				caller := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+				caller := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 				caller.send(map[string]any{"type": "join", "room": room, "flow_id": "f1", "name": "Caller"})
 				caller.readUntil("joined")
 				if room == "first" {

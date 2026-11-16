@@ -51,6 +51,44 @@ func mintToken(t *testing.T, tenant uuid.UUID, sip string) string {
 	return s
 }
 
+// mintVisitorToken mints a visitor's gateway call token (aud tring.gateway) with
+// the IVR flow pinned server-side, as POST /v1/guest-credentials does. Each call
+// gets a fresh jti, since the server burns it on the first join.
+func mintVisitorToken(t *testing.T, tenant uuid.UUID, flow string) string {
+	t.Helper()
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"tenant":  tenant.String(),
+		"flow_id": flow,
+		"iss":     "tring",
+		"aud":     "tring.gateway",
+		"jti":     uuid.NewString(),
+		"exp":     time.Now().Add(5 * time.Minute).Unix(),
+	})
+	s, err := tok.SignedString(testSecret)
+	if err != nil {
+		t.Fatalf("sign visitor token: %v", err)
+	}
+	return s
+}
+
+// memTokens is an in-memory single-use store standing in for Redis SETNX.
+type memTokens struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+func newMemTokens() *memTokens { return &memTokens{seen: map[string]bool{}} }
+
+func (m *memTokens) SetNX(_ context.Context, key string, _ []byte, _ time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen[key] {
+		return false, nil
+	}
+	m.seen[key] = true
+	return true, nil
+}
+
 // wsClient is a minimal /rtc client for the test.
 type wsClient struct {
 	t    *testing.T
@@ -118,6 +156,9 @@ func newServerCfg(t *testing.T, cfg signaling.Config) *httptest.Server {
 	}
 	cfg.SFU = s
 	cfg.JWTSecret = testSecret
+	if cfg.Tokens == nil {
+		cfg.Tokens = newMemTokens()
+	}
 	ts := httptest.NewServer(signaling.New(cfg).Handler())
 	t.Cleanup(ts.Close)
 	return ts
@@ -291,7 +332,7 @@ func TestTransferRingsAgentIntoRoom(t *testing.T) {
 	agent.readUntil("ready")
 
 	// Visitor joins the flow-pinned room → IVR spawns → transfers → rings agents.
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -333,7 +374,7 @@ func TestPresenceSupersededNotifiesOldSocket(t *testing.T) {
 
 	first.readUntil("superseded")
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -397,7 +438,7 @@ func TestTransferRingsOnlyTeamMembers(t *testing.T) {
 	bob.send(map[string]any{"type": "register"})
 	bob.readUntil("ready")
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -441,7 +482,7 @@ func TestTransferSkipsBusyAgentAndQueues(t *testing.T) {
 	busy.readUntil("joined") // alice is now on_call
 
 	// A visitor enters the flow → transfer to team sales (only member: alice).
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -717,7 +758,7 @@ func TestPstnCallWritesCDRHooks(t *testing.T) {
 		t.Fatalf("sfu: %v", err)
 	}
 	cl := &fakeCallLog{}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, Calls: cl})
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, Calls: cl, Tokens: newMemTokens()})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 	fp := newFakePstn()
@@ -854,6 +895,7 @@ func TestAbandonedCallStampsJourneyBeforeEnded(t *testing.T) {
 		Flows:     transferFlows{},
 		Teams:     fakeTeams{members: map[string][]string{"sales": {"alice"}}},
 		Calls:     cl,
+		Tokens:    newMemTokens(),
 	})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
@@ -868,7 +910,7 @@ func TestAbandonedCallStampsJourneyBeforeEnded(t *testing.T) {
 	busy.readUntil("joined") // alice is now on_call
 
 	// Visitor enters the flow → IVR transfers to sales → queued (alice busy).
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -947,7 +989,7 @@ func TestRoundRobinRingsOneAgentAtATime(t *testing.T) {
 		agents = append(agents, a)
 	}
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -991,7 +1033,7 @@ func TestDeclineAdvancesToNextAgent(t *testing.T) {
 	bob.send(map[string]any{"type": "register"})
 	bob.readUntil("ready")
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -1088,7 +1130,7 @@ func TestOnlyRungAgentCanJoinLiveCall(t *testing.T) {
 	bob.send(map[string]any{"type": "register"})
 	bob.readUntil("ready")
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 	alice.readUntil("incoming") // ring_all: both are rung
@@ -1136,7 +1178,7 @@ func TestWithdrawnRingRevokesInvite(t *testing.T) {
 	bob.send(map[string]any{"type": "register"})
 	bob.readUntil("ready")
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	visitor.readUntil("joined")
 
@@ -1171,11 +1213,11 @@ func TestWebCallCDRFromIsNotTheVisitorName(t *testing.T) {
 		t.Fatalf("sfu: %v", err)
 	}
 	cl := &fakeCallLog{}
-	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, Calls: cl})
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, Calls: cl, Tokens: newMemTokens()})
 	ts := httptest.NewServer(sig.Handler())
 	t.Cleanup(ts.Close)
 
-	caller := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	caller := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	caller.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "+919876543210\n"})
 	caller.readUntil("joined")
 
@@ -1256,7 +1298,7 @@ func TestCallerReattachDoesNotAnswerTransferRing(t *testing.T) {
 	agent.send(map[string]any{"type": "register"})
 	agent.readUntil("ready")
 
-	visitor := dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
 	joined := visitor.readUntil("joined")
 	agent.readUntil("incoming")
@@ -1266,7 +1308,7 @@ func TestCallerReattachDoesNotAnswerTransferRing(t *testing.T) {
 	_ = visitor.conn.Close()
 	var again *wsClient
 	for deadline := time.Now().Add(3 * time.Second); ; {
-		again = dial(t, ts.URL, mintToken(t, tenant, "visitor"))
+		again = dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
 		again.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller", "session_token": joined["session_token"]})
 		_ = again.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		data, err := wsutil.ReadServerText(again.conn)
@@ -1318,4 +1360,25 @@ func TestCallerReattachDoesNotAnswerTransferRing(t *testing.T) {
 		}
 	}
 	again.readUntil("peer-joined")
+}
+
+// TestAgentTokenCannotStartIVR: a flow_id in an AGENT's join must be ignored.
+// Honouring it would skip the ring invite and the agent's routing reservation,
+// so one agent JWT could open unlimited IVR rooms that ring the team, write
+// "web visitor" CDRs and fire webhooks. Only a visitor token pins a flow.
+func TestAgentTokenCannotStartIVR(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{Flows: transferFlows{}})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+
+	for _, room := range []string{"spam-1", "spam-2"} {
+		mallory := dial(t, ts.URL, mintToken(t, tenant, "mallory"))
+		mallory.send(map[string]any{"type": "join", "room": room, "flow_id": "f1", "name": "Caller"})
+	}
+	if sawIncoming(alice, 2*time.Second) {
+		t.Fatal("an agent token with flow_id started an IVR that rang the team")
+	}
 }
