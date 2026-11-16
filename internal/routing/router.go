@@ -55,6 +55,7 @@ const (
 	OutcomeCompleted    = "completed"     // an agent answered
 	OutcomeQueueTimeout = "queue_timeout" // max_wait elapsed
 	OutcomeAbandoned    = ""              // caller left while queued (terminal)
+	OutcomeNoAnswer     = "no_answer"     // nobody left who could answer (see Exhaustible)
 )
 
 // Run drives one caller through the team queue: it joins the line, holds while
@@ -91,9 +92,13 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 	// the wait is up. The Hold effect polls this each tick (FS watcher / pion
 	// ticker), so it's also where we refresh the published depth's TTL — a single
 	// gapless FS hold can outlast the depth key otherwise, blanking the dashboard.
+	exhausted := func() bool {
+		ex, ok := eff.(Exhaustible)
+		return ok && ex.Exhausted()
+	}
 	holdReady := func() bool {
 		r.publishDepth(ctx, cfg)
-		if time.Now().After(deadline) || ctx.Err() != nil {
+		if time.Now().After(deadline) || ctx.Err() != nil || exhausted() {
 			return true
 		}
 		return len(r.available(ctx, cfg, candidates)) > 0 && r.queue.IsHead(ctx, qkey, waiter)
@@ -106,6 +111,9 @@ func (r *Router) Run(ctx context.Context, cfg RouteConfig, candidates func(conte
 		}
 		if !eff.CallerAlive(ctx) {
 			return OutcomeAbandoned, false, "abandoned in queue"
+		}
+		if exhausted() {
+			return OutcomeNoAnswer, false, ""
 		}
 
 		avail := r.available(ctx, cfg, candidates)

@@ -36,3 +36,11 @@ type Effects interface {
 	// watcher polling ready(); pion waits (optionally playing a hold prompt).
 	Hold(ctx context.Context, maxDur time.Duration, ready func() bool)
 }
+
+// Exhaustible is an OPTIONAL Effects capability. Exhausted reports that nobody
+// who could ever answer this caller is left — the one agent a direct (non-team)
+// transfer rings has declined — so Run returns OutcomeNoAnswer at once instead
+// of holding the caller until max_wait for an agent who said no.
+type Exhaustible interface {
+	Exhausted() bool
+}

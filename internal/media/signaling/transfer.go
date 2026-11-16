@@ -115,11 +115,10 @@ func (s *Server) transferTimeout(tenant uuid.UUID) time.Duration {
 type pendingTransfer struct {
 	agent   room.ParticipantID
 	handoff *handoff
-	// toSip is the agent a transfer to one agent rings ("" for a team), and
-	// stopRing ends that ring early: when they decline, nobody else is left
-	// to ring, so the call goes straight back (declined records why).
+	// toSip is the agent a transfer to one agent rings ("" for a team).
+	// declined: they declined, which ends the ring at once (pionRing.Exhausted)
+	// and is the reason the waiting agent is given.
 	toSip    string
-	stopRing context.CancelFunc
 	declined bool
 }
 
@@ -262,7 +261,7 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 		// Before the ring starts, so a decline can't arrive ahead of it.
 		s.mu.Lock()
 		if pt := s.transferring[rid]; pt != nil {
-			pt.toSip, pt.stopRing = target.AgentSIP, cancelRing
+			pt.toSip = target.AgentSIP
 		}
 		s.mu.Unlock()
 	}
@@ -356,20 +355,16 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 	s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
 }
 
-// declineTransfer ends a transfer's ring early when sip, the one agent it
-// rings, declines: there is nobody else to ring, so ringTransfer settles it at
-// once (the call goes back to the waiting agent) instead of after the
-// transfer timeout. A team member's decline just moves the ring on.
+// declineTransfer records that sip, the one agent a transfer rings, declined
+// it, so the waiting agent gets the call back with reason "declined". The ring
+// itself ends through pionRing.Exhausted. A team member's decline doesn't
+// count: the ring just moves on.
 func (s *Server) declineTransfer(rid room.RoomID, sip string) {
 	s.mu.Lock()
-	var stop context.CancelFunc
-	if pt := s.transferring[rid]; pt != nil && pt.toSip != "" && pt.toSip == sip && pt.stopRing != nil {
-		pt.declined, stop = true, pt.stopRing
+	if pt := s.transferring[rid]; pt != nil && pt.toSip != "" && pt.toSip == sip {
+		pt.declined = true
 	}
 	s.mu.Unlock()
-	if stop != nil {
-		stop()
-	}
 }
 
 // releaseAgent ends the transferring agent's leg: a terminal `ended`
