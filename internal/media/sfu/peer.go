@@ -3,6 +3,7 @@ package sfu
 import (
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v4"
@@ -55,6 +56,8 @@ type Peer struct {
 	negotiating bool                                           // an offer is outstanding (awaiting the client's answer)
 	needSync    bool                                           // tracks changed while negotiating → renegotiate after the answer
 	closed      bool
+
+	everConnected atomic.Bool // reached Connected at least once (connect timeout)
 }
 
 // Publish invites the client to send an additional media kind (screen-share

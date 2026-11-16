@@ -105,7 +105,8 @@ When a participant's connection drops (page refresh, network blip), the gateway 
 ## Media and network
 
 - Audio is Opus. The gateway is the only offerer; the browser answers.
-- Browser media uses UDP ports `TRING_GATEWAY_UDP_MIN`–`TRING_GATEWAY_UDP_MAX` on `TRING_PUBLIC_IP`. Open that range.
+- Browser media uses one UDP port, `TRING_GATEWAY_UDP_MIN`, on `TRING_PUBLIC_IP`, shared by every call. Open that port. With `TRING_GATEWAY_UDP_MUX=false`, each call takes its own port from `TRING_GATEWAY_UDP_MIN`–`TRING_GATEWAY_UDP_MAX` instead; open the whole range.
+- A browser connection that hasn't connected 30 seconds after joining is closed, so it can't hold media resources open.
 - For UDP-blocked networks, configure TURN with `TRING_TURN_SECRET` so each token response carries short-lived TURN credentials. See [Configuration](/tring/getting-started/configuration/#7-webrtc-ice-stun-and-turn).
 - Browsers only allow the microphone on secure origins. Serve your pages, the api and the gateway over **HTTPS** (`wss://` for `/rtc`) in production.
 

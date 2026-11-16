@@ -201,7 +201,12 @@ func TestForwardsAudioBetweenParticipants(t *testing.T) {
 // A's audio within a short deadline. All resources are torn down before return.
 func forwardOnce(t *testing.T) bool {
 	t.Helper()
-	s, err := sfu.New(sfu.Config{})
+	return forwardOnceCfg(t, sfu.Config{})
+}
+
+func forwardOnceCfg(t *testing.T, cfg sfu.Config) bool {
+	t.Helper()
+	s, err := sfu.New(cfg)
 	if err != nil {
 		t.Fatalf("new sfu: %v", err)
 	}

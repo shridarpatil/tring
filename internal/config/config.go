@@ -88,6 +88,9 @@ var defaults = map[string]any{
 	"gateway_addr":       ":8087",
 	"gateway_udp_min":    10000,
 	"gateway_udp_max":    10100,
+	// gateway_udp_mux serves all browser media on ONE port (gateway_udp_min)
+	// instead of a port per call, so idle peers can't exhaust the range.
+	"gateway_udp_mux": true,
 
 	// gateway_control_addr is the gateway's loopback-only listener for the
 	// API's control calls (POST /control/connect, two-number connect), and
