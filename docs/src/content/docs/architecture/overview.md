@@ -286,7 +286,7 @@ writes/reads them and the API serves recordings; they are no longer under
 
 | Component | Net | Ports |
 |---|---|---|
-| Gateway browser face | **public** | `8087`→TLS `443` (WSS `/rtc`), UDP media on `TRING_PUBLIC_IP`: the one `TRING_GATEWAY_UDP_MUX_PORT` when set, else `TRING_GATEWAY_UDP_MIN`–`MAX` (def 10000–10100) |
+| Gateway browser face | **public** | `8087`→TLS `443` (WSS `/rtc`), UDP media on `TRING_PUBLIC_IP`: the `TRING_GATEWAY_UDP_MUX_PORT` port(s) when set, else `TRING_GATEWAY_UDP_MIN`–`MAX` (def 10000–10100) |
 | TURN (coturn) | **public** | `3478` UDP/TCP, `5349` TLS, relay UDP range |
 | SDK bundles `/sdk/*.js` | **public** (CDN/proxy) | — |
 | FreeSWITCH | **private** | SIP `5060`, RTP, ESL `8021` (outbound originate from the API) |

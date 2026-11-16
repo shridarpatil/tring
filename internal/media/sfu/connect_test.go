@@ -1,6 +1,7 @@
 package sfu_test
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestNeverConnectedPeerIsClosed(t *testing.T) {
 func TestForwardsAudioOverUDPMux(t *testing.T) {
 	const attempts = 8
 	for i := 1; i <= attempts; i++ {
-		if forwardOnceCfg(t, sfu.Config{UDPMuxPort: freeUDPPort(t), IncludeLoopback: true}) {
+		if forwardOnceCfg(t, sfu.Config{UDPMuxPortMin: freeUDPPort(t), IncludeLoopback: true}) {
 			return
 		}
 		t.Logf("attempt %d/%d: media did not flow (in-process ICE stall), retrying", i, attempts)
@@ -62,7 +63,7 @@ func TestUDPMuxPortInUse(t *testing.T) {
 	}
 	defer c.Close()
 	port := uint16(c.LocalAddr().(*net.UDPAddr).Port)
-	if _, err := sfu.New(sfu.Config{UDPMuxPort: port}); err == nil {
+	if _, err := sfu.New(sfu.Config{UDPMuxPortMin: port}); err == nil {
 		t.Fatal("sfu.New accepted a mux port that is already bound")
 	}
 }
@@ -90,7 +91,7 @@ func (c candSignaler) SendCandidate(ci webrtc.ICECandidateInit) error {
 // port, rather than each peer binding its own.
 func TestUDPMuxSharesOnePort(t *testing.T) {
 	port := freeUDPPort(t)
-	s, err := sfu.New(sfu.Config{UDPMuxPort: port, IncludeLoopback: true})
+	s, err := sfu.New(sfu.Config{UDPMuxPortMin: port, IncludeLoopback: true})
 	if err != nil {
 		t.Fatalf("new sfu: %v", err)
 	}
@@ -114,4 +115,92 @@ func TestUDPMuxSharesOnePort(t *testing.T) {
 			t.Fatalf("peer %s gathered no candidate", pid)
 		}
 	}
+}
+
+// TestUDPMuxPortRangeRoundRobin: with a mux range, successive peers take the
+// ports in turn, so each port's socket and reader carry a share of the load.
+func TestUDPMuxPortRangeRoundRobin(t *testing.T) {
+	lo := freeUDPPortRun(t, 3)
+	s, err := sfu.New(sfu.Config{UDPMuxPortMin: lo, UDPMuxPortMax: lo + 2, IncludeLoopback: true})
+	if err != nil {
+		t.Fatalf("new sfu: %v", err)
+	}
+	seen := map[int]int{}
+	for i := 0; i < 6; i++ {
+		sig := candSignaler{cands: make(chan webrtc.ICECandidateInit, 16)}
+		p, err := s.Join("call", room.ParticipantID(fmt.Sprintf("p%d", i)), sig)
+		if err != nil {
+			t.Fatalf("join: %v", err)
+		}
+		p.Negotiate()
+		select {
+		case c := <-sig.cands:
+			cand, err := ice.UnmarshalCandidate(c.Candidate)
+			if err != nil {
+				t.Fatalf("parse candidate: %v", err)
+			}
+			seen[cand.Port()]++
+		case <-time.After(3 * time.Second):
+			t.Fatalf("peer %d gathered no candidate", i)
+		}
+	}
+	for port := int(lo); port <= int(lo)+2; port++ {
+		if seen[port] != 2 {
+			t.Fatalf("port use = %v, want each of %d-%d twice", seen, lo, lo+2)
+		}
+	}
+}
+
+func TestParsePortRange(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		lo, hi uint16
+		bad    bool
+	}{
+		{"", 0, 0, false},
+		{"0", 0, 0, false},
+		{"10000", 10000, 10000, false},
+		{"10000-10003", 10000, 10003, false},
+		{" 10000 - 10003 ", 10000, 10003, false},
+		{"10003-10000", 0, 0, true},
+		{"abc", 0, 0, true},
+		{"70000", 0, 0, true},
+		{"10000-", 0, 0, true},
+	} {
+		lo, hi, err := sfu.ParsePortRange(tc.in)
+		if (err != nil) != tc.bad || lo != tc.lo || hi != tc.hi {
+			t.Errorf("ParsePortRange(%q) = %d, %d, %v", tc.in, lo, hi, err)
+		}
+	}
+}
+
+func TestUDPMuxRangeTooWide(t *testing.T) {
+	if _, err := sfu.New(sfu.Config{UDPMuxPortMin: 20000, UDPMuxPortMax: 20100}); err == nil {
+		t.Fatal("sfu.New accepted a 101-port mux range")
+	}
+}
+
+// freeUDPPortRun finds n consecutive UDP ports that are free right now.
+func freeUDPPortRun(t *testing.T, n int) uint16 {
+	t.Helper()
+	for try := 0; try < 50; try++ {
+		base := freeUDPPort(t)
+		if int(base)+n > 65535 {
+			continue
+		}
+		ok := true
+		for p := int(base); p < int(base)+n; p++ {
+			c, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", p))
+			if err != nil {
+				ok = false
+				break
+			}
+			c.Close()
+		}
+		if ok {
+			return base
+		}
+	}
+	t.Fatal("no run of free UDP ports")
+	return 0
 }
