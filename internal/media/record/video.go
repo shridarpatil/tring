@@ -49,7 +49,7 @@ func videoKeyframe(codec string, pkt *rtp.Packet) bool {
 func (r *Recorder) WriteVideoRTP(pid room.ParticipantID, stream, codec string, pkt *rtp.Packet) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || !r.armed || r.endedVideo[stream] {
+	if r.closed || !r.armed || r.endedVideo[stream] || r.videoFull {
 		return nil
 	}
 	if codec != "video/VP8" && codec != "video/VP9" {
@@ -75,6 +75,10 @@ func (r *Recorder) WriteVideoRTP(pid room.ParticipantID, stream, codec string, p
 		if !videoKeyframe(codec, pkt) {
 			return nil
 		}
+		if len(r.videos) >= r.capVideoSegments {
+			r.stopVideo()
+			return nil
+		}
 		if err := os.MkdirAll(r.dir, 0755); err != nil {
 			return err
 		}
@@ -92,6 +96,10 @@ func (r *Recorder) WriteVideoRTP(pid room.ParticipantID, stream, codec string, p
 		v.framePTS = uint32(time.Since(v.start).Nanoseconds() * 90000 / int64(time.Second))
 		v.lastRTP = pkt.Timestamp
 	}
+	if r.videoBytes += int64(len(pkt.Payload)); r.videoBytes > r.capVideoBytes {
+		r.stopVideo()
+		return nil
+	}
 	copy := *pkt
 	copy.Timestamp = v.framePTS
 	if err := v.writer.WriteRTP(&copy); err != nil {
@@ -101,6 +109,19 @@ func (r *Recorder) WriteVideoRTP(pid room.ParticipantID, stream, codec string, p
 		v.frames++
 	}
 	return nil
+}
+
+// stopVideo ends video recording for the rest of the call after a cap is hit:
+// open captures are closed at now and kept, new ones are refused. r.mu held.
+func (r *Recorder) stopVideo() {
+	r.videoFull = true
+	now := time.Now()
+	for _, v := range r.videos {
+		if v.end.IsZero() {
+			v.end = now
+			_ = v.writer.Close()
+		}
+	}
 }
 
 func (r *Recorder) EndVideo(_ room.ParticipantID, stream string) {
