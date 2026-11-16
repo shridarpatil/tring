@@ -81,7 +81,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		ICEServers: sfuICE,
 		UDPPortMin: uint16(k.Int("gateway_udp_min")),
 		UDPPortMax: uint16(k.Int("gateway_udp_max")),
-		UDPMux:     k.Bool("gateway_udp_mux"),
+		UDPMuxPort: uint16(k.Int("gateway_udp_mux_port")),
 		PublicIP:   k.String("public_ip"),
 		RelayOnly:  k.Bool("turn_relay_only"),
 		TURNURL:    turnURL,

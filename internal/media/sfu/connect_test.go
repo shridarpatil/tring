@@ -45,7 +45,7 @@ func TestNeverConnectedPeerIsClosed(t *testing.T) {
 func TestForwardsAudioOverUDPMux(t *testing.T) {
 	const attempts = 8
 	for i := 1; i <= attempts; i++ {
-		if forwardOnceCfg(t, sfu.Config{UDPMux: true, UDPPortMin: freeUDPPort(t), IncludeLoopback: true}) {
+		if forwardOnceCfg(t, sfu.Config{UDPMuxPort: freeUDPPort(t), IncludeLoopback: true}) {
 			return
 		}
 		t.Logf("attempt %d/%d: media did not flow (in-process ICE stall), retrying", i, attempts)
@@ -53,11 +53,17 @@ func TestForwardsAudioOverUDPMux(t *testing.T) {
 	t.Fatalf("B never received A's forwarded audio over the UDP mux after %d attempts", attempts)
 }
 
-// TestUDPMuxNeedsAPort: the mux binds UDPPortMin, so it can't be enabled
-// without one.
-func TestUDPMuxNeedsAPort(t *testing.T) {
-	if _, err := sfu.New(sfu.Config{UDPMux: true}); err == nil {
-		t.Fatal("sfu.New accepted UDPMux with no port")
+// TestUDPMuxPortInUse: a mux port that can't be bound fails sfu.New rather
+// than silently falling back to per-peer ports.
+func TestUDPMuxPortInUse(t *testing.T) {
+	c, err := net.ListenPacket("udp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer c.Close()
+	port := uint16(c.LocalAddr().(*net.UDPAddr).Port)
+	if _, err := sfu.New(sfu.Config{UDPMuxPort: port}); err == nil {
+		t.Fatal("sfu.New accepted a mux port that is already bound")
 	}
 }
 
@@ -84,7 +90,7 @@ func (c candSignaler) SendCandidate(ci webrtc.ICECandidateInit) error {
 // port, rather than each peer binding its own.
 func TestUDPMuxSharesOnePort(t *testing.T) {
 	port := freeUDPPort(t)
-	s, err := sfu.New(sfu.Config{UDPMux: true, UDPPortMin: port, IncludeLoopback: true})
+	s, err := sfu.New(sfu.Config{UDPMuxPort: port, IncludeLoopback: true})
 	if err != nil {
 		t.Fatalf("new sfu: %v", err)
 	}
