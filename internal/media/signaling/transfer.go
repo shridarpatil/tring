@@ -115,6 +115,12 @@ func (s *Server) transferTimeout(tenant uuid.UUID) time.Duration {
 type pendingTransfer struct {
 	agent   room.ParticipantID
 	handoff *handoff
+	// toSip is the agent a transfer to one agent rings ("" for a team), and
+	// stopRing ends that ring early: when they decline, nobody else is left
+	// to ring, so the call goes straight back (declined records why).
+	toSip    string
+	stopRing context.CancelFunc
+	declined bool
 }
 
 // transferAgent reports the agent waiting on rid's ringing transfer, if any.
@@ -253,6 +259,12 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 		// max_wait. A separate context: running out of time must not look like
 		// the call ending.
 		ringCtx, cancelRing = context.WithTimeout(ctx, s.transferTimeout(tenant))
+		// Before the ring starts, so a decline can't arrive ahead of it.
+		s.mu.Lock()
+		if pt := s.transferring[rid]; pt != nil {
+			pt.toSip, pt.stopRing = target.AgentSIP, cancelRing
+		}
+		s.mu.Unlock()
 	}
 	outcome, _ := s.agentRouter.RingNoHandoff(ringCtx, string(rid), target)
 	cancelRing()
@@ -286,15 +298,19 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 	}
 
 	if agentHere && !callEnded {
-		// Nobody answered: the call is the agent's again.
+		// Nobody answered (or the target declined): the call is the agent's again.
+		reason := "no answer"
 		s.mu.Lock()
 		if pt.handoff != nil && s.handoffs[rid] == nil {
 			s.handoffs[rid] = pt.handoff
 		}
+		if pt.declined {
+			reason = "declined"
+		}
 		s.mu.Unlock()
 		s.isolateAgent(rid, agentPID, false)
 		if c := s.connFor(agentPID); c != nil {
-			_ = c.send(msg{Type: msgTransferFailed, Reason: "no answer"})
+			_ = c.send(msg{Type: msgTransferFailed, Reason: reason})
 		}
 		s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
 		return
@@ -338,6 +354,22 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 		s.hangupOutboundIfAbandoned(rid)
 	}
 	s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
+}
+
+// declineTransfer ends a transfer's ring early when sip, the one agent it
+// rings, declines: there is nobody else to ring, so ringTransfer settles it at
+// once (the call goes back to the waiting agent) instead of after the
+// transfer timeout. A team member's decline just moves the ring on.
+func (s *Server) declineTransfer(rid room.RoomID, sip string) {
+	s.mu.Lock()
+	var stop context.CancelFunc
+	if pt := s.transferring[rid]; pt != nil && pt.toSip != "" && pt.toSip == sip && pt.stopRing != nil {
+		pt.declined, stop = true, pt.stopRing
+	}
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // releaseAgent ends the transferring agent's leg: a terminal `ended`

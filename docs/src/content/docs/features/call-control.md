@@ -42,7 +42,7 @@ The gateway checks the target first. If the agent is unreachable now (offline, A
 1. The agent gets `transfer-ok` and **stays on the call** while the target rings. The customer hears hold music. The agent is muted and hears nothing; this is done by the gateway, so it also applies to a transfer started over REST or after a page refresh. The widget shows "Transferring…".
 2. The target rings for up to the tenant's **transfer timeout** (Settings, or `transfer_timeout_seconds` on `PATCH /v1/tenants/me`; 60 seconds by default).
 3. When the target answers, the agent gets `ended` (reason `transferred`) and leaves; the customer is talking to the target.
-4. If nobody answers in time, **the call goes back to the agent**: they are unmuted and hear the customer again, and get `transfer-failed` with reason `no answer`. The customer hears no failure message.
+4. If nobody answers in time, **the call goes back to the agent**: they are unmuted and hear the customer again, and get `transfer-failed` with reason `no answer`. If the target declines, the call comes back at once, with reason `declined`. The customer hears no failure message.
 
 **To a team** (`toTeam`), the call goes to the team's **queue**: the agent gets `transfer-ok` and then `ended` (reason `transferred`) straight away, and the customer waits in line with the team's hold music, like any other caller for that team, until a member answers. The team's strategy, ring time and `max_wait` apply (see [Agents and routing](/tring/features/agents-and-routing/)); the team doesn't need a free member when the transfer starts.
 

@@ -125,7 +125,8 @@ export type TringEvent =
   // (below); to a team the call goes to its queue and call:ended follows.
   | { type: "call:transferring"; call: Call }
   // The transfer didn't happen and the call is still this agent's: refused up
-  // front (target unavailable, …) or nobody answered (reason "no answer").
+  // front (target unavailable, …), nobody answered (reason "no answer"), or the
+  // agent it rang declined (reason "declined").
   | { type: "call:transfer-failed"; call: Call; reason: string }
   | { type: "error"; error: Error };
 
