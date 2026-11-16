@@ -152,6 +152,12 @@ func (r *sfuRoom) canHear(pub, sub room.ParticipantID) bool {
 // ICE + DTLS normally finish in a second or two; TURN-relayed peers in a few.
 const defaultConnectTimeout = 30 * time.Second
 
+// udpMuxReadBuffer is the mux socket's receive buffer. The kernel charges each
+// queued packet its full skb size (~1 KB for a small RTP packet), so 8 MB holds
+// ~8k packets: ~80 ms at 100k packets/s (≈1,000 web calls), against a few ms at
+// Linux's 208 KB default.
+const udpMuxReadBuffer = 8 << 20
+
 // New builds an SFU. It validates the media config by building one API up front
 // (so a bad codec/port config fails fast), then builds a fresh API per
 // PeerConnection at Join time.
@@ -169,7 +175,10 @@ func New(cfg Config) (*SFU, error) {
 		s.cfg.ConnectTimeout = defaultConnectTimeout
 	}
 	if cfg.UDPMuxPort != 0 {
-		var opts []ice.UDPMuxFromPortOption
+		// One socket now carries every browser's media, read by one goroutine. A
+		// big kernel buffer absorbs that reader's brief stalls (GC, scheduling)
+		// instead of dropping packets; Linux caps it at net.core.rmem_max.
+		opts := []ice.UDPMuxFromPortOption{ice.UDPMuxFromPortWithReadBufferSize(udpMuxReadBuffer)}
 		if cfg.IncludeLoopback {
 			opts = append(opts, ice.UDPMuxFromPortWithLoopback())
 		}
