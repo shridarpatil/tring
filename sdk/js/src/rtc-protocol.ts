@@ -47,8 +47,9 @@ export const ServerMsgType = {
   Ended: "ended",
   Error: "error",
   Supervisor: "supervisor",
-  // agent: your transfer is ringing the target; you stay on the call (cut off
-  // from it) until they answer (then `ended`) or don't (`transfer-failed`).
+  // agent: your transfer is ringing the target. To an agent you stay on the
+  // call (cut off from it) until they answer (then `ended`) or don't
+  // (`transfer-failed`); to a team the call goes to its queue and `ended` follows.
   TransferOK: "transfer-ok",
   TransferFailed: "transfer-failed",
   Answered: "answered",

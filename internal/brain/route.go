@@ -37,12 +37,15 @@ type RingTransport interface {
 // transfer, the brain asks the transport to block until the bridged call ends,
 // so a node wired to the transfer's "completed" edge runs AFTER the agent hangs
 // up (to the caller only) rather than the instant the agent picks up. It returns
-// true when the agent has left with the caller still on the line (continue the
-// flow), or false when the call is over / the caller left (stop the flow). A
+// resume=true when the caller is still on the line (continue the flow), or
+// false when the call is over / the caller left (stop the flow). A
 // transport that doesn't implement this keeps the legacy behaviour: "completed"
-// fires as soon as an agent answers.
+// fires as soon as an agent answers. On resume, outcome is the Transfer node
+// outcome to continue with: "completed" once the agent left, or a failure
+// ("queue_timeout" / "no_answer") when the agent handed the call on with a
+// transfer nobody took.
 type HandoffWaiter interface {
-	AwaitHandoffEnd(ctx context.Context, roomID string) bool
+	AwaitHandoffEnd(ctx context.Context, roomID string) (outcome string, resume bool)
 }
 
 // QueueStints records each caller's wait in a team queue (one stint per
@@ -98,9 +101,11 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 	// so a node wired to the transfer's "completed" edge runs AFTER the agent
 	// disconnects (to the caller only). If the caller leaves first → end the flow.
 	if hw, ok := a.tport.(HandoffWaiter); ok {
-		if !hw.AwaitHandoffEnd(ctx, roomID) {
+		outcome, resume := hw.AwaitHandoffEnd(ctx, roomID)
+		if !resume {
 			return "completed", ivrdrive.ErrCallEnded // answered; the caller has since left
 		}
+		return outcome, nil
 	}
 	return "completed", nil
 }
@@ -108,12 +113,17 @@ func (a *AgentRouter) Ring(ctx context.Context, roomID string, t ivrdrive.Target
 // RingNoHandoff rings a target and returns as soon as the outcome is known, WITHOUT
 // the IVR handoff-wait. Used by agent-initiated blind transfer: there is no IVR
 // session to resume, and registering a handoff would strand the caller when the
-// target later hangs up. "completed" = an agent answered; else "no_answer".
+// target later hangs up. "completed" = an agent answered; "queue_timeout" =
+// the max_wait ran out; else "no_answer".
 func (a *AgentRouter) RingNoHandoff(ctx context.Context, roomID string, t ivrdrive.Target) (string, error) {
-	if a.runRing(ctx, roomID, t) != routing.OutcomeCompleted {
+	switch a.runRing(ctx, roomID, t) {
+	case routing.OutcomeCompleted:
+		return "completed", nil
+	case routing.OutcomeQueueTimeout:
+		return routing.OutcomeQueueTimeout, nil
+	default:
 		return "no_answer", nil
 	}
-	return "completed", nil
 }
 
 // runRing resolves the target (single agent or team) to candidates + a RouteConfig,

@@ -169,10 +169,11 @@ While a number rings, the caller hears the tenant's hold music, which stops when
 
 | Outcome | When |
 |---|---|
-| `completed` | Someone answered. The edge runs **after the agent (or the dialed number) hangs up** while the caller, web or phone, is still on the line, so you can play a survey or goodbye. If the caller hangs up first, the flow stops. With no `completed` edge, the call ends when the agent or dialed number hangs up. |
-| `no_answer` | Nobody answered in time, no one was available, the team wait ran out, the number was busy or invalid, there was no trunk, or the caller ID was refused. |
+| `completed` | Someone answered. The edge runs **after the agent (or the dialed number) hangs up** while the caller, web or phone, is still on the line, so you can play a survey or goodbye. If the agent transferred the call to another agent or team, it runs when whoever ends up with the call hangs up. If the caller hangs up first, the flow stops. With no `completed` edge, the call ends when the agent or dialed number hangs up. |
+| `queue_timeout` | The team's `max_wait` ran out while the caller queued. Only taken when the node wires a `queue_timeout` edge; otherwise the node takes `no_answer`. |
+| `no_answer` | Nobody answered in time, no one was available, the team doesn't exist, the number was busy or invalid, there was no trunk, or the caller ID was refused. Also the team wait running out, when `queue_timeout` isn't wired. |
 
-The editor also shows a `queue_timeout` handle and the Test panel can force it, but live calls report a queue wait that runs out as `no_answer`. Wire `no_answer` for your fallback.
+An agent who answered can transfer the call on. If that transfer fails with nobody to give the call back to (a team transfer whose queue timed out, or an agent transfer the agent hung up on), the caller comes back to this node and the flow takes `queue_timeout` (the team's wait ran out) or `no_answer`, instead of hearing the tenant's transfer failed message. See [Blind transfer](/tring/features/call-control/#blind-transfer).
 
 ### Timing
 

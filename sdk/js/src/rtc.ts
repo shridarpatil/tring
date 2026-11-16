@@ -349,9 +349,11 @@ export class RtcCall extends Emitter<RtcCallEvent> {
     this.setMuted(false);
   }
 
-  /** transfer re-routes the call to another agent or team. This leg waits
-   *  ("transferring") until they answer — then it ends ("ended") — or don't,
-   *  and the call comes back to it ("transfer-failed", reason "no answer"). */
+  /** transfer re-routes the call to another agent or team. To an agent, this
+   *  leg waits ("transferring") until they answer — then it ends ("ended") —
+   *  or don't, and the call comes back to it ("transfer-failed", reason
+   *  "no answer"). To a team, the call goes to the team's queue and this leg
+   *  ends ("ended"). */
   transfer(target: { toSip?: string; toTeam?: string }): void {
     this.send({ type: ClientMsgType.Transfer, to_sip: target.toSip, to_team: target.toTeam });
   }

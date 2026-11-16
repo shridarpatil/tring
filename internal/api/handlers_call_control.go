@@ -158,11 +158,11 @@ type sdkTransferRequest struct {
 	ToTeam string `json:"to_team"` // transfer to a team (ring all available members)
 }
 
-// handleSdkTransfer blind-transfers the agent's current call to another agent or
-// a team. Every call lives in a media-gateway room, so the gateway runs it
+// handleSdkTransfer transfers the agent's current call to another agent or a
+// team. Every call lives in a media-gateway room, so the gateway runs it
 // (POST /control/transfer) exactly as it runs the widget's own /rtc transfer:
-// target pre-flight, the agent's leg ends, the target rings, and on no answer
-// the caller hears the tenant's message. This used to drive FreeSWITCH over ESL
+// target pre-flight, then to an agent the agent waits muted and gets the call
+// back on no answer; to a team the agent's leg ends and the caller queues. This used to drive FreeSWITCH over ESL
 // on calls.leg_id, which is no FreeSWITCH channel for a media-plane call, so it
 // always failed.
 func (s *Server) handleSdkTransfer(w http.ResponseWriter, r *http.Request) {
