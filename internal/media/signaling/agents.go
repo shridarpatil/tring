@@ -399,7 +399,8 @@ func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 
 // handleDecline delivers an agent's rejection of a ringing call to that room's
 // active ring (registered by Prepare), which advances the router to the next
-// agent without waiting out the ring timeout. No-op if the ring already ended.
+// agent without waiting out the ring timeout — or, for an agent transfer to
+// this one agent, hands the call straight back. No-op if the ring already ended.
 func (s *Server) handleDecline(tenant, sip, roomName string) {
 	if roomName == "" {
 		return
@@ -411,6 +412,7 @@ func (s *Server) handleDecline(tenant, sip, roomName string) {
 	if dec != nil {
 		dec(sip)
 	}
+	s.declineTransfer(rid, sip)
 }
 
 // TeamMembersChanged makes this gateway's queued callers in tenant re-read

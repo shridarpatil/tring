@@ -837,7 +837,12 @@ function createPanel(control?: CallControl): Panel {
       transferBtn.disabled = state === "ringing";
       if (state === "ringing") transferNote = "Transferring…";
       else if (state === "failed") {
-        transferNote = reason === "no answer" ? "No answer · call is back with you" : `Transfer failed · ${reason ?? ""}`;
+        transferNote =
+          reason === "no answer"
+            ? "No answer · call is back with you"
+            : reason === "declined"
+              ? "Declined · call is back with you"
+              : `Transfer failed · ${reason ?? ""}`;
         transferNoteTimer = window.setTimeout(() => {
           transferNote = null;
           renderTime();

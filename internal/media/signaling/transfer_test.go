@@ -937,3 +937,80 @@ func TestTransferToUnknownTeamRefused(t *testing.T) {
 		t.Fatal("no transfer should be active after a refused request")
 	}
 }
+
+// reason returns the reason on the first frame of type typ ("" if none).
+func (f *fakeConn) reason(typ string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := readOnly{bytes.NewReader(f.buf.Bytes())}
+	for {
+		data, err := wsutil.ReadServerText(r)
+		if err != nil {
+			return ""
+		}
+		var m msg
+		if json.Unmarshal(data, &m) == nil && m.Type == typ {
+			return m.Reason
+		}
+	}
+}
+
+// The one agent a transfer rings declining hands the call straight back to the
+// waiting agent (reason "declined"), instead of after the transfer timeout. A
+// decline from anyone else doesn't stop the ring.
+func TestTransferTargetDeclineReturnsCallAtOnce(t *testing.T) {
+	sf, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu.New: %v", err)
+	}
+	s := New(Config{SFU: sf, TransferTimeouts: fixedTimeout(30 * time.Second)})
+	spy := spyIsolation(s)
+	tenant := uuid.New()
+	rid := room.RoomID(tenant.String() + "/decline")
+
+	caller, err := s.rooms.Join(rid, "caller")
+	if err != nil {
+		t.Fatalf("join caller: %v", err)
+	}
+	agent, err := s.rooms.Join(rid, "agent")
+	if err != nil {
+		t.Fatalf("join agent: %v", err)
+	}
+	target := &fakeConn{}
+	fc := &fakeConn{}
+	s.mu.Lock()
+	s.agents[tenant.String()] = map[string]*conn{"bob": target.conn("bob-pid")}
+	s.conns[agent.ID()] = fc.conn(agent.ID())
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		s.handleTransfer(fc.conn(agent.ID()), agent, tenant, "alice", msg{Type: msgTransfer, ToSip: "bob"})
+		close(done)
+	}()
+	waitIncoming(t, target)
+
+	s.handleDecline(tenant.String(), "carol", "decline") // not the target
+	select {
+	case <-done:
+		t.Fatal("a decline from an agent the transfer doesn't ring ended it")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	s.handleDecline(tenant.String(), "bob", "decline")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call did not come back when the target declined")
+	}
+	if got := fc.reason(msgTransferFailed); got != "declined" {
+		t.Fatalf("transfer-failed reason = %q, want declined", got)
+	}
+	if fc.saw(msgEnded) || spy.isolated(agent.ID()) {
+		t.Fatal("agent should have the call back, un-muted")
+	}
+	if r, ok := s.rooms.Get(rid); !ok || !hasParticipant(r, agent.ID()) || !hasParticipant(r, caller.ID()) {
+		t.Fatal("agent and caller should both still be on the call")
+	}
+	caller.Leave()
+}
