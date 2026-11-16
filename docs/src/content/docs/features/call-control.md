@@ -33,15 +33,27 @@ If the tenant has no playable hold-music file, the held party hears silence. See
 
 ### Blind transfer
 
-`transfer` takes exactly one target: `toSip` (another agent's `sip_username`) or `toTeam` (a team name). It is a blind transfer with fallback: the agent doesn't talk to the target first, but doesn't lose the call if nobody picks up.
+`transfer` takes exactly one target: `toSip` (another agent's `sip_username`) or `toTeam` (a team name). The agent doesn't talk to the target first.
 
-1. The gateway checks the target first. If it is unreachable now (agent offline or busy, team with nobody available), or the agent names themselves, the transfer is rejected with `transfer-failed` and **the agent keeps the call**.
-2. Otherwise the agent gets `transfer-ok` and **stays on the call** while the target rings. The customer hears hold music. The agent is muted and hears nothing; this is done by the gateway, so it also applies to a transfer started over REST or after a page refresh. The widget shows "Transferring…".
-3. The routing engine rings the target into the same call, with the team's strategy and queue if it is a team (see [Agents and routing](/tring/features/agents-and-routing/)), for up to the tenant's **transfer timeout** (Settings, or `transfer_timeout_seconds` on `PATCH /v1/tenants/me`; 60 seconds by default).
-4. When the target answers, the agent gets `ended` (reason `transferred`) and leaves; the customer is talking to the target.
-5. If nobody answers in time, **the call goes back to the agent**: they are unmuted and hear the customer again, and get `transfer-failed` with reason `no answer`. The customer hears no failure message.
+The gateway checks the target first. If the agent is unreachable now (offline, Away or busy), the team doesn't exist, or the agent names themselves, the transfer is rejected with `transfer-failed` and **the agent keeps the call**.
 
-If the agent hangs up while the target rings, the transfer carries on without them. If nobody answers then, the customer hears the tenant's **transfer failed message** (Settings, or `transfer_failed_message` on `PATCH /v1/tenants/me`, synthesized to speech when saved), then the call ends. If the customer hangs up while the target rings, the ring stops and the call ends.
+**To an agent** (`toSip`), the transfer has a fallback, so the agent doesn't lose the call if nobody picks up:
+
+1. The agent gets `transfer-ok` and **stays on the call** while the target rings. The customer hears hold music. The agent is muted and hears nothing; this is done by the gateway, so it also applies to a transfer started over REST or after a page refresh. The widget shows "Transferring…".
+2. The target rings for up to the tenant's **transfer timeout** (Settings, or `transfer_timeout_seconds` on `PATCH /v1/tenants/me`; 60 seconds by default).
+3. When the target answers, the agent gets `ended` (reason `transferred`) and leaves; the customer is talking to the target.
+4. If nobody answers in time, **the call goes back to the agent**: they are unmuted and hear the customer again, and get `transfer-failed` with reason `no answer`. If the target declines, the call comes back at once, with reason `declined`. The customer hears no failure message.
+
+**To a team** (`toTeam`), the call goes to the team's **queue**: the agent gets `transfer-ok` and then `ended` (reason `transferred`) straight away, and the customer waits in line with the team's hold music, like any other caller for that team, until a member answers. The team's strategy, ring time and `max_wait` apply (see [Agents and routing](/tring/features/agents-and-routing/)); the team doesn't need a free member when the transfer starts.
+
+If nobody answers and there is no agent to give the call back to (the team's `max_wait` ran out, or the agent hung up while their transfer rang):
+
+- If the call came through an IVR Transfer node, it goes back to that node, which takes its `queue_timeout` edge (the team's wait ran out; `no_answer` when that edge isn't wired) or its `no_answer` edge. The flow decides what the customer hears next.
+- Otherwise the customer hears the tenant's **transfer failed message** (Settings, or `transfer_failed_message` on `PATCH /v1/tenants/me`, synthesized to speech when saved), then the call ends.
+
+If the customer hangs up while the target rings, the ring stops and the call ends.
+
+If the call came through an IVR Transfer node and the transfer is answered, the flow's `completed` step (a post-call survey, say) runs when the agent who finally has the call hangs up with the customer still on the line, as it does without a transfer.
 
 Only one transfer can run per call at a time. The transfer is recorded on the call's timeline.
 
@@ -71,7 +83,7 @@ The REST hold and resume endpoints act on a call's **FreeSWITCH** leg. Calls now
 
 The agent-token REST endpoints `POST /v1/sdk/calls/hold` and `POST /v1/sdk/calls/resume` do the same on the agent's own newest answered call, resolved from the token, with the same limitation.
 
-`POST /v1/sdk/calls/transfer` (`{"to_sip": …}` or `{"to_team": …}`, agent token) blind-transfers the agent's own newest answered call through the media gateway. It works for web, phone and click-to-call calls and behaves exactly like the widget's Transfer button (see [Blind transfer](#blind-transfer)): an unreachable target leaves the agent on the call with `409`; otherwise the agent's call ends and the target rings. See the [agent widget endpoints](/tring/sdk/agent-widget/) for its error codes.
+`POST /v1/sdk/calls/transfer` (`{"to_sip": …}` or `{"to_team": …}`, agent token) blind-transfers the agent's own newest answered call through the media gateway. It works for web, phone and click-to-call calls and behaves exactly like the widget's Transfer button (see [Blind transfer](#blind-transfer)): an unreachable target leaves the agent on the call with `409`; otherwise the target rings (or, for a team, the call goes to its queue). See the [agent widget endpoints](/tring/sdk/agent-widget/) for its error codes.
 
 ## Supervision
 

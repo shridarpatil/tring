@@ -120,11 +120,13 @@ export type TringEvent =
   // A supervisor (console operator) is monitoring/whispering/barging on this
   // call, or has stopped. The customer is never notified — this is agent-only.
   | { type: "call:supervisor"; call: Call; present: boolean; mode: string; name: string }
-  // This agent's transfer is ringing the target; they stay on the call (muted,
-  // hearing nothing) until it's answered (call:ended) or not (below).
+  // This agent's transfer is ringing the target. To an agent they stay on the
+  // call (muted, hearing nothing) until it's answered (call:ended) or not
+  // (below); to a team the call goes to its queue and call:ended follows.
   | { type: "call:transferring"; call: Call }
   // The transfer didn't happen and the call is still this agent's: refused up
-  // front (target unavailable, …) or nobody answered (reason "no answer").
+  // front (target unavailable, …), nobody answered (reason "no answer"), or the
+  // agent it rang declined (reason "declined").
   | { type: "call:transfer-failed"; call: Call; reason: string }
   | { type: "error"; error: Error };
 

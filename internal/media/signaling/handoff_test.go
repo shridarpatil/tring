@@ -51,7 +51,7 @@ func TestAwaitHandoffEndResumesWhenAgentLeaves(t *testing.T) {
 	}
 
 	got := make(chan bool, 1)
-	go func() { got <- s.AwaitHandoffEnd(context.Background(), string(rid)) }()
+	go func() { _, ok := s.AwaitHandoffEnd(context.Background(), string(rid)); got <- ok }()
 	waitHandoff(t, s, rid)
 
 	agent.Leave() // emits ParticipantLeft → routeEvent → resume
@@ -87,7 +87,7 @@ func TestAwaitHandoffEndStopsWhenCallerLeaves(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	got := make(chan bool, 1)
-	go func() { got <- s.AwaitHandoffEnd(ctx, string(rid)) }()
+	go func() { _, ok := s.AwaitHandoffEnd(ctx, string(rid)); got <- ok }()
 	waitHandoff(t, s, rid)
 
 	caller.Leave() // caller hung up → handoff voided, NOT resumed
@@ -130,7 +130,7 @@ func TestAwaitHandoffEndPhoneWaitsForAgentHangup(t *testing.T) {
 	}
 
 	got := make(chan bool, 1)
-	go func() { got <- s.AwaitHandoffEnd(context.Background(), string(rid)) }()
+	go func() { _, ok := s.AwaitHandoffEnd(context.Background(), string(rid)); got <- ok }()
 	waitHandoff(t, s, rid)
 	select {
 	case v := <-got:
@@ -166,7 +166,7 @@ func TestAwaitHandoffEndPhoneStopsWhenCallerHangsUp(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	got := make(chan bool, 1)
-	go func() { got <- s.AwaitHandoffEnd(ctx, string(rid)) }()
+	go func() { _, ok := s.AwaitHandoffEnd(ctx, string(rid)); got <- ok }()
 	waitHandoff(t, s, rid)
 
 	s.forgetPstn(rid)

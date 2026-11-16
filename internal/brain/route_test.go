@@ -54,9 +54,9 @@ type handoffTransport struct {
 	waited         bool
 }
 
-func (h *handoffTransport) AwaitHandoffEnd(context.Context, string) bool {
+func (h *handoffTransport) AwaitHandoffEnd(context.Context, string) (string, bool) {
 	h.waited = true
-	return h.resumeToCaller
+	return "completed", h.resumeToCaller
 }
 
 func newRouter(tport RingTransport) *AgentRouter {
@@ -114,13 +114,13 @@ func TestRingNoHandoffSkipsHandoffWait(t *testing.T) {
 	}
 }
 
-// A team that stays empty for the whole max_wait is "no_answer".
+// A team that stays empty for the whole max_wait is "queue_timeout".
 func TestRingNoHandoffNoCandidates(t *testing.T) {
 	tp := effTransport{eff: noAnswerEffects{}}
 	r := NewAgentRouter(fakeTeams{sips: nil, maxWait: 1}, routing.NewRouter(routing.NewMemQueue(), routing.NewMemReservations(), routing.NewMemRR(), nil, nil, nil, nil), tp, nil, nil)
 	got, _ := r.RingNoHandoff(context.Background(), "11111111-1111-1111-1111-111111111111/room", ivrdrive.Target{Team: "sales"})
-	if got != "no_answer" {
-		t.Fatalf("outcome = %q, want no_answer", got)
+	if got != "queue_timeout" {
+		t.Fatalf("outcome = %q, want queue_timeout", got)
 	}
 }
 
@@ -264,8 +264,8 @@ func TestAgentRouterRecordsTeamStint(t *testing.T) {
 func TestAgentRouterStintTimeout(t *testing.T) {
 	st := &fakeStints{enterID: uuid.New()}
 	ar := newStintRouter(fakeTeams{sips: []string{"alice"}, maxWait: 1}, effTransport{eff: noAnswerEffects{}}, st)
-	if out, _ := ar.RingNoHandoff(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{Team: "support"}); out != "no_answer" {
-		t.Fatalf("outcome = %q, want no_answer", out)
+	if out, _ := ar.RingNoHandoff(context.Background(), uuid.New().String()+"/call", ivrdrive.Target{Team: "support"}); out != "queue_timeout" {
+		t.Fatalf("outcome = %q, want queue_timeout", out)
 	}
 	if len(st.leaves) != 1 || st.leaves[0].outcome != "timeout" {
 		t.Fatalf("leaves = %+v, want one timeout", st.leaves)

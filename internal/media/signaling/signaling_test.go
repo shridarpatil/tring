@@ -1382,3 +1382,124 @@ func TestAgentTokenCannotStartIVR(t *testing.T) {
 		t.Fatal("an agent token with flow_id started an IVR that rang the team")
 	}
 }
+
+// overflowFlows is start → transfer(team=sales), whose "queue T/O" handle goes
+// on to transfer(team=overflow).
+type overflowFlows struct{}
+
+func (overflowFlows) Load(_ context.Context, _, _ string) (*ivr.Flow, error) {
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]any{"team": "sales"}},
+			{ID: "y", Type: ivr.NodeTransfer, Config: map[string]any{"team": "overflow"}},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "x", Condition: "default"},
+			{From: "x", To: "y", Condition: "queue_timeout"},
+		},
+	}, nil
+}
+
+func (overflowFlows) FlowName(_ context.Context, _, _ string) (string, error) { return "Sales", nil }
+
+// An agent who took a call from the IVR transfers it to a team whose queue
+// then times out: the caller goes back to the IVR's Transfer node and takes
+// its "queue T/O" branch (here: on to the overflow team), instead of hearing
+// the generic transfer-failed message and being hung up.
+func TestTeamTransferQueueTimeoutResumesIVR(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: overflowFlows{},
+		Teams: fakeTeams{
+			members: map[string][]string{"sales": {"alice"}, "support": {"carol"}, "overflow": {"dave"}},
+			maxWait: 1, ringSeconds: 1,
+		},
+	})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+	dave := dial(t, ts.URL, mintToken(t, tenant, "dave"))
+	dave.send(map[string]any{"type": "register"})
+	dave.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	alice.readUntil("incoming")
+	answer := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	answer.send(map[string]any{"type": "join", "room": "call", "name": "Alice"})
+	answer.readUntil("joined")
+	visitor.readUntil("peer-joined")
+
+	// carol (support's only member) is offline: the caller queues for support
+	// until its max_wait runs out.
+	answer.send(map[string]any{"type": "transfer", "to_team": "support"})
+	answer.readUntil("transfer-ok")
+	if m := answer.readUntil("ended"); m["reason"] != "transferred" {
+		t.Fatalf("alice's leg ended with %v, want transferred", m["reason"])
+	}
+
+	// The IVR takes the Transfer node's queue T/O branch: overflow rings dave.
+	if inc := dave.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("dave incoming room = %v, want call", inc["room"])
+	}
+}
+
+// agentNodeFlows is start → transfer(agent_sip=alice), whose no_answer goes on
+// to transfer(team=overflow).
+type agentNodeFlows struct{}
+
+func (agentNodeFlows) Load(_ context.Context, _, _ string) (*ivr.Flow, error) {
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "x", Type: ivr.NodeTransfer, Config: map[string]any{"agent_sip": "alice"}},
+			{ID: "y", Type: ivr.NodeTransfer, Config: map[string]any{"team": "overflow"}},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "x", Condition: "default"},
+			{From: "x", To: "y", Condition: "no_answer"},
+		},
+	}, nil
+}
+
+func (agentNodeFlows) FlowName(_ context.Context, _, _ string) (string, error) { return "Direct", nil }
+
+// An IVR Transfer node that rings one agent takes no_answer the moment that
+// agent declines, instead of holding the caller for the agent line's max_wait
+// (2 minutes by default) waiting on someone who said no.
+func TestIVRAgentTransferDeclineTakesNoAnswerAtOnce(t *testing.T) {
+	ts := newServerCfg(t, signaling.Config{
+		Flows: agentNodeFlows{},
+		Teams: fakeTeams{members: map[string][]string{"overflow": {"dave"}}},
+	})
+	tenant := uuid.New()
+
+	alice := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	alice.send(map[string]any{"type": "register"})
+	alice.readUntil("ready")
+	dave := dial(t, ts.URL, mintToken(t, tenant, "dave"))
+	dave.send(map[string]any{"type": "register"})
+	dave.readUntil("ready")
+
+	visitor := dial(t, ts.URL, mintVisitorToken(t, tenant, "f1"))
+	visitor.send(map[string]any{"type": "join", "room": "call", "flow_id": "f1", "name": "Caller"})
+	visitor.readUntil("joined")
+
+	alice.readUntil("incoming")
+	start := time.Now()
+	alice.send(map[string]any{"type": "decline", "room": "call"})
+
+	// no_answer → overflow rings dave, well before any queue wait could end.
+	if inc := dave.readUntil("incoming"); inc["room"] != "call" {
+		t.Fatalf("dave incoming room = %v, want call", inc["room"])
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("no_answer took %v after alice declined, want it at once", d)
+	}
+}

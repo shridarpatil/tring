@@ -23,7 +23,7 @@ type TransferMessageResolver interface {
 	TenantTransferFailedAudio(ctx context.Context, tenantID uuid.UUID) (string, error)
 }
 
-// beginTransfer marks a room as having a blind transfer ringing and returns a
+// beginTransfer marks a room as having a transfer ringing and returns a
 // context cancelled when the transfer ends (endTransfer) or the caller hangs up
 // (routeEvent's empty-room branch). ok=false when a transfer is already in flight
 // for the room (a second transfer is rejected).
@@ -38,8 +38,9 @@ func (s *Server) beginTransfer(rid room.RoomID) (context.Context, bool) {
 	return ctx, true
 }
 
-// transferActive reports whether a blind transfer is ringing for the room. The
-// caller is briefly alone during it, so routeEvent must not tear the room down.
+// transferActive reports whether a transfer is ringing for the room. The caller
+// may be alone during it (a team transfer, or the transferring agent hung up),
+// so routeEvent must not tear the room down.
 func (s *Server) transferActive(rid room.RoomID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -60,7 +61,7 @@ func (s *Server) endTransfer(rid room.RoomID) {
 	}
 }
 
-// Why a blind transfer was refused before it committed. The messages are the
+// Why a transfer was refused before it committed. The messages are the
 // transfer-failed reasons the agent SDK shows.
 var (
 	errTransferTarget      = errors.New("specify exactly one of to_sip or to_team")
@@ -70,7 +71,8 @@ var (
 )
 
 // handleTransfer runs an agent's msgTransfer: a refusal goes back to the agent as
-// transfer-failed (the agent keeps the call); otherwise the target rings.
+// transfer-failed (the agent keeps the call); otherwise the target rings, or a
+// team's queue takes the call.
 func (s *Server) handleTransfer(c *conn, p *room.Participant, tenant uuid.UUID, sip string, m msg) {
 	ring, err := s.commitTransfer(c, p, tenant, sip, m.ToSip, m.ToTeam)
 	if err != nil {
@@ -113,6 +115,11 @@ func (s *Server) transferTimeout(tenant uuid.UUID) time.Duration {
 type pendingTransfer struct {
 	agent   room.ParticipantID
 	handoff *handoff
+	// toSip is the agent a transfer to one agent rings ("" for a team).
+	// declined: they declined, which ends the ring at once (pionRing.Exhausted)
+	// and is the reason the waiting agent is given.
+	toSip    string
+	declined bool
 }
 
 // transferAgent reports the agent waiting on rid's ringing transfer, if any.
@@ -125,10 +132,16 @@ func (s *Server) transferAgent(rid room.RoomID) room.ParticipantID {
 	return ""
 }
 
-// commitTransfer starts an agent's blind transfer with fallback: validate +
-// pre-flight the target, then keep the initiating agent on the call — cut off
-// both ways (deaf, and heard by nobody) — while the target rings. It returns
-// the ring step (re-ring the routing engine into the SAME room; see
+// commitTransfer starts an agent's transfer: validate + pre-flight the target,
+// then either
+//   - to an agent: keep the initiating agent on the call — cut off both ways
+//     (deaf, and heard by nobody) — while the target rings, and hand the call
+//     back to them if nobody answers (transfer with fallback); or
+//   - to a team: hand the call to the team's queue, releasing the agent (the
+//     ring step ends their leg). The caller waits in line like any other
+//     caller for that team, up to its max_wait.
+//
+// It returns the ring step (re-ring the routing engine into the SAME room; see
 // ringTransfer for answer / no-answer), or why the transfer was refused, in
 // which case nothing changed. Shared by the agent's own msgTransfer and the
 // API's POST /control/transfer.
@@ -144,8 +157,9 @@ func (s *Server) commitTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 		return nil, errTransferSelf
 	}
 
-	// Pre-flight: if the target is entirely unreachable now, keep the agent on the
-	// call rather than starting a dead ring.
+	// Pre-flight: keep the agent on the call rather than start a dead ring — an
+	// agent who can't answer now, or a team that doesn't exist. A team with no
+	// free member is fine: the caller queues for it.
 	if !s.targetReachable(context.Background(), tenant.String(), toSip, toTeam) {
 		return nil, errTransferUnavailable
 	}
@@ -169,7 +183,9 @@ func (s *Server) commitTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 	delete(s.handoffs, rid)
 	s.transferring[rid] = &pendingTransfer{agent: p.ID(), handoff: h}
 	s.mu.Unlock()
-	s.isolateAgent(rid, p.ID(), true)
+	if toTeam == "" {
+		s.isolateAgent(rid, p.ID(), true)
+	}
 	_ = c.send(msg{Type: msgTransferOK})
 
 	label := p.Name()
@@ -222,18 +238,33 @@ func (s *Server) isolateAgent(rid room.RoomID, pid room.ParticipantID, on bool) 
 	s.setAudience(rid, pid, !on, nil)
 }
 
-// ringTransfer rings a committed transfer's target. Answered: the waiting agent
-// leaves (a terminal `ended`, so their SDK doesn't reconnect into the room).
-// Not answered with the agent still there: the call goes back to them. Not
-// answered after the agent hung up mid-ring: the tenant's no-answer message
-// plays and the stranded caller is hung up, as a plain blind transfer does.
+// ringTransfer rings a committed transfer's target. A team transfer first
+// releases the agent and queues the caller for the team. Answered: the waiting
+// agent leaves (a terminal `ended`, so their SDK doesn't reconnect into the
+// room), and an IVR handoff passes to the answering agent so the flow's
+// post-call step still runs when they hang up. Not answered with the agent
+// still there: the call goes back to them. Not answered with no agent to go
+// back to (a team queue timed out, or the agent hung up mid-ring): the tenant's
+// no-answer message plays and the stranded caller is hung up.
 func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.UUID, sip, to string, target ivrdrive.Target, agentPID room.ParticipantID) {
-	// The transferring agent waits, cut off from the call, for as long as this
-	// rings, so it gets its own bound instead of the target's max_wait (2 min by
-	// default, longer for some teams). A separate context: running out of time
-	// must not look like the call ending.
-	timeout := s.transferTimeout(tenant)
-	ringCtx, cancelRing := context.WithTimeout(ctx, timeout)
+	ringCtx, cancelRing := ctx, context.CancelFunc(func() {})
+	if target.Team != "" {
+		// To the queue: the agent is done with this call. The caller waits
+		// for the team as long as its max_wait allows.
+		s.releaseAgent(rid, agentPID)
+	} else {
+		// The transferring agent waits, cut off from the call, for as long as
+		// this rings, so it gets its own bound instead of the agent line's
+		// max_wait. A separate context: running out of time must not look like
+		// the call ending.
+		ringCtx, cancelRing = context.WithTimeout(ctx, s.transferTimeout(tenant))
+		// Before the ring starts, so a decline can't arrive ahead of it.
+		s.mu.Lock()
+		if pt := s.transferring[rid]; pt != nil {
+			pt.toSip = target.AgentSIP
+		}
+		s.mu.Unlock()
+	}
 	outcome, _ := s.agentRouter.RingNoHandoff(ringCtx, string(rid), target)
 	cancelRing()
 	// Read before endTransfer below, which cancels ctx itself: cancelled here
@@ -250,27 +281,55 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 	s.endTransfer(rid) // clear the guard (idempotent; also fired if the caller hung up)
 
 	if outcome == "completed" {
+		// The answering agent now serves the IVR handoff: when they hang up
+		// with the caller still there, the flow's post-call step runs. The
+		// leaving agent below doesn't resume it — the target is still on.
+		s.mu.Lock()
+		if pt != nil && pt.handoff != nil && s.handoffs[rid] == nil {
+			s.handoffs[rid] = pt.handoff
+		}
+		s.mu.Unlock()
 		if agentHere {
-			if c := s.connFor(agentPID); c != nil {
-				_ = c.send(msg{Type: msgEnded, Reason: "transferred"})
-			}
-			s.removeParticipant(rid, agentPID)
+			s.releaseAgent(rid, agentPID)
 		}
 		s.publishTransferred(tenant.String(), rid, sip, to, "completed")
 		return
 	}
 
 	if agentHere && !callEnded {
-		// Nobody answered: the call is the agent's again.
+		// Nobody answered (or the target declined): the call is the agent's again.
+		reason := "no answer"
 		s.mu.Lock()
 		if pt.handoff != nil && s.handoffs[rid] == nil {
 			s.handoffs[rid] = pt.handoff
 		}
+		if pt.declined {
+			reason = "declined"
+		}
 		s.mu.Unlock()
 		s.isolateAgent(rid, agentPID, false)
 		if c := s.connFor(agentPID); c != nil {
-			_ = c.send(msg{Type: msgTransferFailed, Reason: "no answer"})
+			_ = c.send(msg{Type: msgTransferFailed, Reason: reason})
 		}
+		s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
+		return
+	}
+
+	var parked *handoff
+	if pt != nil {
+		s.mu.Lock()
+		parked = pt.handoff
+		s.mu.Unlock()
+	}
+	if !callEnded && parked != nil && s.brain.Running(rid) {
+		// The call came through the IVR, still parked on the Transfer node that
+		// first connected it. Hand it back there with this transfer's failure
+		// ("queue_timeout" when a team's max_wait ran out, else "no_answer"),
+		// so the flow's own timeout / no-answer branch decides what the caller
+		// hears next, instead of the generic message and a hangup. The handoff
+		// was set aside for the ring, so nothing else can resume it.
+		parked.outcome = outcome
+		close(parked.resume)
 		s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
 		return
 	}
@@ -296,10 +355,31 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 	s.publishTransferred(tenant.String(), rid, sip, to, "no_answer")
 }
 
-// targetReachable reports whether a transfer target has any agent that could answer
-// right now: for a specific SIP, that agent must be online, not Away and not on a call; for a
-// team, at least one resolved member must be. Best-effort — the ring itself is the
-// source of truth, this only avoids dropping the agent into an obviously-dead ring.
+// declineTransfer records that sip, the one agent a transfer rings, declined
+// it, so the waiting agent gets the call back with reason "declined". The ring
+// itself ends through pionRing.Exhausted. A team member's decline doesn't
+// count: the ring just moves on.
+func (s *Server) declineTransfer(rid room.RoomID, sip string) {
+	s.mu.Lock()
+	if pt := s.transferring[rid]; pt != nil && pt.toSip != "" && pt.toSip == sip {
+		pt.declined = true
+	}
+	s.mu.Unlock()
+}
+
+// releaseAgent ends the transferring agent's leg: a terminal `ended`
+// ("transferred", so their SDK doesn't reconnect into the room), then leave.
+func (s *Server) releaseAgent(rid room.RoomID, pid room.ParticipantID) {
+	if c := s.connFor(pid); c != nil {
+		_ = c.send(msg{Type: msgEnded, Reason: "transferred"})
+	}
+	s.removeParticipant(rid, pid)
+}
+
+// targetReachable reports whether a transfer can be handed to its target: a
+// specific SIP must be online, not Away and not on a call; a team must exist
+// (its members may all be busy — the caller queues). Best-effort — the ring
+// itself is the source of truth, this only avoids an obviously-dead transfer.
 func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) bool {
 	free := func(sip string) bool {
 		s.mu.Lock()
@@ -310,36 +390,23 @@ func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) 
 	if sip != "" {
 		return free(sip)
 	}
-	// Team: resolve members (nil resolver → any online free agent qualifies).
+	// Team: nil resolver → the queue rings any online agent.
 	if s.cfg.Teams == nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for a := range s.agents[tenant] {
-			if k := tenant + "|" + a; s.onCall[k] == 0 && !s.away[k] {
-				return true
-			}
-		}
-		return false
+		return true
 	}
 	tid, err := uuid.Parse(tenant)
 	if err != nil {
 		return false
 	}
-	sips, err := s.cfg.Teams.TeamSIPs(ctx, tid, team)
-	if err != nil {
-		return false
-	}
-	for _, a := range sips {
-		if free(a) {
-			return true
-		}
-	}
-	return false
+	_, ok, err := s.cfg.Teams.TeamConfig(ctx, tid, team)
+	// A failed lookup isn't proof the team is gone: the queue runs on its
+	// defaults then (brain.AgentRouter does the same).
+	return err != nil || ok
 }
 
 // playTransferFailMessage plays the tenant's synthesized no-answer prompt into the
 // room once (best-effort). Silent no-op when no resolver / no audio / room gone /
-// load fails — the caller is hung up by the handleTransfer caller regardless.
+// load fails — ringTransfer hangs the caller up regardless.
 func (s *Server) playTransferFailMessage(rid room.RoomID, tenantID uuid.UUID) {
 	if s.cfg.TransferMessage == nil {
 		return
