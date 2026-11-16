@@ -141,6 +141,7 @@ func (e *Engine) Synthesize(ctx context.Context, text, voice string) (string, er
 	defer os.Remove(tmpOgg)
 	fcmd := exec.CommandContext(ctx, e.ffmpeg, "-y", "-i", tmpWav,
 		"-ac", "1", "-ar", "48000", "-c:a", "libopus", tmpOgg)
+	fcmd.Env = []string{} // ffmpeg needs no env; don't hand it the process's secrets
 	if b, err := fcmd.CombinedOutput(); err != nil {
 		os.Remove(tmpOgg)
 		return "", fmt.Errorf("tts: ffmpeg: %w: %s", err, strings.TrimSpace(string(b)))

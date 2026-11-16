@@ -55,7 +55,7 @@ func Encode(ctx context.Context, out, in string, rate int) error {
 	}
 	args := append(audioFFmpegArgs(), "-threads", "1", "-i", in)
 	args = append(args, encodeArgs(rate, out)...)
-	if b, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
+	if b, err := ffmpegCmd(ctx, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg encode: %w: %s", err, b)
 	}
 	return nil
@@ -86,7 +86,7 @@ func MergeStereo(ctx context.Context, out, left, right string, rate int) error {
 		"-map", "[a]",
 	)
 	args = append(args, encodeArgs(rate, out)...)
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := ffmpegCmd(ctx, args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg merge: %w: %s", err, b)
 	}
@@ -150,7 +150,7 @@ func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg, rat
 
 	args = append(args, "-filter_complex", fc.String(), "-map", "[a]")
 	args = append(args, encodeArgs(rate, out)...)
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := ffmpegCmd(ctx, args...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg merge-call: %w: %s", err, b)
 	}
@@ -162,4 +162,14 @@ func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg, rat
 func audioFFmpegArgs() []string {
 	return []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y",
 		"-filter_threads", "1", "-filter_complex_threads", "1"}
+}
+
+// ffmpegCmd runs ffmpeg with an EMPTY environment. It decodes media sent by
+// untrusted callers (visitor Opus/VP8/VP9), so a decoder bug must not also hand
+// over the gateway's secrets (JWT, DSN, ESL/TURN passwords) through an inherited
+// environment. The binary is resolved from our PATH before the env is cleared.
+func ffmpegCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd.Env = []string{} // non-nil: nil would inherit os.Environ()
+	return cmd
 }
