@@ -16,6 +16,8 @@ package sfu
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,11 +59,13 @@ type Config struct {
 	// PublicIP candidates are used); on for same-host dev and tests so local ICE
 	// is deterministic without depending on a routable interface.
 	IncludeLoopback bool
-	// UDPMuxPort, when non-zero, serves every PeerConnection's host candidates
-	// on that ONE UDP port instead of one port per peer from UDPPortMin/Max. A
-	// per-peer port lets a few dozen idle or never-connecting peers exhaust the
-	// range and block new calls. 0 = per-peer ports from the range.
-	UDPMuxPort uint16
+	// UDPMuxPortMin/Max, when Min is non-zero, serve every PeerConnection's host
+	// candidates on a few shared UDP ports instead of one port per peer from
+	// UDPPortMin/Max. A per-peer port lets a few dozen idle or never-connecting
+	// peers exhaust the range and block new calls. Each mux port has its own
+	// socket and reader goroutine, and peers are spread across them round-robin,
+	// so a range scales the packet rate one port can take. Max 0 = just Min.
+	UDPMuxPortMin, UDPMuxPortMax uint16
 	// ConnectTimeout closes a PeerConnection that hasn't connected this long
 	// after Join (default 30s). A client can otherwise hold a peer, its port and
 	// a room slot for as long as its socket keeps pinging.
@@ -84,9 +88,11 @@ type SFU struct {
 	// on subscribe and relays subscriber PLIs to the publisher.
 	keyframe map[*webrtc.TrackLocalStaticRTP]func()
 
-	// udpMux is the shared host-candidate socket (Config.UDPMuxPort), built once in
-	// New and shared by every per-peer API; nil = a port per peer.
-	udpMux ice.UDPMux
+	// udpMuxes are the shared host-candidate sockets (Config.UDPMuxPortMin/Max),
+	// built once in New; each per-peer API takes the next one round-robin
+	// (muxNext). Empty = a port per peer.
+	udpMuxes []ice.UDPMux
+	muxNext  atomic.Uint64
 }
 
 // sfuRoom holds a room's live peers plus its publications. A publication (a
@@ -158,6 +164,29 @@ const defaultConnectTimeout = 30 * time.Second
 // Linux's 208 KB default.
 const udpMuxReadBuffer = 8 << 20
 
+// maxMuxPorts bounds the mux range: each port is a socket (per interface) and a
+// reader goroutine; a handful already covers thousands of calls.
+const maxMuxPorts = 64
+
+// ParsePortRange parses a UDP mux port setting: "" (off → 0, 0), "10000" (one
+// port) or "10000-10003" (a range).
+func ParsePortRange(v string) (lo, hi uint16, err error) {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "0" {
+		return 0, 0, nil
+	}
+	a, b, isRange := strings.Cut(v, "-")
+	if !isRange {
+		b = a
+	}
+	l, err1 := strconv.ParseUint(strings.TrimSpace(a), 10, 16)
+	h, err2 := strconv.ParseUint(strings.TrimSpace(b), 10, 16)
+	if err1 != nil || err2 != nil || l == 0 || h < l {
+		return 0, 0, fmt.Errorf("invalid port or port range %q (want 10000 or 10000-10003)", v)
+	}
+	return uint16(l), uint16(h), nil
+}
+
 // New builds an SFU. It validates the media config by building one API up front
 // (so a bad codec/port config fails fast), then builds a fresh API per
 // PeerConnection at Join time.
@@ -174,19 +203,31 @@ func New(cfg Config) (*SFU, error) {
 	if cfg.ConnectTimeout <= 0 {
 		s.cfg.ConnectTimeout = defaultConnectTimeout
 	}
-	if cfg.UDPMuxPort != 0 {
-		// One socket now carries every browser's media, read by one goroutine. A
+	if cfg.UDPMuxPortMin != 0 {
+		hi := cfg.UDPMuxPortMax
+		if hi == 0 {
+			hi = cfg.UDPMuxPortMin
+		}
+		if hi < cfg.UDPMuxPortMin || int(hi-cfg.UDPMuxPortMin) >= maxMuxPorts {
+			return nil, fmt.Errorf("udp mux ports %d-%d: want min <= max and at most %d ports", cfg.UDPMuxPortMin, hi, maxMuxPorts)
+		}
+		// Each mux socket carries many browsers' media, read by one goroutine. A
 		// big kernel buffer absorbs that reader's brief stalls (GC, scheduling)
 		// instead of dropping packets; Linux caps it at net.core.rmem_max.
 		opts := []ice.UDPMuxFromPortOption{ice.UDPMuxFromPortWithReadBufferSize(udpMuxReadBuffer)}
 		if cfg.IncludeLoopback {
 			opts = append(opts, ice.UDPMuxFromPortWithLoopback())
 		}
-		mux, err := ice.NewMultiUDPMuxFromPort(int(cfg.UDPMuxPort), opts...)
-		if err != nil {
-			return nil, fmt.Errorf("udp mux on port %d: %w", cfg.UDPMuxPort, err)
+		for port := int(cfg.UDPMuxPortMin); port <= int(hi); port++ {
+			mux, err := ice.NewMultiUDPMuxFromPort(port, opts...)
+			if err != nil {
+				for _, m := range s.udpMuxes {
+					_ = m.Close()
+				}
+				return nil, fmt.Errorf("udp mux on port %d: %w", port, err)
+			}
+			s.udpMuxes = append(s.udpMuxes, mux)
 		}
-		s.udpMux = mux
 	}
 	if _, err := s.buildAPI(); err != nil {
 		return nil, err
@@ -232,8 +273,8 @@ func (s *SFU) buildAPI() (*webrtc.API, error) {
 	// Bound the media UDP range when configured (firewall-able). Both zero =
 	// leave it unrestricted (OS ephemeral ports) — used by tests so rapid
 	// PC churn doesn't exhaust a narrow range. cmd/tring always sets a range.
-	if s.udpMux != nil {
-		se.SetICEUDPMux(s.udpMux)
+	if n := uint64(len(s.udpMuxes)); n > 0 {
+		se.SetICEUDPMux(s.udpMuxes[(s.muxNext.Add(1)-1)%n])
 	} else if cfg.UDPPortMin != 0 || cfg.UDPPortMax != 0 {
 		lo, hi := cfg.UDPPortMin, cfg.UDPPortMax
 		if lo == 0 {

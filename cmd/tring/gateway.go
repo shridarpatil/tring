@@ -77,17 +77,22 @@ func startGateway(d *deps) (*gatewayRole, error) {
 			Credential: k.String("turn_password"),
 		})
 	}
+	muxMin, muxMax, err := sfu.ParsePortRange(k.String("gateway_udp_mux_port"))
+	if err != nil {
+		return nil, fmt.Errorf("gateway_udp_mux_port: %w", err)
+	}
 	mediaSFU, err := sfu.New(sfu.Config{
-		ICEServers: sfuICE,
-		UDPPortMin: uint16(k.Int("gateway_udp_min")),
-		UDPPortMax: uint16(k.Int("gateway_udp_max")),
-		UDPMuxPort: uint16(k.Int("gateway_udp_mux_port")),
-		PublicIP:   k.String("public_ip"),
-		RelayOnly:  k.Bool("turn_relay_only"),
-		TURNURL:    turnURL,
-		TURNSecret: turnSecret,
-		TURNTTL:    time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
-		Logger:     logger,
+		ICEServers:    sfuICE,
+		UDPPortMin:    uint16(k.Int("gateway_udp_min")),
+		UDPPortMax:    uint16(k.Int("gateway_udp_max")),
+		UDPMuxPortMin: muxMin,
+		UDPMuxPortMax: muxMax,
+		PublicIP:      k.String("public_ip"),
+		RelayOnly:     k.Bool("turn_relay_only"),
+		TURNURL:       turnURL,
+		TURNSecret:    turnSecret,
+		TURNTTL:       time.Duration(k.Int("turn_ttl_seconds")) * time.Second,
+		Logger:        logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sfu init failed: %w", err)
