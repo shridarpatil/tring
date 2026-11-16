@@ -82,17 +82,19 @@ func TestHoldResume(t *testing.T) {
 }
 
 func TestTransferToAgent(t *testing.T) {
-	testTransfer(t, func(f *fixture, a1 *Agent) { a1.TransferToAgent(f.a2Sip) })
+	testTransfer(t, false, func(f *fixture, a1 *Agent) { a1.TransferToAgent(f.a2Sip) })
 }
 
 func TestTransferToTeam(t *testing.T) {
-	testTransfer(t, func(f *fixture, a1 *Agent) { a1.TransferToTeam(f.team) })
+	testTransfer(t, true, func(f *fixture, a1 *Agent) { a1.TransferToTeam(f.team) })
 }
 
-// testTransfer: agent one transfers an inbound call and stays on it while
-// agent two (the team's only member) is rung. Agent two joins and then hears
-// the customer and is heard by them; only then does agent one's leg end.
-func testTransfer(t *testing.T, transfer func(*fixture, *Agent)) {
+// testTransfer: agent one transfers an inbound call and agent two (the team's
+// only member) is rung. To an agent, agent one stays on the call until agent
+// two answers; to a team (toQueue), agent one hands the call to the team's
+// queue and its leg ends at once. Agent two joins and then hears the customer
+// and is heard by them.
+func testTransfer(t *testing.T, toQueue bool, transfer func(*fixture, *Agent)) {
 	live(t, func(t *testing.T) error {
 		f := seed(t) // this attempt's client
 		a2 := NewAgent(t, f.api, f.a2, f.a2Sip, FreqAgent2)
@@ -102,10 +104,13 @@ func testTransfer(t *testing.T, transfer func(*fixture, *Agent)) {
 		}
 		transfer(f, c.a1)
 		c.a1.WaitMsg("transfer-ok", 10*time.Second)
+		if toQueue {
+			c.a1.WaitMsg("ended", 10*time.Second)
+		}
 		room, _, _ := a2.WaitIncoming(15 * time.Second)
 		// Transfer with fallback: agent one waits on the call until someone
 		// answers, so nothing may have ended its leg yet.
-		for drained := false; !drained; {
+		for drained := toQueue; !drained; {
 			select {
 			case m := <-c.a1.ctrl:
 				if m.Type == "ended" {
@@ -118,7 +123,9 @@ func testTransfer(t *testing.T, transfer func(*fixture, *Agent)) {
 		if err := a2.Join(room); err != nil {
 			return err
 		}
-		c.a1.WaitMsg("ended", 10*time.Second)
+		if !toQueue {
+			c.a1.WaitMsg("ended", 10*time.Second)
+		}
 		from := a2.JoinedAt().Add(settle)
 		hears(t, "transferred customer", c.customer.Got, 8000, from, FreqAgent2)
 		got := Between(a2.Got().Since(from), from, from.Add(2*time.Second))

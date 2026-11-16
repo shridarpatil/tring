@@ -118,7 +118,7 @@ The API also has REST endpoints that accept the **agent JWT** (not the API key) 
 | `POST` | `/v1/sdk/calls/hold` | none | `200 {"held": true}` | `401` invalid agent token, `409` no active call / no media leg yet, `502` hold command failed |
 | `POST` | `/v1/sdk/calls/resume` | none | `200 {"held": false}` | same as hold |
 | `GET` | `/v1/sdk/transfer-targets` | none | `200 {"agents": [...], "teams": [...]}` | `401` |
-| `POST` | `/v1/sdk/calls/transfer` | `{"to_sip": "…"}` or `{"to_team": "…"}` | `200 {"transferred": true}` | `400` missing target, both targets, or transfer to yourself; `404` the agent isn't on that call; `409` no active call, target unavailable (including an unknown agent), transfer already in progress, or the agent is reconnecting; `502` media gateway unavailable |
+| `POST` | `/v1/sdk/calls/transfer` | `{"to_sip": "…"}` or `{"to_team": "…"}` | `200 {"transferred": true}` | `400` missing target, both targets, or transfer to yourself; `404` the agent isn't on that call; `409` no active call, target unavailable (an unknown, offline, Away or busy agent, or an unknown team), transfer already in progress, or the agent is reconnecting; `502` media gateway unavailable |
 
 Transfer goes through the media gateway and works for every call the agent answered: web, phone and click-to-call. It behaves like the widget's Transfer button (see [Blind transfer](/tring/features/call-control/#blind-transfer)).
 

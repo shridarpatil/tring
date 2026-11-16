@@ -806,11 +806,12 @@ func (s *Server) routeEvent(e room.Event) {
 			s.setHangupBy(e.Room, leaverBy)
 			return
 		} else if (!ok || len(r.Participants()) == 0) && s.transferActive(e.Room) && (s.phoneLive(e.Room) || s.outboundLive(e.Room)) {
-			// A blind transfer of a phone call or click-to-call: the transferring
-			// agent just left, but the caller / customer is the port and still on
-			// the line. Keep the call and the ring (the target joins, or the
-			// no-answer message plays and handleTransfer hangs up). The transfer
-			// goes on, so this agent didn't end the call.
+			// A transfer of a phone call or click-to-call: the transferring agent
+			// just left (handed the call to a team queue, or hung up mid-ring), but
+			// the caller / customer is the port and still on the line. Keep the call
+			// and the ring (the target joins, or the no-answer message plays and
+			// ringTransfer hangs up). The transfer goes on, so this agent didn't end
+			// the call.
 			s.clearHangupBy(e.Room)
 			return
 		} else if !ok || len(r.Participants()) == 0 {
@@ -839,8 +840,8 @@ func (s *Server) routeEvent(e room.Event) {
 			s.clearHangupBy(e.Room)
 			return
 		} else if s.transferActive(e.Room) && s.keepForTransfer(e.Room, e.Participant) {
-			// A blind transfer is ringing: the initiating agent just left and the
-			// caller is briefly alone. Keep the room (the target will join, or the
+			// A transfer is ringing: the initiating agent just left (handed the
+			// call to a team queue, or hung up mid-ring) and the caller is alone. Keep the room (the target will join, or the
 			// no-answer message plays) and suppress peer-left to the caller — the
 			// visitor SDK treats "the last peer left" as call-over and would Bye.
 			s.clearHangupBy(e.Room)
