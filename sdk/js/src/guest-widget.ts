@@ -48,12 +48,26 @@ export function bootstrapGuest(opts: GuestWidgetOpts): TringGuest {
     ringer.stop();
     ui.startTimer();
   });
+  // An error during a live call is not the end of it: a socket blip is followed
+  // by a silent reconnect, and a server rejection by the socket closing, so
+  // `ended` is what closes the panel. Ending the UI on the error itself left the
+  // visitor's mic live and recording with no hang-up button. Keep the message to
+  // show if the call does end.
+  let callError = "";
+  guest.on("connected", () => {
+    callError = ""; // (re)connected: an earlier blip didn't end the call
+  });
   guest.on("ended", () => {
     ringer.stop();
     ui.setRemoteVideo(null);
-    ui.end("Call ended");
+    ui.end(callError || "Call ended");
+    callError = "";
   });
   guest.on("error", ({ error }) => {
+    if (guest.inCall) {
+      callError = error.message || "Call failed";
+      return;
+    }
     ringer.stop();
     ui.setRemoteVideo(null);
     ui.end(error.message || "Call failed");
