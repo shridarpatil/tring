@@ -32,6 +32,20 @@ const (
 	opusChannels = 2
 )
 
+// Recording caps. Every byte here comes from a caller's RTP, and a modified
+// client can send far beyond normal bitrates, or toggle video to create a new
+// segment each time (each segment adds a decode/overlay chain to the composite
+// ffmpeg run). Past a cap the recording keeps what it has and drops the rest;
+// the call itself is unaffected.
+const (
+	// maxAudioBytes per leg: Opus tops out at 510 kbps, ~0.9 GiB over 4 h.
+	maxAudioBytes = 1 << 30
+	// maxVideoBytes across all video in one recording: ~4 h of 2 Mbps.
+	maxVideoBytes = 4 << 30
+	// maxVideoSegments per recording: camera/screen on-off intervals.
+	maxVideoSegments = 32
+)
+
 // Track is one recorded participant leg.
 type Track struct {
 	PID    room.ParticipantID
@@ -59,6 +73,13 @@ type Recorder struct {
 	closedAt   time.Time
 	videos     map[string]*videoCapture
 	endedVideo map[string]bool
+	audioBytes map[room.ParticipantID]int64
+	videoBytes int64
+	videoFull  bool // a video cap was hit: no further video is recorded
+
+	// caps, from the max* consts (fields so tests can lower them)
+	capAudioBytes, capVideoBytes int64
+	capVideoSegments             int
 }
 
 // New builds a recorder that writes <dir>/<callID>-<pid>.ogg per participant.
@@ -72,6 +93,11 @@ func New(dir, callID string) *Recorder {
 		offsets:    map[room.ParticipantID]time.Duration{},
 		videos:     map[string]*videoCapture{},
 		endedVideo: map[string]bool{},
+		audioBytes: map[room.ParticipantID]int64{},
+
+		capAudioBytes:    maxAudioBytes,
+		capVideoBytes:    maxVideoBytes,
+		capVideoSegments: maxVideoSegments,
 	}
 }
 
@@ -106,6 +132,9 @@ func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 	if r.closed || !r.armed {
 		return nil
 	}
+	if r.audioBytes[pid]+int64(len(pkt.Payload)) > r.capAudioBytes {
+		return nil // leg is at its cap: keep what's recorded
+	}
 	w := r.writers[pid]
 	if w == nil {
 		if err := os.MkdirAll(r.dir, 0o755); err != nil {
@@ -124,6 +153,7 @@ func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 			r.offsets[pid] = off
 		}
 	}
+	r.audioBytes[pid] += int64(len(pkt.Payload))
 	return w.WriteRTP(pkt)
 }
 
