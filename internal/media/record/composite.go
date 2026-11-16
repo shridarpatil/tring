@@ -107,7 +107,7 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 	args = append(args, "-filter_complex", fc.String(), "-map", "[v]", "-map", "[a]")
 	args = append(args, encoder...)
 	args = append(args, "-threads", "2", "-c:a", "aac", "-ar", strconv.Itoa(rate), "-b:a", "128k", "-movflags", "+faststart", "-t", total, out)
-	if b, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput(); err != nil {
+	if b, err := ffmpegCmd(ctx, args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg compose video: %w: %s", err, b)
 	}
 	return nil
@@ -116,7 +116,7 @@ func ComposeVideo(ctx context.Context, out string, audio []Track, video []VideoT
 // The container ships libx264. Some distribution builds provide OpenH264
 // instead; both produce H.264 MP4 files playable by browsers.
 func videoEncoder(ctx context.Context) ([]string, error) {
-	b, err := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-encoders").Output()
+	b, err := ffmpegCmd(ctx, "-hide_banner", "-encoders").Output()
 	if err != nil {
 		return nil, fmt.Errorf("list video encoders: %w", err)
 	}
