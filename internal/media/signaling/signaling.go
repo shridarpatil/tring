@@ -80,7 +80,7 @@ type Config struct {
 	// Tokens burns visitor gateway-call-token jtis single-use (anti-replay),
 	// mirroring the gateway. Required to accept visitor tokens — a visitor token
 	// with no store is rejected (fail-closed). nil → only agent tokens work.
-	Tokens *cache.Cache
+	Tokens TokenStore
 	// Presence publishes agent online/offline to the shared Redis store the API +
 	// admin console read (the same store the legacy /agent/ws wrote). nil/disabled
 	// → the dashboard won't show /rtc agents as online. Best-effort.
@@ -401,10 +401,17 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// Namespace the room by tenant so two tenants can't share a room id.
 	roomID := room.RoomID(tenant + "/" + first.Room)
-	// A visitor's flow is pinned by the TOKEN (server-side), never the join.
-	flowID := first.FlowID
-	if princ.isVisitor {
+	// A visitor's flow is pinned by the TOKEN (server-side), never the join. An
+	// agent token never starts an IVR: a client-chosen flow_id would skip the ring
+	// invite and the agent's routing reservation, letting one agent JWT open
+	// unlimited IVR rooms (peers, CDRs, webhooks, PSTN dials). Dev tokens keep it
+	// for the two-tab local test client.
+	var flowID string
+	switch {
+	case princ.isVisitor:
 		flowID = princ.flowID
+	case s.cfg.DevTokens:
+		flowID = first.FlowID
 	}
 
 	var p *room.Participant
@@ -929,6 +936,12 @@ type conn struct {
 	// (older) lookup result must not overwrite it (agents.go).
 	availMu     sync.Mutex
 	availPushed bool
+}
+
+// TokenStore burns single-use token ids (Redis SETNX in production;
+// *cache.Cache satisfies it, and a nil *cache.Cache fails closed).
+type TokenStore interface {
+	SetNX(ctx context.Context, key string, val []byte, ttl time.Duration) (bool, error)
 }
 
 // defaultJoinTimeout bounds the wait for a socket's first (join/register) message.
