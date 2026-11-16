@@ -105,8 +105,8 @@ The gateway role runs browser WebRTC on `/rtc`, the IVR, agent routing and call 
 | `TRING_GATEWAY_PUBLIC_URL` | `http://127.0.0.1:8087` | The gateway base URL the api hands to browsers in agent tokens and visitor credentials. Browsers must be able to reach `/rtc` on it. Use `https://` in production. |
 | `TRING_PUBLIC_IP` | empty | Public IP of the gateway, written into its ICE candidates so internet browsers can reach it. Required for internet-facing deployments. Empty means no rewrite (LAN or loopback only). FreeSWITCH also advertises it on the trunk profile unless `TRING_TRUNK_IP` is set. |
 | `TRING_GATEWAY_ADDR` | `:8087` | The gateway's HTTP/WebSocket listen address. |
-| `TRING_GATEWAY_UDP_MIN` / `TRING_GATEWAY_UDP_MAX` | `10000` / `10100` | UDP ports for browser media. With the mux on (the default), every call shares the single port `TRING_GATEWAY_UDP_MIN`; open that port on the firewall. With the mux off, each call takes its own port from the range, which caps you at about 100 concurrent calls; open the whole range. |
-| `TRING_GATEWAY_UDP_MUX` | `true` | Serve all browser media on one UDP port (`TRING_GATEWAY_UDP_MIN`). Per-call ports let a few dozen idle connections use up the range and block new calls. Two gateways on one host need different `TRING_GATEWAY_UDP_MIN` values. |
+| `TRING_GATEWAY_UDP_MIN` / `TRING_GATEWAY_UDP_MAX` | `10000` / `10100` | UDP port range for browser media when `TRING_GATEWAY_UDP_MUX_PORT` is not set: about one port per call, so the default caps you at roughly 100 concurrent calls. Open this range on the firewall. |
+| `TRING_GATEWAY_UDP_MUX_PORT` | empty | Serve all browser media on this one UDP port instead of the range. Recommended: with per-call ports, a few dozen idle connections can use up the range and block new calls. Open just this port. Two gateways on one host need different ports. |
 | `TRING_GATEWAY_REQUIRE_AUTH` | `true` | When `true`, the gateway will not start without Redis (see the note above). `/rtc` always requires a signed token regardless of this setting. Keep it `true`. |
 | `TRING_MEDIA_GRACE_SECONDS` | `30` | How long a dropped participant's slot is held so a page refresh can rejoin the same call. See [page-refresh grace](/tring/features/web-calling/#page-refresh-grace). |
 | `TRING_GATEWAY_DRAIN_SECONDS` | `300` | On `docker stop` (SIGTERM) the gateway stops taking new calls and waits up to this long for live calls to end. Calls still up after that are ended (callers and agents get a hangup, call records settle as a system end, recordings are finalized) before it exits. New web calls, inbound phone calls and two-number connects are refused meanwhile, and `/healthz` returns 503. Keep the gateway's `stop_grace_period` in `docker-compose.yml` (`345s`) about 40s above it, or Docker kills it before the remaining calls are ended. |
@@ -252,7 +252,7 @@ These are not in `.env.example` but are read by the binaries, Compose or FreeSWI
 - Replace every secret: `TRING_JWT_SECRET`, `TRING_FS_BASIC_AUTH`, `TRING_ESL_PASSWORD`, `TRING_ADMIN_PASSWORD` (before first boot). `make .env` / `install.sh` generate these. The Postgres password in `TRING_DSN` is not generated; the compose file publishes Postgres on `127.0.0.1` only.
 - Set `TRING_SECRETS_KEY` so SIP passwords are encrypted at rest, and back it up outside the database backups. The api logs a warning on every start while it is empty.
 - Serve the api and gateway over HTTPS behind a TLS proxy; set `TRING_GATEWAY_PUBLIC_URL=https://…` and `TRING_TRUSTED_PROXIES` to the proxy's address.
-- Set `TRING_PUBLIC_IP` and open only the media ports you use (`TRING_GATEWAY_UDP_MIN` with the default mux).
+- Set `TRING_PUBLIC_IP`, set `TRING_GATEWAY_UDP_MUX_PORT`, and open only the media ports you use.
 - Keep `TRING_GATEWAY_REQUIRE_AUTH=true` and `TRING_RTC_DEV_TOKENS=false`.
 - Keep ESL (`8021`), Postgres and Redis off the public internet.
 - Set `TRING_CARRIER_CIDRS` to your carriers' signalling addresses.

@@ -57,11 +57,11 @@ type Config struct {
 	// PublicIP candidates are used); on for same-host dev and tests so local ICE
 	// is deterministic without depending on a routable interface.
 	IncludeLoopback bool
-	// UDPMux serves every PeerConnection's host candidates on ONE UDP port
-	// (UDPPortMin) instead of one port per peer from the range. A per-peer port
-	// let a few dozen idle or never-connecting peers exhaust the ~100-port range
-	// and block new calls. Needs a configured range.
-	UDPMux bool
+	// UDPMuxPort, when non-zero, serves every PeerConnection's host candidates
+	// on that ONE UDP port instead of one port per peer from UDPPortMin/Max. A
+	// per-peer port lets a few dozen idle or never-connecting peers exhaust the
+	// range and block new calls. 0 = per-peer ports from the range.
+	UDPMuxPort uint16
 	// ConnectTimeout closes a PeerConnection that hasn't connected this long
 	// after Join (default 30s). A client can otherwise hold a peer, its port and
 	// a room slot for as long as its socket keeps pinging.
@@ -84,7 +84,7 @@ type SFU struct {
 	// on subscribe and relays subscriber PLIs to the publisher.
 	keyframe map[*webrtc.TrackLocalStaticRTP]func()
 
-	// udpMux is the shared host-candidate socket (Config.UDPMux), built once in
+	// udpMux is the shared host-candidate socket (Config.UDPMuxPort), built once in
 	// New and shared by every per-peer API; nil = a port per peer.
 	udpMux ice.UDPMux
 }
@@ -168,17 +168,14 @@ func New(cfg Config) (*SFU, error) {
 	if cfg.ConnectTimeout <= 0 {
 		s.cfg.ConnectTimeout = defaultConnectTimeout
 	}
-	if cfg.UDPMux {
-		if cfg.UDPPortMin == 0 {
-			return nil, fmt.Errorf("udp mux needs a UDP port (UDPPortMin)")
-		}
+	if cfg.UDPMuxPort != 0 {
 		var opts []ice.UDPMuxFromPortOption
 		if cfg.IncludeLoopback {
 			opts = append(opts, ice.UDPMuxFromPortWithLoopback())
 		}
-		mux, err := ice.NewMultiUDPMuxFromPort(int(cfg.UDPPortMin), opts...)
+		mux, err := ice.NewMultiUDPMuxFromPort(int(cfg.UDPMuxPort), opts...)
 		if err != nil {
-			return nil, fmt.Errorf("udp mux on port %d: %w", cfg.UDPPortMin, err)
+			return nil, fmt.Errorf("udp mux on port %d: %w", cfg.UDPMuxPort, err)
 		}
 		s.udpMux = mux
 	}
