@@ -423,20 +423,27 @@ function loadFromIVRFlowData(d: IVRFlowData) {
 }
 
 // syncRenderedAudio pulls the server's freshly-rendered prompt audio back into
-// the canvas. On save the API synthesizes node text (greeting_text) to an audio
-// file and stamps each node's audio_file; without copying that back, the play
-// button keeps the stale/empty path until a page refresh.
+// the canvas. On save the API synthesizes node text (greeting_text, a menu's
+// invalid_text) to audio files and stamps each node's audio fields; without
+// copying them back, the play button keeps the stale/empty path until a page
+// refresh.
+const renderedAudioFields = ["audio_file", "invalid_audio_file"];
 function syncRenderedAudio(def?: IVRFlowData) {
   if (!def?.nodes) return;
   for (const sn of def.nodes) {
     const idx = nodes.value.findIndex((n) => n.id === sn.id);
     if (idx < 0) continue;
-    const serverAF = ((sn.config as Record<string, unknown>)?.audio_file as string) || "";
+    const server = (sn.config || {}) as Record<string, unknown>;
     const cfg = (nodes.value[idx].data?.config || {}) as Record<string, unknown>;
-    if (((cfg.audio_file as string) || "") === serverAF) continue;
+    const changed: Record<string, string> = {};
+    for (const f of renderedAudioFields) {
+      const v = (server[f] as string) || "";
+      if (((cfg[f] as string) || "") !== v) changed[f] = v;
+    }
+    if (Object.keys(changed).length === 0) continue;
     nodes.value[idx] = {
       ...nodes.value[idx],
-      data: { ...nodes.value[idx].data, config: { ...cfg, audio_file: serverAF } },
+      data: { ...nodes.value[idx].data, config: { ...cfg, ...changed } },
     };
   }
 }
