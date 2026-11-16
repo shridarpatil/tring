@@ -399,7 +399,9 @@ func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 
 // handleDecline delivers an agent's rejection of a ringing call to that room's
 // active ring (registered by Prepare), which advances the router to the next
-// agent without waiting out the ring timeout. No-op if the ring already ended.
+// agent without waiting out the ring timeout — or, when this was the one agent
+// a direct transfer rang, ends the ring (pionRing.Exhausted). No-op if the
+// ring already ended.
 func (s *Server) handleDecline(tenant, sip, roomName string) {
 	if roomName == "" {
 		return
@@ -408,6 +410,7 @@ func (s *Server) handleDecline(tenant, sip, roomName string) {
 	s.mu.Lock()
 	dec := s.declines[rid]
 	s.mu.Unlock()
+	s.declineTransfer(rid, sip) // first: the ring may settle as soon as dec runs
 	if dec != nil {
 		dec(sip)
 	}
@@ -429,7 +432,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	ring := make(chan struct{})
 	eff := &pionRing{
 		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label, maskedLabel: t.MaskedLabel,
-		strategy: strategy, moh: moh, ring: ring,
+		strategy: strategy, moh: moh, ring: ring, only: t.AgentSIP,
 		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{},
 		declineCh: make(chan struct{}, 1),
 	}
@@ -522,6 +525,9 @@ type pionRing struct {
 	rung        map[string]bool // sips popped at least once this transfer (suppresses re-pop within a round)
 	active      map[string]bool // sips whose popup is currently showing (guarded by s.mu)
 	declined    map[string]bool // sips that rejected this call — excluded from candidates (guarded by s.mu)
+	// only is the one agent a direct transfer rings ("" for a team / ring-all):
+	// once they decline, nobody is left to answer (Exhausted).
+	only string
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
@@ -569,6 +575,18 @@ func (p *pionRing) stopHold() {
 	if p.holdStop != nil {
 		p.holdStop()
 	}
+}
+
+// Exhausted satisfies routing.Exhaustible: a direct transfer's only agent
+// declined, so the caller stops waiting for them (the Transfer node's
+// no_answer; an agent transfer goes back to the transferring agent).
+func (p *pionRing) Exhausted() bool {
+	if p.only == "" {
+		return false
+	}
+	p.s.mu.Lock()
+	defer p.s.mu.Unlock()
+	return p.declined[p.only]
 }
 
 // Answered backstops the async case: an agent joined mid-hold (outside a Ring).

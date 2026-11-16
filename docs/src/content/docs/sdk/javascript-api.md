@@ -205,7 +205,7 @@ holdBtn.onclick = () => {
 transfer(target: { toSip?: string; toTeam?: string }): void
 ```
 
-Transfers the call to one agent (`toSip`, their `sip_username`) or to a team (`toTeam`, its name). While the target rings you get `call:transferring`, and this agent stays on the call, muted and hearing nothing. When the target answers, this agent's call ends and you get `call:ended`. If the transfer is refused (target unavailable, or a transfer to yourself) or nobody answers within the transfer timeout, the call carries on with this agent and you get `call:transfer-failed` with the reason (`"no answer"` for a timeout). See [Blind transfer](/tring/features/call-control/#blind-transfer).
+Transfers the call to one agent (`toSip`, their `sip_username`) or to a team (`toTeam`, its name). You get `call:transferring` first. To an agent, this agent stays on the call, muted and hearing nothing, while the target rings; when the target answers, this agent's call ends and you get `call:ended`. To a team, the call goes to the team's queue and you get `call:ended` straight away. If the transfer is refused (agent unavailable, unknown team, or a transfer to yourself) or an agent target doesn't answer within the transfer timeout or declines, the call carries on with this agent and you get `call:transfer-failed` with the reason (`"no answer"` for a timeout, `"declined"` when the target declines). See [Blind transfer](/tring/features/call-control/#blind-transfer).
 
 To list targets, call `GET /v1/sdk/transfer-targets` with the agent JWT (see [Agent widget](/tring/sdk/agent-widget/#how-hold-and-transfer-work)).
 
