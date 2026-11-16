@@ -281,8 +281,14 @@ func TestMenuInvalidDigitDoesNotInterruptPrompt(t *testing.T) {
 func TestMenuTimeoutBranch(t *testing.T) {
 	fake := &fakePrompts{played: make(chan string, 16)}
 	d := newDriver(fake, nil)
-	// no DTMF fed → menu times out (1s) → timeout branch
-	path := runFlow(t, d, fake, menuFlow(), nil)
+	// no DTMF fed → menu times out (1s) → timeout branch (no retries allowed)
+	flow := menuFlow()
+	for i := range flow.Nodes {
+		if flow.Nodes[i].ID == "m" {
+			flow.Nodes[i].Config["max_retries"] = float64(0)
+		}
+	}
+	path := runFlow(t, d, fake, flow, nil)
 	if want := []string{"s", "g", "m", "h2"}; !eq(ids(path), want) {
 		t.Fatalf("path = %v, want %v", ids(path), want)
 	}
@@ -1019,5 +1025,108 @@ func TestNumberTransferWebhookFiresOnAnswer(t *testing.T) {
 	runFlow(t, d, fake, flow, nil)
 	if got := log.outcomes(); !eq(got, []string{"x:answered"}) {
 		t.Fatalf("events = %v, want x:answered once", got)
+	}
+}
+
+// invalidMenuFlow: a menu with one option, one retry and an invalid-input
+// message; max_retries and digit:1 both hang up.
+func invalidMenuFlow(extra map[string]interface{}) *ivr.Flow {
+	cfg := map[string]interface{}{
+		"audio_file": "menu.ogg", "timeout_seconds": float64(1), "max_retries": float64(1),
+		"options": map[string]interface{}{"1": "sales"},
+	}
+	for k, v := range extra {
+		cfg[k] = v
+	}
+	return &ivr.Flow{
+		EntryNode: "s",
+		Nodes: []ivr.Node{
+			{ID: "s", Type: ivr.NodeStart},
+			{ID: "m", Type: ivr.NodeMenu, Config: cfg},
+			{ID: "h", Type: ivr.NodeHangup},
+		},
+		Edges: []ivr.Edge{
+			{From: "s", To: "m", Condition: "default"},
+			{From: "m", To: "h", Condition: "digit:1"},
+			{From: "m", To: "h", Condition: "max_retries"},
+		},
+	}
+}
+
+// An invalid key plays the menu's invalid-input message before the menu
+// re-prompts; the last invalid attempt doesn't (max_retries routes on).
+func TestMenuInvalidInputPlaysMessageBeforeReprompt(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	path := runFlow(t, d, fake, invalidMenuFlow(map[string]interface{}{"invalid_audio_file": "invalid.ogg"}),
+		map[string][]string{"menu.ogg": {"9"}})
+
+	if want := []string{"menu.ogg", "invalid.ogg", "menu.ogg"}; !eq(d.Played(), want) {
+		t.Fatalf("played = %v, want %v", d.Played(), want)
+	}
+	if got := path[len(path)-2].Outcome; got != "max_retries" {
+		t.Fatalf("menu outcome = %q, want max_retries", got)
+	}
+}
+
+// Without an invalid-input message the menu just re-prompts, as before.
+func TestMenuInvalidInputWithoutMessageJustReprompts(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	runFlow(t, d, fake, invalidMenuFlow(nil), map[string][]string{"menu.ogg": {"9"}})
+	if want := []string{"menu.ogg", "menu.ogg"}; !eq(d.Played(), want) {
+		t.Fatalf("played = %v, want %v", d.Played(), want)
+	}
+}
+
+// Silence counts as a try, like an invalid key: the menu replays its prompt
+// until max_retries is used up, then leaves via timeout.
+func TestMenuSilenceRepromptsThenTimesOut(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	flow := invalidMenuFlow(nil)
+	flow.Edges = append(flow.Edges, ivr.Edge{From: "m", To: "h", Condition: "timeout"})
+	path := runFlow(t, d, fake, flow, nil)
+
+	if want := []string{"menu.ogg", "menu.ogg"}; !eq(d.Played(), want) {
+		t.Fatalf("played = %v, want the prompt replayed once after silence", d.Played())
+	}
+	if got := path[len(path)-2].Outcome; got != "timeout" {
+		t.Fatalf("menu outcome = %q, want timeout", got)
+	}
+}
+
+// Silence and invalid keys share max_retries; how the last try ended picks
+// the exit: an invalid key then silence leaves via timeout.
+func TestMenuInvalidThenSilenceLeavesViaTimeout(t *testing.T) {
+	fake := &fakePrompts{played: make(chan string, 16)}
+	d := newDriver(fake, nil)
+	flow := invalidMenuFlow(map[string]interface{}{"invalid_audio_file": "invalid.ogg"})
+	flow.Edges = append(flow.Edges, ivr.Edge{From: "m", To: "h", Condition: "timeout"})
+
+	done := make(chan []ivr.Step, 1)
+	go func() {
+		p, _ := ivr.Walk(context.Background(), flow, flow.EntryNode, d)
+		done <- p
+	}()
+	first := true
+	for {
+		select {
+		case f := <-fake.played:
+			if f == "menu.ogg" && first {
+				first = false
+				d.DTMF("9") // first try: invalid; the second try stays silent
+			}
+		case p := <-done:
+			if want := []string{"menu.ogg", "invalid.ogg", "menu.ogg"}; !eq(d.Played(), want) {
+				t.Fatalf("played = %v, want %v", d.Played(), want)
+			}
+			if got := p[len(p)-2].Outcome; got != "timeout" {
+				t.Fatalf("menu outcome = %q, want timeout (the last try was silent)", got)
+			}
+			return
+		case <-time.After(5 * time.Second):
+			t.Fatal("flow walk hung")
+		}
 	}
 }

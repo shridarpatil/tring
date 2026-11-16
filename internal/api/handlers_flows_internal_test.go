@@ -120,3 +120,35 @@ func TestPrerenderFlowAudioDisabledIsPassThrough(t *testing.T) {
 		t.Fatalf("disabled engine should pass definition through unchanged; got %s", out)
 	}
 }
+
+// A menu's invalid-input message is rendered to its own audio field on save,
+// beside (not instead of) the menu prompt; an uploaded invalid message wins,
+// and clearing the text drops a message we rendered.
+func TestPrerenderFlowAudioRendersMenuInvalidMessage(t *testing.T) {
+	s := &Server{tts: stubPiperEngine(t), audioDir: "/sounds", log: slog.Default()}
+
+	def := json.RawMessage(`{"version":2,"entry_node":"m","nodes":[
+		{"id":"m","type":"menu","config":{"greeting_text":"Press 1","invalid_text":"Sorry, that is not an option"}},
+		{"id":"u","type":"menu","config":{"invalid_text":"ignored","invalid_audio_file":"/sounds/t/oops.ogg"}},
+		{"id":"c","type":"menu","config":{"invalid_text":"","invalid_audio_file":"/sounds/tts/old.ogg"}}
+	],"edges":[]}`)
+
+	var root map[string]any
+	if err := json.Unmarshal(s.prerenderFlowAudio(context.Background(), def), &root); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	nodes := root["nodes"].([]any)
+	cfg := func(i int) map[string]any { return nodes[i].(map[string]any)["config"].(map[string]any) }
+
+	prompt, _ := cfg(0)["audio_file"].(string)
+	invalid, _ := cfg(0)["invalid_audio_file"].(string)
+	if !strings.HasPrefix(invalid, "/sounds/tts/") || invalid == prompt {
+		t.Fatalf("invalid_audio_file = %q (prompt %q), want its own /sounds/tts/ rendering", invalid, prompt)
+	}
+	if af, _ := cfg(1)["invalid_audio_file"].(string); af != "/sounds/t/oops.ogg" {
+		t.Fatalf("uploaded invalid message overwritten: %q", af)
+	}
+	if _, ok := cfg(2)["invalid_audio_file"]; ok {
+		t.Fatal("rendered invalid message kept after its text was cleared")
+	}
+}
