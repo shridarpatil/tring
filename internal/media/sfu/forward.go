@@ -2,6 +2,7 @@ package sfu
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pion/rtcp"
@@ -68,6 +69,7 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 		p.log.Debug("pc state", "state", st.String())
 		switch st {
 		case webrtc.PeerConnectionStateConnected:
+			p.everConnected.Store(true)
 			if p.OnConnected != nil {
 				p.OnConnected()
 			}
@@ -96,6 +98,17 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 	old := r.peers[pid]
 	r.peers[pid] = p
 	s.mu.Unlock()
+
+	// A peer that never connects (no answer, unreachable candidates) would keep
+	// its port and room slot for as long as the client's socket pings. Closing
+	// it fires OnClosed → the room's normal grace-window teardown.
+	time.AfterFunc(s.cfg.ConnectTimeout, func() {
+		if p.everConnected.Load() || pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
+			return
+		}
+		p.log.Warn("peer never connected; closing", "after", s.cfg.ConnectTimeout)
+		_ = pc.Close()
+	})
 
 	// Reattach: drop the old transport but keep the publication + subscribers.
 	if old != nil {

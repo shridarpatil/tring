@@ -57,7 +57,16 @@ type Config struct {
 	// PublicIP candidates are used); on for same-host dev and tests so local ICE
 	// is deterministic without depending on a routable interface.
 	IncludeLoopback bool
-	Logger          *slog.Logger
+	// UDPMuxPort, when non-zero, serves every PeerConnection's host candidates
+	// on that ONE UDP port instead of one port per peer from UDPPortMin/Max. A
+	// per-peer port lets a few dozen idle or never-connecting peers exhaust the
+	// range and block new calls. 0 = per-peer ports from the range.
+	UDPMuxPort uint16
+	// ConnectTimeout closes a PeerConnection that hasn't connected this long
+	// after Join (default 30s). A client can otherwise hold a peer, its port and
+	// a room slot for as long as its socket keeps pinging.
+	ConnectTimeout time.Duration
+	Logger         *slog.Logger
 }
 
 // SFU holds the pion media/setting-engine config and the live peers grouped by
@@ -74,6 +83,10 @@ type SFU struct {
 	// keyframe; screen-share encoders emit them rarely, so the SFU requests one
 	// on subscribe and relays subscriber PLIs to the publisher.
 	keyframe map[*webrtc.TrackLocalStaticRTP]func()
+
+	// udpMux is the shared host-candidate socket (Config.UDPMuxPort), built once in
+	// New and shared by every per-peer API; nil = a port per peer.
+	udpMux ice.UDPMux
 }
 
 // sfuRoom holds a room's live peers plus its publications. A publication (a
@@ -135,6 +148,16 @@ func (r *sfuRoom) canHear(pub, sub room.ParticipantID) bool {
 	return !r.deaf[sub] && r.audienceHears(pub, sub)
 }
 
+// defaultConnectTimeout bounds how long a new PeerConnection may take to connect.
+// ICE + DTLS normally finish in a second or two; TURN-relayed peers in a few.
+const defaultConnectTimeout = 30 * time.Second
+
+// udpMuxReadBuffer is the mux socket's receive buffer. The kernel charges each
+// queued packet its full skb size (~1 KB for a small RTP packet), so 8 MB holds
+// ~8k packets: ~80 ms at 100k packets/s (≈1,000 web calls), against a few ms at
+// Linux's 208 KB default.
+const udpMuxReadBuffer = 8 << 20
+
 // New builds an SFU. It validates the media config by building one API up front
 // (so a bad codec/port config fails fast), then builds a fresh API per
 // PeerConnection at Join time.
@@ -147,6 +170,23 @@ func New(cfg Config) (*SFU, error) {
 		log:      cfg.Logger.With("component", "sfu"),
 		rooms:    make(map[room.RoomID]*sfuRoom),
 		keyframe: make(map[*webrtc.TrackLocalStaticRTP]func()),
+	}
+	if cfg.ConnectTimeout <= 0 {
+		s.cfg.ConnectTimeout = defaultConnectTimeout
+	}
+	if cfg.UDPMuxPort != 0 {
+		// One socket now carries every browser's media, read by one goroutine. A
+		// big kernel buffer absorbs that reader's brief stalls (GC, scheduling)
+		// instead of dropping packets; Linux caps it at net.core.rmem_max.
+		opts := []ice.UDPMuxFromPortOption{ice.UDPMuxFromPortWithReadBufferSize(udpMuxReadBuffer)}
+		if cfg.IncludeLoopback {
+			opts = append(opts, ice.UDPMuxFromPortWithLoopback())
+		}
+		mux, err := ice.NewMultiUDPMuxFromPort(int(cfg.UDPMuxPort), opts...)
+		if err != nil {
+			return nil, fmt.Errorf("udp mux on port %d: %w", cfg.UDPMuxPort, err)
+		}
+		s.udpMux = mux
 	}
 	if _, err := s.buildAPI(); err != nil {
 		return nil, err
@@ -192,7 +232,9 @@ func (s *SFU) buildAPI() (*webrtc.API, error) {
 	// Bound the media UDP range when configured (firewall-able). Both zero =
 	// leave it unrestricted (OS ephemeral ports) — used by tests so rapid
 	// PC churn doesn't exhaust a narrow range. cmd/tring always sets a range.
-	if cfg.UDPPortMin != 0 || cfg.UDPPortMax != 0 {
+	if s.udpMux != nil {
+		se.SetICEUDPMux(s.udpMux)
+	} else if cfg.UDPPortMin != 0 || cfg.UDPPortMax != 0 {
 		lo, hi := cfg.UDPPortMin, cfg.UDPPortMax
 		if lo == 0 {
 			lo = 10000
