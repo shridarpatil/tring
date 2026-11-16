@@ -189,8 +189,9 @@ func (d *simDriver) Greeting(_ context.Context, n *ivrNode) (ivr.NodeResult, err
 	return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: "(no audio configured)"}, nil
 }
 
-// Menu takes one key per attempt and re-prompts on an invalid one, up to
-// max_retries, as a live menu does.
+// Menu takes one key per try and re-prompts on an invalid one or on silence
+// (no key left), up to max_retries, as a live menu does; the last try's
+// ending picks timeout or max_retries.
 func (d *simDriver) Menu(_ context.Context, n *ivrNode) (ivr.NodeResult, error) {
 	detail := stringFromConfig(n.Config, "greeting_text")
 	if detail == "" {
@@ -202,6 +203,9 @@ func (d *simDriver) Menu(_ context.Context, n *ivrNode) (ivr.NodeResult, error) 
 	for attempt := 0; attempt <= retries; attempt++ {
 		k, ok := d.key()
 		if !ok {
+			if attempt < retries {
+				continue // silence uses a try; the queue stays empty, so the next does too
+			}
 			return ivr.NodeResult{Outcome: "timeout", Action: "prompt_dtmf", Detail: detail, DTMF: last}, nil
 		}
 		if _, valid := opts[k]; valid {

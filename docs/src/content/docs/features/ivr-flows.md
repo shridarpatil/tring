@@ -81,16 +81,16 @@ Outcome: `default`.
 | `greeting_text` / `audio_file` | | The prompt, for example "Press 1 for sales, 2 for support". |
 | `options` | `{}` | Map of digit to option, for example `{"1": {"label": "Sales"}}`. Only these digits are valid. |
 | `timeout_seconds` | `10` | How long to wait for a digit after the prompt ends. |
-| `max_retries` | `3` | How many times to replay the prompt after an invalid digit. |
+| `max_retries` | `3` | How many times to replay the prompt after silence or an invalid digit. `0`: one try, no replay. |
 | `invalid_text` / `invalid_audio_file` | | Invalid-input message, for example "Sorry, that's not a valid option." Played after an invalid digit, before the prompt is replayed. Text is turned into speech when the flow is saved. Empty: the prompt is just replayed. |
 
-The caller can press a valid option while the prompt is still playing (barge-in); invalid keys are ignored until the prompt ends. After the prompt, an invalid key plays the invalid-input message and replays the prompt, until `max_retries` is used up; the message isn't played on the last attempt.
+The caller can press a valid option while the prompt is still playing (barge-in); invalid keys are ignored until the prompt ends. After the prompt, silence replays the prompt and an invalid key plays the invalid-input message and replays it, until `max_retries` replays are used up. The last try's ending picks the exit.
 
 | Outcome | When |
 |---|---|
 | `digit:<d>` | A configured digit was pressed, for example `digit:1`. |
-| `timeout` | No digit within `timeout_seconds`. |
-| `max_retries` | Invalid digits on every attempt. |
+| `timeout` | The last try got no key within `timeout_seconds`. |
+| `max_retries` | The last try got an invalid key. |
 
 ### Gather
 

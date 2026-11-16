@@ -370,3 +370,17 @@ func TestSimulateGatherHonoursTerminatorAndNumDigits(t *testing.T) {
 		t.Errorf("num_digits: gathered %q, want 123", got)
 	}
 }
+
+// Silence counts as a try: an invalid key followed by silence leaves via
+// timeout (the last try's ending), as on a live call.
+func TestSimulateMenuInvalidThenSilenceTimesOut(t *testing.T) {
+	res, err := SimulateFlow([]byte(menuFlow), SimInput{DTMF: []string{"9"}})
+	if err != nil {
+		t.Fatalf("SimulateFlow: %v", err)
+	}
+	for _, s := range res.Steps {
+		if s.NodeType == nodeMenu && s.Outcome != "timeout" {
+			t.Fatalf("menu outcome = %q, want timeout after an invalid key then silence", s.Outcome)
+		}
+	}
+}
