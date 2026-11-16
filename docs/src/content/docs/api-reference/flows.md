@@ -111,17 +111,17 @@ Outcome: `default`.
 
 #### `menu`
 
-Plays a prompt and waits for one digit. The caller can press a valid option while the prompt is still playing; invalid keys are ignored until the prompt ends. After the prompt, an invalid key plays the invalid-input message (if set) and then replays the prompt. The message isn't played on the last allowed attempt, since `max_retries` routes on from there.
+Plays a prompt and waits for one digit. The caller can press a valid option while the prompt is still playing; invalid keys are ignored until the prompt ends. The caller gets 1 + `max_retries` tries. On each try, after the prompt, silence for `timeout_seconds` replays the prompt, and an invalid key plays the invalid-input message (if set) and then replays it. When the tries run out, the way the last one ended picks the outcome: silence takes `timeout`, an invalid key takes `max_retries` (and its message isn't played).
 
 | Config | Type | Default | Description |
 |---|---|---|---|
 | `audio_file` / `greeting_text` | string | | The prompt. |
 | `options` | object | `{}` | Valid digits as keys, for example `{"1": {"label": "Sales"}, "2": {"label": "Support"}}`. Only the keys matter at call time. |
 | `timeout_seconds` | integer | `10` | How long to wait for a digit after the prompt. |
-| `max_retries` | integer | `3` | Invalid choices allowed before giving up. |
+| `max_retries` | integer | `3` | Extra tries after the first, used by silence or an invalid key. `0`: one try, no replay. |
 | `invalid_audio_file` / `invalid_text` | string | | Invalid-input message, for example "Sorry, that's not a valid option." `invalid_text` is turned into speech when the flow is saved (unless it contains `{{variables}}`); an uploaded `invalid_audio_file` takes precedence. Empty: the prompt is just replayed. |
 
-Outcomes: `digit:<d>` for a valid option (for example `digit:1`), `timeout` when no digit arrives, `max_retries` after too many invalid choices.
+Outcomes: `digit:<d>` for a valid option (for example `digit:1`); `timeout` when the last try got no key; `max_retries` when the last try got an invalid key.
 
 #### `gather`
 

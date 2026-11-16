@@ -343,10 +343,11 @@ func (d *Driver) Greeting(ctx context.Context, n *ivr.Node) (ivr.NodeResult, err
 	return ivr.NodeResult{Outcome: "default", Action: "play_audio", Detail: file}, nil
 }
 
-// Menu plays the prompt and collects one digit, retrying on an invalid choice.
-// Outcomes mirror the FreeSWITCH executor: "digit:<n>" on a valid option,
-// "timeout" when no digit arrives, "max_retries" when the caller keeps pressing
-// invalid digits.
+// Menu plays the prompt and collects one digit. Silence and an invalid key each
+// use one of the 1 + max_retries tries, and both replay the prompt (an invalid
+// key after the invalid-input message, if set). When the tries run out, how
+// the last one ended picks the outcome: "timeout" for silence, "max_retries"
+// for an invalid key. A valid option is "digit:<n>" at once.
 func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	options := ivr.MapFromConfig(n.Config, "options")
 	timeout := time.Duration(ivr.IntFromConfig(n.Config, "timeout_seconds", 10)) * time.Second
@@ -365,6 +366,12 @@ func (d *Driver) Menu(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) 
 		}
 		file = f
 		if !ok {
+			// Silence counts as a try, like an invalid key: replay the prompt
+			// while tries are left; the last silent try leaves via timeout. A
+			// hung-up call gives up at once (Walk records the hangup).
+			if attempt < retries && ctx.Err() == nil {
+				continue
+			}
 			return ivr.NodeResult{Outcome: "timeout", Action: "prompt_dtmf", Detail: file}, nil
 		}
 		if _, valid := options[digit]; valid {
