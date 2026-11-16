@@ -582,6 +582,7 @@ func (s *Server) campaignAudio(ctx context.Context, tenant uuid.UUID, source str
 	}
 	dest := filepath.Join(dir, uuid.NewString()+".ogg")
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "error", "-y", "-i", source, "-t", fmt.Sprint(maxSeconds+1), "-vn", "-ac", "1", "-ar", "48000", "-c:a", "libopus", "-frame_duration", "20", dest)
+	cmd.Env = []string{} // decodes an uploaded file: keep the api's secrets out of a decoder exploit
 	if err = cmd.Run(); err != nil {
 		_ = os.Remove(dest)
 		return "", errors.New("audio conversion failed; ensure ffmpeg is installed and the file is valid")

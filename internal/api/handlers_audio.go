@@ -55,6 +55,7 @@ func transcodeToOpusOgg(ctx context.Context, src, dst string) error {
 		",areverse,afade=t=in:st=0:d=" + holdFadeSeconds + ",areverse"
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", src,
 		"-af", fade, "-ac", "1", "-ar", "48000", "-c:a", "libopus", dst)
+	cmd.Env = []string{} // decodes an uploaded file: keep the api's secrets out of a decoder exploit
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg transcode: %w: %s", err, b)
 	}
