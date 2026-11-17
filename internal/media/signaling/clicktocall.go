@@ -124,12 +124,18 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	defer release()
 	ctx, cancelClaim := context.WithCancel(context.Background())
 	defer cancelClaim()
+	// A lost reservation stops the call only while it is still being set up:
+	// once both sides are connected (stopWatch below), a failed renewal must
+	// not hang up the conversation.
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	defer stopWatch()
 	go func() {
 		select {
 		case <-claim.Lost():
+			s.log.Warn("call: agent reservation lost before connect, ending", "room", roomID, "sip", req.AgentSIP)
 			cancelClaim()
 			s.endCallRoom(roomID)
-		case <-ctx.Done():
+		case <-watchCtx.Done():
 		}
 	}()
 
@@ -180,6 +186,7 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	s.mu.Lock()
 	s.outboundLegs[roomID] = clientPID // the agent leaving now hangs the customer up
 	s.mu.Unlock()
+	stopWatch()
 
 	// Both connected: the call is answered and recording starts.
 	if sink := s.cfg.Calls.Customer(string(roomID), clientPID); sink != nil {

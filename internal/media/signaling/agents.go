@@ -77,10 +77,14 @@ func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *ro
 		s.setAgentOnCall(tenant, sip, false)
 		claim.Release()
 	} else if claim != nil {
+		// The agent is already on this call. Losing the reservation (a failed
+		// Redis renewal) must not hang up a live conversation — it used to, and
+		// dropped answered and transferred calls. The agent stays busy through
+		// on_call presence and onCall, so routing still skips them.
 		go func() {
 			select {
 			case <-claim.Lost():
-				p.Leave()
+				s.log.Warn("agent reservation lost mid-call; keeping the call", "room", p.Room().ID(), "sip", sip)
 			case <-claim.Done():
 			}
 		}()
