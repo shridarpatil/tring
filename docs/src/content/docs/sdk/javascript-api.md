@@ -14,10 +14,10 @@ Use the JavaScript API when the drop-in widgets don't fit, for example when you 
 
 ## Loading the SDK
 
-**Bundler (ESM).** Build `sdk/js` and import from `@tring/voice`:
+**Bundler (ESM).** Install `tring-voice` from npm and import it:
 
 ```js
-import Tring, { TringGuest, RtcCall, RtcAgent } from "@tring/voice";
+import Tring, { TringGuest, RtcCall, RtcAgent } from "tring-voice";
 ```
 
 `Tring` is both the default export and a named export.
@@ -421,7 +421,7 @@ new RtcCall(opts: RtcCallOpts)
 | `error` | `{ error: Error }` |
 
 ```js
-import { RtcCall } from "@tring/voice";
+import { RtcCall } from "tring-voice";
 
 const call = new RtcCall({ gatewayUrl, room: "support-1", token });
 call.on("transfer-failed", ({ reason }) => toast(`Transfer failed: ${reason}`));
@@ -463,7 +463,7 @@ new RtcAgent(opts: RtcAgentOpts)
 | `error` | `{ error: Error }` |
 
 ```js
-import { RtcAgent } from "@tring/voice";
+import { RtcAgent } from "tring-voice";
 
 const agent = new RtcAgent({ gatewayUrl, name: "agent", getToken });
 agent.on("incoming", ({ from }) => showRing(from));
