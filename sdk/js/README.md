@@ -1,15 +1,15 @@
-# @tring/voice
+# tring-voice
 
 Drop-in browser voice SDK for the Tring CPaaS — WebRTC calling on any web page, no SIP/FreeSWITCH knowledge needed. Built into a few bundles, all of which the **Tring API serves itself at `/sdk/*`** (so self-hosters need no CDN):
 
 | Bundle | Served at | For |
 |---|---|---|
-| **`voice.js`** (`dist/voice.iife.js`) | `/sdk/voice.js` | **Website visitors** — a "Call" button on any public page drops the caller into your IVR over WebRTC, no account. Anonymous (`data-gateway-url`+`data-flow-id`) or trusted (`data-credentials-url`). |
-| **`agent.js`** (`dist/agent.iife.js`) | `/sdk/agent.js` | **CRM agents** — connects the gateway WebSocket and renders the in-call panel (ring/answer/hangup/DTMF). **No Tring API access — it cannot place calls;** origination is backend-only. Auth: short-lived agent **JWT**. |
-| **`tring.js`** (`dist/tring.iife.js`) | `/sdk/tring.js` | Bare SDK — exposes `window.Tring` for programmatic use. |
-| **`tring.esm.js`** | — (npm) | `import Tring from '@tring/voice'` for bundlers. |
+| **`voice.js`** | `/sdk/voice.js` | **Website visitors** — a "Call" button on any public page drops the caller into your IVR over WebRTC, no account. Anonymous (`data-gateway-url`+`data-flow-id`) or trusted (`data-credentials-url`). |
+| **`agent.js`** | `/sdk/agent.js` | **CRM agents** — connects the gateway WebSocket and renders the in-call panel (ring/answer/hangup/DTMF). **No Tring API access — it cannot place calls;** origination is backend-only. Auth: short-lived agent **JWT**. |
+| **`tring.js`** | `/sdk/tring.js` | Bare SDK — exposes `window.Tring` for programmatic use. |
+| **`tring.esm.js`** | — (npm) | `import Tring from 'tring-voice'` for bundlers. |
 
-> The widget is served from the same origin as your API, e.g. `https://your-tring-host/sdk/voice.js`. No `cdn.tring.io` dependency — point `src` at your own deployment.
+> The widget is served from the same origin as your API, e.g. `https://your-tring-host/sdk/voice.js`. Each release is also on npm as `tring-voice`, so you can load a pinned copy from a CDN instead: `https://unpkg.com/tring-voice@1.2.0/voice.js`. From a CDN, set `data-api-base` on `agent.js` if you use call control.
 
 > **Building for another platform (Flutter / iOS / Android)?** This is a thin
 > client over a small, language-agnostic WebRTC protocol — see
@@ -215,7 +215,7 @@ without video keep the tenant's audio recording format.
 
 ```bash
 npm install
-npm run build      # produces dist/tring.{iife,esm}.js + .map + .d.ts
+npm run build      # produces {voice,agent,tring}.js, dist/tring.esm.js + .map + .d.ts
 npm run watch      # rebuild on change
 npm run typecheck  # tsc --noEmit
 npm run test:browser-video # real Chromium negotiation test (remote debugging on :9222)

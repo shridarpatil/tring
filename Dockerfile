@@ -46,9 +46,9 @@ COPY sdk/js/ ./
 # Build, then copy each drop-in bundle to its served name under /widget-dist.
 RUN npm run build && \
     mkdir -p /widget-dist && \
-    cp dist/voice.iife.js /widget-dist/voice.js && \
-    cp dist/agent.iife.js /widget-dist/agent.js && \
-    cp dist/tring.iife.js /widget-dist/tring.js
+    cp voice.js /widget-dist/voice.js && \
+    cp agent.js /widget-dist/agent.js && \
+    cp tring.js /widget-dist/tring.js
 
 # ---- Go build stage ------------------------------------------------------
 # --platform=$BUILDPLATFORM pins the builder to the *runner's* native arch

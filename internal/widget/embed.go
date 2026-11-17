@@ -5,8 +5,8 @@
 // `<script src="<your-api>/sdk/voice.js">` just works.
 //
 // Build-time only — the dist/ subtree is populated by `make sdk` (or the
-// Node stage in the Dockerfile), which copies sdk/js/dist/*.iife.js here
-// under their served names. Mirrors internal/webui: if dist/ holds only
+// Node stage in the Dockerfile), which copies sdk/js/{voice,agent,tring}.js
+// here. Mirrors internal/webui: if dist/ holds only
 // the .gitkeep placeholder, FS() returns (nil, false) and server.go skips
 // the /sdk/* mount — a Go-only build "just works" without the bundles.
 package widget

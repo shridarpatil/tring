@@ -1,0 +1,81 @@
+# Publishes the browser SDK (sdk/js) to npm as `tring-voice`, which makes the
+# drop-in bundles available on the npm CDNs:
+#   https://unpkg.com/tring-voice@<ver>/voice.js
+#   https://cdn.jsdelivr.net/npm/tring-voice@<ver>/voice.js
+#
+# Runs on the same v* release tags as ci.yml. The package version comes from
+# the tag (package.json's version is never bumped in git). Auth is npm
+# trusted publishing (OIDC), so no npm token is stored in the repo; the
+# package's npmjs.com settings must name this repo + workflow file.
+name: Publish to npm
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing release tag to publish (e.g. v1.0.1 or 1.0.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select release tag
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSHED_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="v${REQUESTED_VERSION#v}"
+          else
+            tag="$PUSHED_TAG"
+          fi
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Expected a stable release version such as v1.0.1."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      # Trusted publishing requires npm >= 11.5.1.
+      - name: Install npm 11
+        run: npm install -g npm@11
+
+      - name: Build
+        working-directory: sdk/js
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          npm ci
+          npm version "$VERSION" --no-git-tag-version
+          npm run typecheck
+          npm run build
+
+      - name: Publish
+        working-directory: sdk/js
+        run: npm publish --access public

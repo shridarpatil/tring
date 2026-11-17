@@ -1,26 +1,40 @@
 {
-  "name": "@tring/voice",
+  "name": "tring-voice",
   "version": "0.0.1",
   "description": "Tring browser SDK — drop-in voice calling for any CRM.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shridarpatil/tring.git",
+    "directory": "sdk/js"
+  },
   "type": "module",
   "main": "./dist/tring.esm.js",
   "module": "./dist/tring.esm.js",
-  "browser": "./dist/tring.iife.js",
   "types": "./dist/index.d.ts",
+  "unpkg": "./voice.js",
+  "jsdelivr": "./voice.js",
   "exports": {
     ".": {
-      "import": "./dist/tring.esm.js",
-      "browser": "./dist/tring.iife.js",
-      "types": "./dist/index.d.ts"
-    }
+      "types": "./dist/index.d.ts",
+      "import": "./dist/tring.esm.js"
+    },
+    "./voice.js": "./voice.js",
+    "./agent.js": "./agent.js",
+    "./tring.js": "./tring.js"
   },
   "files": [
     "dist",
+    "voice.js",
+    "voice.js.map",
+    "agent.js",
+    "agent.js.map",
+    "tring.js",
+    "tring.js.map",
     "README.md"
   ],
   "scripts": {
-    "build": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly",
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.mjs",
