@@ -1,5 +1,5 @@
 // Auto-init entry for the visitor web-calling widget. Built as
-// dist/voice.iife.js and served by the API at /sdk/voice.js.
+// voice.js and served by the API at /sdk/voice.js.
 //
 // Drop one tag on any public page; no JS required:
 //

@@ -11,11 +11,14 @@ const shared = {
   define: { "process.env.NODE_ENV": '"production"' },
 };
 
+// The drop-in <script> bundles land at the package root under their served
+// names, so the npm CDN URLs are short (unpkg.com/tring-voice/voice.js) and
+// match the API's /sdk/voice.js etc.
 const builds = [
   // IIFE — bare SDK. Exposes a global `Tring`; integrator wires it manually.
   {
     ...shared,
-    outfile: "dist/tring.iife.js",
+    outfile: "tring.js",
     format: "iife",
     globalName: "Tring",
     footer: { js: "window.Tring = Tring.default || Tring;" },
@@ -33,7 +36,7 @@ const builds = [
   {
     ...shared,
     entryPoints: ["src/widget-entry.ts"],
-    outfile: "dist/agent.iife.js",
+    outfile: "agent.js",
     format: "iife",
   },
   // voice.js — the drop-in widget for putting voice calling on any website.
@@ -43,7 +46,7 @@ const builds = [
   {
     ...shared,
     entryPoints: ["src/guest-entry.ts"],
-    outfile: "dist/voice.iife.js",
+    outfile: "voice.js",
     format: "iife",
   },
 ];
