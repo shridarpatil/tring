@@ -1,4 +1,4 @@
-// Auto-init entry for the drop-in <script> bundle (agent.iife.js).
+// Auto-init entry for the drop-in <script> bundle (agent.js).
 //
 // Reads config from its own <script> tag's data-* attributes:
 //

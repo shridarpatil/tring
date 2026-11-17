@@ -1,0 +1,4 @@
+# Built drop-in bundles (see esbuild.config.mjs); published to npm, not git.
+/voice.js*
+/agent.js*
+/tring.js*

@@ -11,9 +11,9 @@ The source lives in [`sdk/js/`](https://github.com/shridarpatil/tring/tree/main/
 
 | Bundle | Built from | Served at | Use it for |
 |---|---|---|---|
-| `voice.js` | `dist/voice.iife.js` | `/sdk/voice.js` | **Website visitors.** A "Call" button that drops the visitor into one of your IVR flows. No account needed. See [Visitor widget](/tring/sdk/visitor-widget/). |
-| `agent.js` | `dist/agent.iife.js` | `/sdk/agent.js` | **Agents in your CRM.** Keeps the agent online and shows a call panel when a call rings them. It **cannot place calls**. See [Agent widget](/tring/sdk/agent-widget/). |
-| `tring.js` | `dist/tring.iife.js` | `/sdk/tring.js` | **The bare SDK.** Sets `window.Tring` to the agent client class and renders no UI. See [JavaScript API](/tring/sdk/javascript-api/). |
+| `voice.js` | `voice.js` | `/sdk/voice.js` | **Website visitors.** A "Call" button that drops the visitor into one of your IVR flows. No account needed. See [Visitor widget](/tring/sdk/visitor-widget/). |
+| `agent.js` | `agent.js` | `/sdk/agent.js` | **Agents in your CRM.** Keeps the agent online and shows a call panel when a call rings them. It **cannot place calls**. See [Agent widget](/tring/sdk/agent-widget/). |
+| `tring.js` | `tring.js` | `/sdk/tring.js` | **The bare SDK.** Sets `window.Tring` to the agent client class and renders no UI. See [JavaScript API](/tring/sdk/javascript-api/). |
 | `tring.esm.js` | `dist/tring.esm.js` | not served | **Bundlers.** An ES module with every public export (`Tring`, `TringGuest`, `RtcCall`, `RtcAgent`, and the protocol constants). |
 
 Each script bundle also sets one global:
@@ -29,9 +29,20 @@ The Tring API serves the bundles from its own origin, under `/sdk/*`, so you don
 <script src="https://tring.example.com/sdk/voice.js" …></script>
 ```
 
-- `make sdk` builds the bundles and copies `voice.iife.js`, `agent.iife.js` and `tring.iife.js` into the API binary as `voice.js`, `agent.js` and `tring.js`. The Docker image does the same in its Node build stage. If the binary was built without the bundles, `/sdk/*` isn't mounted and these URLs return 404.
+- `make sdk` builds the bundles and copies `voice.js`, `agent.js` and `tring.js` into the API binary. The Docker image does the same in its Node build stage. If the binary was built without the bundles, `/sdk/*` isn't mounted and these URLs return 404.
 - The URLs don't carry a version, so the API sends `Cache-Control: no-cache`. Browsers revalidate each load, get a cheap `304` when nothing changed, and pick up a new bundle as soon as you deploy it.
-- `tring.esm.js` isn't served. Build it from `sdk/js` (`npm install && npm run build`) and import it in your app. The package is named `@tring/voice`.
+- `tring.esm.js` isn't served. Install the [`tring-voice`](https://www.npmjs.com/package/tring-voice) npm package and import it in your app.
+
+### From a CDN
+
+Each release tag is also published to npm as `tring-voice`, so the bundles are on the npm CDNs. Pin a version on production pages:
+
+```html
+<script src="https://unpkg.com/tring-voice@1.2.0/voice.js" …></script>
+<script src="https://cdn.jsdelivr.net/npm/tring-voice@1.2.0/voice.js" …></script>
+```
+
+Use the same version as your Tring server, since the bundles speak its `/rtc` protocol. Loaded from a CDN, `agent.js` can't work out your API's address from its own URL, so set `data-api-base` on its `<script>` tag if you use call control.
 
 ## Trust model
 

@@ -60,9 +60,9 @@ sdk:
 	@# Copy the drop-in bundles into the API's embed dir under their served
 	@# names so /sdk/voice.js etc. are hosted by the binary (no CDN needed).
 	mkdir -p internal/widget/dist
-	cp sdk/js/dist/voice.iife.js internal/widget/dist/voice.js
-	cp sdk/js/dist/agent.iife.js internal/widget/dist/agent.js
-	cp sdk/js/dist/tring.iife.js internal/widget/dist/tring.js
+	cp sdk/js/voice.js internal/widget/dist/voice.js
+	cp sdk/js/agent.js internal/widget/dist/agent.js
+	cp sdk/js/tring.js internal/widget/dist/tring.js
 
 sdk-watch:
 	cd sdk/js && npm run watch
