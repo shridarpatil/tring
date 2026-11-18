@@ -18,7 +18,7 @@ func TestIssueAndParseRoundtrip(t *testing.T) {
 	s := newJWTTestServer("topsecret")
 	agentID, tenantID := uuid.New(), uuid.New()
 
-	tok, exp, err := s.IssueAgentToken(agentID, tenantID, "alice", "tring.local", 5*time.Minute)
+	tok, exp, err := s.IssueAgentToken(agentID, tenantID, "alice", 5*time.Minute)
 	if err != nil {
 		t.Fatalf("IssueAgentToken: %v", err)
 	}
@@ -36,8 +36,8 @@ func TestIssueAndParseRoundtrip(t *testing.T) {
 	if claims.TenantID != tenantID {
 		t.Errorf("TenantID = %v, want %v", claims.TenantID, tenantID)
 	}
-	if claims.SipUsername != "alice" || claims.SipDomain != "tring.local" {
-		t.Errorf("sip claims = %s@%s, want alice@tring.local", claims.SipUsername, claims.SipDomain)
+	if claims.SipUsername != "alice" {
+		t.Errorf("sip_user = %s, want alice", claims.SipUsername)
 	}
 	if claims.Subject != agentID.String() {
 		t.Errorf("sub = %s, want %s", claims.Subject, agentID)
@@ -47,7 +47,7 @@ func TestIssueAndParseRoundtrip(t *testing.T) {
 func TestParseExpiredTokenRejected(t *testing.T) {
 	s := newJWTTestServer("topsecret")
 	// Negative TTL → expired at issue time.
-	tok, _, _ := s.IssueAgentToken(uuid.New(), uuid.New(), "alice", "tring.local", -1*time.Minute)
+	tok, _, _ := s.IssueAgentToken(uuid.New(), uuid.New(), "alice", -1*time.Minute)
 	if _, err := s.ParseAgentToken(tok); err == nil {
 		t.Error("ParseAgentToken accepted expired token")
 	}
@@ -56,7 +56,7 @@ func TestParseExpiredTokenRejected(t *testing.T) {
 func TestParseWrongSecretRejected(t *testing.T) {
 	issuer := newJWTTestServer("secret-A")
 	verifier := newJWTTestServer("secret-B")
-	tok, _, _ := issuer.IssueAgentToken(uuid.New(), uuid.New(), "alice", "tring.local", 5*time.Minute)
+	tok, _, _ := issuer.IssueAgentToken(uuid.New(), uuid.New(), "alice", 5*time.Minute)
 
 	if _, err := verifier.ParseAgentToken(tok); err == nil {
 		t.Error("verifier with wrong secret accepted token")

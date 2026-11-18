@@ -29,9 +29,9 @@ func TestAgentsListIdleSince(t *testing.T) {
 	tenant := f.TenantID.String()
 
 	for _, q := range []string{
-		`INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'idle-a', 'x')`,
-		`INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'busy-b', 'x')`,
-		`INSERT INTO users (tenant_id, sip_username, sip_password, available_for_calls) VALUES ($1, 'away-c', 'x', false)`,
+		`INSERT INTO users (tenant_id, sip_username) VALUES ($1, 'idle-a')`,
+		`INSERT INTO users (tenant_id, sip_username) VALUES ($1, 'busy-b')`,
+		`INSERT INTO users (tenant_id, sip_username, available_for_calls) VALUES ($1, 'away-c', false)`,
 	} {
 		if _, err := f.DB.Pool.Exec(ctx, q, f.TenantID); err != nil {
 			t.Fatal(err)

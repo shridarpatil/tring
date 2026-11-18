@@ -46,7 +46,7 @@ func seedAgent(t *testing.T, fx *dbtest.Fixture, sip string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	if err := fx.DB.Pool.QueryRow(context.Background(),
-		`INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, $2, 'x') RETURNING id`,
+		`INSERT INTO users (tenant_id, sip_username) VALUES ($1, $2) RETURNING id`,
 		fx.TenantID, sip).Scan(&id); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}

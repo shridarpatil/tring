@@ -43,17 +43,3 @@ func TestHashKeyIsDeterministicSHA256(t *testing.T) {
 		t.Errorf("HashKey(%q) = %s, not SHA-256 hex", in, got)
 	}
 }
-
-func TestGenerateSipPasswordNonEmptyAndRandom(t *testing.T) {
-	a, err := GenerateSipPassword()
-	if err != nil {
-		t.Fatalf("GenerateSipPassword: %v", err)
-	}
-	if a == "" {
-		t.Fatal("password is empty")
-	}
-	b, _ := GenerateSipPassword()
-	if a == b {
-		t.Error("two passwords identical — RNG not engaged?")
-	}
-}

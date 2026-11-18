@@ -15,8 +15,6 @@ package bootstrap
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -61,7 +59,6 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 		return fmt.Errorf("bootstrap: hash password: %w", err)
 	}
 
-	sipDomain := "t_" + strings.ToLower(strings.ReplaceAll(cfg.TenantName, " ", "_")) + ".tring.local"
 	email := strings.ToLower(cfg.AdminEmail)
 
 	tx, err := database.Pool.Begin(ctx)
@@ -78,18 +75,12 @@ func Run(ctx context.Context, database *db.DB, cfg Config) error {
 	apiKeySentinel := "deprecated-" + uuid.New().String()
 	var tenantID uuid.UUID
 	err = tx.QueryRow(ctx, q.InsertTenant,
-		cfg.TenantName, apiKeySentinel, "deprecated--", sipDomain).Scan(&tenantID)
+		cfg.TenantName, apiKeySentinel, "deprecated--").Scan(&tenantID)
 	if err != nil {
 		return fmt.Errorf("bootstrap: insert tenant: %w", err)
 	}
 
-	// The admin is also a users row with a SIP identity; its password is
-	// random and unused, and is sealed by the api's startup pass.
-	var sipPw [16]byte
-	if _, err := rand.Read(sipPw[:]); err != nil {
-		return fmt.Errorf("bootstrap: sip password: %w", err)
-	}
-	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash), hex.EncodeToString(sipPw[:])); err != nil {
+	if _, err := tx.Exec(ctx, q.InsertUser, tenantID, email, string(hash)); err != nil {
 		return fmt.Errorf("bootstrap: insert user: %w", err)
 	}
 

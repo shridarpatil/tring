@@ -15,7 +15,7 @@ func TestSdkTransferTargetsListsAgents(t *testing.T) {
 	me := f.AddUser(t, "agent", "me@example.com")
 	f.AddUser(t, "agent", "a@example.com")
 	f.AddUser(t, "agent", "b@example.com")
-	tok, _, err := s.IssueAgentToken(me, f.TenantID, "me@example.com", f.SIPDomain, time.Hour)
+	tok, _, err := s.IssueAgentToken(me, f.TenantID, "me@example.com", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}

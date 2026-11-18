@@ -70,17 +70,17 @@ func (r *Resolver) OutboundTrunks(ctx context.Context, tenant uuid.UUID) ([]trun
 		return nil, nil
 	}
 
-	// get-tenant returns id, name, sip_domain, outbound_strategy,
+	// get-tenant returns id, name, outbound_strategy,
 	// failover_causes — only outbound_strategy matters here, but pgx needs a
 	// destination for every column.
 	var (
-		id              uuid.UUID
-		name, sipDomain string
-		strategy        string
-		failoverCauses  []string
+		id             uuid.UUID
+		name           string
+		strategy       string
+		failoverCauses []string
 	)
 	if err := r.db.Pool.QueryRow(ctx, r.q.GetTenant, tenant).Scan(
-		&id, &name, &sipDomain, &strategy, &failoverCauses,
+		&id, &name, &strategy, &failoverCauses,
 	); err != nil {
 		return nil, fmt.Errorf("load tenant outbound_strategy: %w", err)
 	}

@@ -6,7 +6,7 @@ import { api } from "../api/client";
 import { toast } from "../lib/toast";
 import SsoProviders from "../components/SsoProviders.vue";
 import AudioPicker from "../components/AudioPicker.vue";
-import { Card, Button, Select, Toggle, Badge, CopyButton } from "../components/ui";
+import { Card, Button, Select, Toggle, Badge } from "../components/ui";
 import type { Tenant, GuestConfig, Flow, Paginated } from "../api/types";
 
 const tenant = ref<Tenant | null>(null);
@@ -174,13 +174,6 @@ onMounted(load);
         <div class="srow">
           <div class="srow-label">Name</div>
           <div class="srow-value">{{ tenant.name }}</div>
-        </div>
-        <div class="srow">
-          <div class="srow-label">SIP domain</div>
-          <div class="srow-value hstack">
-            <span class="mono">{{ tenant.sip_domain }}</span>
-            <CopyButton :value="tenant.sip_domain" />
-          </div>
         </div>
       </Card>
 

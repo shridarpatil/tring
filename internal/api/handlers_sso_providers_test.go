@@ -220,8 +220,8 @@ func TestSSOProviderSSOOnlyCount(t *testing.T) {
 	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
 	idp := newFakeIdP(t)
 	if _, err := f.DB.Pool.Exec(context.Background(), `
-		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
-		VALUES ($1, 'Bob@Count.example.com', NULL, 'bob@count.example.com', 'x', 'agent')`, f.TenantID); err != nil {
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, role)
+		VALUES ($1, 'Bob@Count.example.com', NULL, 'bob@count.example.com', 'agent')`, f.TenantID); err != nil {
 		t.Fatal(err)
 	}
 	if rec := doReq(t, h, "POST", "/v1/sso-providers", admin, ssoBody(idp.issuer, "A", "count.example.com")); rec.Code != http.StatusCreated {

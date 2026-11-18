@@ -41,12 +41,7 @@ type Agent struct {
 	ID          uuid.UUID `json:"id"`
 	TenantID    uuid.UUID `json:"tenant_id"`
 	SipUsername string    `json:"sip_username"`
-	// SipPassword is generated and stored for the FreeSWITCH directory
-	// (legacy SIP transport) but never returned: gateway-transport agents
-	// authenticate with the agent JWT and never SIP-register. Holds the
-	// stored form (sealed when TRING_SECRETS_KEY is set; see secrets.go).
-	SipPassword string `json:"-"`
-	DisplayName string `json:"display_name,omitempty"`
+	DisplayName string    `json:"display_name,omitempty"`
 	// AvailableForCalls is the backend-managed availability (the integrator's
 	// Away/Break button). Separate from connection presence: the orchestrator
 	// rings an agent only when they're BOTH connected AND available_for_calls.
@@ -87,16 +82,10 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sipPassword, err := GenerateSipPassword()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "generate password")
-		return
-	}
-
 	var a Agent
-	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
-		t.ID, req.SipUsername, s.sealSecret(sipPassword), req.DisplayName).Scan(
-		&a.ID, &a.TenantID, &a.SipUsername, &a.SipPassword, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
+	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateAgent,
+		t.ID, req.SipUsername, req.DisplayName).Scan(
+		&a.ID, &a.TenantID, &a.SipUsername, &a.DisplayName, &a.AvailableForCalls, &a.CreatedAt, &a.Role,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -110,8 +99,7 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // agentsList returns a tenant's agents enriched with live presence status. The
-// list endpoint and the SSE snapshot share it. Needs the Tenant (SipDomain) for
-// the legacy SIP-registration fallback.
+// list endpoint and the SSE snapshot share it.
 func (s *Server) agentsList(ctx context.Context, t *Tenant) ([]Agent, error) {
 	agents, err := s.loadAgents(ctx, t.ID)
 	if err != nil {
@@ -720,7 +708,7 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
 		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat,
 		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors, req.TransferTimeoutSeconds).
-		Scan(&out.ID, &out.Name, &out.SipDomain, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat,
+		Scan(&out.ID, &out.Name, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat,
 			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors, &out.TransferTimeoutSeconds)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)

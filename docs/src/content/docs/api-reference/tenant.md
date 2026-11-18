@@ -13,7 +13,6 @@ All endpoints on this page act on the tenant the credential belongs to. They acc
 |---|---|---|
 | `id` | UUID | Tenant ID. |
 | `name` | string | Tenant name. |
-| `sip_domain` | string | The tenant's SIP domain, for example `t_default.tring.local`. |
 | `outbound_strategy` | string | How outbound calls pick a trunk: `failover`, `round_robin`, `manual` or `load_based`. Default `failover`. See [Numbers & trunks](/tring/features/numbers-and-trunks/). |
 | `failover_causes` | string[] | FreeSWITCH hangup causes that make an outbound call try the next trunk. |
 | `hold_music` | string | The `file_path` of a sound used as hold music, or `""` for the built-in default. |
@@ -46,7 +45,6 @@ curl -sS "$TRING_URL/v1/tenants/me" \
 {
   "id": "00000000-0000-4000-8000-000000000001",
   "name": "Default",
-  "sip_domain": "t_default.tring.local",
   "outbound_strategy": "failover",
   "failover_causes": [
     "NETWORK_OUT_OF_ORDER",

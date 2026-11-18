@@ -8,9 +8,9 @@
 -- ===========================================================================
 
 -- name: create-agent
-INSERT INTO users (tenant_id, sip_username, sip_password, display_name)
-VALUES ($1, $2, $3, NULLIF($4, ''))
-RETURNING id, tenant_id, sip_username, sip_password, COALESCE(display_name, ''), available_for_calls, created_at, role;
+INSERT INTO users (tenant_id, sip_username, display_name)
+VALUES ($1, $2, NULLIF($3, ''))
+RETURNING id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at, role;
 
 -- name: list-agents
 SELECT id, tenant_id, sip_username, COALESCE(display_name, ''), available_for_calls, created_at, role
@@ -221,7 +221,7 @@ SET outbound_strategy       = COALESCE($1, outbound_strategy),
     mask_numbers_supervisors = COALESCE($13, mask_numbers_supervisors),
     transfer_timeout_seconds = COALESCE($14, transfer_timeout_seconds)
 WHERE id = $3
-RETURNING id, name, sip_domain, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
+RETURNING id, name, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
           mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds;
 
 -- name: get-tenant-settings
@@ -386,9 +386,6 @@ WHERE tenant_id = $1 AND enqueued_at >= date_trunc('day', now());
 
 -- name: get-agent-sip-username
 SELECT sip_username FROM users WHERE id = $1 AND tenant_id = $2;
-
--- name: get-tenant-sip-domain
-SELECT sip_domain FROM tenants WHERE id = $1;
 
 -- name: create-call-outbound
 -- $7 is the pion room id (media plane) so a supervisor can be routed to the
@@ -590,7 +587,7 @@ RETURNING session_epoch;
 
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
-SELECT id, name, sip_domain, outbound_strategy, failover_causes
+SELECT id, name, outbound_strategy, failover_causes
 FROM tenants WHERE id = $1;
 
 -- ===========================================================================
@@ -792,10 +789,10 @@ DELETE FROM trunks WHERE id = $1 AND tenant_id = $2;
 -- ===========================================================================
 
 -- name: count-stored-secrets
--- (sealed, plaintext) SIP password counts across trunks + agents.
+-- (sealed, plaintext) trunk SIP password counts.
 SELECT count(*) FILTER (WHERE sip_password LIKE 'enc:v1:%'),
        count(*) FILTER (WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%')
-FROM (SELECT sip_password FROM trunks UNION ALL SELECT sip_password FROM users) s;
+FROM trunks;
 
 -- name: list-plaintext-trunk-secrets
 -- Locked so concurrent api replicas starting together seal each row once.
@@ -805,14 +802,6 @@ FOR UPDATE;
 
 -- name: set-trunk-secret
 UPDATE trunks SET sip_password = $2 WHERE id = $1;
-
--- name: list-plaintext-agent-secrets
-SELECT id, sip_password FROM users
-WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%'
-FOR UPDATE;
-
--- name: set-agent-secret
-UPDATE users SET sip_password = $2 WHERE id = $1;
 
 -- name: select-outbound-trunks
 -- Active outbound DIDs joined to their active trunk, priority order.
@@ -906,13 +895,13 @@ SELECT COUNT(*) FROM tenants;
 
 -- name: insert-tenant
 -- Shared by bootstrap (env sentinels) and the --seed-tenant CLI (real key).
-INSERT INTO tenants (name, api_key_hash, api_key_prefix, sip_domain)
-VALUES ($1, $2, $3, $4)
+INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+VALUES ($1, $2, $3)
 RETURNING id;
 
 -- name: insert-user
-INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
-VALUES ($1, lower($2), $3, lower($2), $4, 'admin');
+INSERT INTO users (tenant_id, email, password_hash, sip_username, role)
+VALUES ($1, lower($2), $3, lower($2), 'admin');
 
 -- ===========================================================================
 -- webhook notifier (shared: api + orchestrator)
@@ -1166,8 +1155,8 @@ WHERE u.tenant_id = $1 AND u.id = $2
 GROUP BY u.id;
 
 -- name: create-user
-INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, display_name, role)
-VALUES ($1, lower($2), $3, $4, $5, NULLIF($6, ''), $7)
+INSERT INTO users (tenant_id, email, password_hash, sip_username, display_name, role)
+VALUES ($1, lower($2), $3, $4, NULLIF($5, ''), $6)
 RETURNING id;
 
 -- name: update-user
