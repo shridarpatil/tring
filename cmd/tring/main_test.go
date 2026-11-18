@@ -44,7 +44,7 @@ func TestWeakSecretKeys(t *testing.T) {
 	if got := weakSecretKeys(true); !slices.Equal(got, []string{"jwt_secret"}) {
 		t.Errorf("gateway: %v", got)
 	}
-	if got := weakSecretKeys(false); !slices.Equal(got, []string{"jwt_secret", "fs_basic_auth", "esl_password"}) {
+	if got := weakSecretKeys(false); !slices.Equal(got, []string{"jwt_secret", "esl_password"}) {
 		t.Errorf("all: %v", got)
 	}
 }

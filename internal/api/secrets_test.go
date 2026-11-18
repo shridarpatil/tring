@@ -6,8 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +29,6 @@ func newSealingServer(f *dbtest.Fixture, box *secretbox.Box) *Server {
 	return NewServer(Config{
 		DB:               f.DB,
 		JWTSecret:        "test-secret",
-		FSBasicAuth:      "fs:0123456789abcdef",
 		GatewayPublicURL: "http://gw.test",
 		Secrets:          box,
 	})
@@ -136,7 +133,7 @@ func TestActiveGatewaysSkipsUndecryptableTrunk(t *testing.T) {
 	}
 }
 
-func TestAgentPasswordSealedAtRestPlaintextInDirectory(t *testing.T) {
+func TestAgentPasswordSealedAtRest(t *testing.T) {
 	f := dbtest.Setup(t)
 	box := testBox(t, 1)
 	s := newSealingServer(f, box)
@@ -157,17 +154,6 @@ func TestAgentPasswordSealedAtRestPlaintextInDirectory(t *testing.T) {
 	plain, err := box.Open(raw)
 	if err != nil || plain == "" {
 		t.Fatalf("Open = %q, %v", plain, err)
-	}
-
-	form := url.Values{"section": {"directory"}, "user": {"alice"}, "domain": {f.SIPDomain}}
-	req := httptest.NewRequest(http.MethodPost, "/fs/directory", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.SetBasicAuth("fs", "0123456789abcdef")
-	out := httptest.NewRecorder()
-	s.FSRouter().ServeHTTP(out, req)
-	body := out.Body.String()
-	if !strings.Contains(body, `value="`+plain+`"`) || strings.Contains(body, secretbox.Prefix) {
-		t.Fatalf("directory = %d, want the plaintext password:\n%s", out.Code, body)
 	}
 }
 

@@ -17,7 +17,6 @@ import (
 	"github.com/shridarpatil/tring/internal/dial"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/flowstore"
-	"github.com/shridarpatil/tring/internal/freeswitch"
 	"github.com/shridarpatil/tring/internal/presence"
 )
 
@@ -140,11 +139,12 @@ func (s *Server) loadAgents(ctx context.Context, tenantID uuid.UUID) ([]Agent, e
 	return agents, rows.Err()
 }
 
-// fillAgentStatus sets each agent's live Status (and IdleSince) from presence,
-// or from SIP registrations when the gateway transport isn't in use. Presence
-// costs a lookup per agent, so callers pass only the agents they will show.
+// fillAgentStatus sets each agent's live Status (and IdleSince) from presence.
+// Without Redis there is no presence, so status is "unknown" rather than a
+// misleading "offline". Presence costs a lookup per agent, so callers pass
+// only the agents they will show.
 func (s *Server) fillAgentStatus(ctx context.Context, t *Tenant, agents []Agent) {
-	if s.agentTransport == "gateway" && s.presence.Enabled() {
+	if s.presence.Enabled() {
 		for i := range agents {
 			st := s.presence.Status(ctx, t.ID.String(), agents[i].SipUsername)
 			if st == presence.StatusOnline && !agents[i].AvailableForCalls {
@@ -158,18 +158,8 @@ func (s *Server) fillAgentStatus(ctx context.Context, t *Tenant, agents []Agent)
 			}
 		}
 	} else {
-		regs, regErr := s.fs.RegisteredUsers(ctx)
 		for i := range agents {
-			switch {
-			case regErr != nil:
-				agents[i].Status = "unknown"
-			case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)] && !agents[i].AvailableForCalls:
-				agents[i].Status = "away" // registered but unavailable, as in gateway mode
-			case regs[freeswitch.RegKey(agents[i].SipUsername, t.SipDomain)]:
-				agents[i].Status = "online"
-			default:
-				agents[i].Status = "offline"
-			}
+			agents[i].Status = "unknown"
 		}
 	}
 }

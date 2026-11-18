@@ -21,7 +21,7 @@ func TestValidateTrunkFields(t *testing.T) {
 	bad := []struct {
 		user, pw, realm, proxy, extra string
 	}{
-		{"", "", "", "", `{"from_domain":"$${tring_fs_basic_auth}"}`},
+		{"", "", "", "", `{"from_domain":"$${tring_esl_password}"}`},
 		{"", "x${tring_esl_password}", "", "", ""},
 		{"", "", "${sip_from_host}", "", ""},
 		{"", "", "", "1.2.3.4\"/><param", ""},

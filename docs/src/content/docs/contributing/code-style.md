@@ -55,7 +55,7 @@ minus the `TRING_` prefix:
 |---|---|
 | `TRING_DSN` | `dsn` |
 | `TRING_ESL_ADDR` | `esl_addr` |
-| `TRING_FS_BASIC_AUTH` | `fs_basic_auth` |
+| `TRING_JWT_SECRET` | `jwt_secret` |
 
 - Add a new setting in **one place**: `internal/config/config.go` (`defaults`
   map). Read it in `main` via `k.String("...")`.
@@ -101,7 +101,7 @@ minus the `TRING_` prefix:
   `server.go`'s router. Auth is chi middleware (`AuthRequired`,
   `JWTAuthRequired`). Keep handlers thin; push logic into helpers.
 - New browser-hit endpoint → `/v1/sdk/...` (agent JWT) or the public guest
-  path; CRM-backend endpoint → `/v1/...`; FreeSWITCH callback → `/fs/...`.
+  path; CRM-backend endpoint → `/v1/...`.
 
 ## Embedded assets
 - The console (`web/`) and browser bundles (`sdk/js`) are embedded via

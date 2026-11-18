@@ -22,12 +22,10 @@ services:
       # Each call holds several sockets (carrier + fsplug RTP/RTCP); the
       # default soft limit of 1024 rejects calls with 488 past ~120.
       nofile: 65536
-    # Start after the tring container so FreeSWITCH's first mod_xml_curl lookups
-    # (directory/gateways/ACL against the api role on boot) are less likely to
-    # race a not-yet-listening api. service_started (not _healthy) because tring
-    # is a distroless image with no shell/curl for a healthcheck — this is ordering
-    # only, so a brief first-query race can still occur, but FS retries on real
-    # lookups so it self-heals.
+    # Start after the tring container so the api has written the dynamic trunk
+    # gateways (and listens for ESL-driven rescans) before FreeSWITCH loads.
+    # service_started (not _healthy) because tring is a distroless image with no
+    # shell/curl for a healthcheck — ordering only.
     depends_on:
       tring:
         condition: service_started
@@ -59,7 +57,7 @@ services:
       - ./freeswitch/tls/whatsapp:/etc/freeswitch/tls/whatsapp:ro
     # network_mode: host is simplest for SIP/RTP during dev.
     # Ports: 5060 (SIP), 5080 (external SIP), 8021 (ESL),
-    #        7443 (WSS for WebRTC), 16384-32768 (RTP).
+    #        16384-32768 (RTP).
     restart: unless-stopped
 
   postgres:

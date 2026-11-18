@@ -103,7 +103,7 @@ type xmlInclude struct {
 
 // ErrUnsafeValue rejects a gateway field FreeSWITCH would expand: it
 // substitutes $${global} and ${var} inside gateway XML, so a tenant-set
-// from-domain of $${tring_fs_basic_auth} would send that secret to the
+// from-domain of $${tring_esl_password} would send that secret to the
 // tenant's proxy in every SIP request. Control characters are refused too.
 var ErrUnsafeValue = errors.New("gateway field contains FreeSWITCH variable syntax or control characters")
 

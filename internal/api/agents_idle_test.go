@@ -25,7 +25,7 @@ func TestAgentsListIdleSince(t *testing.T) {
 		t.Skipf("redis not reachable at %s: %v", addr, err)
 	}
 	ctx := context.Background()
-	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", Cache: c, AgentTransport: "gateway"})
+	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", Cache: c})
 	tenant := f.TenantID.String()
 
 	for _, q := range []string{
