@@ -11,15 +11,19 @@ const shared = {
   define: { "process.env.NODE_ENV": '"production"' },
 };
 
+// The drop-in <script> bundles are loaded as-is from the CDN or /sdk/, so they
+// ship minified (the .map files keep them debuggable). The ESM build is left
+// readable: an app's own bundler minifies it.
+const dropIn = { ...shared, format: "iife", minify: true };
+
 // The drop-in <script> bundles land at the package root under their served
 // names, so the npm CDN URLs are short (unpkg.com/tring-voice/voice.js) and
 // match the API's /sdk/voice.js etc.
 const builds = [
   // IIFE — bare SDK. Exposes a global `Tring`; integrator wires it manually.
   {
-    ...shared,
+    ...dropIn,
     outfile: "tring.js",
-    format: "iife",
     globalName: "Tring",
     footer: { js: "window.Tring = Tring.default || Tring;" },
   },
@@ -34,20 +38,18 @@ const builds = [
   // ready, reading config from its own <script> tag's data-* attributes.
   // (Served by the API at /sdk/agent.js.)
   {
-    ...shared,
+    ...dropIn,
     entryPoints: ["src/widget-entry.ts"],
     outfile: "agent.js",
-    format: "iife",
   },
   // voice.js — the drop-in widget for putting voice calling on any website.
   // A visitor clicks "Call", gets an anonymous flow-pinned identity, and
   // lands in the tenant's IVR over WebRTC — no account. (Served by the API
   // at /sdk/voice.js.)
   {
-    ...shared,
+    ...dropIn,
     entryPoints: ["src/guest-entry.ts"],
     outfile: "voice.js",
-    format: "iife",
   },
 ];
 
