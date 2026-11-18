@@ -261,7 +261,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		IdleTimeout:       120 * time.Second,
 	}
 	// The API's control calls (two-number connect) on their own loopback
-	// listener, like the api's fs_addr: never reachable through gateway_addr.
+	// listener: never reachable through gateway_addr.
 	g.ctlSrv = &http.Server{
 		Addr:              k.String("gateway_control_addr"),
 		Handler:           sig.ControlHandler(),

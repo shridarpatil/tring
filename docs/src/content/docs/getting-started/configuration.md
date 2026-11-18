@@ -23,19 +23,17 @@ The values in `.env.example` are tuned for **local development on one machine**.
 
 ## 1. Secrets
 
-`make .env` and `install.sh` generate random values for `TRING_JWT_SECRET`, `TRING_SECRETS_KEY`, `TRING_FS_BASIC_AUTH`, `TRING_ESL_PASSWORD` and `TRING_ADMIN_PASSWORD`. The api and gateway **refuse to start** while any of their secrets is still the built-in placeholder or too short (`TRING_JWT_SECRET` at least 32 characters, the others at least 16).
+`make .env` and `install.sh` generate random values for `TRING_JWT_SECRET`, `TRING_SECRETS_KEY`, `TRING_ESL_PASSWORD` and `TRING_ADMIN_PASSWORD`. The api and gateway **refuse to start** while any of their secrets is still the built-in placeholder or too short (`TRING_JWT_SECRET` at least 32 characters, the others at least 16).
 
 | Variable | Default | What it does |
 |---|---|---|
 | `TRING_JWT_SECRET` | dev placeholder | HMAC-SHA256 key that signs **every** token Tring issues: console sessions, agent tokens, visitor call tokens and supervisor tokens. The api and the gateway must share the same value. |
 | `TRING_SECRETS_KEY` | empty | api only. AES-256-GCM key that encrypts the SIP trunk and agent passwords stored in Postgres. Exactly 32 bytes, written as **64 hex characters** (`openssl rand -hex 32`; note `-hex 16` gives only 32 characters and is rejected) or base64. See [Encryption at rest](#encryption-at-rest) below. |
-| `TRING_FS_BASIC_AUTH` | dev placeholder (`fs:…`) | `user:password` that FreeSWITCH presents to the api's `/fs/directory` endpoint (`mod_xml_curl`). FreeSWITCH reads the same variable from `.env`. |
-| `TRING_FS_ADDR` | `127.0.0.1:8088` | Loopback-only listener for the api's `/fs/*` endpoints. They are not served on `TRING_API_ADDR`. Must match the URL in `xml_curl.conf.xml`. |
 | `TRING_ALLOW_INSECURE_SECRETS` | `false` | Skip the startup secret check. Local development only. |
 
 :::danger[Production]
 - Anyone who knows `TRING_JWT_SECRET` can mint valid tokens for any tenant. Rotating it signs everyone out and invalidates every agent and visitor token in flight.
-- FreeSWITCH reads `TRING_FS_BASIC_AUTH` and `TRING_ESL_PASSWORD` from the same `.env`, so changing them only needs a restart of the `freeswitch` and `api` containers.
+- FreeSWITCH reads `TRING_ESL_PASSWORD` from the same `.env`, so changing it only needs a restart of the `freeswitch` and `api` containers.
 :::
 
 ### Encryption at rest
@@ -237,9 +235,6 @@ These are not in `.env.example` but are read by the binaries, Compose or FreeSWI
 |---|---|---|
 | `TRING_API_ADDR` | `:8085` | The api's listen address (also `--addr`). |
 | `TRING_TURN_TTL_SECONDS` | `14700` | Lifetime of the TURN credential the gateway mints for its own relay candidate. Must outlive the longest call. |
-| `TRING_AGENT_TRANSPORT` | `gateway` | How the api builds an agent's call leg for outbound calls. `gateway` is the supported mode; `sip` is legacy. |
-| `TRING_AGENT_GATEWAY` | `tring-gw` | FreeSWITCH gateway name that points at the Tring gateway. |
-| `TRING_AGENT_JITTER_MSEC` | `60:200` | FreeSWITCH jitter buffer on the agent leg (`min:max` ms). Empty disables it. |
 | `TRING_GATEWAY_DIR` | `/etc/freeswitch/sip_profiles/external/dynamic` | Where the api writes trunk gateway XML. Must be the directory FreeSWITCH includes. |
 | `TRING_INTERNAL_IP` | primary interface | FreeSWITCH: IP of the private profile the gateway talks to. `127.0.0.1` for single-machine dev. |
 | `TRING_EXTERNAL_SIP_PORT` | `5080` | FreeSWITCH: trunk profile SIP port. Set to the port your carrier signals on. |
@@ -249,7 +244,7 @@ These are not in `.env.example` but are read by the binaries, Compose or FreeSWI
 
 ## Production checklist
 
-- Replace every secret: `TRING_JWT_SECRET`, `TRING_FS_BASIC_AUTH`, `TRING_ESL_PASSWORD`, `TRING_ADMIN_PASSWORD` (before first boot). `make .env` / `install.sh` generate these. The Postgres password in `TRING_DSN` is not generated; the compose file publishes Postgres on `127.0.0.1` only.
+- Replace every secret: `TRING_JWT_SECRET`, `TRING_ESL_PASSWORD`, `TRING_ADMIN_PASSWORD` (before first boot). `make .env` / `install.sh` generate these. The Postgres password in `TRING_DSN` is not generated; the compose file publishes Postgres on `127.0.0.1` only.
 - Set `TRING_SECRETS_KEY` so SIP passwords are encrypted at rest, and back it up outside the database backups. The api logs a warning on every start while it is empty.
 - Serve the api and gateway over HTTPS behind a TLS proxy; set `TRING_GATEWAY_PUBLIC_URL=https://…` and `TRING_TRUSTED_PROXIES` to the proxy's address.
 - Set `TRING_PUBLIC_IP`, set `TRING_GATEWAY_UDP_MUX_PORT`, and open only the media ports you use.

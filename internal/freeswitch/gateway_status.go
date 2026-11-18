@@ -63,7 +63,7 @@ func (c *Client) GatewayHealths(ctx context.Context) (map[string]GatewayHealth, 
 // parseGatewayHealth reads the <gateways><gateway>… document emitted by
 // `sofia xmlstatus gateway`. Fail-soft: a malformed or "-ERR" body yields
 // an empty map, so a FreeSWITCH hiccup shows trunks as not_loaded rather
-// than erroring the list — the same discipline as parseRegistrations.
+// than erroring the list.
 func parseGatewayHealth(body []byte) map[string]GatewayHealth {
 	out := map[string]GatewayHealth{}
 	var doc struct {

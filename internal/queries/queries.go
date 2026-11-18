@@ -157,8 +157,6 @@ type Queries struct {
 	CountCalls          string `query:"count-calls"`
 
 	// ---- api: mod_xml_curl directory (/fs) ----
-	GetTenantIDBySipDomain string `query:"get-tenant-id-by-sip-domain"`
-	GetAgentCredentials    string `query:"get-agent-credentials"`
 
 	// ---- api: console auth ----
 	GetUserByEmail      string `query:"get-user-by-email"`
