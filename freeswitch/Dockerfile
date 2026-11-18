@@ -30,7 +30,6 @@ COPY conf/directory/default.xml                  /usr/share/freeswitch/conf/vani
 COPY conf/autoload_configs/modules.conf.xml      /usr/share/freeswitch/conf/vanilla/autoload_configs/modules.conf.xml
 COPY conf/autoload_configs/acl.conf.xml          /usr/share/freeswitch/conf/vanilla/autoload_configs/acl.conf.xml
 COPY conf/autoload_configs/event_socket.conf.xml /usr/share/freeswitch/conf/vanilla/autoload_configs/event_socket.conf.xml
-COPY conf/autoload_configs/xml_curl.conf.xml     /usr/share/freeswitch/conf/vanilla/autoload_configs/xml_curl.conf.xml
 COPY conf/autoload_configs/local_stream.conf.xml /usr/share/freeswitch/conf/vanilla/autoload_configs/local_stream.conf.xml
 COPY conf/autoload_configs/switch.conf.xml       /usr/share/freeswitch/conf/vanilla/autoload_configs/switch.conf.xml
 COPY conf/sip_profiles/external.xml              /usr/share/freeswitch/conf/vanilla/sip_profiles/external.xml

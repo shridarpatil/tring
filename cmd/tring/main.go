@@ -61,12 +61,12 @@ func parseOptions(args []string, k *koanf.Koanf) (options, error) {
 }
 
 // weakSecretKeys lists the secrets that must not be defaults. A gateway-only
-// node never serves /fs or dials ESL, so its .env may omit those two.
+// node never dials ESL, so its .env may omit esl_password.
 func weakSecretKeys(gatewayOnly bool) []string {
 	if gatewayOnly {
 		return []string{"jwt_secret"}
 	}
-	return []string{"jwt_secret", "fs_basic_auth", "esl_password"}
+	return []string{"jwt_secret", "esl_password"}
 }
 
 // apiStopper and gatewayStopper are what run needs from a started role; tests

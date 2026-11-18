@@ -15,8 +15,7 @@ import (
 
 // SIP passwords (trunks.sip_password, agents.sip_password) are stored sealed
 // with TRING_SECRETS_KEY (internal/secretbox) and opened only where they are
-// handed to FreeSWITCH: the gateway XML (rerenderAllGateways) and the agent
-// directory (handleFSDirectory). With no key configured (s.secrets == nil)
+// handed to FreeSWITCH: the gateway XML (rerenderAllGateways). With no key configured (s.secrets == nil)
 // new values are stored as plaintext and only plaintext can be read — the
 // upgrade path for deployments that haven't added the key yet. The api role
 // refuses to start keyless if sealed values exist.

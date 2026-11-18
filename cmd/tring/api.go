@@ -26,7 +26,7 @@ import (
 
 type apiRole struct {
 	d            *deps
-	srv, fsSrv   *http.Server
+	srv          *http.Server
 	hub          *events.Hub
 	cancel       context.CancelFunc // stops the hub
 	db           *db.DB
@@ -117,7 +117,6 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		CampaignLimits:    campaign.Limits{Concurrent: k.Int("campaign_max_concurrent"), PerTenant: k.Int("campaign_tenant_concurrent"), StartsPerSecond: k.Int("campaign_starts_per_second"), TotalCalls: k.Int("campaign_total_call_capacity"), ReservedCalls: k.Int("campaign_reserved_calls")},
 		TTS:               ttsEngine,
 		JWTSecret:         k.String("jwt_secret"),
-		FSBasicAuth:       k.String("fs_basic_auth"),
 		ESLAddr:           k.String("esl_addr"),
 		ESLPassword:       k.String("esl_password"),
 		STUNURL:           k.String("stun_url"),
@@ -125,9 +124,6 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		TURNUsername:      k.String("turn_username"),
 		TURNPassword:      k.String("turn_password"),
 		TURNSecret:        k.String("turn_secret"),
-		AgentTransport:    k.String("agent_transport"),
-		AgentGateway:      k.String("agent_gateway"),
-		AgentJitter:       k.String("agent_jitter_msec"),
 		GatewayPublicURL:  k.String("gateway_public_url"),
 		GatewayControlURL: k.String("gateway_control_url"),
 		ConsolePublicURL:  k.String("console_public_url"),
@@ -196,27 +192,10 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// FreeSWITCH mod_xml_curl endpoints on their own loopback listener, so the
-	// public api_addr (and any reverse proxy in front of it) never serves them.
-	a.fsSrv = &http.Server{
-		Addr:              k.String("fs_addr"),
-		Handler:           apiSrv.FSRouter(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
-
 	go func() {
 		logger.Info("api listening", "addr", a.srv.Addr)
 		if err := a.srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("api listen failed", "err", err)
-			os.Exit(1)
-		}
-	}()
-	go func() {
-		logger.Info("fs endpoints listening", "addr", a.fsSrv.Addr)
-		if err := a.fsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("fs listen failed", "err", err)
 			os.Exit(1)
 		}
 	}()
@@ -228,7 +207,6 @@ func (a *apiRole) shutdown(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	_ = a.srv.Shutdown(ctx)
-	_ = a.fsSrv.Shutdown(ctx)
 	a.close()
 }
 

@@ -39,7 +39,6 @@ type Config struct {
 	CampaignLimits campaign.Limits
 	DB             *db.DB
 	JWTSecret      string
-	FSBasicAuth    string // "user:pass" — shared with FreeSWITCH mod_xml_curl
 	ESLAddr        string // FreeSWITCH ESL inbound, e.g. 127.0.0.1:8021
 	ESLPassword    string // FreeSWITCH ESL password (default ClueCon)
 
@@ -57,16 +56,6 @@ type Config struct {
 	// reaches clients) instead of the static TURNUsername/TURNPassword. The
 	// credential lifetime is the tenant's max_call_seconds (see turnTTLFor).
 	TURNSecret string
-
-	// AgentTransport routes the agent's own call leg: "sip" (agent registers
-	// to FS directly) or "gateway" (leg routed to the media gateway as a SIP
-	// endpoint; ADR-001 M4b). AgentGateway is the FS gateway name used for the
-	// latter. Defaults supplied by internal/config.
-	AgentTransport string
-	AgentGateway   string
-	// AgentJitter sets jitterbuffer_msec on the gateway agent leg ("min:max"
-	// adaptive ms; "" disables). Smooths the agent's internet/TURN uplink.
-	AgentJitter string
 
 	// GatewayPublicURL is the browser-reachable base URL of the media gateway,
 	// returned to visitors in a guest mint response (ADR-001 M5).
@@ -137,8 +126,6 @@ type Server struct {
 	db              *db.DB
 	q               *queries.Queries // named SQL loaded from queries.sql at startup
 	jwtSecret       []byte
-	fsBasicUser     string
-	fsBasicPass     string
 	fs              *freeswitch.Client
 	cache           *cache.Cache    // shared Redis; invalidates the gateway's cached DIDs + flows
 	presence        *presence.Store // agent online status published by the gateway
@@ -147,11 +134,6 @@ type Server struct {
 	// the background (StartGatewaySync).
 	gwSync *freeswitch.GatewaySync
 
-	// agentTransport / agentGateway: how an agent's own call leg is routed
-	// ("sip" → user/<sip>; "gateway" → the media gateway as a SIP endpoint).
-	agentTransport string
-	agentGateway   string
-	agentJitter    string
 	// gatewayPublicURL: browser-reachable gateway base URL, returned to
 	// visitors in a guest mint response.
 	gatewayPublicURL  string
@@ -231,7 +213,6 @@ func NewServer(cfg Config) *Server {
 	if cfg.CampaignLimits.Concurrent == 0 {
 		cfg.CampaignLimits = campaign.DefaultLimits()
 	}
-	user, pass, _ := strings.Cut(cfg.FSBasicAuth, ":")
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -242,15 +223,10 @@ func NewServer(cfg Config) *Server {
 		db:                cfg.DB,
 		q:                 queries.MustLoad(),
 		jwtSecret:         []byte(cfg.JWTSecret),
-		fsBasicUser:       user,
-		fsBasicPass:       pass,
 		fs:                fs,
 		gwSync:            freeswitch.NewGatewaySync(fs.RescanExternalProfile, nil, logger),
 		cache:             cfg.Cache,
 		presence:          presence.New(cfg.Cache),
-		agentTransport:    cfg.AgentTransport,
-		agentGateway:      cfg.AgentGateway,
-		agentJitter:       cfg.AgentJitter,
 		gatewayPublicURL:  cfg.GatewayPublicURL,
 		gatewayControlURL: strings.TrimRight(cfg.GatewayControlURL, "/"),
 		gatewayHTTP:       &http.Client{Timeout: 10 * time.Second},
@@ -367,20 +343,6 @@ func (s *Server) turnTTLFor(ctx context.Context, tenantID uuid.UUID) time.Durati
 		secs = defaultMaxCallSeconds
 	}
 	return time.Duration(secs)*time.Second + turnSetupBuffer
-}
-
-// FSRouter serves the FreeSWITCH-facing /fs/* endpoints. Basic Auth shared
-// with mod_xml_curl; not behind the tenant API-key wall. Mounted on its own
-// loopback listener (fs_addr), never on the public Router.
-func (s *Server) FSRouter() http.Handler {
-	r := chi.NewRouter()
-	r.Use(middleware.Recoverer)
-	r.Route("/fs", func(r chi.Router) {
-		r.Use(middleware.Timeout(30 * time.Second))
-		r.Use(s.FSBasicAuth)
-		r.Post("/directory", s.handleFSDirectory)
-	})
-	return r
 }
 
 func (s *Server) Router() http.Handler {
@@ -769,8 +731,6 @@ func (s *Server) writeServerError(w http.ResponseWriter, r *http.Request, status
 //
 // v0 is permissive (echo any Origin). Phase 2: per-tenant allowed-origins
 // list to lock things down once we're confident in the abuse surface.
-// The /fs/* endpoints are deliberately excluded — they're localhost-only
-// by design.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")

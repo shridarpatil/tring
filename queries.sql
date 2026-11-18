@@ -559,16 +559,6 @@ WHERE c.tenant_id = $1
                       OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%')));
 
 -- ===========================================================================
--- mod_xml_curl directory (/fs) — FreeSWITCH SIP auth lookups
--- ===========================================================================
-
--- name: get-tenant-id-by-sip-domain
-SELECT id FROM tenants WHERE sip_domain = $1;
-
--- name: get-agent-credentials
-SELECT id, sip_password FROM users WHERE tenant_id = $1 AND sip_username = $2;
-
--- ===========================================================================
 -- console auth
 -- ===========================================================================
 

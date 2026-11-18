@@ -22,7 +22,6 @@ Trunks are configured in the database per tenant, but they are all loaded into t
 | **Agent token** | JWT, `aud: tring.sdk` | `GET /v1/agents/{id}/token` (API key) | 5 minutes | Gateway `/rtc`; api `/v1/sdk/*` | Go online as that agent, take calls, control the agent's own call |
 | **Visitor call token** | JWT, `aud: tring.gateway` | `POST /v1/guest-credentials` (API key) | 2 minutes, single use | Gateway `/rtc` | Join one call pinned to one flow |
 | **Supervisor token** | JWT, `aud: tring.supervisor` | `POST /v1/calls/{id}/supervise` (console session only) | 2 minutes, single use | Gateway `/rtc` | Listen to, whisper on or barge into one live call |
-| **FreeSWITCH basic auth** | `user:password` | `TRING_FS_BASIC_AUTH` | Static | The api (`/fs/*`) | FreeSWITCH directory lookups. Internal only |
 
 All JWTs are HS256, signed with `TRING_JWT_SECRET`, with issuer `tring`. Each kind has its own audience and is rejected anywhere else: an agent token cannot call the tenant API, and a visitor token cannot register as an agent.
 
@@ -94,7 +93,7 @@ Because anyone can reach a public "call us" page, protect your credentials endpo
 - **Grant the supervisor role and team manager flag sparingly.** Supervision allows silent listening to live calls.
 - **Protect `TRING_JWT_SECRET`.** It signs every token for every tenant. Store it in a secret manager and rotate it if exposed (rotation signs everyone out).
 - **Use HTTPS everywhere** in production: the api, the gateway (`wss://` for `/rtc`), your token endpoints and webhook receivers.
-- **Keep internals private.** `/fs/*`, FreeSWITCH ESL, Postgres and Redis must not be reachable from the internet.
+- **Keep internals private.** FreeSWITCH ESL, Postgres and Redis must not be reachable from the internet.
 - **Turn on MFA and audit logging** for the cloud, registry and secret-manager accounts that hold these credentials.
 
 :::caution[CORS]

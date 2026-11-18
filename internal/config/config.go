@@ -5,7 +5,7 @@
 //
 //	TRING_DSN            -> "dsn"
 //	TRING_ESL_ADDR       -> "esl_addr"
-//	TRING_FS_BASIC_AUTH  -> "fs_basic_auth"
+//	TRING_JWT_SECRET     -> "jwt_secret"
 //
 // Binaries build their own typed Config from this in main(); CLI flags
 // (e.g. --dsn) take precedence by using the resolved value as the flag's
@@ -30,11 +30,10 @@ import (
 // defaults are the dev-friendly fallbacks used when no TRING_* env var is
 // set. Production overrides them via env.
 var defaults = map[string]any{
-	"dsn":           "postgres://tring:tring_dev@localhost:5434/tring",
-	"jwt_secret":    "tring_dev_jwt_secret_change_me_in_prod",
-	"fs_basic_auth": "fs:fs_dev_secret_change_me_in_prod",
-	"esl_addr":      "127.0.0.1:8021",
-	"esl_password":  "ClueCon",
+	"dsn":          "postgres://tring:tring_dev@localhost:5434/tring",
+	"jwt_secret":   "tring_dev_jwt_secret_change_me_in_prod",
+	"esl_addr":     "127.0.0.1:8021",
+	"esl_password": "ClueCon",
 	// Structured logging (internal/logging). format: text (logfmt, local dev) |
 	// json (log shippers — logchef/Loki). level: debug|info|warn|error.
 	"log_format": "text",
@@ -123,21 +122,6 @@ var defaults = map[string]any{
 	// endpoint is then an unauthenticated resource-allocation surface.
 	// The agent path is unaffected — /agent/ws ALWAYS authenticates the agent JWT.
 	"gateway_require_auth": true,
-	// agent_transport routes the agent's own call leg. "gateway" (default since
-	// the M5 cutover) routes the leg to the media gateway as a SIP endpoint so
-	// agents speak WebRTC, never SIP (ADR-001); "sip" is the legacy mode where
-	// agents register to FS directly (user/<sip>) — kept for migrations but the
-	// SDK no longer supports it. agent_gateway is the FreeSWITCH gateway name
-	// pointing at the media gateway (freeswitch/conf/sip_profiles/external/tring-gw.xml).
-	"agent_transport": "gateway",
-	"agent_gateway":   "tring-gw",
-	// agent_jitter_msec installs a FreeSWITCH jitter buffer (jitterbuffer_msec)
-	// on the gateway agent leg so the agent's internet/TURN uplink — which
-	// arrives jittered/reordered/lossy — is smoothed (and Opus inband-FEC made
-	// usable) before it's bridged to the far party. Without it, packet jitter is
-	// heard as breaks in the agent's voice at the other end. "min:max" adaptive
-	// ms; "" disables (fine for agents on the same LAN as the gateway).
-	"agent_jitter_msec": "60:200",
 	// redis_addr enables the IVR flow cache (host:port). Empty = caching
 	// disabled (every flow resolve reads Postgres). `make up` runs a Redis
 	// container and sets TRING_REDIS_ADDR; host-run dev opts in via env.
@@ -208,10 +192,6 @@ var defaults = map[string]any{
 	// this host's own addresses. Set only when FreeSWITCH is on another host.
 	"fsplug_allow_cidrs": "",
 
-	// fs_addr is the loopback-only listener for the FreeSWITCH-facing /fs/*
-	// endpoints (mod_xml_curl). Kept off api_addr so a reverse proxy or an
-	// open :8085 never exposes the agent SIP directory.
-	"fs_addr": "127.0.0.1:8088",
 	// secrets_key (api only) encrypts trunk and agent SIP passwords at rest
 	// with AES-256-GCM: 64 hex chars or base64 of 32 bytes. Empty = stored in
 	// plaintext (the api warns; it refuses to start keyless once any value is
@@ -226,9 +206,8 @@ var defaults = map[string]any{
 
 // secretMinLen is the shortest value WeakSecrets accepts per secret key.
 var secretMinLen = map[string]int{
-	"jwt_secret":    32,
-	"fs_basic_auth": 16,
-	"esl_password":  16,
+	"jwt_secret":   32,
+	"esl_password": 16,
 }
 
 // WeakSecrets returns the given secret keys whose value is still the

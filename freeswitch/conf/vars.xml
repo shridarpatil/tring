@@ -86,11 +86,9 @@
   <!-- Shared secrets, read from the same .env the api uses (docker-compose
        env_file), so FreeSWITCH and the api always agree:
          tring_esl_password  -> event_socket.conf.xml (api -> FS ESL)
-         tring_fs_basic_auth -> xml_curl.conf.xml (FS -> api /fs, user:pass)
        The fallbacks are the dev defaults; the api refuses to start with them
        unless TRING_ALLOW_INSECURE_SECRETS=true. -->
   <X-PRE-PROCESS cmd="exec-set" data="tring_esl_password=sh -c 'echo ${TRING_ESL_PASSWORD:-ClueCon}'"/>
-  <X-PRE-PROCESS cmd="exec-set" data="tring_fs_basic_auth=sh -c 'echo ${TRING_FS_BASIC_AUTH:-fs:fs_dev_secret_change_me_in_prod}'"/>
   <!-- Trunk credentials are now managed via the admin console at /trunks.
        Each trunk row in the `trunks` table renders to
        external/dynamic/t_<uuid>.xml on save; `sofia profile external

@@ -146,8 +146,8 @@
     <!-- Runs on every call (continue="true"): offer SRTP on the outbound leg
          when the inbound leg negotiated it, so secure-media trunks/clients
          interop. The stock default_password=1234 nag (a 10s sleep on every
-         call) was removed — Tring authenticates via mod_xml_curl, not the
-         static default_password. -->
+         call) was removed — nothing authenticates with the static
+         default_password. -->
     <extension name="global" continue="true">
       <condition field="${call_debug}" expression="^true$" break="never">
 	<action application="info"/>
