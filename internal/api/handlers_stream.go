@@ -171,11 +171,7 @@ func (s *Server) QueuesData(ctx context.Context, tenantID string) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	// agentsList needs the SIP domain (FreeSWITCH registration lookup).
 	t := &Tenant{ID: id}
-	if err := s.db.Pool.QueryRow(ctx, s.q.GetTenantSipDomain, id).Scan(&t.SipDomain); err != nil {
-		return nil, err
-	}
 	agents, err := s.agentsList(ctx, t)
 	if err != nil {
 		s.log.Warn("queues recompute: agents", "err", err) // staffing reads unknown

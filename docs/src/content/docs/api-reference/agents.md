@@ -67,7 +67,7 @@ curl -sS -X POST "$TRING_URL/v1/agents" \
 }
 ```
 
-Agents authenticate with an [agent token](#get-v1agentsidtoken), not SIP credentials. Tring still generates and stores a SIP password for the legacy `sip` agent transport, but never returns it.
+Agents authenticate with an [agent token](#get-v1agentsidtoken), not SIP credentials.
 
 A new agent isn't in any team yet. Add it with [`POST /v1/teams/{name}/agents`](/tring/api-reference/teams/#post-v1teamsnameagents).
 

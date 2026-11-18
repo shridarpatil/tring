@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/shridarpatil/tring/internal/api"
@@ -227,7 +226,6 @@ func seedTenant(ctx context.Context, database *db.DB, name string, out io.Writer
 	if err != nil {
 		return err
 	}
-	sipDomain := "t_" + strings.ToLower(strings.ReplaceAll(name, " ", "_")) + ".tring.local"
 
 	// Auth resolves keys from api_keys only; tenants.api_key_hash is legacy.
 	// Without the api_keys row the printed key never authenticated. One tx so
@@ -239,7 +237,7 @@ func seedTenant(ctx context.Context, database *db.DB, name string, out io.Writer
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var id string
-	if err := tx.QueryRow(ctx, q.InsertTenant, name, hash, prefix, sipDomain).Scan(&id); err != nil {
+	if err := tx.QueryRow(ctx, q.InsertTenant, name, hash, prefix).Scan(&id); err != nil {
 		return fmt.Errorf("insert tenant: %w", err)
 	}
 	var (
@@ -258,7 +256,6 @@ Tenant created.
 
   ID:         %s
   Name:       %s
-  SIP domain: %s
 
 API key (save this — it will not be shown again):
 
@@ -266,6 +263,6 @@ API key (save this — it will not be shown again):
 
 Use it as: Authorization: Bearer %s
 
-`, id, name, sipDomain, plaintext, plaintext)
+`, id, name, plaintext, plaintext)
 	return nil
 }

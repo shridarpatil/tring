@@ -13,9 +13,9 @@ import (
 	"github.com/shridarpatil/tring/internal/secretbox"
 )
 
-// SIP passwords (trunks.sip_password, agents.sip_password) are stored sealed
-// with TRING_SECRETS_KEY (internal/secretbox) and opened only where they are
-// handed to FreeSWITCH: the gateway XML (rerenderAllGateways). With no key configured (s.secrets == nil)
+// Trunk SIP passwords (trunks.sip_password) are stored sealed with
+// TRING_SECRETS_KEY (internal/secretbox) and opened only where they are handed
+// to FreeSWITCH: the gateway XML (rerenderAllGateways). With no key configured (s.secrets == nil)
 // new values are stored as plaintext and only plaintext can be read — the
 // upgrade path for deployments that haven't added the key yet. The api role
 // refuses to start keyless if sealed values exist.
@@ -78,20 +78,20 @@ func PrepareStoredSecrets(ctx context.Context, database *db.DB, box *secretbox.B
 	if sealed > 0 {
 		return fmt.Errorf("%d stored SIP passwords are encrypted but TRING_SECRETS_KEY is not set — restore the key from your backup", sealed)
 	}
-	log.Warn("TRING_SECRETS_KEY is not set: trunk and agent SIP passwords are stored in PLAINTEXT. "+
+	log.Warn("TRING_SECRETS_KEY is not set: trunk SIP passwords are stored in PLAINTEXT. "+
 		"Generate one (od -An -tx1 -N32 /dev/urandom | tr -d ' \\n'), add it to .env, back it up, and restart",
 		"plaintext_count", plaintext)
 	return nil
 }
 
-// countStoredSecrets returns how many stored SIP passwords (trunks + agents)
+// countStoredSecrets returns how many stored trunk SIP passwords
 // are sealed and how many are still legacy plaintext.
 func countStoredSecrets(ctx context.Context, database *db.DB) (sealed, plaintext int, err error) {
 	err = database.Pool.QueryRow(ctx, queries.MustLoad().CountStoredSecrets).Scan(&sealed, &plaintext)
 	return sealed, plaintext, err
 }
 
-// sealLegacySecrets encrypts every plaintext SIP password (trunks + agents)
+// sealLegacySecrets encrypts every plaintext trunk SIP password
 // in one transaction and returns how many it sealed. Idempotent: sealed
 // values are skipped, and the rows are locked so concurrent api replicas
 // starting together don't double-seal.
@@ -110,7 +110,6 @@ func sealLegacySecrets(ctx context.Context, database *db.DB, box *secretbox.Box)
 	n := 0
 	for _, tbl := range []struct{ name, list, set string }{
 		{"trunks", q.ListPlaintextTrunkSecrets, q.SetTrunkSecret},
-		{"agents", q.ListPlaintextAgentSecrets, q.SetAgentSecret},
 	} {
 		rows, err := tx.Query(ctx, tbl.list)
 		if err != nil {

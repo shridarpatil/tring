@@ -26,7 +26,6 @@ function loadUser(): MeUser | null {
 export interface TenantSummary {
   id: string;
   name: string;
-  sip_domain: string;
 }
 
 /** GET /v1/me: the user plus their tenant. */

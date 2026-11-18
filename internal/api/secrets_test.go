@@ -133,64 +133,30 @@ func TestActiveGatewaysSkipsUndecryptableTrunk(t *testing.T) {
 	}
 }
 
-func TestAgentPasswordSealedAtRest(t *testing.T) {
-	f := dbtest.Setup(t)
-	box := testBox(t, 1)
-	s := newSealingServer(f, box)
-
-	rec := serve(t, s, f, http.MethodPost, "/v1/agents", `{"sip_username":"alice"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create agent = %d, body %s", rec.Code, rec.Body.String())
-	}
-	var raw string
-	if err := f.DB.Pool.QueryRow(context.Background(),
-		`SELECT sip_password FROM users WHERE tenant_id = $1 AND sip_username = 'alice'`, f.TenantID,
-	).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	if !secretbox.IsSealed(raw) {
-		t.Fatalf("agent sip_password stored unsealed: %q", raw)
-	}
-	plain, err := box.Open(raw)
-	if err != nil || plain == "" {
-		t.Fatalf("Open = %q, %v", plain, err)
-	}
-}
-
 func TestSealLegacySecretsIsIdempotent(t *testing.T) {
 	f := dbtest.Setup(t)
 	ctx := context.Background()
 	box := testBox(t, 1)
 	trunkID := insertRegisterTrunk(t, f, "legacy-trunk-pw")
 	if _, err := f.DB.Pool.Exec(ctx, `
-		INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'bob', 'legacy-agent-pw')
-	`, f.TenantID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.DB.Pool.Exec(ctx, `
 		INSERT INTO trunks (tenant_id, name, sip_username, sip_password) VALUES ($1, 'ip-auth', '', '')
 	`, f.TenantID); err != nil {
 		t.Fatal(err)
 	}
 
-	// trunk + bob + the fixture admin (a users row with a plaintext sip_password).
+	// The register trunk; the empty-password IP-auth trunk isn't counted.
 	sealed, plain, err := countStoredSecrets(ctx, f.DB)
-	if err != nil || sealed != 0 || plain != 3 {
-		t.Fatalf("before: sealed=%d plain=%d err=%v; want 0, 3", sealed, plain, err)
+	if err != nil || sealed != 0 || plain != 1 {
+		t.Fatalf("before: sealed=%d plain=%d err=%v; want 0, 1", sealed, plain, err)
 	}
 
 	n, err := sealLegacySecrets(ctx, f.DB, box)
-	if err != nil || n != 3 {
-		t.Fatalf("first pass sealed %d (err %v), want 3", n, err)
+	if err != nil || n != 1 {
+		t.Fatalf("first pass sealed %d (err %v), want 1", n, err)
 	}
 	first := rawTrunkPassword(t, f, trunkID)
 	if got, err := box.Open(first); err != nil || got != "legacy-trunk-pw" {
 		t.Fatalf("trunk after seal: Open = %q, %v", got, err)
-	}
-	var agentRaw string
-	_ = f.DB.Pool.QueryRow(ctx, `SELECT sip_password FROM users WHERE sip_username = 'bob'`).Scan(&agentRaw)
-	if got, err := box.Open(agentRaw); !secretbox.IsSealed(agentRaw) || err != nil || got != "legacy-agent-pw" {
-		t.Fatalf("agent after seal: %q → %q, %v", agentRaw, got, err)
 	}
 
 	n, err = sealLegacySecrets(ctx, f.DB, box)
@@ -201,8 +167,8 @@ func TestSealLegacySecretsIsIdempotent(t *testing.T) {
 		t.Fatal("second pass re-sealed an already-sealed value")
 	}
 	sealed, plain, _ = countStoredSecrets(ctx, f.DB)
-	if sealed != 3 || plain != 0 {
-		t.Fatalf("after: sealed=%d plain=%d; want 3, 0", sealed, plain)
+	if sealed != 1 || plain != 0 {
+		t.Fatalf("after: sealed=%d plain=%d; want 1, 0", sealed, plain)
 	}
 }
 

@@ -138,14 +138,9 @@ func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 		h := string(b)
 		hash = &h
 	}
-	sipPassword, err := GenerateSipPassword()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "generate password")
-		return
-	}
 	var id uuid.UUID
-	err = s.db.Pool.QueryRow(r.Context(), s.q.CreateUser,
-		p.TenantID, email, hash, sip, s.sealSecret(sipPassword), req.DisplayName, req.Role).Scan(&id)
+	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateUser,
+		p.TenantID, email, hash, sip, req.DisplayName, req.Role).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeError(w, http.StatusConflict, "email or sip_username already in use")

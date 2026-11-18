@@ -42,9 +42,8 @@ func databaseName(dsn string) string {
 // Fixture is what Setup returns: a connected DB plus a seeded tenant +
 // admin console user so handler tests can mint a JWT and authenticate.
 type Fixture struct {
-	DB        *db.DB
-	TenantID  uuid.UUID
-	SIPDomain string
+	DB       *db.DB
+	TenantID uuid.UUID
 
 	// UserID and UserEmail identify the seeded console user. Tests use
 	// these to mint a JWT via (*api.Server).IssueConsoleToken and put it
@@ -110,12 +109,11 @@ func Setup(t *testing.T) *Fixture {
 	// succeed across parallel/sequential test runs.
 	apiKeySentinel := "deprecated-" + uuid.New().String()
 	var tenantID uuid.UUID
-	const sipDomain = "test.tring.local"
 	err = d.Pool.QueryRow(ctx, `
-		INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, "dbtest", sipDomain, apiKeySentinel, "deprecated--").Scan(&tenantID)
+	`, "dbtest", apiKeySentinel, "deprecated--").Scan(&tenantID)
 	if err != nil {
 		t.Fatalf("insert tenant: %v", err)
 	}
@@ -126,8 +124,8 @@ func Setup(t *testing.T) *Fixture {
 	const bcryptSentinel = "$2a$10$dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest.dbtest"
 	var userID uuid.UUID
 	err = d.Pool.QueryRow(ctx, `
-		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
-		VALUES ($1, $2, $3, $2, 'x', 'admin')
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, role)
+		VALUES ($1, $2, $3, $2, 'admin')
 		RETURNING id
 	`, tenantID, dbtestUserEmail, bcryptSentinel).Scan(&userID)
 	if err != nil {
@@ -137,7 +135,6 @@ func Setup(t *testing.T) *Fixture {
 	return &Fixture{
 		DB:        d,
 		TenantID:  tenantID,
-		SIPDomain: sipDomain,
 		UserID:    userID,
 		UserEmail: dbtestUserEmail,
 	}
@@ -151,8 +148,8 @@ func (f *Fixture) AddUser(t *testing.T, role, email string) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	err := f.DB.Pool.QueryRow(context.Background(), `
-		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
-		VALUES ($1, $2, 'x', $2, 'x', $3)
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, role)
+		VALUES ($1, $2, 'x', $2, $3)
 		RETURNING id
 	`, f.TenantID, email, role).Scan(&id)
 	if err != nil {

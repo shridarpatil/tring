@@ -37,8 +37,8 @@ func TestLoadIsTenantScoped(t *testing.T) {
 
 	var other uuid.UUID
 	if err := f.DB.Pool.QueryRow(ctx, `
-		INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
-		VALUES ('other', 'other.tring.local', $1, 'deprecated--') RETURNING id
+		INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+		VALUES ('other', $1, 'deprecated--') RETURNING id
 	`, "deprecated-"+uuid.NewString()).Scan(&other); err != nil {
 		t.Fatalf("insert other tenant: %v", err)
 	}
