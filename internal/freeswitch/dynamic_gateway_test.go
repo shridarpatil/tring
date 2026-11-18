@@ -130,7 +130,7 @@ func TestWriteGatewaysReportsChangedAndRemoved(t *testing.T) {
 }
 
 // FreeSWITCH expands $${global} (and ${var}) inside gateway XML, so a trunk
-// field like from-domain=$${tring_fs_basic_auth} would put a secret into the
+// field like from-domain=$${tring_esl_password} would put a secret into the
 // SIP headers sent to the tenant's proxy. Such gateways are never rendered;
 // the others still are.
 func TestWriteGatewaysSkipsVariableExpansion(t *testing.T) {
@@ -141,7 +141,7 @@ func TestWriteGatewaysSkipsVariableExpansion(t *testing.T) {
 	idGood, idBad := uuid.New(), uuid.New()
 	good := Gateway{ID: idGood.String(), Name: GatewayName(idGood), ProxyIP: "198.51.100.20"}
 	for _, bad := range []Gateway{
-		{FromDomain: "$${tring_fs_basic_auth}"},
+		{FromDomain: "$${tring_esl_password}"},
 		{Register: true, Username: "u", Password: "x${tring_esl_password}"},
 		{Realm: "${sip_from_host}"},
 		{AuthUsername: "a\nb"},

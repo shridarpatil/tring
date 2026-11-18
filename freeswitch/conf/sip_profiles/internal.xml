@@ -326,25 +326,17 @@
         If you need more than ONE domain you'll need to not use these options.
 
     -->
-    <!-- Tring runs multi-tenant: every tenant has its own sip_domain
-         (t_<slug>.tring.local), and the SDK's REGISTER From URI carries
-         that domain. The vanilla force-register-* params would rewrite
-         every REGISTER into $${domain} (= $${local_ip_v4}), collapsing
-         all tenants into one and breaking the xml_curl directory
-         lookup. Leaving them disabled keeps the From URI domain intact
-         end-to-end (REGISTER → 401 challenge realm → digest auth →
-         /fs/directory). -->
+    <!-- Nothing SIP-registers here any more: agents reach calls over WebRTC
+         through the media gateway, and this profile only carries the
+         gateway's own legs (admitted by the 'domains' ACL, not digest auth). -->
     <!--<param name="force-register-domain" value="$${domain}"/>-->
     <!--<param name="force-subscription-domain" value="$${domain}"/>-->
     <!--<param name="force-register-db-domain" value="$${domain}"/>-->
 
 
-    <!-- for sip over websocket support -->
-    <param name="ws-binding"  value=":5066"/>
-
-    <!-- for sip over secure websocket support -->
-    <!-- You need wss.pem in $${certs_dir} for wss or one will be created for you -->
-    <param name="wss-binding" value=":7443"/>
+    <!-- No SIP-over-WebSocket (ws :5066 / wss :7443): browsers talk WebRTC to
+         the media gateway, never SIP to FreeSWITCH, so those listeners were
+         only an exposed login surface. -->
 
     <!--<param name="delete-subs-on-register" value="false"/>-->
 

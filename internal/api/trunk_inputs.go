@@ -8,7 +8,7 @@ import (
 )
 
 // Trunk fields are rendered into FreeSWITCH gateway XML, where $${global} and
-// ${var} are expanded — a from_domain of $${tring_fs_basic_auth} would leak
+// ${var} are expanded — a from_domain of $${tring_esl_password} would leak
 // that secret to the tenant's proxy (freeswitch.ErrUnsafeValue is the render
 // backstop). Hosts are restricted to host[:port] / sip-URI characters and
 // usernames to SIP user characters; a password may contain anything except
