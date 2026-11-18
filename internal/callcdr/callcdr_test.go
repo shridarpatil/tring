@@ -69,7 +69,7 @@ func TestCampaignRecordingStartsWithAgent(t *testing.T) {
 				t.Fatal(err)
 			}
 			var agentID uuid.UUID
-			if err := fx.DB.Pool.QueryRow(ctx, `INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'alice', 'x') RETURNING id`, fx.TenantID).Scan(&agentID); err != nil {
+			if err := fx.DB.Pool.QueryRow(ctx, `INSERT INTO users (tenant_id, sip_username) VALUES ($1, 'alice') RETURNING id`, fx.TenantID).Scan(&agentID); err != nil {
 				t.Fatal(err)
 			}
 			l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
@@ -160,7 +160,7 @@ func TestLifecycleWritesCDRAndRecording(t *testing.T) {
 	}
 	var agentID uuid.UUID
 	if err := fx.DB.Pool.QueryRow(ctx,
-		`INSERT INTO users (tenant_id, sip_username, sip_password) VALUES ($1, 'alice', 'x') RETURNING id`,
+		`INSERT INTO users (tenant_id, sip_username) VALUES ($1, 'alice') RETURNING id`,
 		fx.TenantID).Scan(&agentID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestTimelineEvents(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		`INSERT INTO users (tenant_id, sip_username, display_name) VALUES ($1,'alice','Alice A')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestRingAgentLiveShowsAgentName(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A')`,
+		`INSERT INTO users (tenant_id, sip_username, display_name) VALUES ($1,'alice','Alice A')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestLateRingAgentAfterAnswerKeepsTalking(t *testing.T) {
 	fx := dbtest.Setup(t)
 	ctx := context.Background()
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1,'alice','x','Alice A'), ($1,'bob','x','Bob B')`,
+		`INSERT INTO users (tenant_id, sip_username, display_name) VALUES ($1,'alice','Alice A'), ($1,'bob','Bob B')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agents: %v", err)
 	}
@@ -653,7 +653,7 @@ func TestAgentLookupThroughCache(t *testing.T) {
 		t.Fatalf("disable recording: %v", err)
 	}
 	if _, err := fx.DB.Pool.Exec(ctx,
-		`INSERT INTO users (tenant_id, sip_username, sip_password, display_name) VALUES ($1, 'carol', 'x', 'Carol A')`,
+		`INSERT INTO users (tenant_id, sip_username, display_name) VALUES ($1,'carol','Carol A')`,
 		fx.TenantID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}

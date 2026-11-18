@@ -54,7 +54,7 @@ func (s *Server) handleAgentToken(w http.ResponseWriter, r *http.Request) {
 // agentTokenResponse mints an agent JWT plus the gateway URL and ICE servers
 // the SDK needs, shared by the CRM-backend and /v1/me token endpoints.
 func (s *Server) agentTokenResponse(ctx context.Context, t *Tenant, agentID uuid.UUID, sip string) (tokenResponse, error) {
-	tok, exp, err := s.IssueAgentToken(agentID, t.ID, sip, t.SipDomain, agentTokenTTL)
+	tok, exp, err := s.IssueAgentToken(agentID, t.ID, sip, agentTokenTTL)
 	if err != nil {
 		return tokenResponse{}, err
 	}

@@ -11,7 +11,7 @@ import { Button, TextField } from "../components/ui";
 interface LoginResponse {
   token: string;
   expires_at: string;
-  tenant: { id: string; name: string; sip_domain: string };
+  tenant: { id: string; name: string };
   user: MeUser;
 }
 

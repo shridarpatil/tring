@@ -102,14 +102,14 @@ func TestUsersDuplicateEmailAcrossTenants(t *testing.T) {
 
 	var otherTenant uuid.UUID
 	if err := f.DB.Pool.QueryRow(context.Background(), `
-		INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
-		VALUES ('other', 'other.tring.local', $1, 'deprecated--') RETURNING id`,
+		INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+		VALUES ('other', $1, 'deprecated--') RETURNING id`,
 		"deprecated-"+uuid.NewString()).Scan(&otherTenant); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.DB.Pool.Exec(context.Background(), `
-		INSERT INTO users (tenant_id, email, password_hash, sip_username, sip_password, role)
-		VALUES ($1, 'dup@example.com', 'x', 'dup-sip', 'x', 'agent')`, otherTenant); err != nil {
+		INSERT INTO users (tenant_id, email, password_hash, sip_username, role)
+		VALUES ($1, 'dup@example.com', 'x', 'dup-sip', 'agent')`, otherTenant); err != nil {
 		t.Fatal(err)
 	}
 
@@ -260,8 +260,8 @@ func TestCreateUserNoPasswordOtherDomain(t *testing.T) {
 	admin := tokenFor(t, s, f, f.UserID, f.UserEmail, "admin")
 	// A provider in another tenant must not count.
 	var other uuid.UUID
-	if err := f.DB.Pool.QueryRow(context.Background(), `INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
-		VALUES ('other', 'other.sip.test', 'x', 'other-pfx') RETURNING id`).Scan(&other); err != nil {
+	if err := f.DB.Pool.QueryRow(context.Background(), `INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+		VALUES ('other', 'x', 'other-pfx') RETURNING id`).Scan(&other); err != nil {
 		t.Fatal(err)
 	}
 	seedSSODomain(t, f, other, "elsewhere.example.com")

@@ -255,7 +255,7 @@ func TestAgentCampaignPreparationRequiresTenantTeam(t *testing.T) {
 	// The API may store a draft before a team exists, but may not prepare it.
 	campaignRequest(t, s, f, "POST", path+"/prepare", map[string]any{"revision": c.Revision}, 400)
 	other := uuid.New()
-	if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO tenants(id,name,sip_domain,api_key_hash,api_key_prefix) VALUES($1,'Other','agent-campaign-other.test','agent-campaign-test-hash','deprecated--')`, other); err != nil {
+	if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO tenants(id,name,api_key_hash,api_key_prefix) VALUES($1,'Other','agent-campaign-test-hash','deprecated--')`, other); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO teams(tenant_id,name) VALUES($1,'sales')`, other); err != nil {

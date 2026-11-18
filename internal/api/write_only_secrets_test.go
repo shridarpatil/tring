@@ -74,27 +74,6 @@ func TestUpdateTrunkKeepsPasswordOnEmpty(t *testing.T) {
 	}
 }
 
-// Agents never SIP-register on the gateway transport, so the generated SIP
-// password is stored (FreeSWITCH directory, legacy transport) but not returned.
-func TestCreateAgentOmitsSipPassword(t *testing.T) {
-	f := dbtest.Setup(t)
-	s := newTestServer(f)
-
-	rec := serve(t, s, f, http.MethodPost, "/v1/agents", `{"sip_username":"alice"}`)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "sip_password") {
-		t.Errorf("create agent returns sip_password: %s", rec.Body.String())
-	}
-	var stored string
-	if err := f.DB.Pool.QueryRow(context.Background(),
-		`SELECT sip_password FROM users WHERE tenant_id = $1 AND sip_username = 'alice'`, f.TenantID,
-	).Scan(&stored); err != nil || stored == "" {
-		t.Errorf("stored sip_password = %q (err %v), want a generated password", stored, err)
-	}
-}
-
 // The unified users table carries a role: API-created agents are 'agent', the
 // fixture console admin shows up as 'admin'.
 func TestListAgentsIncludesRole(t *testing.T) {

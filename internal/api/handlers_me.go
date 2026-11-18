@@ -27,9 +27,8 @@ const (
 // admins can read GET /v1/tenants/me, so /v1/me carries the name the console
 // shows in its top bar for everyone else.
 type meTenant struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	SipDomain string `json:"sip_domain"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
@@ -39,7 +38,7 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 		Tenant *meTenant `json:"tenant,omitempty"`
 	}{meUser: newMeUser(p, p.Email)}
 	if t := tenantFromCtx(r.Context()); t != nil {
-		resp.Tenant = &meTenant{ID: t.ID.String(), Name: t.Name, SipDomain: t.SipDomain}
+		resp.Tenant = &meTenant{ID: t.ID.String(), Name: t.Name}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

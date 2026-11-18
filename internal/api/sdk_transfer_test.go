@@ -64,7 +64,7 @@ func TestSdkTransferGoesThroughGateway(t *testing.T) {
 		f.TenantID, uuid.NewString(), roomID, me); err != nil {
 		t.Fatal(err)
 	}
-	tok, _, err := s.IssueAgentToken(me, f.TenantID, "me@example.com", f.SIPDomain, time.Hour)
+	tok, _, err := s.IssueAgentToken(me, f.TenantID, "me@example.com", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestSdkTransferGoesThroughGateway(t *testing.T) {
 
 	// No answered call for this agent → 409 without reaching the gateway.
 	other := f.AddUser(t, "agent", "other@example.com")
-	otok, _, _ := s.IssueAgentToken(other, f.TenantID, "other@example.com", f.SIPDomain, time.Hour)
+	otok, _, _ := s.IssueAgentToken(other, f.TenantID, "other@example.com", time.Hour)
 	if rec := doReq(t, s.Router(), "POST", "/v1/sdk/calls/transfer", otok, `{"to_team":"sales"}`); rec.Code != http.StatusConflict {
 		t.Errorf("no active call: %d %s, want 409", rec.Code, rec.Body)
 	}

@@ -32,16 +32,3 @@ func HashKey(plaintext string) string {
 	h := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(h[:])
 }
-
-// GenerateSipPassword produces a random 24-char alphanumeric password for an
-// agent's SIP registration. v1 will replace this with short-lived JWTs via
-// mod_xml_curl; v0 stores plaintext in the agents table.
-func GenerateSipPassword() (string, error) {
-	b := make([]byte, 15)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return strings.ToLower(
-		base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b),
-	), nil
-}

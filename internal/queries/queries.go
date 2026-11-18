@@ -106,7 +106,6 @@ type Queries struct {
 
 	// ---- api: tenants ----
 	UpdateTenant             string `query:"update-tenant"`
-	GetTenantSipDomain       string `query:"get-tenant-sip-domain"`
 	GetTenantAudio           string `query:"get-tenant-audio"`
 	GetTenantSettings        string `query:"get-tenant-settings"`
 	GetTenantRecordCalls     string `query:"get-tenant-record-calls"`
@@ -247,8 +246,6 @@ type Queries struct {
 	CountStoredSecrets        string `query:"count-stored-secrets"`
 	ListPlaintextTrunkSecrets string `query:"list-plaintext-trunk-secrets"`
 	SetTrunkSecret            string `query:"set-trunk-secret"`
-	ListPlaintextAgentSecrets string `query:"list-plaintext-agent-secrets"`
-	SetAgentSecret            string `query:"set-agent-secret"`
 
 	// ---- call settlement (callcdr) ----
 	MarkCallAnswered string `query:"mark-call-answered"`
@@ -263,7 +260,6 @@ type Queries struct {
 	InboundHeldElsewhere string `query:"inbound-number-held-elsewhere"`
 	GetActiveFlowByID    string `query:"get-active-flow-by-id"`
 	GetTeamMOH           string `query:"get-team-moh"`
-	// NOTE: agentBridgeTarget reuses GetTenantSipDomain (SELECT sip_domain ...).
 
 	// ---- bootstrap / seed (first-boot + --seed-tenant CLI) ----
 	CountTenants string `query:"count-tenants"`

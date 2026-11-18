@@ -2,17 +2,12 @@
 <!--
     Tring 'default' dialplan context.
 
-    Authenticated callers (internal profile, 5060) and calls transferred from
-    the public context (external profile, 5080 — inbound carrier/trunk DIDs)
-    land here. This file was pruned down from the stock FreeSWITCH 1.10 sample
-    dialplan: all the demo extensions (conferences, parking, eavesdrop, fax,
-    ringback tests, the ClueCon/bkw.org and conference.freeswitch.org external
-    bridges, etc.) were removed. They were dead weight — `tring_ivr` below
-    matches every numeric destination, so they were already shadowed — and a
-    couple bridged to third-party internet hosts, which has no place in a
-    production CPaaS dialplan. Keep this file Tring-only; route real behaviour
-    through the orchestrator (IVR executor) and the dynamic trunk gateways, not
-    hard-coded dialplan rules.
+    Calls on the private internal profile (5060) land here; the only caller
+    is the media gateway's fsplug placing outbound trunk calls. Inbound
+    carrier calls (public.xml) and WhatsApp (whatsapp.xml) bridge straight to
+    the gateway and never reach this context. Pruned from the stock
+    FreeSWITCH 1.10 sample dialplan; keep it Tring-only — IVR, routing and
+    transfer run in the media gateway, not in dialplan rules.
 -->
 <!-- http://wiki.freeswitch.org/wiki/Dialplan_XML -->
 <include>
@@ -24,14 +19,9 @@
          acl.conf.xml — so no auth/registration is involved) with the
          destination in the RURI, the caller-ID in From (-> sip_from_user),
          and the resolved trunk/gateway name in a custom X-Tring-Trunk
-         header (see fsplug/originate.go). Gate on that header being PRESENT
-         so this rule can NEVER fire for agent-to-agent or IVR/web traffic
-         (gwflow, tring_transfer, tring_ivr below) — those calls never carry
-         the header. Placed at the TOP of the context so it wins over
-         tring_ivr's catch-all "^\d+$" match on numeric destinations; a call
-         without the header falls straight through (default break-on-false:
-         the first condition aborts THIS extension only, not the dialplan)
-         to the extensions below, unaffected.
+         header (see fsplug/originate.go). Gate on that header being PRESENT;
+         a call without it falls through (default break-on-false: the first
+         condition aborts THIS extension only) and finds no route.
 
          NOTE: this bridges a SINGLE trunk leg today —
          X-Tring-Trunk carries only the FIRST of a tenant's selected/ordered
@@ -48,7 +38,7 @@
     <extension name="tring_outbound_trunk">
       <!-- Only the media gateway may use this: the trunk name and caller ID
            come straight from SIP headers, so any other internal-profile caller
-           (e.g. a digest-authenticated agent SIP user) could otherwise bridge
+           could otherwise bridge
            out over ANY tenant's trunk with a spoofed caller ID. tring_gateway
            (acl.conf.xml) = loopback + $${tring_internal_ip}, the addresses
            fsplug INVITEs from. -->
@@ -68,70 +58,6 @@
              the mirror of public.xml's tring_inbound_to_gateway. Quoted so
              the comma doesn't end the {} block. -->
         <action application="bridge" data="{absolute_codec_string='PCMA,PCMU'}sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
-      </condition>
-    </extension>
-
-    <!-- WebRTC gateway, flow-pinned (no DID): the pion gateway INVITEs
-         'gwflow' with an X-Tring-Flow-Id header. We copy it to tring_flow_id
-         and hand to the IVR socket, where the executor runs that flow via
-         resolveFlowByID — exactly like a guest web call, just sourced from the
-         gateway instead of a guest_* registration. -->
-    <extension name="tring_gateway_flow">
-      <!-- Gateway-only, like tring_outbound_trunk: the flow id and client ref
-           are caller-supplied headers, so without this any internal-profile
-           caller could run any tenant's flow (and write that tenant's CDRs). -->
-      <condition field="${acl(${network_addr} tring_gateway)}" expression="^true$"/>
-      <condition field="destination_number" expression="^gwflow$">
-        <action application="set" data="tring_flow_id=${sip_h_X-Tring-Flow-Id}"/>
-        <!-- Trusted caller id from the gateway call token (when present) — the
-             IVR executor records it on the CDR (calls.client_ref). -->
-        <action application="set" data="tring_client_ref=${sip_h_X-Tring-Client-Ref}"/>
-        <action application="socket" data="$${tring_ivr_socket} full"/>
-      </condition>
-    </extension>
-
-    <extension name="tring_gateway_echo">
-      <condition field="destination_number" expression="^9999$">
-        <action application="answer"/>
-        <!-- Echo target for the gateway bridge POC: the browser hears itself
-             through browser→gateway→FreeSWITCH→gateway→browser. -->
-        <action application="echo"/>
-      </condition>
-    </extension>
-
-    <!-- Agent-initiated transfer target. The API blind-transfers the client
-         leg here (uuid_transfer ... tring_transfer XML default) after setting
-         two channel vars: transfer_target (the bridge dial-string — may contain
-         commas for a ring-all team, which is why this is a var, not inline) and
-         transfer_ringback (hold music while it rings). The bridge does the work;
-         on no-answer/failure the leg hangs up (blind transfer has no fallback). -->
-    <extension name="tring_transfer">
-      <condition field="destination_number" expression="^tring_transfer$">
-        <action application="set" data="ringback=${transfer_ringback}"/>
-        <action application="set" data="instant_ringback=true"/>
-        <action application="bridge" data="${transfer_target}"/>
-        <action application="hangup"/>
-      </condition>
-    </extension>
-
-    <!-- Tring IVR — hand the call to the orchestrator's outbound-ESL
-         listener BEFORE answering, so the executor decides whether to
-         answer/playback/bridge/etc. based on the flow attached to this
-         DID. This matches every numeric destination, which is why the stock
-         demo extensions (all numeric) were safe to remove — they sat below
-         this rule and were already shadowed.
-         We use SYNCHRONOUS socket mode (`full`, no `async`): the executor
-         drives the channel step by step (answer → greeting → menu/DTMF →
-         transfer) and relies on eslgo's synchronous command/reply matching.
-         `async` breaks that matching ("no response channels"), which drops
-         DTMF collection and the queue's uuid_exists probe — so we keep sync.
-         The queue plays hold music via a non-blocking uuid_broadcast API
-         command (NOT a foreground app, which would freeze the poll loop in
-         sync mode). `full` = ship the full channel-data event so the
-         executor can read Caller-* fields. -->
-    <extension name="tring_ivr">
-      <condition field="destination_number" expression="^\d+$">
-        <action application="socket" data="$${tring_ivr_socket} full"/>
       </condition>
     </extension>
 

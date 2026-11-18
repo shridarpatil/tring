@@ -69,8 +69,8 @@ func (quietLogger) Error(format string, args ...any) {
 // Command runs a synchronous FreeSWITCH API command on a fresh ESL connection
 // and returns the reply. Used for call-control actions on an existing channel —
 // e.g. Command(ctx, "uuid_hold", "<uuid>") to hold, "uuid_hold", "off <uuid>" to
-// resume, "uuid_transfer", "<uuid> <dest>" to transfer. Returns an error if FS
-// replies -ERR (e.g. the channel no longer exists).
+// resume. Returns an error if FS replies -ERR (e.g. the channel no longer
+// exists).
 func (c *Client) Command(ctx context.Context, cmd, args string) (string, error) {
 	if err := checkArgs(cmd, args); err != nil {
 		return "", err

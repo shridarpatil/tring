@@ -90,8 +90,8 @@ func TestCreateCallViaGateway(t *testing.T) {
 	f := dbtest.Setup(t)
 	ctx := context.Background()
 	var agentID, callID uuid.UUID
-	if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO users (tenant_id, sip_username, sip_password)
-		VALUES ($1, 'Administrator', 'agent-pw') RETURNING id`, f.TenantID).Scan(&agentID); err != nil {
+	if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO users (tenant_id, sip_username)
+		VALUES ($1, 'Administrator') RETURNING id`, f.TenantID).Scan(&agentID); err != nil {
 		t.Fatalf("seed agent: %v", err)
 	}
 	if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, source)

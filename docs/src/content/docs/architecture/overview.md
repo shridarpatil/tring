@@ -331,7 +331,7 @@ Scale by adding **gateway** instances (horizontal); FS scales vertically.
 - **DB-gated tests** skip unless `TRING_TEST_DSN` points at a DB whose name
   contains `test` (a destructive-truncate guard). Use a migrated `tring_test` on
   `:5434`. DB-gated packages share one DB + tenant — run them with `go test -p 1`
-  to avoid a `tenants_sip_domain_key` collision.
+  because the harness TRUNCATEs the shared DB per test.
 - **Plug seam** is covered by `fakePstn` in `media/signaling/signaling_test.go`
   (inbound → plug → room → IVR), proving the channel-source contract end-to-end
   without FreeSWITCH. The live FS-trunk smoke test returns once an FS plug
@@ -358,7 +358,6 @@ Scale by adding **gateway** instances (horizontal); FS scales vertically.
 | Plug seam (THE PLUG) | `internal/media/room/interfaces.go` (`room.Plug`/`Leg`); wiring `media/signaling/pstn.go` (`AttachPstn`); FS adapter = future (§5b) |
 | CDR + recording (web; phone when plug lands) | `internal/callcdr/` + `media/record` |
 | IVR walker (shared) | `internal/ivr/` ; consumers: `media/ivrdrive` (runtime), `brain/simulator.go` (Test panel) |
-| Agent bridge dial-string | `internal/agentleg/` |
 | DB schema | `internal/migrate/migrations/*.sql` |
 | SQL catalog | `queries.sql` + `internal/queries` |
 | Config | `internal/config` (koanf) |
