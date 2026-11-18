@@ -13,7 +13,6 @@ export interface Paginated<T> {
 export interface Tenant {
   id: string;
   name: string;
-  sip_domain: string;
   outbound_strategy: string;
   failover_causes: string[];
   // System hold music: an audio asset's file_path, or "" for the built-in default.

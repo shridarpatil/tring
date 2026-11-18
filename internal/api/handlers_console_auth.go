@@ -212,7 +212,7 @@ func (s *Server) consoleSession(ctx context.Context, userID, tenantID uuid.UUID,
 	var t Tenant
 	err := s.db.Pool.QueryRow(ctx, s.q.GetTenant,
 		tenantID,
-	).Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
+	).Scan(&t.ID, &t.Name, &t.OutboundStrategy, &t.FailoverCauses)
 	if err != nil {
 		return consoleLoginResponse{}, errors.New("load tenant")
 	}

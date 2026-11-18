@@ -192,7 +192,7 @@ var defaults = map[string]any{
 	// this host's own addresses. Set only when FreeSWITCH is on another host.
 	"fsplug_allow_cidrs": "",
 
-	// secrets_key (api only) encrypts trunk and agent SIP passwords at rest
+	// secrets_key (api only) encrypts trunk SIP passwords at rest
 	// with AES-256-GCM: 64 hex chars or base64 of 32 bytes. Empty = stored in
 	// plaintext (the api warns; it refuses to start keyless once any value is
 	// encrypted). Not in WeakSecrets so existing deployments upgrade before

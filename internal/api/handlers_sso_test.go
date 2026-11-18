@@ -87,9 +87,9 @@ func addTenant(t *testing.T, f *dbtest.Fixture) uuid.UUID {
 	var id uuid.UUID
 	sentinel := "deprecated-" + uuid.NewString()
 	if err := f.DB.Pool.QueryRow(context.Background(), `
-		INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
-		VALUES ('other', $1, $2, 'deprecated--') RETURNING id`,
-		uuid.NewString()+".tring.local", sentinel).Scan(&id); err != nil {
+		INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+		VALUES ('other', $1, 'deprecated--') RETURNING id`,
+		sentinel).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id

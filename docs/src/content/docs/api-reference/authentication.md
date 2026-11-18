@@ -67,7 +67,6 @@ curl -sS -X POST "$TRING_URL/v1/console/login" \
   "tenant": {
     "id": "00000000-0000-4000-8000-000000000001",
     "name": "Default",
-    "sip_domain": "t_default.tring.local",
     "outbound_strategy": "failover",
     "failover_causes": ["NETWORK_OUT_OF_ORDER", "GATEWAY_DOWN"],
     "hold_music": "",
@@ -79,7 +78,7 @@ curl -sS -X POST "$TRING_URL/v1/console/login" \
 ```
 
 :::note
-The `tenant` object in the login response only fills in `id`, `name`, `sip_domain`, `outbound_strategy` and `failover_causes`. The other settings come back as empty or zero values. Call [`GET /v1/tenants/me`](/tring/api-reference/tenant/#get-v1tenantsme) to read their real values.
+The `tenant` object in the login response only fills in `id`, `name`, `outbound_strategy` and `failover_causes`. The other settings come back as empty or zero values. Call [`GET /v1/tenants/me`](/tring/api-reference/tenant/#get-v1tenantsme) to read their real values.
 :::
 
 **Errors**

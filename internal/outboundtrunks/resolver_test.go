@@ -137,8 +137,8 @@ func TestOutboundTrunks_IgnoresForeignTrunk(t *testing.T) {
 	fx := dbtest.Setup(t)
 	var other uuid.UUID
 	if err := fx.DB.Pool.QueryRow(context.Background(), `
-		INSERT INTO tenants (name, sip_domain, api_key_hash, api_key_prefix)
-		VALUES ('other', 'other.tring.local', $1, 'deprecated--') RETURNING id
+		INSERT INTO tenants (name, api_key_hash, api_key_prefix)
+		VALUES ('other', $1, 'deprecated--') RETURNING id
 	`, "deprecated-"+uuid.NewString()).Scan(&other); err != nil {
 		t.Fatalf("insert other tenant: %v", err)
 	}

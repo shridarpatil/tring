@@ -98,8 +98,6 @@ function logout() {
         <div class="topbar-right">
           <div class="tenant">
             <span>{{ tenant?.name || auth.state.tenant?.name || "…" }}</span>
-            <span v-if="tenant" class="sep">·</span>
-            <span v-if="tenant" class="sip">{{ tenant.sip_domain }}</span>
           </div>
           <IconButton
             :title="theme.state.theme === 'dark' ? 'Switch to light' : 'Switch to dark'"
@@ -158,8 +156,6 @@ function logout() {
 }
 .topbar-right { display: flex; align-items: center; gap: 1rem; min-width: 0; }
 .tenant { font-size: var(--text-7); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tenant .sep { color: var(--faint-foreground); margin: 0 0.375rem; }
-.tenant .sip { font-family: var(--font-mono); font-size: var(--text-8); color: var(--muted-foreground); }
 .signout {
   background: transparent;
   border: none;

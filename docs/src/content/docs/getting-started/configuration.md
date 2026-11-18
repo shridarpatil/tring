@@ -28,7 +28,7 @@ The values in `.env.example` are tuned for **local development on one machine**.
 | Variable | Default | What it does |
 |---|---|---|
 | `TRING_JWT_SECRET` | dev placeholder | HMAC-SHA256 key that signs **every** token Tring issues: console sessions, agent tokens, visitor call tokens and supervisor tokens. The api and the gateway must share the same value. |
-| `TRING_SECRETS_KEY` | empty | api only. AES-256-GCM key that encrypts the SIP trunk and agent passwords stored in Postgres. Exactly 32 bytes, written as **64 hex characters** (`openssl rand -hex 32`; note `-hex 16` gives only 32 characters and is rejected) or base64. See [Encryption at rest](#encryption-at-rest) below. |
+| `TRING_SECRETS_KEY` | empty | api only. AES-256-GCM key that encrypts the SIP trunk passwords stored in Postgres. Exactly 32 bytes, written as **64 hex characters** (`openssl rand -hex 32`; note `-hex 16` gives only 32 characters and is rejected) or base64. See [Encryption at rest](#encryption-at-rest) below. |
 | `TRING_ALLOW_INSECURE_SECRETS` | `false` | Skip the startup secret check. Local development only. |
 
 :::danger[Production]
@@ -38,7 +38,7 @@ The values in `.env.example` are tuned for **local development on one machine**.
 
 ### Encryption at rest
 
-FreeSWITCH needs the plaintext SIP passwords to register with carriers, so Tring can't hash them. Instead the api encrypts `trunks.sip_password` and `agents.sip_password` with `TRING_SECRETS_KEY` (AES-256-GCM, stored as `enc:v1:…`). It decrypts them only to write the FreeSWITCH gateway XML and to answer the agent directory lookup.
+FreeSWITCH needs the plaintext SIP passwords to register with carriers, so Tring can't hash them. Instead the api encrypts `trunks.sip_password` with `TRING_SECRETS_KEY` (AES-256-GCM, stored as `enc:v1:…`). It decrypts them only to write the FreeSWITCH gateway XML.
 
 - **Key set:** on every start the api encrypts any plaintext passwords left in the database (one transaction; it logs how many, never the values). Setting the key on an existing install is how you migrate.
 - **Key empty:** the api starts with a warning and keeps storing passwords in plaintext, so existing deployments keep working after an upgrade until you add the key. If the database already holds encrypted passwords, the api **refuses to start** without the key.

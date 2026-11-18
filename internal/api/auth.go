@@ -29,7 +29,6 @@ const (
 type Tenant struct {
 	ID               uuid.UUID `json:"id"`
 	Name             string    `json:"name"`
-	SipDomain        string    `json:"sip_domain"`
 	OutboundStrategy string    `json:"outbound_strategy"`
 	FailoverCauses   []string  `json:"failover_causes"`
 	// HoldMusic is the tenant's system hold music (an audio asset's file_path, or
@@ -82,7 +81,7 @@ func (s *Server) AuthRequired(next http.Handler) http.Handler {
 
 		var t Tenant
 		err := s.db.Pool.QueryRow(r.Context(), s.q.GetTenant, tenantID).
-			Scan(&t.ID, &t.Name, &t.SipDomain, &t.OutboundStrategy, &t.FailoverCauses)
+			Scan(&t.ID, &t.Name, &t.OutboundStrategy, &t.FailoverCauses)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return

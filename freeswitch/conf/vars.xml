@@ -78,11 +78,6 @@
        TRING_GATEWAY_SIP_PORT must equal the port in TRING_FSPLUG_SIP_LISTEN.
        Defaults to loopback:5090 (gateway co-located with FS). -->
   <X-PRE-PROCESS cmd="exec-set" data="tring_gateway_sip=sh -c 'echo ${TRING_GATEWAY_ADVERT_IP:-127.0.0.1}:${TRING_GATEWAY_SIP_PORT:-5090}'"/>
-  <!-- Tring orchestrator IVR socket (cmd/orchestrator's outbound-ESL listener).
-       The dialplan hands inbound calls here (see dialplan/default.xml). Defaults
-       to loopback because the orchestrator is co-located with FreeSWITCH (one per
-       FS instance). Override TRING_IVR_SOCKET if you run it on another host/port. -->
-  <X-PRE-PROCESS cmd="exec-set" data="tring_ivr_socket=sh -c 'echo ${TRING_IVR_SOCKET:-127.0.0.1:8086}'"/>
   <!-- Shared secrets, read from the same .env the api uses (docker-compose
        env_file), so FreeSWITCH and the api always agree:
          tring_esl_password  -> event_socket.conf.xml (api -> FS ESL)
