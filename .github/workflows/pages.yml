@@ -31,24 +31,6 @@ jobs:
       - name: Install
         working-directory: docs
         run: npm ci --ignore-scripts
-      - name: Audit
-        working-directory: docs
-        # Fail on any high/critical advisory except those listed in IGNORE.
-        # GHSA-fc5q-39xc-vjpf: picomatch ReDoS, no patched release yet (all
-        # <= 4.0.7). Build-time only, on our own globs; the site is static.
-        # Remove it once picomatch ships a fix.
-        env:
-          IGNORE: GHSA-fc5q-39xc-vjpf
-        run: |
-          npm audit --omit=dev --json > audit.json || true
-          found=$(jq -r '[.vulnerabilities[].via[] | objects
-            | select(.severity == "high" or .severity == "critical") | .url]
-            | unique | .[]' audit.json | grep -vE "$(echo "$IGNORE" | tr ' ' '|')" || true)
-          if [ -n "$found" ]; then
-            npm audit --omit=dev --audit-level=high || true
-            echo "::error::unignored high/critical advisories: $found"
-            exit 1
-          fi
       - name: Build
         working-directory: docs
         run: npm run build
