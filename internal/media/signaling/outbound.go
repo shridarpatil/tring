@@ -58,15 +58,16 @@ var (
 // callerID overrides the trunk's own DID when set, but only with a number the
 // tenant holds. Returns the answered leg, the caller-ID presented, and the
 // normalized number.
-func (s *Server) originateOut(ctx context.Context, tenant uuid.UUID, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
-	return s.originateOn(ctx, tenant, nil, to, callerID, onProgress)
+func (s *Server) originateOut(ctx context.Context, roomID room.RoomID, tenant uuid.UUID, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
+	return s.originateOn(ctx, roomID, tenant, nil, to, callerID, onProgress)
 }
 
 // originateOn is originateOut over trunks the caller already selected (nil =
 // select now). Selecting advances a round_robin tenant's rotation, so a path
 // that had to select up front — to validate, or to stamp the CDR's "from" —
-// dials on that same selection instead of selecting again.
-func (s *Server) originateOn(ctx context.Context, tenant uuid.UUID, selected []trunkselect.Trunk, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
+// dials on that same selection instead of selecting again. The leg negotiates
+// roomID's codec, so it plugs into that room without a transcode.
+func (s *Server) originateOn(ctx context.Context, roomID room.RoomID, tenant uuid.UUID, selected []trunkselect.Trunk, to, callerID string, onProgress func(room.Progress)) (*room.Leg, string, string, error) {
 	if s.cfg.Originator == nil || s.cfg.Trunks == nil {
 		return nil, "", to, errDialUnavailable
 	}
@@ -123,6 +124,7 @@ func (s *Server) originateOn(ctx context.Context, tenant uuid.UUID, selected []t
 		To:       to,
 		CallerID: callerID,
 		Trunks:   names,
+		Codec:    s.sfu.RoomCodec(roomID),
 	}, onProgress)
 	return leg, callerID, to, err
 }
@@ -167,7 +169,7 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, sip strin
 	}
 	defer release()
 
-	leg, callerID, to, err := s.originateOut(context.Background(), tenant, to, "", func(room.Progress) {
+	leg, callerID, to, err := s.originateOut(context.Background(), roomID, tenant, to, "", func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})
 		}
@@ -204,7 +206,7 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, sip strin
 	}
 
 	tagParticipant(leg.Source.ID(), "callee")
-	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
+	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Codec, leg.Write); err != nil {
 		logging.ClearParticipant(string(leg.Source.ID()))
 		s.log.Error("outbound: attach port failed", "room", roomID, "err", err)
 		_ = s.cfg.Originator.HangupOutbound(leg.Source.ID())

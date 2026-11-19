@@ -69,12 +69,12 @@ func TestHoldResume(t *testing.T) {
 				c.a1.Hold()
 				from := time.Now().Add(settle)
 				hears(t, "held customer", c.customer.Got, 8000, from, FreqHold)
-				hears(t, "holding agent", c.a1.Got(), opusRate, from, 0)
+				hears(t, "holding agent", c.a1.Got(), c.a1.Rate(), from, 0)
 
 				c.a1.Resume()
 				from = time.Now().Add(settle)
 				hears(t, "resumed customer", c.customer.Got, 8000, from, FreqAgent1)
-				hears(t, "resumed agent", c.a1.Got(), opusRate, from, FreqCustomer)
+				hears(t, "resumed agent", c.a1.Got(), c.a1.Rate(), from, FreqCustomer)
 				return nil
 			})
 		})
@@ -129,10 +129,10 @@ func testTransfer(t *testing.T, toQueue bool, transfer func(*fixture, *Agent)) {
 		from := a2.JoinedAt().Add(settle)
 		hears(t, "transferred customer", c.customer.Got, 8000, from, FreqAgent2)
 		got := Between(a2.Got().Since(from), from, from.Add(2*time.Second))
-		if f, ok := Hears(got, opusRate, Freqs); !ok || f != FreqCustomer {
+		if f, ok := Hears(got, a2.Rate(), Freqs); !ok || f != FreqCustomer {
 			t.Errorf("agent two hears %v (clear tone: %v), want the customer's %v Hz", f, ok, FreqCustomer)
 		}
-		if err := CheckClock(Main(got), opusFrame); err != nil {
+		if err := CheckClock(Main(got), a2.Step()); err != nil {
 			t.Errorf("agent two: %v", err)
 		}
 		return nil

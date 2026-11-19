@@ -89,7 +89,7 @@ func TestBargeMixesAgentAndSupervisor(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var got [][]byte
-	if err := s.AttachPort("call", silentLeg{id: "phone"}, func(p *rtp.Packet) error {
+	if err := s.AttachPort("call", silentLeg{id: "phone"}, room.Opus, func(p *rtp.Packet) error {
 		mu.Lock()
 		got = append(got, p.Payload)
 		mu.Unlock()
@@ -138,7 +138,7 @@ func BenchmarkMixTick(b *testing.B) {
 	buf := make([]byte, 1500)
 	n, _ := enc.Encode(pcm, buf)
 	pkt := buf[:n]
-	m, _ := newPortMixer()
+	m, _ := newPortMixer(room.Opus)
 	for range 2 {
 		m.push("agent", pkt)
 		m.push("sup", pkt)

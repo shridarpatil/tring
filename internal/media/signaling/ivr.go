@@ -7,13 +7,13 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/pion/webrtc/v4"
 
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/webhook"
 )
 
@@ -52,12 +52,15 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 	}
 
 	pid := room.ParticipantID("ivr-" + uuid.NewString())
-	player := prompt.NewPlayer(pid, 0)
+	codec := s.sfu.RoomCodec(roomID)
+	player := prompt.NewPlayer(pid, codec, 0)
 	tagParticipant(pid, "ivr")
 	driver := ivrdrive.New(ivrdrive.Config{
 		Prompts: &filePrompts{
 			dir:       s.cfg.AudioDir,
 			player:    player,
+			codec:     codec,
+			g711:      &s.g711,
 			waitFirst: func() { s.waitForConnected(roomID, ivrConnectWait) },
 		},
 		Agents: s.agentRouter, // brain.AgentRouter drives team-resolution + routing loop
@@ -112,9 +115,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 	// startIVR that also races past the Running() check above will lose the slot
 	// race and never inject, preventing a leaked orphaned player/source.
 	setup := func() error {
-		return s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
-			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-		})
+		return s.sfu.InjectSource(roomID, player, sfu.AudioCapability(codec))
 	}
 	s.log.Info("ivr started", "room", roomID, "flow", flowID, "entry", flow.EntryNode)
 	if !s.brain.Start(context.Background(), roomID, flow, driver, setup, onJourney, onDone) {
@@ -165,11 +166,13 @@ func (s *Server) stopIVR(roomID room.RoomID) {
 	s.brain.Stop(roomID)
 }
 
-// filePrompts plays Ogg/Opus prompt files (from AudioDir) through the IVR's
-// player, caching decoded frames so a repeated prompt isn't re-read.
+// filePrompts plays prompt files (from AudioDir) through the IVR's player, in
+// the room's codec, caching decoded frames so a repeated prompt isn't re-read.
 type filePrompts struct {
 	dir    string
 	player *prompt.Player
+	codec  room.Codec // the player's (the room's)
+	g711   *g711Cache // shared server-wide: decoding to G.711 runs ffmpeg
 	// waitFirst runs once before the first prompt (used to wait for the caller's
 	// media to connect). nil → no wait. Gated here so prompt-less flows (a bare
 	// transfer) never block.
@@ -216,8 +219,8 @@ func (p *filePrompts) load(file string) ([][]byte, error) {
 
 	// audio_file may be an absolute file_path from the sound library
 	// (<AudioDir>/<tenant>/<uuid>.ogg) or a relative path (the custom-path
-	// escape hatch); loadOggFile handles both and confines the open to AudioDir.
-	frames, err := loadOggFile(p.dir, file)
+	// escape hatch); loadAudio handles both and confines the open to AudioDir.
+	frames, err := loadAudio(p.g711, p.dir, file, p.codec)
 	if err != nil {
 		return nil, err
 	}

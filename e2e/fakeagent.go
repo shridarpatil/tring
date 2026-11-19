@@ -8,6 +8,8 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,10 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"gopkg.in/hraban/opus.v2"
+
+	"github.com/shridarpatil/tring/internal/media/g711"
+	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 const (
@@ -119,6 +125,7 @@ type Agent struct {
 	mu       sync.Mutex
 	silent   bool
 	joinedAt time.Time
+	codec    room.Codec // the mic's, from the gateway's offer (the room's)
 }
 
 // NewAgent registers the agent's presence, as the SDK does on load, and waits
@@ -176,13 +183,6 @@ func (a *Agent) Join(room string) error {
 		return err
 	}
 	a.t.Cleanup(func() { _ = pc.Close() })
-	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: opusRate, Channels: 2}, "audio", "agent-"+a.sip)
-	if err != nil {
-		return err
-	}
-	if _, err := pc.AddTrack(track); err != nil {
-		return err
-	}
 	connected := make(chan struct{})
 	var once sync.Once
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
@@ -204,7 +204,6 @@ func (a *Agent) Join(room string) error {
 	})
 	pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) { a.record(tr) })
 	go a.signal(pc, a.call)
-	go a.publish(track, a.call)
 
 	a.call.send(wsMsg{Type: "join", Room: room, Name: a.sip})
 	a.call.keepalive(wsMsg{Type: "ping"})
@@ -217,10 +216,13 @@ func (a *Agent) Join(room string) error {
 }
 
 // signal answers the gateway's offers and applies its ICE candidates; every
-// other call-socket message is kept for WaitMsg.
+// other call-socket message is kept for WaitMsg. The mic is added on the first
+// offer, in the codec it offers (a phone room offers only its G.711 law), as a
+// browser's answer picks it.
 func (a *Agent) signal(pc *webrtc.PeerConnection, call *sock) {
 	var pending []webrtc.ICECandidateInit
 	haveRemote := false
+	published := false
 	for {
 		var m wsMsg
 		select {
@@ -230,6 +232,12 @@ func (a *Agent) signal(pc *webrtc.PeerConnection, call *sock) {
 		}
 		switch m.Type {
 		case "offer":
+			if !published {
+				published = true
+				if err := a.addMic(pc, micCodec(m.SDP), call); err != nil {
+					a.log.Errorf("agent %s: mic: %v", a.sip, err)
+				}
+			}
 			if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: m.SDP}); err != nil {
 				a.log.Logf("agent %s: set offer: %v", a.sip, err)
 				continue
@@ -264,13 +272,98 @@ func (a *Agent) signal(pc *webrtc.PeerConnection, call *sock) {
 	}
 }
 
-// publish sends the agent's tone (or silence while held, as a muted Chrome
-// does) as 20 ms Opus frames.
-func (a *Agent) publish(track *webrtc.TrackLocalStaticSample, call *sock) {
-	enc, err := opus.NewEncoder(opusRate, 1, opus.AppVoIP)
+// micCodec is the codec the gateway's offer lists first for the mic (the first
+// audio m-line): what a browser's answer sends.
+func micCodec(offer string) room.Codec {
+	for _, line := range strings.Split(offer, "\r\n") {
+		if f := strings.Fields(line); len(f) > 3 && f[0] == "m=audio" {
+			pt, _ := strconv.Atoi(f[3])
+			return room.CodecForPayloadType(uint8(pt))
+		}
+	}
+	return room.Opus
+}
+
+// addMic adds the agent's mic track in codec c and starts publishing to it.
+func (a *Agent) addMic(pc *webrtc.PeerConnection, c room.Codec, call *sock) error {
+	track, err := webrtc.NewTrackLocalStaticSample(sfu.AudioCapability(c), "audio", "agent-"+a.sip)
 	if err != nil {
-		a.log.Errorf("opus encoder: %v", err)
+		return err
+	}
+	if _, err := pc.AddTrack(track); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.codec = c
+	a.mu.Unlock()
+	go a.publish(track, c, call)
+	return nil
+}
+
+// Rate and Step are the agent's audio clock: what it hears is decoded at Rate,
+// and 20 ms frames step its RTP timestamps by Step. Valid after Join.
+func (a *Agent) Rate() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.codec.G711() {
+		return 8000
+	}
+	return opusRate
+}
+
+func (a *Agent) Step() uint32 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.codec.FrameSamples()
+}
+
+// coder encodes/decodes one 20 ms mono frame at the codec's rate.
+type coder struct {
+	c   room.Codec
+	enc *opus.Encoder
+	dec *opus.Decoder
+}
+
+func newCoder(c room.Codec) (*coder, error) {
+	k := &coder{c: c}
+	if c.G711() {
+		return k, nil
+	}
+	var err error
+	if k.enc, err = opus.NewEncoder(opusRate, 1, opus.AppVoIP); err != nil {
+		return nil, err
+	}
+	if k.dec, err = opus.NewDecoder(opusRate, 1); err != nil {
+		return nil, err
+	}
+	return k, nil
+}
+
+func (k *coder) encode(pcm []int16, buf []byte) (int, error) {
+	if k.c.G711() {
+		return g711.Encode(k.c, pcm, buf), nil
+	}
+	return k.enc.Encode(pcm, buf)
+}
+
+func (k *coder) decode(data []byte, pcm []int16) (int, error) {
+	if k.c.G711() {
+		return g711.Decode(k.c, data, pcm), nil
+	}
+	return k.dec.Decode(data, pcm)
+}
+
+// publish sends the agent's tone (or silence while held, as a muted Chrome
+// does) as 20 ms frames in codec c.
+func (a *Agent) publish(track *webrtc.TrackLocalStaticSample, c room.Codec, call *sock) {
+	k, err := newCoder(c)
+	if err != nil {
+		a.log.Errorf("agent %s: coder: %v", a.sip, err)
 		return
+	}
+	rate, frame := opusRate, opusFrame
+	if c.G711() {
+		rate, frame = 8000, int(c.FrameSamples())
 	}
 	buf := make([]byte, 1500)
 	var phase float64
@@ -282,13 +375,13 @@ func (a *Agent) publish(track *webrtc.TrackLocalStaticSample, call *sock) {
 			return
 		case <-tick.C:
 		}
-		pcm := Tone(a.tone, opusRate, opusFrame, &phase)
+		pcm := Tone(a.tone, rate, frame, &phase)
 		a.mu.Lock()
 		if a.silent {
-			pcm = make([]int16, opusFrame)
+			pcm = make([]int16, frame)
 		}
 		a.mu.Unlock()
-		n, err := enc.Encode(pcm, buf)
+		n, err := k.encode(pcm, buf)
 		if err != nil {
 			continue
 		}
@@ -296,11 +389,12 @@ func (a *Agent) publish(track *webrtc.TrackLocalStaticSample, call *sock) {
 	}
 }
 
-// record decodes every received Opus packet into the agent's recorder.
+// record decodes every received packet, in the track's codec, into the
+// agent's recorder.
 func (a *Agent) record(tr *webrtc.TrackRemote) {
-	dec, err := opus.NewDecoder(opusRate, 1)
+	k, err := newCoder(room.CodecForPayloadType(uint8(tr.Codec().PayloadType)))
 	if err != nil {
-		a.log.Errorf("opus decoder: %v", err)
+		a.log.Errorf("agent %s: coder: %v", a.sip, err)
 		return
 	}
 	pcm := make([]int16, opusFrame*6)
@@ -309,7 +403,7 @@ func (a *Agent) record(tr *webrtc.TrackRemote) {
 		if err != nil {
 			return
 		}
-		n, err := dec.Decode(pkt.Payload, pcm)
+		n, err := k.decode(pkt.Payload, pcm)
 		if err != nil {
 			n = 0
 		}

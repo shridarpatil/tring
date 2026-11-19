@@ -2,17 +2,15 @@ package signaling
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/pion/webrtc/v4"
 
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 // HoldMusicResolver resolves a tenant's configured system hold music
@@ -23,7 +21,7 @@ type HoldMusicResolver interface {
 	TenantHoldMusic(ctx context.Context, tenantID uuid.UUID) (string, error)
 }
 
-// holdFile returns the local Ogg/Opus file to play for a resolved hold-music
+// holdFile returns the local audio file to play for a resolved hold-music
 // value, or "" when nothing plays on the pion plane. The default MOH is the
 // FreeSWITCH-only "local_stream://moh" stream sentinel (and a per-team override
 // may be any URL) — pion has no stream player, only a file player, so any value
@@ -50,18 +48,17 @@ func (s *Server) playHold(roomID room.RoomID, moh string) func() {
 	if file == "" {
 		return func() {}
 	}
-	frames, err := loadOggFile(s.cfg.AudioDir, file)
+	codec := s.sfu.RoomCodec(roomID)
+	frames, err := loadAudio(&s.g711, s.cfg.AudioDir, file, codec)
 	if err != nil {
 		s.log.Warn("hold: load hold music failed", "room", roomID, "file", file, "err", err)
 		return func() {}
 	}
 
 	pid := room.ParticipantID("hold-" + uuid.NewString())
-	player := prompt.NewPlayer(pid, 0)
+	player := prompt.NewPlayer(pid, codec, 0)
 	tagParticipant(pid, "hold")
-	if err := s.sfu.InjectSource(roomID, player, webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-	}); err != nil {
+	if err := s.sfu.InjectSource(roomID, player, sfu.AudioCapability(codec)); err != nil {
 		s.log.Warn("hold: inject hold music failed", "room", roomID, "err", err)
 		_ = player.Close()
 		logging.ClearParticipant(string(pid))
@@ -197,18 +194,4 @@ func (s *Server) clearHold(roomID room.RoomID) {
 	if stop != nil {
 		stop()
 	}
-}
-
-// loadOggFile opens an Ogg/Opus file under dir and decodes it to per-frame Opus
-// packets. file may be an absolute sound-library path (<dir>/<tenant>/<uuid>.ogg)
-// or a relative custom path; either way the open is confined to dir (no
-// traversal out). Shared by the IVR prompt loader and hold music.
-func loadOggFile(dir, file string) ([][]byte, error) {
-	rel := strings.TrimPrefix(file, dir)
-	f, err := os.Open(filepath.Join(dir, filepath.Clean("/"+rel)))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return prompt.LoadOggOpus(f)
 }

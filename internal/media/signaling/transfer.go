@@ -7,13 +7,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pion/webrtc/v4"
 
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 )
 
 // TransferMessageResolver resolves a tenant's synthesized "no one answered" prompt
@@ -418,17 +418,16 @@ func (s *Server) playTransferFailMessage(rid room.RoomID, tenantID uuid.UUID) {
 	if _, ok := s.rooms.Get(rid); !ok {
 		return
 	}
-	frames, err := loadOggFile(s.cfg.AudioDir, file)
+	codec := s.sfu.RoomCodec(rid)
+	frames, err := loadAudio(&s.g711, s.cfg.AudioDir, file, codec)
 	if err != nil {
 		s.log.Warn("transfer: load no-answer message failed", "room", rid, "file", file, "err", err)
 		return
 	}
 	pid := room.ParticipantID("xfermsg-" + uuid.NewString())
-	player := prompt.NewPlayer(pid, 0)
+	player := prompt.NewPlayer(pid, codec, 0)
 	tagParticipant(pid, "xfermsg")
-	if err := s.sfu.InjectSource(rid, player, webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-	}); err != nil {
+	if err := s.sfu.InjectSource(rid, player, sfu.AudioCapability(codec)); err != nil {
 		_ = player.Close()
 		logging.ClearParticipant(string(pid))
 		return

@@ -2,7 +2,12 @@
 
 package e2e
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/shridarpatil/tring/internal/media/g711"
+	"github.com/shridarpatil/tring/internal/media/room"
+)
 
 func window(freq float64, rate int) []int16 {
 	var phase float64
@@ -35,7 +40,11 @@ func TestDominantSilenceAndMix(t *testing.T) {
 }
 
 func TestMuLawRoundTripKeepsTone(t *testing.T) {
-	pcm := MuLawDecode(MuLawEncode(window(FreqAgent1, 8000)))
+	in := window(FreqAgent1, 8000)
+	enc := make([]byte, len(in))
+	g711.Encode(room.PCMU, in, enc)
+	pcm := make([]int16, len(enc))
+	g711.Decode(room.PCMU, enc, pcm)
 	if f, ok := Dominant(pcm, 8000, Freqs); !ok || f != FreqAgent1 {
 		t.Errorf("after μ-law round trip: Dominant = %v, %v; want %v", f, ok, FreqAgent1)
 	}

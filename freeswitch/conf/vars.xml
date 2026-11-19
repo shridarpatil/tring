@@ -279,6 +279,11 @@
   -->
   <X-PRE-PROCESS cmd="set" data="global_codec_prefs=OPUS,G722,PCMU,PCMA,H264,VP8"/>
   <X-PRE-PROCESS cmd="set" data="outbound_codec_prefs=OPUS,G722,PCMU,PCMA,H264,VP8"/>
+  <!-- Tring: the carrier-facing (external) profile is phone-only: G.711, no
+       video. Inbound calls are relayed to the gateway in the carrier's own
+       law with no transcode (dialplan/public.xml); WhatsApp and the gateway
+       legs keep the prefs above. -->
+  <X-PRE-PROCESS cmd="set" data="carrier_codec_prefs=PCMA,PCMU"/>
 
   <!--
       xmpp_client_profile and xmpp_server_profile

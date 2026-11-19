@@ -1,5 +1,6 @@
-// Package record captures a call's media to disk: each participant's Opus RTP is
-// written losslessly to its own Ogg/Opus file (no transcode), and the per-leg
+// Package record captures a call's media to disk: each participant's audio RTP
+// is written losslessly to its own file (no transcode) — Ogg/Opus, or an
+// A-law/µ-law WAV for a phone room's G.711 (wav.go) — and the per-leg
 // files are merged into one stereo recording (agent left, customer right) at
 // finalize (MergeStereo).
 //
@@ -50,13 +51,13 @@ const (
 type Track struct {
 	PID    room.ParticipantID
 	Role   string        // "agent" / "customer" / … — drives the stereo channel mapping
-	Path   string        // <dir>/<callID>-<pid>.ogg (unique per participant, not per role)
+	Path   string        // <dir>/<callID>-<pid>.ogg|.wav (unique per participant, not per role)
 	Offset time.Duration // when this leg's first packet landed, relative to Arm — so a
 	// later-joining agent (transfer) is placed at its real position on the customer
 	// timeline instead of at t=0. ~0 for the caller and the first agent.
 }
 
-// Recorder writes each participant's Opus RTP to its own Ogg file. Its WriteRTP
+// Recorder writes each participant's audio RTP to its own file. Its WriteRTP
 // is safe to call from the SFU copy loops (one goroutine per publisher).
 type Recorder struct {
 	dir    string
@@ -64,7 +65,7 @@ type Recorder struct {
 
 	mu         sync.Mutex
 	roles      map[room.ParticipantID]string
-	writers    map[room.ParticipantID]*oggwriter.OggWriter
+	writers    map[room.ParticipantID]legWriter
 	paths      map[room.ParticipantID]string
 	offsets    map[room.ParticipantID]time.Duration // first-packet offset from armedAt
 	armed      bool
@@ -82,13 +83,20 @@ type Recorder struct {
 	capVideoSegments             int
 }
 
-// New builds a recorder that writes <dir>/<callID>-<pid>.ogg per participant.
+// legWriter is one participant's audio file: *oggwriter.OggWriter or *wavWriter.
+type legWriter interface {
+	WriteRTP(*rtp.Packet) error
+	Close() error
+}
+
+// New builds a recorder that writes <dir>/<callID>-<pid>.ogg (or .wav) per
+// participant.
 func New(dir, callID string) *Recorder {
 	return &Recorder{
 		dir:        dir,
 		callID:     callID,
 		roles:      map[room.ParticipantID]string{},
-		writers:    map[room.ParticipantID]*oggwriter.OggWriter{},
+		writers:    map[room.ParticipantID]legWriter{},
 		paths:      map[room.ParticipantID]string{},
 		offsets:    map[room.ParticipantID]time.Duration{},
 		videos:     map[string]*videoCapture{},
@@ -123,8 +131,8 @@ func (r *Recorder) Arm() {
 	r.mu.Unlock()
 }
 
-// WriteRTP implements room.TrackSink: it lazily opens the participant's Ogg
-// writer and appends the packet. Packets before Arm (pre-answer) and after Close
+// WriteRTP implements room.TrackSink: it lazily opens the participant's writer
+// (by the first packet's codec — a room carries one) and appends the packet. Packets before Arm (pre-answer) and after Close
 // are dropped.
 func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 	r.mu.Lock()
@@ -140,8 +148,15 @@ func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 		if err := os.MkdirAll(r.dir, 0o755); err != nil {
 			return err
 		}
-		path := filepath.Join(r.dir, r.fileName(pid))
-		nw, err := oggwriter.New(path, opusRate, opusChannels)
+		codec := room.CodecForPayloadType(pkt.PayloadType)
+		path := filepath.Join(r.dir, r.fileName(pid, codec))
+		var nw legWriter
+		var err error
+		if codec.G711() {
+			nw, err = newWAVWriter(path, codec)
+		} else {
+			nw, err = oggwriter.New(path, opusRate, opusChannels)
+		}
 		if err != nil {
 			return err
 		}
@@ -200,8 +215,12 @@ func (r *Recorder) Tracks() []Track {
 // "agent", and a role-keyed name would make the second overwrite the first — the
 // bug that left only the last agent in the recording. The role still drives the
 // stereo channel mapping (via Track.Role), it just no longer names the file.
-func (r *Recorder) fileName(pid room.ParticipantID) string {
-	return fmt.Sprintf("%s-%s.ogg", r.callID, sanitize(string(pid)))
+func (r *Recorder) fileName(pid room.ParticipantID, c room.Codec) string {
+	ext := "ogg"
+	if c.G711() {
+		ext = "wav"
+	}
+	return fmt.Sprintf("%s-%s.%s", r.callID, sanitize(string(pid)), ext)
 }
 
 // roleOf must be called with r.mu held.
