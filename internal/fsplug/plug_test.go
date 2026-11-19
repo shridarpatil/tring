@@ -140,10 +140,10 @@ func TestPlugRejectUnknownDID(t *testing.T) {
 	}
 }
 
-// TestPlugAnswersAtCarrierRate: the X-Tring-Audio-Rate FreeSWITCH puts on a
-// carrier call caps the Opus answer at that rate; a call without it (WhatsApp)
-// stays full band.
-func TestPlugAnswersAtCarrierRate(t *testing.T) {
+// TestPlugAnswersOfferedCodec: the plug answers the codec FreeSWITCH offers —
+// a carrier call's G.711 law (relayed, no transcode) or a WhatsApp call's Opus
+// (full band) — and its leg reports it, which sets the room's codec.
+func TestPlugAnswersOfferedCodec(t *testing.T) {
 	cfg := Config{SIPListen: "127.0.0.1:15070", SIPAdvertise: "127.0.0.1", RTPMin: 12400, RTPMax: 12500, OpusPT: 111, DTMFPT: 101}
 	p, err := New(cfg, slog.Default())
 	if err != nil {
@@ -159,18 +159,18 @@ func TestPlugAnswersAtCarrierRate(t *testing.T) {
 	client, _ := sipgo.NewClient(ua)
 	dc := sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15071}})
 
+	pcmaOffer := strings.NewReplacer("RTP/AVP 111 101", "RTP/AVP 8 101", "a=rtpmap:111 opus/48000/2", "a=rtpmap:8 PCMA/8000",
+		"telephone-event/48000", "telephone-event/8000").Replace(fsOffer)
 	for _, tc := range []struct {
-		header string
-		want   string // in the answer's Opus fmtp; "" = no cap
+		offer string
+		codec room.Codec
+		want  string // in the answer
 	}{
-		{"8000", "maxplaybackrate=8000;sprop-maxcapturerate=8000"},
-		{"", ""},
+		{pcmaOffer, room.PCMA, "m=audio 12400 RTP/AVP 8 101"},
+		{fsOffer, room.Opus, "opus/48000/2"},
 	} {
-		hdrs := []sip.Header{sip.NewHeader("Content-Type", "application/sdp")}
-		if tc.header != "" {
-			hdrs = append(hdrs, sip.NewHeader("X-Tring-Audio-Rate", tc.header))
-		}
-		dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000001", Host: "127.0.0.1", Port: 15070}, []byte(fsOffer), hdrs...)
+		dlg, err := dc.Invite(ctx, sip.Uri{User: "919000000001", Host: "127.0.0.1", Port: 15070}, []byte(tc.offer),
+			sip.NewHeader("Content-Type", "application/sdp"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,15 +184,18 @@ func TestPlugAnswersAtCarrierRate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if leg.Codec != tc.codec {
+			t.Errorf("leg codec = %q, want %q", leg.Codec, tc.codec)
+		}
 		if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
 			t.Fatal(err)
 		}
 		ans := string(dlg.InviteResponse.Body())
-		if tc.want != "" && !strings.Contains(ans, tc.want) {
-			t.Errorf("X-Tring-Audio-Rate %q: answer lacks %q:\n%s", tc.header, tc.want, ans)
+		if !strings.Contains(ans, tc.want) {
+			t.Errorf("%s offer: answer lacks %q:\n%s", tc.codec, tc.want, ans)
 		}
-		if tc.want == "" && strings.Contains(ans, "maxplaybackrate") {
-			t.Errorf("no X-Tring-Audio-Rate: answer caps Opus:\n%s", ans)
+		if strings.Contains(ans, "maxplaybackrate") {
+			t.Errorf("%s offer: answer caps Opus (WhatsApp is full band):\n%s", tc.codec, ans)
 		}
 		_ = dlg.Ack(ctx)
 		_ = dlg.Bye(ctx)

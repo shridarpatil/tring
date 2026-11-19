@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emiago/sipgo/sip"
 	"github.com/pion/sdp/v3"
 
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -138,19 +137,6 @@ func TestBuildAnswerCapsOpusAtCarrierRate(t *testing.T) {
 	}
 	if ans := string(buildAnswer("127.0.0.1", 12000, room.Opus, 111, 101, 0)); strings.Contains(ans, "maxplaybackrate") {
 		t.Errorf("full-band answer caps Opus:\n%s", ans)
-	}
-}
-
-func TestAudioRate(t *testing.T) {
-	for in, want := range map[string]int{"8000": 8000, " 16000 ": 16000, "48000": 0, "": 0, "8k": 0, "-8000": 0} {
-		req := sip.NewRequest(sip.INVITE, sip.Uri{User: "919000000001", Host: "127.0.0.1"})
-		req.AppendHeader(sip.NewHeader("X-Tring-Audio-Rate", in))
-		if got := audioRate(req); got != want {
-			t.Errorf("X-Tring-Audio-Rate %q → %d, want %d", in, got, want)
-		}
-	}
-	if got := audioRate(sip.NewRequest(sip.INVITE, sip.Uri{User: "919000000001", Host: "127.0.0.1"})); got != 0 {
-		t.Errorf("no header → %d, want 0", got)
 	}
 }
 

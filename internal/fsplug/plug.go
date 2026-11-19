@@ -52,7 +52,6 @@ type call struct {
 	offerIP string
 	offerPt int
 	codec   room.Codec // what the offer asks for: the leg's and its room's codec
-	rate    int        // carrier leg's audio rate for an Opus answer (0 = full band)
 	answer  []byte     // our SDP answer, set with media in Answer (under Plug.mu)
 
 	// responded is closed once Answer or Reject has sent the final
@@ -268,7 +267,7 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 	id := room.CallID(req.CallID().Value())
-	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, codec: codec, rate: audioRate(req), responded: make(chan struct{})}
+	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, codec: codec, responded: make(chan struct{})}
 	p.mu.Lock()
 	p.calls[id] = c
 	cb := p.onInbound
@@ -345,12 +344,12 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	if c == nil {
 		return nil, fmt.Errorf("fsplug: unknown call %s", id)
 	}
-	m, err := newMediaSession(room.ParticipantID(id), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, c.codec, p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
+	m, err := newMediaSession(room.ParticipantID(id), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, c.codec, p.cfg.OpusPT, p.cfg.DTMFPT, 0)
 	if err != nil {
 		return nil, err
 	}
 	m.setRemote(c.offerIP, c.offerPt)
-	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), c.codec, p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
+	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), c.codec, p.cfg.OpusPT, p.cfg.DTMFPT, 0)
 	p.mu.Lock()
 	c.media = m
 	c.answer = answer
