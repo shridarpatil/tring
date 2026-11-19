@@ -57,7 +57,7 @@ func TestOriginateAnswered(t *testing.T) {
 		}
 		gotOffer <- string(req.Body())
 		// answer with an Opus SDP pointing at a throwaway port
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16000, 111, 101, 0))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16000, room.Opus, 111, 101, 0))
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadAck(req, tx) })
 	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadBye(req, tx) })
@@ -183,7 +183,7 @@ func TestOriginateTeardownOnCarrierBye(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16001, 111, 101, 0))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16001, room.Opus, 111, 101, 0))
 		sessCh <- sess
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
@@ -257,7 +257,7 @@ func TestHangupOutboundSendsBye(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16002, 111, 101, 0))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16002, room.Opus, 111, 101, 0))
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadAck(req, tx) })
 	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
@@ -329,7 +329,7 @@ func TestHangupOutboundRacesCarrierBye(t *testing.T) {
 		if err != nil {
 			return
 		}
-		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16003, 111, 101, 0))
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16003, room.Opus, 111, 101, 0))
 		sessCh <- sess
 	})
 	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
@@ -388,5 +388,51 @@ func TestHangupOutboundRacesCarrierBye(t *testing.T) {
 	// so a second HangupOutbound is always a no-op, not an error or panic.
 	if err := p.HangupOutbound(pid); err != nil {
 		t.Fatalf("second HangupOutbound = %v, want nil", err)
+	}
+}
+
+// An outbound leg for a phone room offers FS the room's law alone, so FS
+// relays it to the carrier with no transcode, and the leg reports it.
+func TestOriginateOffersRoomCodec(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ua, _ := sipgo.NewUA()
+	fsSrv, _ := sipgo.NewServer(ua)
+	fsClient, _ := sipgo.NewClient(ua)
+	ds := sipgo.NewDialogServerCache(fsClient, sip.ContactHeader{Address: sip.Uri{User: "fs", Host: "127.0.0.1", Port: 15950}})
+	gotOffer := make(chan string, 1)
+	fsSrv.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+		sess, err := ds.ReadInvite(req, tx)
+		if err != nil {
+			return
+		}
+		gotOffer <- string(req.Body())
+		_ = sess.RespondSDP(buildAnswer("127.0.0.1", 16004, room.PCMA, 111, 101, 0))
+	})
+	fsSrv.OnAck(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadAck(req, tx) })
+	fsSrv.OnBye(func(req *sip.Request, tx sip.ServerTransaction) { _ = ds.ReadBye(req, tx) })
+	serveFakeFS(t, fsSrv, "127.0.0.1:15950")
+
+	p, err := New(Config{SIPListen: "127.0.0.1:15951", SIPAdvertise: "127.0.0.1", RTPMin: 14600, RTPMax: 14700, OpusPT: 111, DTMFPT: 101, FSSIP: "127.0.0.1:15950"}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leg, err := p.Originate(ctx, room.OriginateRequest{To: "919000000001", CallerID: "911600123456", Trunks: []string{"tata"}, Codec: room.PCMA}, nil)
+	if err != nil {
+		t.Fatalf("Originate: %v", err)
+	}
+	defer leg.Source.Close()
+	if leg.Codec != room.PCMA {
+		t.Fatalf("leg codec = %q, want PCMA", leg.Codec)
+	}
+	offer := <-gotOffer
+	for _, want := range []string{"RTP/AVP 8 101", "a=rtpmap:8 PCMA/8000", "telephone-event/8000"} {
+		if !strings.Contains(offer, want) {
+			t.Fatalf("offer missing %q:\n%s", want, offer)
+		}
+	}
+	if strings.Contains(strings.ToLower(offer), "opus") {
+		t.Fatalf("PCMA offer still carries Opus:\n%s", offer)
 	}
 }

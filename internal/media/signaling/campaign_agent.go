@@ -73,7 +73,7 @@ func (s *Server) runAgentCampaign(ctx context.Context, tenant uuid.UUID, rid roo
 	stopMusic := s.playHold(rid, s.tenantHoldMusic(rid))
 	defer stopMusic()
 	ringCtx, stopRing := context.WithTimeout(callCtx, time.Duration(cfg.RingSeconds)*time.Second)
-	leg, _, _, err := s.originateOut(ringCtx, tenant, a.Phone, cfg.CallerID, func(room.Progress) {
+	leg, _, _, err := s.originateOut(ringCtx, rid, tenant, a.Phone, cfg.CallerID, func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})
 		}
@@ -96,7 +96,7 @@ func (s *Server) runAgentCampaign(ctx context.Context, tenant uuid.UUID, rid roo
 		return "incomplete", "disconnected_before_bridge", true
 	}
 	tagParticipant(clientPID, "callee")
-	if err := s.sfu.AttachPort(rid, leg.Source, leg.Write); err != nil {
+	if err := s.sfu.AttachPort(rid, leg.Source, leg.Codec, leg.Write); err != nil {
 		return "incomplete", "media_attach_failed", true
 	}
 	s.mu.Lock()

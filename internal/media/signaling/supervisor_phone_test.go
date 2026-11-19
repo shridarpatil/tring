@@ -38,7 +38,7 @@ func TestCallLivePhoneInIVR(t *testing.T) {
 	}
 	src := &fakeOutboundSource{id: "phone-leg", stop: make(chan struct{})}
 	t.Cleanup(func() { src.Close() })
-	if err := s.sfu.AttachPort(rid, src, func(*rtp.Packet) error { return nil }); err != nil {
+	if err := s.sfu.AttachPort(rid, src, room.Opus, func(*rtp.Packet) error { return nil }); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 	if _, live := s.callLive(rid); !live {

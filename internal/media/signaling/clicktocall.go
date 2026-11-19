@@ -122,6 +122,9 @@ func (s *Server) Call(ctx context.Context, tenant uuid.UUID, req CallRequest) (u
 func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req CallRequest, to string, trunks []trunkselect.Trunk, claim *routing.Claim, release func()) {
 	defer s.endPortCall()
 	defer release()
+	// Before the agent's widget joins: their mic must negotiate the phone codec.
+	s.sfu.SetRoomCodec(roomID, phoneCodec)
+	defer s.sfu.SetRoomCodec(roomID, room.Opus)
 	ctx, cancelClaim := context.WithCancel(context.Background())
 	defer cancelClaim()
 	// A lost reservation stops the call only while it is still being set up:
@@ -153,7 +156,7 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 	stopMusic := s.playHold(roomID, s.tenantHoldMusic(roomID))
 	octx, cancel := context.WithTimeout(ctx, connectRingTimeout)
 	go s.cancelWhenEmpty(octx, roomID, cancel)
-	leg, _, _, err := s.originateOn(octx, tenant, trunks, to, req.CallerID, func(room.Progress) {
+	leg, _, _, err := s.originateOn(octx, roomID, tenant, trunks, to, req.CallerID, func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgRinging})
 		}
@@ -175,7 +178,7 @@ func (s *Server) runCall(roomID room.RoomID, name string, tenant uuid.UUID, req 
 		return
 	}
 	tagParticipant(clientPID, "callee")
-	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
+	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Codec, leg.Write); err != nil {
 		logging.ClearParticipant(string(clientPID))
 		s.log.Error("call: attach customer failed", "room", roomID, "err", err)
 		_ = s.cfg.Originator.HangupOutbound(clientPID)

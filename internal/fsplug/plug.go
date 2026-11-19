@@ -51,8 +51,8 @@ type call struct {
 	media   *mediaSession
 	offerIP string
 	offerPt int
-	rate    int    // carrier leg's audio rate for the Opus answer (0 = full band)
-	answer  []byte // our SDP answer, set with media in Answer (under Plug.mu)
+	codec   room.Codec // what the offer asks for: the leg's and its room's codec
+	answer  []byte     // our SDP answer, set with media in Answer (under Plug.mu)
 
 	// responded is closed once Answer or Reject has sent the final
 	// response, unblocking onInvite's wait (see ringTimeout above).
@@ -259,7 +259,7 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		p.log.Error("fsplug: ReadInvite failed", "err", err)
 		return
 	}
-	ip, port, err := parseOffer(req.Body())
+	ip, port, codec, err := parseOffer(req.Body())
 	if err != nil {
 		p.log.Warn("fsplug: bad offer, rejecting", "err", err)
 		_ = sess.Respond(sip.StatusBadRequest, "Bad SDP", nil)
@@ -267,7 +267,7 @@ func (p *Plug) onInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 	id := room.CallID(req.CallID().Value())
-	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, rate: audioRate(req), responded: make(chan struct{})}
+	c := &call{sess: sess, tx: tx, offerIP: ip, offerPt: port, codec: codec, responded: make(chan struct{})}
 	p.mu.Lock()
 	p.calls[id] = c
 	cb := p.onInbound
@@ -317,7 +317,7 @@ func (p *Plug) onReInvite(req *sip.Request, tx sip.ServerTransaction) {
 		return
 	}
 	if len(req.Body()) > 0 {
-		ip, port, err := parseOffer(req.Body())
+		ip, port, _, err := parseOffer(req.Body())
 		if err != nil || ip != c.offerIP || port != c.offerPt { // offerIP/offerPt are immutable
 			_ = tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotAcceptableHere, "Not Acceptable Here", nil))
 			return
@@ -336,19 +336,20 @@ func (p *Plug) get(id room.CallID) *call {
 	return p.calls[id]
 }
 
-// Answer accepts the call: allocates media, sends a 200 with an Opus-only SDP,
-// and returns a room.Leg bridging the RTP socket to the room.
+// Answer accepts the call: allocates media, sends a 200 with the offered codec
+// alone (G.711 for a carrier call, else Opus — see offeredCodec), and returns a
+// room.Leg bridging the RTP socket to the room.
 func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	c := p.get(id)
 	if c == nil {
 		return nil, fmt.Errorf("fsplug: unknown call %s", id)
 	}
-	m, err := newMediaSession(room.ParticipantID(id), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
+	m, err := newMediaSession(room.ParticipantID(id), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, c.codec, p.cfg.OpusPT, p.cfg.DTMFPT, 0)
 	if err != nil {
 		return nil, err
 	}
 	m.setRemote(c.offerIP, c.offerPt)
-	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT, c.rate)
+	answer := buildAnswer(p.cfg.SIPAdvertise, m.localPort(), c.codec, p.cfg.OpusPT, p.cfg.DTMFPT, 0)
 	p.mu.Lock()
 	c.media = m
 	c.answer = answer
@@ -390,6 +391,7 @@ func (p *Plug) Answer(id room.CallID) (*room.Leg, error) {
 	go p.watchDialog(id, c, m, stateCh)
 
 	return &room.Leg{
+		Codec:  c.codec,
 		Source: m,
 		Write:  func(pkt *rtp.Packet) error { return m.write(pkt) },
 		DTMF:   m.dtmf(),

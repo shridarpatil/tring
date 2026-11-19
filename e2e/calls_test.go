@@ -120,7 +120,7 @@ func TestInboundAgentHearsCustomer(t *testing.T) {
 			return err
 		}
 		from := a1.JoinedAt().Add(500 * time.Millisecond)
-		checkHearsCustomer(t, "agent", waitArrivals(t, a1.Got(), from, 2*time.Second), opusRate, opusFrame)
+		checkHearsCustomer(t, "agent", waitArrivals(t, a1.Got(), from, 2*time.Second), a1.Rate(), a1.Step())
 		if fq, ok := Hears(Between(customer.Got.Since(from), from, from.Add(2*time.Second)), 8000, Freqs); !ok || fq != FreqAgent1 {
 			t.Errorf("customer hears %v (clear tone: %v), want agent one's %v Hz", fq, ok, FreqAgent1)
 		}
@@ -144,7 +144,7 @@ func TestClickToCallAgentHearsCustomer(t *testing.T) {
 			return err
 		}
 		a1.WaitMsg("answered", 20*time.Second)
-		checkHearsCustomer(t, "agent", waitArrivals(t, a1.Got(), customer.AnsweredAt(), 2*time.Second), opusRate, opusFrame)
+		checkHearsCustomer(t, "agent", waitArrivals(t, a1.Got(), customer.AnsweredAt(), 2*time.Second), a1.Rate(), a1.Step())
 		return nil
 	})
 }

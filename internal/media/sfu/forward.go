@@ -40,6 +40,15 @@ func (s *SFU) Join(roomID room.RoomID, pid room.ParticipantID, sig Signaler) (*P
 		_ = pc.Close()
 		return nil, fmt.Errorf("add recvonly audio: %w", err)
 	}
+	// A phone room's mic must send the room's G.711 law: the SFU forwards it to
+	// the phone leg as is. Offering only that codec makes the browser's answer
+	// pick it, with no SDK change.
+	if c := s.RoomCodec(roomID); c.G711() {
+		if err := audio.SetCodecPreferences([]webrtc.RTPCodecParameters{audioParameters(c)}); err != nil {
+			_ = pc.Close()
+			return nil, fmt.Errorf("mic codec %s: %w", c, err)
+		}
+	}
 	p := &Peer{
 		pid:    pid,
 		roomID: roomID,

@@ -8,13 +8,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pion/webrtc/v4"
 	"github.com/shridarpatil/tring/internal/campaign"
 	"github.com/shridarpatil/tring/internal/ivr"
 	"github.com/shridarpatil/tring/internal/logging"
 	"github.com/shridarpatil/tring/internal/media/ivrdrive"
 	"github.com/shridarpatil/tring/internal/media/prompt"
 	"github.com/shridarpatil/tring/internal/media/room"
+	"github.com/shridarpatil/tring/internal/media/sfu"
 	"github.com/shridarpatil/tring/internal/webhook"
 )
 
@@ -95,6 +95,9 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 	defer func() { cancel(); <-heartbeatDone }()
 	outcome, reason := "failed", "system_error"
 	rid := room.RoomID(tenant.String() + "/campaign-" + a.ID.String())
+	// Set before an agent campaign rings its agent, whose mic must match.
+	s.sfu.SetRoomCodec(rid, phoneCodec)
+	defer s.sfu.SetRoomCodec(rid, room.Opus)
 	answered := false
 	var callID uuid.UUID
 	defer func() {
@@ -128,7 +131,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 		return
 	}
 	for _, file := range files {
-		frames, err := loadOggFile(s.cfg.AudioDir, file)
+		frames, err := loadAudio(&s.g711, s.cfg.AudioDir, file, room.Opus)
 		if err != nil || len(frames) == 0 {
 			reason = "invalid_audio"
 			return
@@ -149,7 +152,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 		return
 	}
 	ringCtx, stopRing := context.WithTimeout(ctx, time.Duration(cfg.RingSeconds)*time.Second)
-	leg, _, _, err := s.originateOut(ringCtx, tenant, a.Phone, cfg.CallerID, nil)
+	leg, _, _, err := s.originateOut(ringCtx, rid, tenant, a.Phone, cfg.CallerID, nil)
 	stopRing()
 	if err != nil {
 		outcome, reason = campaignDialOutcome(err)
@@ -176,7 +179,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 	s.campaignLegs[rid] = pid
 	s.mu.Unlock()
 	tagParticipant(pid, "caller")
-	if err = s.sfu.AttachPort(rid, leg.Source, leg.Write); err != nil {
+	if err = s.sfu.AttachPort(rid, leg.Source, leg.Codec, leg.Write); err != nil {
 		reason = "media_attach_failed"
 		return
 	}
@@ -189,12 +192,12 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 	}
 	s.cfg.Calls.CarrierAnswered(string(rid))
 	playerID := room.ParticipantID("ivr-" + uuid.NewString())
-	player := prompt.NewPlayer(playerID, 0)
+	player := prompt.NewPlayer(playerID, leg.Codec, 0)
 	tagParticipant(playerID, "ivr")
 	defer logging.ClearParticipant(string(playerID))
 	defer player.Close()
 	defer s.sfu.RemoveSource(rid, playerID)
-	if err = s.sfu.InjectSource(rid, player, webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}); err != nil {
+	if err = s.sfu.InjectSource(rid, player, sfu.AudioCapability(leg.Codec)); err != nil {
 		reason = "media_attach_failed"
 		return
 	}
@@ -207,7 +210,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 		flow = &ivr.Flow{EntryNode: "message", Nodes: []ivr.Node{{ID: "message", Type: ivr.NodeGreeting, Config: map[string]any{"audio_file": a.Payload.Prepared.AudioFile}}}}
 	}
 	s.setEndWebhook(rid, flow.EndWebhookID)
-	driver := ivrdrive.New(ivrdrive.Config{Prompts: &filePrompts{dir: s.cfg.AudioDir, player: player}, Agents: s.agentRouter, Dialer: ivrDialer{s}, DialAudio: func() string { return holdFile(s.tenantHoldMusic(rid)) }, Room: string(rid), ClientRef: a.ExternalRef, Vars: map[string]string{"caller": a.Phone, "did": cfg.CallerID, "campaign_id": a.CampaignID.String(), "recipient_id": uuidString(a.RecipientID), "attempt_id": a.ID.String(), "external_ref": a.ExternalRef}, HTTP: s.cfg.HTTP, Logger: s.log, OnNodeEvent: func(ev ivrdrive.NodeEvent) { s.sendNodeWebhook(rid, cfg.FlowID, ev) }})
+	driver := ivrdrive.New(ivrdrive.Config{Prompts: &filePrompts{dir: s.cfg.AudioDir, player: player, codec: leg.Codec, g711: &s.g711}, Agents: s.agentRouter, Dialer: ivrDialer{s}, DialAudio: func() string { return holdFile(s.tenantHoldMusic(rid)) }, Room: string(rid), ClientRef: a.ExternalRef, Vars: map[string]string{"caller": a.Phone, "did": cfg.CallerID, "campaign_id": a.CampaignID.String(), "recipient_id": uuidString(a.RecipientID), "attempt_id": a.ID.String(), "external_ref": a.ExternalRef}, HTTP: s.cfg.HTTP, Logger: s.log, OnNodeEvent: func(ev ivrdrive.NodeEvent) { s.sendNodeWebhook(rid, cfg.FlowID, ev) }})
 	done := make(chan error, 1)
 	if !s.brain.StartWithResult(callCtx, rid, flow, driver, nil, func(path []ivr.Step, err error) { s.cfg.Calls.Journey(string(rid), path); done <- err }, func() { s.clearCaller(rid) }) {
 		reason = "flow_start_failed"

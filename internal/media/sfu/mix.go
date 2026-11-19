@@ -1,6 +1,7 @@
 package sfu
 
 import (
+	"github.com/shridarpatil/tring/internal/media/g711"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
@@ -8,14 +9,17 @@ import (
 // roomPort), which is enough for caller ↔ IVR and caller ↔ agent. A supervisor
 // barging into a phone call needs the caller to hear the agent AND the
 // supervisor, so while a barge is on the port decodes every publisher it hears,
-// sums them each 20ms and re-encodes one Opus stream.
+// sums them each 20ms and re-encodes one stream in the room's codec.
 //
-// Opus encoding needs libopus (cgo). mix_opus.go, built with `-tags opus`, sets
-// newOpusDecoder/newOpusEncoder; without the tag they stay nil, the binary stays
-// cgo-free, and a barge on a phone call falls back to one speaker at a time.
+// G.711 (phone rooms) is coded in pure Go (internal/media/g711). Opus needs
+// libopus (cgo):
+// mix_opus.go, built with `-tags opus`, sets newOpusDecoder/newOpusEncoder;
+// without the tag they stay nil, the binary stays cgo-free, and a barge on an
+// Opus phone leg falls back to one speaker at a time.
 
-// opusDecoder / opusEncoder are the parts of libopus the mixer uses, so the
-// mixing logic is testable without cgo. Both work on 48kHz mono int16 PCM.
+// opusDecoder / opusEncoder are the codec parts the mixer uses, so the mixing
+// logic is testable without cgo. Both work on mono int16 PCM at the codec's
+// rate (48kHz Opus, 8kHz G.711).
 type opusDecoder interface {
 	Decode(data []byte, pcm []int16) (int, error)
 }
@@ -30,15 +34,17 @@ var (
 )
 
 const (
-	// mixFrame is one 20ms frame of 48kHz mono PCM, the mixer's tick.
-	mixFrame = opusFrameSamplesPort
-	// mixPrime is how much a source buffers before it's mixed (and again after it
-	// runs dry): 40ms absorbs network jitter at the cost of 40ms of latency.
-	mixPrime = 2 * mixFrame
-	// mixMaxBuffered caps a source's backlog; a sender running fast loses its
+	// mixFrame is one 20ms frame of 48kHz mono PCM, the Opus mixer's tick.
+	mixFrame = 960
+	// mixPrimeFrames is how much a source buffers before it's mixed (and again
+	// after it runs dry): 40ms absorbs network jitter at the cost of 40ms of
+	// latency.
+	mixPrimeFrames = 2
+	// mixMaxFrames caps a source's backlog; a sender running fast loses its
 	// oldest audio rather than drifting ever later.
-	mixMaxBuffered = 5 * mixFrame
-	// maxOpusFrame is the largest Opus frame (120ms at 48kHz).
+	mixMaxFrames = 5
+	// maxOpusFrame is the largest Opus frame (120ms at 48kHz), the decode
+	// scratch size (a G.711 packet is far smaller).
 	maxOpusFrame = 6 * mixFrame
 )
 
@@ -49,31 +55,43 @@ type mixSource struct {
 	primed bool
 }
 
-// portMixer turns several publishers' Opus packets into one Opus stream. Not
+// portMixer turns several publishers' packets into one stream in the leg's codec. Not
 // safe for concurrent use: the port calls it under its mutex.
 type portMixer struct {
-	enc  opusEncoder
-	srcs map[room.ParticipantID]*mixSource
-	pcm  []int16 // decode scratch
-	sum  []int16 // mixed frame scratch
-	out  []byte  // encode scratch
+	tick   int // samples per 20ms tick at the codec's rate
+	newDec func() (opusDecoder, error)
+	enc    opusEncoder
+	srcs   map[room.ParticipantID]*mixSource
+	pcm    []int16 // decode scratch
+	sum    []int16 // mixed frame scratch
+	out    []byte  // encode scratch
 }
 
-// newPortMixer builds a mixer, or returns nil when the binary has no libopus.
-func newPortMixer() (*portMixer, error) {
-	if newOpusEncoder == nil || newOpusDecoder == nil {
+// newPortMixer builds a mixer for a leg in codec c, or returns nil when it
+// can't code c (Opus in a binary without libopus).
+func newPortMixer(c room.Codec) (*portMixer, error) {
+	newDec, newEnc := newOpusDecoder, newOpusEncoder
+	if c.G711() {
+		g := g711Coder{c}
+		newDec = func() (opusDecoder, error) { return g, nil }
+		newEnc = func() (opusEncoder, error) { return g, nil }
+	}
+	if newEnc == nil || newDec == nil {
 		return nil, nil
 	}
-	enc, err := newOpusEncoder()
+	enc, err := newEnc()
 	if err != nil {
 		return nil, err
 	}
+	frame := int(c.FrameSamples())
 	return &portMixer{
-		enc:  enc,
-		srcs: make(map[room.ParticipantID]*mixSource),
-		pcm:  make([]int16, maxOpusFrame),
-		sum:  make([]int16, mixFrame),
-		out:  make([]byte, 1500),
+		tick:   frame,
+		newDec: newDec,
+		enc:    enc,
+		srcs:   make(map[room.ParticipantID]*mixSource),
+		pcm:    make([]int16, maxOpusFrame),
+		sum:    make([]int16, frame),
+		out:    make([]byte, 1500),
 	}, nil
 }
 
@@ -82,7 +100,7 @@ func newPortMixer() (*portMixer, error) {
 func (m *portMixer) push(from room.ParticipantID, payload []byte) {
 	src := m.srcs[from]
 	if src == nil {
-		dec, err := newOpusDecoder()
+		dec, err := m.newDec()
 		if err != nil {
 			return
 		}
@@ -94,10 +112,10 @@ func (m *portMixer) push(from room.ParticipantID, payload []byte) {
 		return
 	}
 	src.buf = append(src.buf, m.pcm[:n]...)
-	if over := len(src.buf) - mixMaxBuffered; over > 0 {
+	if over := len(src.buf) - mixMaxFrames*m.tick; over > 0 {
 		src.buf = append(src.buf[:0], src.buf[over:]...)
 	}
-	if len(src.buf) >= mixPrime {
+	if len(src.buf) >= mixPrimeFrames*m.tick {
 		src.primed = true
 	}
 }
@@ -105,19 +123,19 @@ func (m *portMixer) push(from room.ParticipantID, payload []byte) {
 // frame mixes the next 20ms of every primed source and encodes it. ok is false
 // when no source had audio, so nothing is sent for this tick.
 func (m *portMixer) frame() (payload []byte, ok bool) {
-	var acc [mixFrame]int32
+	acc := make([]int32, m.tick)
 	for _, src := range m.srcs {
 		if !src.primed {
 			continue
 		}
-		if len(src.buf) < mixFrame {
+		if len(src.buf) < m.tick {
 			src.primed = false // ran dry: re-buffer before mixing it again
 			continue
 		}
-		for i, v := range src.buf[:mixFrame] {
+		for i, v := range src.buf[:m.tick] {
 			acc[i] += int32(v)
 		}
-		src.buf = append(src.buf[:0], src.buf[mixFrame:]...)
+		src.buf = append(src.buf[:0], src.buf[m.tick:]...)
 		ok = true
 	}
 	if !ok {
@@ -131,6 +149,17 @@ func (m *portMixer) frame() (payload []byte, ok bool) {
 		return nil, false
 	}
 	return append([]byte(nil), m.out[:n]...), true
+}
+
+// g711Coder adapts package g711 to the mixer's coder interfaces.
+type g711Coder struct{ c room.Codec }
+
+func (g g711Coder) Decode(data []byte, pcm []int16) (int, error) {
+	return g711.Decode(g.c, data, pcm), nil
+}
+
+func (g g711Coder) Encode(pcm []int16, data []byte) (int, error) {
+	return g711.Encode(g.c, pcm, data), nil
 }
 
 // drop forgets a publisher (it left, or the port no longer hears it).

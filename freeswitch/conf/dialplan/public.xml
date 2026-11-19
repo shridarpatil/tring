@@ -21,10 +21,10 @@
     default 127.0.0.1:5090 — co-located dev). The gateway's SIP plug
     (internal/fsplug, fsplug_sip_listen, default :5090) answers, resolves the
     dialed DID to a flow via room.Plug, and the call runs on the pion media
-    plane exactly like a web call. absolute_codec_string=opus on the gateway leg makes
-    FreeSWITCH transcode the carrier's G.711 to Opus (the plug/pion side speaks
-    Opus only); rtp_secure_media=false because that is a plain-RTP loopback/LAN
-    hop to the gateway, not a public-facing SRTP leg.
+    plane exactly like a web call. The gateway leg carries the carrier's own G.711
+    law (tring_gw_codec), so FreeSWITCH relays the frames without transcoding;
+    rtp_secure_media=false because that is a plain-RTP loopback/LAN hop to the
+    gateway, not a public-facing SRTP leg.
 -->
 <!-- http://wiki.freeswitch.org/wiki/Dialplan_XML -->
 <include>
@@ -53,37 +53,31 @@
          /usr/local/bin/tring-sip-relays; empty when no relays are set. -->
     <X-PRE-PROCESS cmd="exec" data="/usr/local/bin/tring-sip-relays dialplan"/>
 
-    <!-- The carrier leg's audio rate, for the gateway leg's Opus: sent as
-         X-Tring-Audio-Rate on the bridge below, and the plug answers with Opus
-         capped at it (maxplaybackrate), so FS runs that leg at 8 kHz for G.711
-         instead of 48 kHz — no resampling, and about a third of the CPU per
-         call. Read from the carrier's first offered codec, which is the one FS
-         picks (inbound-codec-negotiation is generous). Any other first codec
-         sets nothing: full band, as before. -->
-    <extension name="tring_carrier_audio_rate_8k" continue="true">
-      <condition field="${ep_codec_string}" expression="^[^,]*\.(PCMU|PCMA)@">
-        <action application="set" data="tring_audio_rate=8000"/>
-      </condition>
-    </extension>
-    <extension name="tring_carrier_audio_rate_16k" continue="true">
-      <condition field="${ep_codec_string}" expression="^[^,]*\.G722@">
-        <action application="set" data="tring_audio_rate=16000"/>
+    <!-- The gateway leg's codec: the carrier's own G.711 law, so both legs
+         share one codec and FS relays the frames without transcoding; the
+         plug answers that law and the whole room (agents' browsers, prompts,
+         recording) carries it. The external profile accepts only PCMA/PCMU
+         (carrier_codec_prefs) and negotiation is generous and late, so FS
+         picks the carrier's first-offered G.711 codec — matched here ($1). -->
+    <extension name="tring_gw_codec" continue="true">
+      <condition field="${ep_codec_string}" expression="^(?:[^,]*,)*?[^,]*\.(PCMA|PCMU)@">
+        <action application="set" data="tring_gw_codec=$1"/>
+        <anti-action application="set" data="tring_gw_codec=PCMA"/>
       </condition>
     </extension>
 
     <!-- Carrier-inbound to the gateway plug: any numeric (optionally
          +-prefixed) destination_number is bridged into the media plane via
-         the tring-gw gateway, forcing Opus for the plug leg. -->
+         the tring-gw gateway, in the codec tring_gw_codec picked. -->
     <extension name="tring_inbound_to_gateway">
       <condition field="destination_number" expression="^(\+?\d+)$">
-        <!-- Opus (and plain RTP) on the GATEWAY leg only, as {} vars on the
-             bridge. Set on this (carrier) leg instead, absolute_codec_string
-             restricted the carrier side to Opus and the gateway leg was
-             offered the carrier's G.711; the plug answers Opus-only, so FS
-             dropped it (INCOMPATIBLE_DESTINATION) and sent the carrier 488.
-             Now the carrier leg negotiates its own codec (G.711) and FS
-             transcodes to Opus for the plug. -->
-        <action application="bridge" data="{absolute_codec_string=opus,rtp_secure_media=false,sip_h_X-Tring-Audio-Rate=${tring_audio_rate}}sofia/gateway/tring-gw/${destination_number}"/>
+        <!-- The codec (and plain RTP) on the GATEWAY leg only, as {} vars on
+             the bridge. Set on this (carrier) leg instead, absolute_codec_string
+             restricted the carrier side to it and broke negotiation with the
+             carrier (FS sent it 488). The carrier leg negotiates its own codec;
+             the gateway leg is offered only tring_gw_codec, which the plug
+             answers (a single codec, so FS can't pick a mismatched one). -->
+        <action application="bridge" data="{absolute_codec_string=${tring_gw_codec},rtp_secure_media=false}sofia/gateway/tring-gw/${destination_number}"/>
       </condition>
     </extension>
 

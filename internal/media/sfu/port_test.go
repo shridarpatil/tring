@@ -111,7 +111,7 @@ func TestPortHearsRoomAndSwitchesFeeds(t *testing.T) {
 	// Attach the phone port (caller's leg): publishes into the room + hears it.
 	caller := &slowSource{id: "phone-leg", mark: 0xCC, total: 200}
 	out := &pktCollector{}
-	if err := s.AttachPort("call", caller, out.write); err != nil {
+	if err := s.AttachPort("call", caller, room.Opus, out.write); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 
@@ -196,7 +196,7 @@ func TestPortPinnedFeedWinsUntilRemoved(t *testing.T) {
 	}
 	caller := &slowSource{id: "phone-leg", mark: 0xCC, total: 1000}
 	out := &pktCollector{}
-	if err := s.AttachPort("call", caller, out.write); err != nil {
+	if err := s.AttachPort("call", caller, room.Opus, out.write); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 	agent := &slowSource{id: "agent", mark: 0xBB, total: 1000}
@@ -236,7 +236,7 @@ func TestPortReleasedFeedYieldsUntilMembershipChanges(t *testing.T) {
 	}
 	caller := &slowSource{id: "phone-leg", mark: 0xCC, total: 1000}
 	out := &pktCollector{}
-	if err := s.AttachPort("call", caller, out.write); err != nil {
+	if err := s.AttachPort("call", caller, room.Opus, out.write); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 	ivrSrc := &slowSource{id: "ivr", mark: 0xAA, total: 1000}
@@ -280,7 +280,7 @@ func TestPortReleaseKeepsAFeedFromAPerson(t *testing.T) {
 			}
 			callerOut := &pktCollector{}
 			caller := &slowSource{id: "caller-leg", mark: 0xCC, total: 1000}
-			if err := s.AttachPort("call", caller, callerOut.write); err != nil {
+			if err := s.AttachPort("call", caller, room.Opus, callerOut.write); err != nil {
 				t.Fatalf("attach caller: %v", err)
 			}
 			ivrSrc := &slowSource{id: "ivr", mark: 0xAA, total: 1000}
@@ -295,7 +295,7 @@ func TestPortReleaseKeepsAFeedFromAPerson(t *testing.T) {
 
 			calleeOut := &pktCollector{}
 			callee := &slowSource{id: "callee-leg", mark: 0xDD, total: 1000}
-			if err := s.AttachPort("call", callee, calleeOut.write); err != nil {
+			if err := s.AttachPort("call", callee, room.Opus, calleeOut.write); err != nil {
 				t.Fatalf("attach callee: %v", err)
 			}
 			waitCount(t, calleeOut, 5, "callee hears someone before the release")

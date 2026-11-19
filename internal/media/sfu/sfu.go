@@ -8,9 +8,10 @@
 // subscribes to. The fan-out track is keyed by the stable room.ParticipantID,
 // not the PeerConnection — so when a participant reconnects with a FRESH
 // PeerConnection (M4 resumption), we re-point the copy loop into the same
-// fan-out track and subscribers never renegotiate. The SFU carries Opus (audio)
-// and VP8/VP9 (screen share, M5); DTMF rides the data channel, not RFC 4733, so
-// telephone-event is intentionally NOT registered.
+// fan-out track and subscribers never renegotiate. The SFU carries Opus or G.711
+// (audio — one codec per room, see codec.go) and VP8/VP9 (screen share, M5);
+// DTMF rides the data channel, not RFC 4733, so telephone-event is
+// intentionally NOT registered.
 package sfu
 
 import (
@@ -87,6 +88,10 @@ type SFU struct {
 	// keyframe; screen-share encoders emit them rarely, so the SFU requests one
 	// on subscribe and relays subscriber PLIs to the publisher.
 	keyframe map[*webrtc.TrackLocalStaticRTP]func()
+	// codecs is each phone room's G.711 law (SetRoomCodec); a room absent here
+	// carries Opus. Kept apart from rooms because it must be set before the room
+	// has any member — the agent's browser joins a click-to-call room first.
+	codecs map[room.RoomID]room.Codec
 
 	// udpMuxes are the shared host-candidate sockets (Config.UDPMuxPortMin/Max),
 	// built once in New; each per-peer API takes the next one round-robin
@@ -199,6 +204,7 @@ func New(cfg Config) (*SFU, error) {
 		log:      cfg.Logger.With("component", "sfu"),
 		rooms:    make(map[room.RoomID]*sfuRoom),
 		keyframe: make(map[*webrtc.TrackLocalStaticRTP]func()),
+		codecs:   make(map[room.RoomID]room.Codec),
 	}
 	if cfg.ConnectTimeout <= 0 {
 		s.cfg.ConnectTimeout = defaultConnectTimeout
@@ -235,23 +241,18 @@ func New(cfg Config) (*SFU, error) {
 	return s, nil
 }
 
-// buildAPI constructs a fresh pion API: Opus + VP8/VP9 codecs, the UDP port
+// buildAPI constructs a fresh pion API: Opus + G.711 + VP8/VP9 codecs, the UDP port
 // range (when configured), mDNS disabled, and the public-IP host-candidate
 // rewrite. A new one is used per PeerConnection.
 func (s *SFU) buildAPI() (*webrtc.API, error) {
 	cfg := s.cfg
 	me := &webrtc.MediaEngine{}
-	if err := me.RegisterCodec(webrtc.RTPCodecParameters{
-		// Standard WebRTC Opus fmtp: useinbandfec=1 lets the far side reconstruct
-		// an isolated lost packet instead of hearing a gap; minptime=10 keeps 20ms
-		// framing. stereo=1 so screen-share/music isn't downmixed.
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-			SDPFmtpLine: "minptime=10;useinbandfec=1",
-		},
-		PayloadType: 111,
-	}, webrtc.RTPCodecTypeAudio); err != nil {
-		return nil, fmt.Errorf("register opus: %w", err)
+	// Opus first, so a plain offer prefers it; G.711 for phone rooms, whose
+	// peers narrow the mic to the room's law (Join, codec.go).
+	for _, c := range []room.Codec{room.Opus, room.PCMA, room.PCMU} {
+		if err := me.RegisterCodec(audioParameters(c), webrtc.RTPCodecTypeAudio); err != nil {
+			return nil, fmt.Errorf("register audio %q: %w", c, err)
+		}
 	}
 
 	// Video for screen share (M5). NACK+PLI feedback so the SFU can request a

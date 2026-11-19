@@ -75,13 +75,17 @@ func (s *Server) handleInboundPhone(ic room.InboundCall) {
 		return
 	}
 	roomID := room.RoomID(tenant.String() + "/pstn-" + string(ic.CallID))
+	// The room carries the carrier's codec, as the plug answered it: agents'
+	// mics, prompts and recording all follow it (no transcode anywhere).
+	s.sfu.SetRoomCodec(roomID, leg.Codec)
+	defer s.sfu.SetRoomCodec(roomID, room.Opus)
 
 	s.mu.Lock()
 	s.pstnCalls[roomID] = ic.CallID
 	s.mu.Unlock()
 
 	tagParticipant(leg.Source.ID(), "caller")
-	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
+	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Codec, leg.Write); err != nil {
 		logging.ClearParticipant(string(leg.Source.ID()))
 		s.log.Error("pstn: attach port failed", "room", roomID, "err", err)
 		_ = s.pstnGW.Hangup(ic.CallID)

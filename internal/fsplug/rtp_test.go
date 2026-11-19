@@ -21,7 +21,7 @@ func dialUDP(t *testing.T, port int) *net.UDPConn {
 }
 
 func TestMediaSessionReadsOpusAndDecodesDTMF(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.Opus, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestMediaSessionReadsOpusAndDecodesDTMF(t *testing.T) {
 }
 
 func TestMediaSessionWriteReStampsToRemote(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.Opus, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestMediaSessionWriteReStampsToRemote(t *testing.T) {
 // so both are queued, then asserts each ReadRTP() call still has its own
 // distinct payload bytes.
 func TestMediaSessionNoPayloadAliasingUnderQueueDepth(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.Opus, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestMediaSessionNoPayloadAliasingUnderQueueDepth(t *testing.T) {
 // (only doneC), otherwise a send racing the close can panic and take down
 // the whole gateway process.
 func TestMediaSessionCloseDuringTrafficNoPanic(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.Opus, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +226,7 @@ func TestMediaSessionRestampsOpusOntoTheOpusClock(t *testing.T) {
 	// fsStep is FreeSWITCH's timestamp step per 20 ms frame at that rate; 0 is a
 	// full-band leg, already on the 48 kHz clock. Stamps start near the wrap.
 	for _, tc := range []struct{ rate, fsStep int }{{8000, 160}, {16000, 320}, {0, 960}} {
-		m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, tc.rate)
+		m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.Opus, 111, 101, tc.rate)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -257,7 +257,7 @@ func TestMediaSessionRestampsOpusOntoTheOpusClock(t *testing.T) {
 // it (the room attaches the leg on answer). discardQueued drops that backlog so
 // the room starts on live audio, not seconds of stale ringing played late.
 func TestMediaSessionDiscardQueued(t *testing.T) {
-	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, 111, 101, 0)
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.Opus, 111, 101, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,5 +286,58 @@ func TestMediaSessionDiscardQueued(t *testing.T) {
 	}
 	if got.SequenceNumber != 100 {
 		t.Fatalf("first packet after answer is seq %d, want the live 100", got.SequenceNumber)
+	}
+}
+
+// A G.711 leg passes the carrier's frames through on their own 8 kHz clock
+// (no Opus re-stamp) and sends the room's frames as PT 8, stepping 160.
+func TestMediaSessionG711(t *testing.T) {
+	m, err := newMediaSession(room.ParticipantID("p1"), "127.0.0.1", 12000, 12100, room.PCMA, 111, 101, 8000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	fs, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	m.setRemote("127.0.0.1", fs.LocalAddr().(*net.UDPAddr).Port)
+
+	in := &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 8, SequenceNumber: 1, Timestamp: 160, SSRC: 1}, Payload: bytes.Repeat([]byte{0xD5}, 160)}
+	raw, _ := in.Marshal()
+	if _, err := fs.WriteToUDP(raw, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: m.localPort()}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := m.ReadRTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PayloadType != 8 || got.Timestamp != 160 || len(got.Payload) != 160 {
+		t.Fatalf("inbound = PT %d ts %d len %d, want PT 8 ts 160 len 160", got.PayloadType, got.Timestamp, len(got.Payload))
+	}
+
+	var ts []uint32
+	buf := make([]byte, 1500)
+	for range 3 {
+		if err := m.write(&rtp.Packet{Header: rtp.Header{PayloadType: 8}, Payload: make([]byte, 160)}); err != nil {
+			t.Fatal(err)
+		}
+		_ = fs.SetReadDeadline(time.Now().Add(time.Second))
+		n, err := fs.Read(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out rtp.Packet
+		if err := out.Unmarshal(buf[:n]); err != nil {
+			t.Fatal(err)
+		}
+		if out.PayloadType != 8 {
+			t.Fatalf("outbound PT = %d, want 8", out.PayloadType)
+		}
+		ts = append(ts, out.Timestamp)
+	}
+	if ts[1]-ts[0] != 160 || ts[2]-ts[1] != 160 {
+		t.Fatalf("outbound timestamps %v, want steps of 160", ts)
 	}
 }

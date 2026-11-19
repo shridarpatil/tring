@@ -54,7 +54,7 @@ func newPortRoom(t *testing.T) (*sfu.SFU, *pktCollector) {
 	}
 	out := &pktCollector{}
 	caller := &slowSource{id: "phone-leg", mark: 0xCC, total: 3000}
-	if err := s.AttachPort("call", caller, out.write); err != nil {
+	if err := s.AttachPort("call", caller, room.Opus, out.write); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 	return s, out
@@ -118,7 +118,7 @@ func TestPortAttachedAfterSupervisor(t *testing.T) {
 	s.RemoveSource("call", "agent")
 
 	out := &pktCollector{}
-	if err := s.AttachPort("call", &slowSource{id: "phone-leg", mark: 0xCC, total: 3000}, out.write); err != nil {
+	if err := s.AttachPort("call", &slowSource{id: "phone-leg", mark: 0xCC, total: 3000}, room.Opus, out.write); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 	noNewMark(t, out, supMark, "late port hears a monitoring supervisor")
