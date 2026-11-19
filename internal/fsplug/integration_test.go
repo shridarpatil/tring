@@ -98,7 +98,7 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = dlg.Bye(context.Background()) }()
-	fsIP, fsPort, err := parseOffer(dlg.InviteResponse.Body())
+	fsIP, fsPort, _, err := parseOffer(dlg.InviteResponse.Body())
 	if err != nil {
 		t.Fatal(err)
 	}
