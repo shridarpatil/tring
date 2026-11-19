@@ -49,11 +49,12 @@ type connectOriginator struct {
 	block   map[int]bool // Originate call index → ring until ctx ends
 	n       int
 	dialed  chan string
+	codecs  chan room.Codec
 	hangups chan room.ParticipantID
 }
 
 func newConnectOriginator(results ...connectLeg) *connectOriginator {
-	return &connectOriginator{results: results, block: map[int]bool{}, dialed: make(chan string, 4), hangups: make(chan room.ParticipantID, 4)}
+	return &connectOriginator{results: results, block: map[int]bool{}, dialed: make(chan string, 4), codecs: make(chan room.Codec, 4), hangups: make(chan room.ParticipantID, 4)}
 }
 
 func (o *connectOriginator) Originate(ctx context.Context, req room.OriginateRequest, _ func(room.Progress)) (*room.Leg, error) {
@@ -62,6 +63,7 @@ func (o *connectOriginator) Originate(ctx context.Context, req room.OriginateReq
 	o.n++
 	o.mu.Unlock()
 	o.dialed <- req.To
+	o.codecs <- req.Codec
 	if o.block[i] {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -194,6 +196,26 @@ func TestConnectBridgesAgentThenClient(t *testing.T) {
 	if got := cl.snapshot(); strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("cdr events %v, want %v", got, want)
 	}
+}
+
+// Connect is two phone legs: both are dialed in the phone codec, so the call
+// is relayed end to end with no Opus leg (and no transcode) in between.
+func TestConnectDialsBothLegsInPhoneCodec(t *testing.T) {
+	agent, client := newConnectLeg("out-agent"), newConnectLeg("out-client")
+	agent.leg.Codec, client.leg.Codec = phoneCodec, phoneCodec
+	o := newConnectOriginator(agent, client)
+	cl := newConnectCallLog()
+	srv := newConnectServer(t, o, cl)
+	if _, err := srv.Connect(context.Background(), uuid.New(), "9876543210", "09812345678"); err != nil {
+		t.Fatal(err)
+	}
+	for _, leg := range []string{"agent", "client"} {
+		if c := <-o.codecs; c != room.PCMA {
+			t.Fatalf("%s dialed in %q, want PCMA", leg, c)
+		}
+	}
+	close(client.done)
+	waitEnd(t, cl)
 }
 
 func TestConnectAgentNotAnswered(t *testing.T) {

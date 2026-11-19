@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/pion/webrtc/v4"
 
 	"github.com/shridarpatil/tring/internal/media/room"
 )
@@ -28,6 +27,7 @@ import (
 // publisher it hears is decoded, summed and re-encoded onto the same stream.
 type roomPort struct {
 	pid   room.ParticipantID // the port's own participant id (never echoed back)
+	codec room.Codec         // the leg's codec — the room's; nothing else is forwarded
 	write func(*rtp.Packet) error
 
 	mu     sync.Mutex
@@ -47,8 +47,13 @@ type roomPort struct {
 
 // WriteRTP implements room.TrackSink: forward the active publisher's packets to
 // the leg, re-stamped onto the port's own continuous seq/ts (the leg sees one
-// clean RTP stream across switchovers). 20ms Opus framing assumed (our planes').
+// clean RTP stream across switchovers). 20ms framing assumed (our planes').
 func (p *roomPort) WriteRTP(from room.ParticipantID, pkt *rtp.Packet) error {
+	if room.CodecForPayloadType(pkt.PayloadType) != p.codec {
+		// The leg can't play another codec's frames (nothing here transcodes):
+		// sending them would be loud noise, so the caller hears silence instead.
+		return nil
+	}
 	p.mu.Lock()
 	if p.closed || from == p.pid {
 		p.mu.Unlock()
@@ -79,7 +84,7 @@ func (p *roomPort) WriteRTP(from room.ParticipantID, pkt *rtp.Packet) error {
 		return nil // not the active feed
 	}
 	p.seq++
-	p.ts += opusFrameSamplesPort
+	p.ts += p.codec.FrameSamples()
 	out := &rtp.Packet{
 		Header: rtp.Header{
 			Version: 2, PayloadType: pkt.PayloadType,
@@ -102,7 +107,8 @@ func (p *roomPort) Close() error {
 
 // setBarge records whether supervisor pid is barging. The port mixes while any
 // supervisor is, and goes back to forwarding one publisher when the last stops.
-// Returns false if mixing was wanted but this binary can't (no libopus).
+// Returns false if mixing was wanted but this binary can't (an Opus leg without
+// libopus).
 func (p *roomPort) setBarge(pid room.ParticipantID, on bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -121,7 +127,7 @@ func (p *roomPort) setBarge(pid room.ParticipantID, on bool) bool {
 	if p.mixer != nil || p.closed {
 		return true
 	}
-	m, err := newPortMixer()
+	m, err := newPortMixer(p.codec)
 	if m == nil || err != nil {
 		return false
 	}
@@ -163,7 +169,7 @@ func (p *roomPort) mixLoop(m *portMixer, stop chan struct{}) {
 			continue
 		}
 		p.seq++
-		p.ts += opusFrameSamplesPort
+		p.ts += p.codec.FrameSamples()
 		out := &rtp.Packet{
 			Header: rtp.Header{
 				Version: 2, PayloadType: p.pt,
@@ -207,19 +213,15 @@ func (p *roomPort) restore(pid room.ParticipantID) {
 	p.mu.Unlock()
 }
 
-const (
-	// opusFrameSamplesPort is the RTP timestamp increment per 20ms Opus frame.
-	opusFrameSamplesPort = 960
-	// portSSRC is the fixed SSRC of a port's outbound stream.
-	portSSRC = 0x7064 // "pd"
-)
+// portSSRC is the fixed SSRC of a port's outbound stream.
+const portSSRC = 0x7064 // "pd"
 
 // AttachPort plugs a bidirectional external leg into a room: src publishes the
 // leg's audio into the room, and `out` receives the room's audio (one active
-// publisher at a time — see roomPort). Returns the port participant id (= src's)
-// for DetachPort.
-func (s *SFU) AttachPort(roomID room.RoomID, src room.ParticipantSource, out func(*rtp.Packet) error) error {
-	port := &roomPort{pid: src.ID(), write: out}
+// publisher at a time — see roomPort). codec is the leg's, and must be the
+// room's (RoomCodec): the port forwards frames as they are.
+func (s *SFU) AttachPort(roomID room.RoomID, src room.ParticipantSource, codec room.Codec, out func(*rtp.Packet) error) error {
+	port := &roomPort{pid: src.ID(), codec: codec, write: out}
 
 	s.mu.Lock()
 	r := s.rooms[roomID]
@@ -245,9 +247,11 @@ func (s *SFU) AttachPort(roomID room.RoomID, src room.ParticipantSource, out fun
 	s.mu.Unlock()
 
 	// And publish the leg's audio into the room.
-	return s.InjectSource(roomID, src, webrtc.RTPCodecCapability{
-		MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-	})
+	if rc := s.RoomCodec(roomID); rc != codec {
+		s.log.Warn("port codec differs from the room's; the leg hears only its own codec",
+			"room", roomID, "participant", src.ID(), "port", codec, "room_codec", rc)
+	}
+	return s.InjectSource(roomID, src, AudioCapability(codec))
 }
 
 // DetachPort removes a port: stops its outbound feed and removes its publication

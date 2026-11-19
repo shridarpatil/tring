@@ -50,7 +50,7 @@ func mixed(t *testing.T, payload []byte) int16 {
 
 func TestMixerSumsPrimedSources(t *testing.T) {
 	useFakeOpus(t)
-	m, err := newPortMixer()
+	m, err := newPortMixer(room.Opus)
 	if err != nil || m == nil {
 		t.Fatalf("newPortMixer: %v, %v", m, err)
 	}
@@ -82,13 +82,13 @@ func TestMixerSumsPrimedSources(t *testing.T) {
 
 func TestMixerSaturatesAndCapsBacklog(t *testing.T) {
 	useFakeOpus(t)
-	m, _ := newPortMixer()
-	for range 10 { // more than mixMaxBuffered: the oldest frames go
+	m, _ := newPortMixer(room.Opus)
+	for range 10 { // more than mixMaxFrames*mixFrame: the oldest frames go
 		m.push("a", []byte{200})
 		m.push("b", []byte{200})
 	}
-	if got := len(m.srcs["a"].buf); got != mixMaxBuffered {
-		t.Fatalf("backlog = %d samples, want capped at %d", got, mixMaxBuffered)
+	if got := len(m.srcs["a"].buf); got != mixMaxFrames*mixFrame {
+		t.Fatalf("backlog = %d samples, want capped at %d", got, mixMaxFrames*mixFrame)
 	}
 	p, _ := m.frame()
 	if mixed(t, p) != 32767 {
@@ -178,7 +178,7 @@ func TestPortPassthroughMixPassthrough(t *testing.T) {
 		if pk[i].SSRC != pk[0].SSRC {
 			t.Fatal("SSRC changed across a mode switch")
 		}
-		if pk[i].SequenceNumber != pk[i-1].SequenceNumber+1 || pk[i].Timestamp != pk[i-1].Timestamp+opusFrameSamplesPort {
+		if pk[i].SequenceNumber != pk[i-1].SequenceNumber+1 || pk[i].Timestamp != pk[i-1].Timestamp+mixFrame {
 			t.Fatalf("packet %d: seq/ts %d/%d after %d/%d", i, pk[i].SequenceNumber, pk[i].Timestamp, pk[i-1].SequenceNumber, pk[i-1].Timestamp)
 		}
 	}
@@ -216,7 +216,7 @@ func TestPortBargeAttachesAndDetaches(t *testing.T) {
 		t.Fatalf("new sfu: %v", err)
 	}
 	out := &portOut{}
-	if err := s.AttachPort("call", &pacedSource{id: "phone", mark: 9, total: 3000}, out.write); err != nil {
+	if err := s.AttachPort("call", &pacedSource{id: "phone", mark: 9, total: 3000}, room.Opus, out.write); err != nil {
 		t.Fatalf("attach port: %v", err)
 	}
 	opus := webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}

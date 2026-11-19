@@ -202,6 +202,7 @@ type Server struct {
 	sfu   *sfu.SFU
 	rooms *room.Manager
 	log   *slog.Logger
+	g711  g711Cache // prompts/hold music decoded for phone rooms (audio.go)
 
 	// joinTimeout bounds the wait for a socket's first message (defaultJoinTimeout;
 	// a field so tests can shorten it without racing live handlers).

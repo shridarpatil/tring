@@ -15,7 +15,7 @@ import (
 var _ room.ParticipantSource = (*prompt.Player)(nil)
 
 func TestPlayerPacketizesFramesWithIncrementingSeqTs(t *testing.T) {
-	p := prompt.NewPlayer("ivr", time.Millisecond) // tiny pacing for a fast test
+	p := prompt.NewPlayer("ivr", room.Opus, time.Millisecond) // tiny pacing for a fast test
 	frames := [][]byte{{1}, {2, 2}, {3, 3, 3}}
 	done := p.Play(frames)
 
@@ -46,7 +46,7 @@ func TestPlayerPacketizesFramesWithIncrementingSeqTs(t *testing.T) {
 }
 
 func TestPlayerCloseUnblocksRead(t *testing.T) {
-	p := prompt.NewPlayer("ivr", time.Millisecond)
+	p := prompt.NewPlayer("ivr", room.Opus, time.Millisecond)
 	errc := make(chan error, 1)
 	go func() {
 		_, err := p.ReadRTP() // blocks (no frames) until Close
@@ -69,7 +69,7 @@ func TestPlayerCloseUnblocksRead(t *testing.T) {
 // frames, but leave the player usable for the next Play — unlike Close. This is
 // the IVR barge-in primitive: a keypress halts the current prompt immediately.
 func TestFlushStopsCurrentBatchAndKeepsPlayerUsable(t *testing.T) {
-	p := prompt.NewPlayer("ivr", time.Millisecond)
+	p := prompt.NewPlayer("ivr", room.Opus, time.Millisecond)
 	done := p.Play([][]byte{{1}, {2}, {3}, {4}, {5}})
 
 	if _, err := p.ReadRTP(); err != nil { // consume one frame mid-batch
@@ -100,7 +100,7 @@ func TestFlushStopsCurrentBatchAndKeepsPlayerUsable(t *testing.T) {
 }
 
 func TestPlayEmptyBatchClosesImmediately(t *testing.T) {
-	p := prompt.NewPlayer("ivr", time.Millisecond)
+	p := prompt.NewPlayer("ivr", room.Opus, time.Millisecond)
 	select {
 	case <-p.Play(nil):
 	case <-time.After(time.Second):

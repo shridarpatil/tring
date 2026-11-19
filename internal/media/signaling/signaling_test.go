@@ -552,6 +552,7 @@ var errSourceClosed = errors.New("closed")
 
 // fakePstn is a scripted phone plug (the FS adapter stand-in).
 type fakePstn struct {
+	codec    room.Codec // what Answer negotiates (Opus unless a test sets it)
 	inbound  func(room.InboundCall)
 	src      *blockingSource
 	dtmf     chan string
@@ -573,6 +574,7 @@ func newFakePstn() *fakePstn {
 func (f *fakePstn) OnInbound(fn func(room.InboundCall)) { f.inbound = fn }
 func (f *fakePstn) Answer(room.CallID) (*room.Leg, error) {
 	return &room.Leg{
+		Codec:  f.codec,
 		Source: f.src,
 		Write:  func(*rtp.Packet) error { return nil },
 		DTMF:   f.dtmf,
@@ -646,6 +648,58 @@ func TestInboundPhoneCallRingsAgentAndEndsOnHangup(t *testing.T) {
 	close(fp.done)
 	if end := ans.readUntil("ended"); end["reason"] != "caller hung up" {
 		t.Fatalf("ended reason = %v", end["reason"])
+	}
+}
+
+// A carrier call answered in G.711 makes its room G.711: the agent who joins is
+// offered that law alone for their mic, so nothing transcodes anywhere, and the
+// room's codec is cleared once the call ends.
+func TestInboundPhoneRoomCarriesCarrierCodec(t *testing.T) {
+	tenant := uuid.New()
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatalf("sfu: %v", err)
+	}
+	sig := signaling.New(signaling.Config{SFU: s, JWTSecret: testSecret, Flows: transferFlows{}, NumberMask: noMask{}})
+	ts := httptest.NewServer(sig.Handler())
+	t.Cleanup(ts.Close)
+	fp := newFakePstn()
+	fp.codec = room.PCMA
+	sig.AttachPstn(fp, fakeDIDs{tenant: tenant, flow: "f1"})
+
+	agent := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	agent.send(map[string]any{"type": "register"})
+	agent.readUntil("ready")
+	fp.inbound(room.InboundCall{CallID: "c1", From: "+919900112233", To: "+916600112233"})
+	agent.readUntil("incoming")
+	rid := room.RoomID(tenant.String() + "/pstn-c1")
+	if c := s.RoomCodec(rid); c != room.PCMA {
+		t.Fatalf("room codec = %q, want PCMA", c)
+	}
+
+	ans := dial(t, ts.URL, mintToken(t, tenant, "alice"))
+	ans.send(map[string]any{"type": "join", "room": "pstn-c1", "name": "Alice"})
+	offer, _ := ans.readUntil("offer")["sdp"].(string)
+	var mic string
+	for _, line := range strings.Split(offer, "\r\n") {
+		if strings.HasPrefix(line, "m=audio") {
+			mic = line
+			break
+		}
+	}
+	if !strings.HasSuffix(mic, " 8") {
+		t.Fatalf("agent mic m-line = %q, want PCMA (PT 8) alone", mic)
+	}
+
+	fp.src.Close()
+	close(fp.done)
+	ans.readUntil("ended")
+	deadline := time.Now().Add(2 * time.Second)
+	for s.RoomCodec(rid) != room.Opus {
+		if time.Now().After(deadline) {
+			t.Fatal("room codec not cleared after the call")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
