@@ -1,35 +1,46 @@
-package sfu
+// Package g711 codes G.711 A-law and µ-law: one byte per 8 kHz sample, the
+// codec a phone room carries end to end. The media plane forwards G.711 as is;
+// only the barge mixer, the recorder's silence and the e2e tests code samples.
+// The algorithms are the ITU-T G.711 reference ones (as in Sun's public
+// g711.c), on 16-bit linear PCM.
+package g711
 
-// g711 codes G.711 A-law or µ-law for the port mixer (mix.go): one byte per
-// 8kHz sample, so a barge on a phone room mixes without libopus. The
-// algorithms are the ITU-T G.711 reference ones (as in Sun's public g711.c),
-// on 16-bit linear PCM.
-type g711 struct{ alaw bool }
+import "github.com/shridarpatil/tring/internal/media/room"
 
-// Decode implements opusDecoder: one sample per payload byte.
-func (g g711) Decode(data []byte, pcm []int16) (int, error) {
+// Decode decodes data in law c (room.PCMA or room.PCMU) into pcm, one sample
+// per byte, and returns the samples written.
+func Decode(c room.Codec, data []byte, pcm []int16) int {
 	n := min(len(data), len(pcm))
 	for i, b := range data[:n] {
-		if g.alaw {
+		if c == room.PCMA {
 			pcm[i] = alawToLinear(b)
 		} else {
 			pcm[i] = ulawToLinear(b)
 		}
 	}
-	return n, nil
+	return n
 }
 
-// Encode implements opusEncoder: one payload byte per sample.
-func (g g711) Encode(pcm []int16, data []byte) (int, error) {
+// Encode encodes pcm in law c into data, one byte per sample, and returns the
+// bytes written.
+func Encode(c room.Codec, pcm []int16, data []byte) int {
 	n := min(len(pcm), len(data))
 	for i, v := range pcm[:n] {
-		if g.alaw {
+		if c == room.PCMA {
 			data[i] = linearToAlaw(v)
 		} else {
 			data[i] = linearToUlaw(v)
 		}
 	}
-	return n, nil
+	return n
+}
+
+// Silence is law c's zero-amplitude sample.
+func Silence(c room.Codec) byte {
+	if c == room.PCMA {
+		return 0xD5
+	}
+	return 0xFF
 }
 
 // segment returns the index of the first segment end >= v (len(ends) when v

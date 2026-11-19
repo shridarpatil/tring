@@ -34,7 +34,7 @@ func TestAgentGetsAudioThroughGateway(t *testing.T) {
 	if err := CheckArrives(got, 50, 2*time.Second); err != nil {
 		t.Errorf("agent: %v", err)
 	}
-	if f, ok := Hears(got, 48000, Freqs); !ok || f != FreqCustomer {
+	if f, ok := Hears(got, agent.Rate(), Freqs); !ok || f != FreqCustomer {
 		t.Errorf("agent hears %v (clear tone: %v), want the customer's %v Hz", f, ok, FreqCustomer)
 	}
 }
