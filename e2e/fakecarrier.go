@@ -15,6 +15,9 @@ import (
 	"github.com/emiago/sipgo/sip"
 	"github.com/pion/rtp"
 	"github.com/pion/sdp/v3"
+
+	"github.com/shridarpatil/tring/internal/media/g711"
+	"github.com/shridarpatil/tring/internal/media/room"
 )
 
 const (
@@ -303,9 +306,11 @@ func (l *Leg) send() {
 		}
 		seq++
 		ts += pcmuFrame
+		payload := make([]byte, pcmuFrame)
+		g711.Encode(room.PCMU, Tone(freq, 8000, pcmuFrame, &phase), payload)
 		pkt := &rtp.Packet{
 			Header:  rtp.Header{Version: 2, PayloadType: 0, SequenceNumber: seq, Timestamp: ts, SSRC: 0x63617272},
-			Payload: MuLawEncode(Tone(freq, 8000, pcmuFrame, &phase)),
+			Payload: payload,
 		}
 		if raw, err := pkt.Marshal(); err == nil {
 			_, _ = l.conn.WriteToUDP(raw, remote)
@@ -325,7 +330,9 @@ func (l *Leg) recv() {
 		if pkt.Unmarshal(buf[:n]) != nil || pkt.PayloadType != 0 {
 			continue
 		}
-		l.Got.Add(Arrival{At: time.Now(), Seq: pkt.SequenceNumber, TS: pkt.Timestamp, Marker: pkt.Marker, PCM: MuLawDecode(pkt.Payload)})
+		pcm := make([]int16, len(pkt.Payload))
+		g711.Decode(room.PCMU, pkt.Payload, pcm)
+		l.Got.Add(Arrival{At: time.Now(), Seq: pkt.SequenceNumber, TS: pkt.Timestamp, Marker: pkt.Marker, PCM: pcm})
 	}
 }
 

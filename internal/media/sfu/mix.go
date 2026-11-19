@@ -1,6 +1,7 @@
 package sfu
 
 import (
+	"github.com/shridarpatil/tring/internal/media/g711"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
@@ -10,7 +11,8 @@ import (
 // supervisor, so while a barge is on the port decodes every publisher it hears,
 // sums them each 20ms and re-encodes one stream in the room's codec.
 //
-// G.711 (phone rooms) is coded in pure Go (g711.go). Opus needs libopus (cgo):
+// G.711 (phone rooms) is coded in pure Go (internal/media/g711). Opus needs
+// libopus (cgo):
 // mix_opus.go, built with `-tags opus`, sets newOpusDecoder/newOpusEncoder;
 // without the tag they stay nil, the binary stays cgo-free, and a barge on an
 // Opus phone leg falls back to one speaker at a time.
@@ -70,7 +72,7 @@ type portMixer struct {
 func newPortMixer(c room.Codec) (*portMixer, error) {
 	newDec, newEnc := newOpusDecoder, newOpusEncoder
 	if c.G711() {
-		g := g711{alaw: c == room.PCMA}
+		g := g711Coder{c}
 		newDec = func() (opusDecoder, error) { return g, nil }
 		newEnc = func() (opusEncoder, error) { return g, nil }
 	}
@@ -147,6 +149,17 @@ func (m *portMixer) frame() (payload []byte, ok bool) {
 		return nil, false
 	}
 	return append([]byte(nil), m.out[:n]...), true
+}
+
+// g711Coder adapts package g711 to the mixer's coder interfaces.
+type g711Coder struct{ c room.Codec }
+
+func (g g711Coder) Decode(data []byte, pcm []int16) (int, error) {
+	return g711.Decode(g.c, data, pcm), nil
+}
+
+func (g g711Coder) Encode(pcm []int16, data []byte) (int, error) {
+	return g711.Encode(g.c, pcm, data), nil
 }
 
 // drop forgets a publisher (it left, or the port no longer hears it).

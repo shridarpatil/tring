@@ -6,6 +6,7 @@ import (
 
 	"github.com/pion/rtp"
 
+	"github.com/shridarpatil/tring/internal/media/g711"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
@@ -35,9 +36,9 @@ func newWAVWriter(path string, c room.Codec) (*wavWriter, error) {
 	if err != nil {
 		return nil, err
 	}
-	format, silence := uint16(6), byte(0xD5) // WAVE_FORMAT_ALAW
+	format := uint16(6) // WAVE_FORMAT_ALAW
 	if c == room.PCMU {
-		format, silence = 7, 0xFF // WAVE_FORMAT_MULAW
+		format = 7 // WAVE_FORMAT_MULAW
 	}
 	h := make([]byte, wavHeaderSize)
 	copy(h[0:], "RIFF")
@@ -56,7 +57,7 @@ func newWAVWriter(path string, c room.Codec) (*wavWriter, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &wavWriter{f: f, silence: silence}, nil
+	return &wavWriter{f: f, silence: g711.Silence(c)}, nil
 }
 
 // WriteRTP appends pkt's samples, first filling any timestamp gap since the

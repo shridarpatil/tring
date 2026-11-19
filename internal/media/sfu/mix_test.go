@@ -3,6 +3,7 @@ package sfu
 import (
 	"encoding/binary"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/shridarpatil/tring/internal/media/g711"
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
@@ -261,4 +263,39 @@ func TestPortBargeAttachesAndDetaches(t *testing.T) {
 
 	s.SetAudience("call", "sup", true, nil)
 	waitSup(supOnly()+5, "second barge did not reach the caller")
+}
+
+// A barge in a PCMA room mixes without libopus: two speakers' samples are
+// summed and the frame goes out as 160 A-law bytes (20ms at 8kHz).
+func TestMixerMixesG711WithoutLibopus(t *testing.T) {
+	dec, enc := newOpusDecoder, newOpusEncoder
+	newOpusDecoder, newOpusEncoder = nil, nil // a cgo-free build
+	t.Cleanup(func() { newOpusDecoder, newOpusEncoder = dec, enc })
+
+	if m, _ := newPortMixer(room.Opus); m != nil {
+		t.Fatal("Opus mixer built without libopus")
+	}
+	m, err := newPortMixer(room.PCMA)
+	if err != nil || m == nil {
+		t.Fatalf("newPortMixer(PCMA) = %v, %v", m, err)
+	}
+	level := func(v int16) []byte {
+		b := make([]byte, 160)
+		g711.Encode(room.PCMA, slices.Repeat([]int16{v}, 160), b)
+		return b
+	}
+	a, b := level(1000), level(2000)
+	for range mixPrimeFrames {
+		m.push("agent", a)
+		m.push("supervisor", b)
+	}
+	out, ok := m.frame()
+	if !ok || len(out) != 160 {
+		t.Fatalf("frame = %d bytes, ok=%v; want 160", len(out), ok)
+	}
+	pcm := make([]int16, 1)
+	g711.Decode(room.PCMA, out[:1], pcm)
+	if d := int(pcm[0]) - 3000; d < -128 || d > 128 { // within one A-law step at this level
+		t.Fatalf("mixed sample = %d, want ≈ 3000", pcm[0])
+	}
 }
