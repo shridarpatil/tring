@@ -10,23 +10,25 @@ import (
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
-// mediaSession owns the plain-RTP UDP socket for one call leg. Inbound Opus
-// packets are re-stamped onto the 48 kHz Opus clock and queued for ReadRTP;
-// telephone-event packets are decoded to DTMF.
+// mediaSession owns the plain-RTP UDP socket for one call leg, in one audio
+// codec (the room's). Inbound audio packets are queued for ReadRTP — Opus ones
+// re-stamped onto Opus's 48 kHz RTP clock first; telephone-event packets are
+// decoded to DTMF.
 // Outbound room audio is re-stamped onto one clean stream via write. It
 // implements room.ParticipantSource.
 type mediaSession struct {
-	id     room.ParticipantID
-	conn   *net.UDPConn
-	opusPT uint8
-	dtmfPT uint8
+	id      room.ParticipantID
+	conn    *net.UDPConn
+	audioPT uint8  // the codec's payload type, both directions
+	step    uint32 // outbound RTP timestamp step per 20 ms frame
+	dtmfPT  uint8
 	// tsScale turns FreeSWITCH's inbound Opus timestamps into 48 kHz ones. Run
 	// below 48 kHz (maxplaybackrate), FreeSWITCH stamps on that rate's clock
 	// (160 per 20 ms at 8 kHz), but Opus RTP is always 48 kHz (RFC 7587) and
 	// browsers play these packets as is.
 	tsScale uint32
 
-	in    chan *rtp.Packet // inbound Opus, drained by ReadRTP
+	in    chan *rtp.Packet // inbound audio, drained by ReadRTP
 	dtmfC chan string
 	doneC chan struct{}
 
@@ -40,8 +42,9 @@ type mediaSession struct {
 	outTS   uint32
 }
 
-// rate is the leg's Opus rate as offered or answered (0 = full band).
-func newMediaSession(id room.ParticipantID, listenIP string, portMin, portMax int, opusPT, dtmfPT uint8, rate int) (*mediaSession, error) {
+// c is the leg's codec; opusPT is used when it is Opus, and rate is then the
+// leg's Opus rate as offered or answered (0 = full band).
+func newMediaSession(id room.ParticipantID, listenIP string, portMin, portMax int, c room.Codec, opusPT, dtmfPT uint8, rate int) (*mediaSession, error) {
 	var conn *net.UDPConn
 	var err error
 	for p := portMin; p <= portMax; p++ {
@@ -54,11 +57,13 @@ func newMediaSession(id room.ParticipantID, listenIP string, portMin, portMax in
 		return nil, fmt.Errorf("fsplug: no free RTP port in %d-%d: %w", portMin, portMax, err)
 	}
 	m := &mediaSession{
-		id: id, conn: conn, opusPT: opusPT, dtmfPT: dtmfPT, tsScale: 1,
+		id: id, conn: conn, audioPT: opusPT, step: c.FrameSamples(), dtmfPT: dtmfPT, tsScale: 1,
 		in: make(chan *rtp.Packet, 256), dtmfC: make(chan string, 8), doneC: make(chan struct{}),
 		outSSRC: 0x5052494e, // "PRIN" — stable per-session SSRC
 	}
-	if rate > 0 {
+	if c.G711() {
+		m.audioPT = c.PayloadType() // its own 8 kHz clock: no re-stamp
+	} else if rate > 0 {
 		m.tsScale = uint32(48000 / rate)
 	}
 	go m.readLoop()
@@ -96,7 +101,7 @@ func (m *mediaSession) readLoop() {
 				default:
 				}
 			}
-		case m.opusPT:
+		case m.audioPT:
 			pkt.Timestamp *= m.tsScale // wraps consistently: gaps scale, mod 2^32
 			select {
 			case m.in <- pkt:
@@ -106,7 +111,7 @@ func (m *mediaSession) readLoop() {
 	}
 }
 
-// ReadRTP yields the next inbound Opus packet. It blocks until one is available
+// ReadRTP yields the next inbound audio packet. It blocks until one is available
 // or the session closes.
 func (m *mediaSession) ReadRTP() (*rtp.Packet, error) {
 	select {
@@ -117,7 +122,7 @@ func (m *mediaSession) ReadRTP() (*rtp.Packet, error) {
 	}
 }
 
-// discardQueued drops the inbound Opus queued so far. An outbound leg's socket
+// discardQueued drops the inbound audio queued so far. An outbound leg's socket
 // receives the carrier's ringback (early media) while nobody reads it; left
 // queued, the room would play seconds of stale ringing on answer and then run
 // that far behind.
@@ -141,7 +146,7 @@ func (m *mediaSession) write(pkt *rtp.Packet) error {
 		return nil
 	}
 	out := &rtp.Packet{
-		Header:  rtp.Header{Version: 2, PayloadType: m.opusPT, SequenceNumber: m.outSeq, Timestamp: m.outTS, SSRC: m.outSSRC},
+		Header:  rtp.Header{Version: 2, PayloadType: m.audioPT, SequenceNumber: m.outSeq, Timestamp: m.outTS, SSRC: m.outSSRC},
 		Payload: pkt.Payload,
 	}
 	m.mu.Unlock()
@@ -153,7 +158,7 @@ func (m *mediaSession) write(pkt *rtp.Packet) error {
 
 	m.mu.Lock()
 	m.outSeq++
-	m.outTS += 960 // 20 ms @ 48 kHz
+	m.outTS += m.step // one 20 ms frame
 	m.mu.Unlock()
 
 	_, err = m.conn.WriteToUDP(raw, remote)

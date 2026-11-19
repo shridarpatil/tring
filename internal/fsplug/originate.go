@@ -16,14 +16,15 @@ import (
 
 // carrierRate is the outbound carrier leg's audio rate: FreeSWITCH's
 // tring_outbound_trunk (dialplan/default.xml) bridges to the trunk with G.711
-// only.
+// only, so an Opus leg runs at its 8 kHz.
 const carrierRate = 8000
 
-// buildOffer is the outbound SDP offer. Structurally identical to buildAnswer
-// (Opus-only + telephone-event forces FS to transcode toward the carrier), at
-// the carrier's 8 kHz.
-func buildOffer(localIP string, localPort int, opusPT, dtmfPT uint8) []byte {
-	return buildAnswer(localIP, localPort, opusPT, dtmfPT, carrierRate)
+// buildOffer is the outbound SDP offer: buildAnswer's single codec — the
+// room's — plus telephone-event. A G.711 offer is relayed to the carrier as
+// is; an Opus one (a web room) makes FS transcode toward the carrier, at the
+// carrier's 8 kHz.
+func buildOffer(localIP string, localPort int, c room.Codec, opusPT, dtmfPT uint8) []byte {
+	return buildAnswer(localIP, localPort, c, opusPT, dtmfPT, carrierRate)
 }
 
 // splitHostPort splits an "ip:port" address, defaulting to port 5060 if no
@@ -69,11 +70,11 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	if len(req.Trunks) == 0 {
 		return nil, fmt.Errorf("fsplug: originate with no trunk")
 	}
-	m, err := newMediaSession(room.ParticipantID("out-"+uuid.NewString()), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, p.cfg.OpusPT, p.cfg.DTMFPT, carrierRate)
+	m, err := newMediaSession(room.ParticipantID("out-"+uuid.NewString()), p.cfg.SIPAdvertise, p.cfg.RTPMin, p.cfg.RTPMax, req.Codec, p.cfg.OpusPT, p.cfg.DTMFPT, carrierRate)
 	if err != nil {
 		return nil, err
 	}
-	offer := buildOffer(p.cfg.SIPAdvertise, m.localPort(), p.cfg.OpusPT, p.cfg.DTMFPT)
+	offer := buildOffer(p.cfg.SIPAdvertise, m.localPort(), req.Codec, p.cfg.OpusPT, p.cfg.DTMFPT)
 
 	// INVITE FreeSWITCH: destination in the RURI, caller-ID in From, trunk in a
 	// custom header the FS outbound dialplan reads (sip_h_X-Tring-Trunk).
@@ -130,7 +131,8 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 	// channel that already dropped its one Ended event — leaking the
 	// goroutine, the mediaSession's UDP socket, and Leg.Done.
 	stateCh := dlg.StateRead()
-	ip, rtpPort, err := parseOffer(dlg.InviteResponse.Body()) // the 200's answer SDP
+	// The 200's answer SDP. Its codec is ours: we offered exactly one.
+	ip, rtpPort, _, err := parseOffer(dlg.InviteResponse.Body())
 	if err != nil {
 		// The 200 was already received (dialog Established) — the carrier
 		// believes the call is up even though we're about to fail out.
@@ -185,6 +187,7 @@ func (p *Plug) Originate(ctx context.Context, req room.OriginateRequest, onProgr
 		m.Close()
 	}
 	return &room.Leg{
+		Codec:  req.Codec,
 		Source: m,
 		Write:  func(pkt *rtp.Packet) error { return m.write(pkt) },
 		DTMF:   m.dtmf(),
