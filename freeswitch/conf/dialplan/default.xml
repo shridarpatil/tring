@@ -47,17 +47,25 @@
            t_ + 12 hex). Anything else — including `|` or `,` that would
            smuggle extra dial strings into the bridge — falls through. -->
       <condition field="${sip_h_X-Tring-Trunk}" expression="^t_[0-9a-f]{12}$"/>
+      <!-- The carrier's codec order: the plug leg's own G.711 law first (see
+           the bridge below). break="never" so it only ever picks the order. -->
+      <condition field="${ep_codec_string}" expression="^[^,]*\.PCMU@" break="never">
+        <action application="set" data="tring_carrier_codecs=PCMU,PCMA"/>
+        <anti-action application="set" data="tring_carrier_codecs=PCMA,PCMU"/>
+      </condition>
       <condition field="destination_number" expression="^(\+?\d+)$">
         <action application="set" data="effective_caller_id_number=${sip_from_user}"/>
         <action application="set" data="continue_on_fail=NORMAL_TEMPORARY_FAILURE,NO_ROUTE_DESTINATION,RECOVERY_ON_TIMER_EXPIRE"/>
-        <!-- G.711 on the CARRIER leg, as {} vars on the bridge. fsplug offers
-             Opus only, and without this FS offered the carrier that same
-             Opus-only SDP (m=audio … 102 101); Tata's IBCF refused it with an
-             instant 487, so no gateway-placed outbound call ever rang. Now
-             the carrier gets G.711 and FS transcodes to Opus for the plug —
-             the mirror of public.xml's tring_inbound_to_gateway. Quoted so
-             the comma doesn't end the {} block. -->
-        <action application="bridge" data="{absolute_codec_string='PCMA,PCMU'}sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
+        <!-- G.711 only on the CARRIER leg, as {} vars on the bridge. A web
+             room's plug leg offers Opus, and without this FS offered the
+             carrier that same Opus-only SDP (m=audio … 102 101); Tata's IBCF
+             refused it with an instant 487, so no gateway-placed outbound call
+             ever rang. A phone room's plug leg offers its G.711 law: it goes
+             first here, so a carrier that takes it shares one codec with the
+             plug and FS relays the frames untouched; the other law stays as
+             a fallback (a cheap A/µ transcode in FS). Quoted so the comma
+             doesn't end the {} block. -->
+        <action application="bridge" data="{absolute_codec_string='${tring_carrier_codecs}'}sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
       </condition>
     </extension>
 
