@@ -42,9 +42,9 @@ type VideoSink interface {
 
 // ParticipantSource injects a participant whose media originates OUTSIDE WebRTC.
 // The IVR prompt player and a channel's phone/PSTN leg both implement it: they
-// appear in the room as ordinary participants publishing Opus. pion never sees a
-// channel-native codec — a Plug transcodes (e.g. G.711↔Opus) before the source,
-// so ReadRTP always yields Opus.
+// appear in the room as ordinary participants publishing the room's Codec (Opus,
+// or G.711 in a phone room). The media plane never transcodes: a source yields
+// frames already in the room's codec.
 type ParticipantSource interface {
 	ID() ParticipantID
 	ReadRTP() (*rtp.Packet, error)
@@ -68,9 +68,10 @@ type InboundCall struct {
 // Leg is one ANSWERED call's media + events, ready to plug into a room
 // (sfu.AttachPort): the caller's audio enters as Source, the room's audio goes
 // back via Write, keypresses arrive on DTMF, and Done closes when the far side
-// hangs up. Source always yields Opus — the plug owns any transcode, so the
-// media plane never sees a channel-native codec.
+// hangs up. Codec is what Source yields and Write expects; it must match the
+// room the leg is attached to (the media plane never transcodes).
 type Leg struct {
+	Codec  Codec
 	Source ParticipantSource
 	Write  func(pkt *rtp.Packet) error
 	DTMF   <-chan string
@@ -98,6 +99,9 @@ type OriginateRequest struct {
 	To       string   // E.164 destination
 	CallerID string   // presented caller line (an allocated DID)
 	Trunks   []string // ordered provider/gateway names
+	// Codec is the audio codec to negotiate for the leg: the room's, so the
+	// answered leg plugs into it without a transcode.
+	Codec Codec
 }
 
 // Progress is an outbound call's pre-answer state, reported on the Originate

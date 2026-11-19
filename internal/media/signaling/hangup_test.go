@@ -151,7 +151,7 @@ func TestEndPstnRoomDetachesCallerPort(t *testing.T) {
 	s := newOutboundServer(t, nil, nil)
 	rid := room.RoomID(uuid.NewString() + "/pstn-detach")
 	src := &fakeOutboundSource{id: "call-detach", stop: make(chan struct{})}
-	if err := s.sfu.AttachPort(rid, src, func(*rtp.Packet) error { return nil }); err != nil {
+	if err := s.sfu.AttachPort(rid, src, room.Opus, func(*rtp.Packet) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	pstnRoom(s, &hangupPlug{hangups: make(chan room.CallID, 1)}, rid, "call-detach")

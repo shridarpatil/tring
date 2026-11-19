@@ -1,6 +1,6 @@
 // Package prompt is the IVR's voice on the pion media plane: a room.Participant
-// Source that streams Opus frames (a greeting, menu prompt, or hold music) into
-// a room as paced RTP. It's injected via SFU.InjectSource, so the caller hears
+// Source that streams audio frames (a greeting, menu prompt, or hold music) into
+// a room as paced RTP, in the room's codec (Opus, or G.711 in a phone room). It's injected via SFU.InjectSource, so the caller hears
 // it exactly like another participant — the foundation for the IVR participant
 // (internal/media/ivrdrive) and, later, an AI voice agent's TTS output.
 package prompt
@@ -17,17 +17,15 @@ import (
 	"github.com/shridarpatil/tring/internal/media/room"
 )
 
-// opusFrameSamples is the RTP timestamp increment per 20ms Opus frame at 48kHz.
-const opusFrameSamples = 960
-
 // errClosed ends the SFU copy loop when the player is closed.
 var errClosed = errors.New("prompt: player closed")
 
-// Player is a room.ParticipantSource that plays queued Opus frames as RTP, one
-// 20ms frame per packet, paced in real time. Between prompts ReadRTP blocks
+// Player is a room.ParticipantSource that plays queued frames as RTP, one 20ms
+// frame per packet, paced in real time. Between prompts ReadRTP blocks
 // (the participant is silent) until the next Play or Close.
 type Player struct {
 	id       room.ParticipantID
+	codec    room.Codec // what the frames are; sets the RTP payload type and clock
 	frameDur time.Duration
 
 	mu     sync.Mutex
@@ -41,13 +39,14 @@ type Player struct {
 	lastSent time.Time
 }
 
-// NewPlayer builds a player for participant id. frameDur is the inter-packet
-// pacing (0 → 20ms); pass a small value in tests to avoid real-time waits.
-func NewPlayer(id room.ParticipantID, frameDur time.Duration) *Player {
+// NewPlayer builds a player for participant id that plays frames of codec c
+// (the room's). frameDur is the inter-packet pacing (0 → 20ms); pass a small
+// value in tests to avoid real-time waits.
+func NewPlayer(id room.ParticipantID, c room.Codec, frameDur time.Duration) *Player {
 	if frameDur <= 0 {
 		frameDur = 20 * time.Millisecond
 	}
-	p := &Player{id: id, frameDur: frameDur}
+	p := &Player{id: id, codec: c, frameDur: frameDur}
 	p.cond = sync.NewCond(&p.mu)
 	return p
 }
@@ -89,7 +88,7 @@ func (p *Player) ReadRTP() (*rtp.Packet, error) {
 	done := p.done
 	seq, ts := p.seq, p.ts
 	p.seq++
-	p.ts += opusFrameSamples
+	p.ts += p.codec.FrameSamples()
 	wait := p.pacingLocked()
 	if drained {
 		p.done = nil
@@ -104,7 +103,7 @@ func (p *Player) ReadRTP() (*rtp.Packet, error) {
 	p.mu.Unlock()
 
 	pkt := &rtp.Packet{
-		Header:  rtp.Header{Version: 2, PayloadType: 111, SequenceNumber: seq, Timestamp: ts},
+		Header:  rtp.Header{Version: 2, PayloadType: p.codec.PayloadType(), SequenceNumber: seq, Timestamp: ts},
 		Payload: frame,
 	}
 	if drained && done != nil {

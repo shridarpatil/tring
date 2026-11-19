@@ -50,7 +50,7 @@ func (s *Server) dialFromIVR(ctx context.Context, roomID room.RoomID, number, ca
 	octx, ocancel := context.WithCancel(context.Background())
 	timer := time.AfterFunc(ring, ocancel)
 	stopWatch := context.AfterFunc(ctx, ocancel)
-	leg, callerID, to, err := s.originateOut(octx, tenant, number, callerID, nil)
+	leg, callerID, to, err := s.originateOut(octx, roomID, tenant, number, callerID, nil)
 	timer.Stop()
 	stopWatch()
 	if err != nil {
@@ -70,7 +70,7 @@ func (s *Server) dialFromIVR(ctx context.Context, roomID room.RoomID, number, ca
 		answered() // the caller hears the callee, not the ringing music
 	}
 	tagParticipant(pid, "callee")
-	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Write); err != nil {
+	if err := s.sfu.AttachPort(roomID, leg.Source, leg.Codec, leg.Write); err != nil {
 		ocancel()
 		logging.ClearParticipant(string(pid))
 		s.log.Error("ivr dial: attach port failed", "room", roomID, "err", err)

@@ -7,7 +7,7 @@
 // is the whole point. The IVR (a prompt participant, and later an AI voice agent)
 // joins as an ordinary participant that publishes prompt audio and consumes the caller's
 // audio + DTMF; the phone leg (FreeSWITCH or other PSTN adapter, behind
-// Plug) joins as an Opus ParticipantSource; routing a call to a human is
+// Plug) joins as a ParticipantSource in the room's Codec; routing a call to a human is
 // just a membership change. See docs/src/content/docs/architecture/overview.md.
 //
 // Milestone 1 (this package) builds the model only: the participant state

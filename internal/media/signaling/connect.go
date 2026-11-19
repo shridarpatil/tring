@@ -73,8 +73,10 @@ func (s *Server) Connect(ctx context.Context, tenant uuid.UUID, agentNumber, cli
 // (trunks) so that check doesn't advance a round_robin rotation on its own.
 func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client string, trunks []trunkselect.Trunk) {
 	defer s.endPortCall()
+	s.sfu.SetRoomCodec(roomID, phoneCodec) // two phone legs: no browser, no transcode
+	defer s.sfu.SetRoomCodec(roomID, room.Opus)
 	octx, cancel := context.WithTimeout(context.Background(), connectRingTimeout)
-	agentLeg, callerID, _, err := s.originateOn(octx, tenant, trunks, agent, "", nil)
+	agentLeg, callerID, _, err := s.originateOn(octx, roomID, tenant, trunks, agent, "", nil)
 	cancel()
 	if err != nil {
 		s.log.Warn("connect: agent's number not answered", "room", roomID, "to", agent, "err", err)
@@ -83,7 +85,7 @@ func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client 
 	}
 	agentPID := agentLeg.Source.ID()
 	tagParticipant(agentPID, "agent")
-	if err := s.sfu.AttachPort(roomID, agentLeg.Source, agentLeg.Write); err != nil {
+	if err := s.sfu.AttachPort(roomID, agentLeg.Source, agentLeg.Codec, agentLeg.Write); err != nil {
 		s.log.Error("connect: attach agent failed", "room", roomID, "err", err)
 		s.cfg.Calls.Failed(string(roomID), "system")
 		s.endConnect(roomID, agentPID)
@@ -102,7 +104,7 @@ func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client 
 		case <-octx.Done():
 		}
 	}()
-	clientLeg, _, _, err := s.originateOut(octx, tenant, client, "", nil)
+	clientLeg, _, _, err := s.originateOut(octx, roomID, tenant, client, "", nil)
 	cancel()
 	stopMusic()
 	if err != nil || closed(agentLeg.Done) {
@@ -121,7 +123,7 @@ func (s *Server) runConnect(roomID room.RoomID, tenant uuid.UUID, agent, client 
 	}
 	clientPID := clientLeg.Source.ID()
 	tagParticipant(clientPID, "callee")
-	if err := s.sfu.AttachPort(roomID, clientLeg.Source, clientLeg.Write); err != nil {
+	if err := s.sfu.AttachPort(roomID, clientLeg.Source, clientLeg.Codec, clientLeg.Write); err != nil {
 		s.log.Error("connect: attach client failed", "room", roomID, "err", err)
 		s.cfg.Calls.Failed(string(roomID), "system")
 		s.endConnect(roomID, agentPID, clientPID)
