@@ -2,10 +2,8 @@ package fsplug
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
-	"github.com/emiago/sipgo/sip"
 	"github.com/pion/sdp/v3"
 
 	"github.com/shridarpatil/tring/internal/media/room"
@@ -40,8 +38,7 @@ func parseOffer(body []byte) (string, int, room.Codec, error) {
 // offeredCodec is the first of the plug's codecs (PCMA, PCMU, Opus) in the
 // offer's preference order. FreeSWITCH's public dialplan offers the carrier's
 // G.711 law alone, so the plug answers it and FS relays the carrier's frames
-// untouched; anything else (WhatsApp, a G.722 carrier) is answered with Opus,
-// which FS transcodes to, as before.
+// untouched; anything else (WhatsApp) is answered with Opus, full band.
 func offeredCodec(md *sdp.MediaDescription) room.Codec {
 	names := map[string]string{"0": "PCMU", "8": "PCMA"} // static types may omit rtpmap
 	for _, a := range md.Attributes {
@@ -72,12 +69,13 @@ func offeredCodec(md *sdp.MediaDescription) room.Codec {
 // G.711 (c) goes out on its static payload type with an 8 kHz telephone-event:
 // RFC 4733 events run on the audio codec's clock.
 //
-// For Opus, rate, when set, is the carrier leg's audio rate (8000 for G.711): it
-// goes out as maxplaybackrate/sprop-maxcapturerate, and FreeSWITCH then runs
-// this Opus leg at that rate instead of 48 kHz — no resampling, and a far
-// cheaper encoder (about a third of the CPU per call at 8 kHz). Full band would
-// carry nothing a phone line has. The RTP clock stays 48 kHz, as RFC 7587
-// fixes it for Opus whatever the audio bandwidth.
+// For Opus (an inbound WhatsApp call, or a web room dialing out), rate, when
+// set, is the carrier leg's audio rate (8000 on outbound calls, which reach the
+// carrier as G.711): it goes out as maxplaybackrate/sprop-maxcapturerate, and
+// FreeSWITCH then runs this Opus leg at that rate instead of 48 kHz — no
+// resampling, and a far cheaper encoder (about a third of the CPU per call at
+// 8 kHz). The RTP clock stays 48 kHz, as RFC 7587 fixes it for Opus whatever
+// the audio bandwidth.
 func buildAnswer(localIP string, localPort int, c room.Codec, opusPT, dtmfPT uint8, rate int) []byte {
 	pt, clock := opusPT, 48000
 	codecLines := fmt.Sprintf("a=rtpmap:%d opus/48000/2\na=fmtp:%d minptime=10;useinbandfec=1;stereo=0;sprop-stereo=0", pt, pt)
@@ -100,21 +98,4 @@ a=fmtp:%d 0-16
 a=ptime:20
 a=sendrecv
 `, localIP, localIP, localPort, pt, dtmfPT, codecLines, dtmfPT, clock, dtmfPT))
-}
-
-// audioRates are the Opus rates a carrier leg's X-Tring-Audio-Rate may name.
-var audioRates = map[int]bool{8000: true, 12000: true, 16000: true, 24000: true}
-
-// audioRate reads the carrier leg's audio rate from the X-Tring-Audio-Rate
-// header FreeSWITCH's public dialplan sets on the bridge (0 when absent or not
-// an Opus rate, e.g. a WhatsApp call: full band, as WhatsApp audio is).
-func audioRate(req *sip.Request) int {
-	h := req.GetHeader("X-Tring-Audio-Rate")
-	if h == nil {
-		return 0
-	}
-	if r, err := strconv.Atoi(strings.TrimSpace(h.Value())); err == nil && audioRates[r] {
-		return r
-	}
-	return 0
 }

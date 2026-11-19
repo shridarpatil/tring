@@ -36,11 +36,11 @@ func intEnv(key, def string) string {
 	return def
 }
 
-// TestCarrierCallRunsOpusAtCarrierRate: a G.711 carrier call through the real
-// FreeSWITCH (public.xml → tring-gw) reaches the plug with X-Tring-Audio-Rate,
-// FreeSWITCH runs the plug's Opus leg at 8 kHz instead of 48, and audio and the
+// TestCarrierCallRelaysG711: a G.711 carrier call through the real FreeSWITCH
+// (public.xml → tring-gw) reaches the plug in the carrier's own law, both
+// FreeSWITCH legs run that one codec (a relay, no transcode), and audio and the
 // carrier's DTMF still get through.
-func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
+func TestCarrierCallRelaysG711(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	plugSIP := intEnv("TRING_INTEGRATION_PLUG_SIP", "127.0.0.1:5090")
@@ -91,6 +91,9 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the call never reached the plug")
 	}
+	if leg.Codec != room.PCMU {
+		t.Fatalf("plug leg codec = %q, want the carrier's PCMU", leg.Codec)
+	}
 	if err := dlg.WaitAnswer(ctx, sipgo.AnswerOptions{}); err != nil {
 		t.Fatalf("carrier not answered: %v", err)
 	}
@@ -104,22 +107,23 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 	}
 	fsMedia := &net.UDPAddr{IP: net.ParseIP(fsIP), Port: fsPort}
 
-	// FreeSWITCH's leg toward the plug runs Opus at the carrier's 8 kHz. `show
-	// channels` reads FreeSWITCH's own DB, written asynchronously, so poll.
-	var plugLeg *fsChannel
-	for deadline := time.Now().Add(3 * time.Second); plugLeg == nil && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		plugLeg = opusChannel(ctx, t, esl)
+	// Both FreeSWITCH legs (carrier and plug) run PCMU: nothing to transcode.
+	// `show channels` reads FreeSWITCH's own DB, written asynchronously, so poll.
+	var chans []fsChannel
+	for deadline := time.Now().Add(3 * time.Second); len(chans) < 2 && time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		chans = fsChannels(ctx, t, esl)
 	}
-	if plugLeg == nil {
-		t.Fatal("FreeSWITCH shows no Opus leg toward the plug")
+	if len(chans) < 2 {
+		t.Fatalf("FreeSWITCH shows %d channels, want the carrier and plug legs", len(chans))
 	}
-	t.Logf("plug leg %s: opus at %s Hz", plugLeg.Name, plugLeg.ReadRate)
-	if plugLeg.ReadRate != "8000" {
-		t.Errorf("FreeSWITCH runs the plug's Opus leg at %s Hz, want 8000", plugLeg.ReadRate)
+	for _, c := range chans {
+		t.Logf("channel %s: %s/%s", c.Name, c.ReadCodec, c.WriteCodec)
+		if c.ReadCodec != "PCMU" || c.WriteCodec != "PCMU" {
+			t.Errorf("channel %s runs %s/%s, want PCMU both ways (no transcode)", c.Name, c.ReadCodec, c.WriteCodec)
+		}
 	}
 
-	// Audio both ways: carrier G.711 in → Opus at the plug; plug Opus in → G.711
-	// at the carrier.
+	// Audio both ways, relayed as PCMU.
 	carrierGot := make(chan int, 1)
 	go func() {
 		n := 0
@@ -143,7 +147,7 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 	}
 	for i := 0; i < 25; i++ {
 		send(t, media, fsMedia, &rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 0, SequenceNumber: uint16(i), Timestamp: uint32(i * 160), SSRC: 1}, Payload: silence})
-		_ = leg.Write(&rtp.Packet{Payload: []byte{0xF8, 0xFF, 0xFE}}) // 20 ms of Opus silence
+		_ = leg.Write(&rtp.Packet{Payload: silence})
 		time.Sleep(20 * time.Millisecond)
 	}
 	plugGot := 0
@@ -163,16 +167,15 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 		break
 	}
 	if plugGot < 10 {
-		t.Errorf("plug got %d Opus packets from the carrier's audio, want ≥10", plugGot)
+		t.Errorf("plug got %d packets from the carrier's audio, want ≥10", plugGot)
 	}
-	// Opus RTP runs on a 48 kHz clock whatever the encoder's rate (RFC 7587), so
-	// 20 ms frames step the timestamp by 960. Browsers play the plug's packets
-	// as they arrive; another step garbles or silences them there. FreeSWITCH
-	// restarts its timestamps on the second packet (marker bit set), so the
+	// G.711 runs on an 8 kHz RTP clock: 20 ms frames step the timestamp by 160,
+	// which is what browsers in the room play the packets at. FreeSWITCH may
+	// restart its timestamps on the second packet (marker bit set), so the
 	// steady step is measured from there.
 	for i := 2; i < len(stamps); i++ {
-		if d := stamps[i] - stamps[i-1]; d != 960 {
-			t.Errorf("plug's Opus RTP timestamp stepped by %d (packets %d→%d, stamps %v), want 960", d, i-1, i, stamps)
+		if d := stamps[i] - stamps[i-1]; d != 160 {
+			t.Errorf("plug's RTP timestamp stepped by %d (packets %d→%d, stamps %v), want 160", d, i-1, i, stamps)
 			break
 		}
 	}
@@ -203,14 +206,13 @@ func TestCarrierCallRunsOpusAtCarrierRate(t *testing.T) {
 }
 
 type fsChannel struct {
-	Name      string `json:"name"`
-	ReadCodec string `json:"read_codec"`
-	ReadRate  string `json:"read_rate"`
+	Name       string `json:"name"`
+	ReadCodec  string `json:"read_codec"`
+	WriteCodec string `json:"write_codec"`
 }
 
-// opusChannel returns FreeSWITCH's Opus channel (the leg toward the plug), or
-// nil if it isn't listed yet.
-func opusChannel(ctx context.Context, t *testing.T, esl *freeswitch.Client) *fsChannel {
+// fsChannels lists FreeSWITCH's live channels.
+func fsChannels(ctx context.Context, t *testing.T, esl *freeswitch.Client) []fsChannel {
 	t.Helper()
 	out, err := esl.Command(ctx, "show", "channels as json")
 	if err != nil {
@@ -222,12 +224,7 @@ func opusChannel(ctx context.Context, t *testing.T, esl *freeswitch.Client) *fsC
 	if err := json.Unmarshal([]byte(out), &chans); err != nil {
 		t.Fatalf("show channels: %v\n%s", err, out)
 	}
-	for _, c := range chans.Rows {
-		if c.ReadCodec == "opus" {
-			return &c
-		}
-	}
-	return nil
+	return chans.Rows
 }
 
 func fsVar(ctx context.Context, t *testing.T, esl *freeswitch.Client, name string) string {
