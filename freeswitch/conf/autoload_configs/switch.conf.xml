@@ -62,7 +62,9 @@
     <!--Most channels to create per second -->
     <param name="sessions-per-second" value="30"/>
     <!-- Default Global Log Level - value is one of debug,info,notice,warning,err,crit,alert -->
-    <param name="loglevel" value="debug"/>
+    <!-- info, not debug: FS formats every debug line it logs, on every call,
+         even though the console only prints info. -->
+    <param name="loglevel" value="info"/>
 
     <!-- Set the core DEBUG level (0-10) -->
     <!-- <param name="debug-level" value="10"/> -->
