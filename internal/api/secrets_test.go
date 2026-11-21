@@ -111,25 +111,42 @@ func TestTrunkPasswordSealedAtRestPlaintextInGatewayXML(t *testing.T) {
 }
 
 // A trunk sealed under another key is skipped (logged), not fatal: the rest
-// still render.
+// still render. Its carrier addresses still reach the ACL (inbound calls don't
+// use the gateway), while an invalid stored address is dropped, not fatal.
 func TestActiveGatewaysSkipsUndecryptableTrunk(t *testing.T) {
 	f := dbtest.Setup(t)
 	good := insertRegisterTrunk(t, f, "legacy-plain")
 	var bad string
 	if err := f.DB.Pool.QueryRow(context.Background(), `
-		INSERT INTO trunks (tenant_id, name, sip_username, sip_password, register)
-		VALUES ($1, 'other-key', 'u2', $2, true) RETURNING id
+		INSERT INTO trunks (tenant_id, name, sip_username, sip_password, register, auth_acl_cidr)
+		VALUES ($1, 'other-key', 'u2', $2, true, '203.0.113.7') RETURNING id
 	`, f.TenantID, testBox(t, 2).Seal("pw")).Scan(&bad); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(context.Background(), `
+		INSERT INTO trunks (tenant_id, name, sip_username, sip_password, auth_acl_cidr)
+		VALUES ($1, 'stale-cidr', '', '', 'sbc.example')
+	`, f.TenantID); err != nil {
 		t.Fatal(err)
 	}
 	s := newSealingServer(f, testBox(t, 1))
 
-	gws, err := s.activeGateways(context.Background())
+	gws, cidrs, err := s.activeGateways(context.Background())
 	if err != nil {
 		t.Fatalf("activeGateways: %v", err)
 	}
-	if len(gws) != 1 || gws[0].ID != good || gws[0].Password != "legacy-plain" {
-		t.Fatalf("got %+v, want only the legacy-plaintext trunk", gws)
+	if len(gws) != 2 || gws[0].Password == "pw" || gws[1].Password == "pw" {
+		t.Fatalf("got %+v, want the legacy-plaintext and stale-cidr trunks only", gws)
+	}
+	found := false
+	for _, g := range gws {
+		found = found || (g.ID == good && g.Password == "legacy-plain")
+	}
+	if !found {
+		t.Fatalf("got %+v, want the legacy-plaintext trunk", gws)
+	}
+	if len(cidrs) != 1 || cidrs[0].String() != "203.0.113.7/32" {
+		t.Fatalf("cidrs = %v, want [203.0.113.7/32]", cidrs)
 	}
 }
 

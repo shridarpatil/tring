@@ -285,8 +285,8 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
       Saving a trunk renders gateway XML to
       <code class="mono">freeswitch/conf/sip_profiles/external/dynamic/</code>
       and runs
-      <code class="mono">sofia profile external rescan</code>. Zero downtime;
-      live calls stay up.
+      <code class="mono">sofia profile external rescan</code>, and reloads the
+      inbound carrier ACL. Zero downtime; live calls stay up.
     </p>
 
     <Modal v-model:open="showForm" :title="formTitle" size="lg">
@@ -347,23 +347,14 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
 
         <!-- IP-auth fields -->
         <template v-else>
-          <div class="grid grid-2">
-            <TextField
-              v-model="form.proxy_ip"
-              label="SBC proxy IP"
-              mono
-              required
-              placeholder="10.0.0.42"
-              hint="Tata's SBC IP — sent to and trusted from."
-            />
-            <TextField
-              v-model="form.auth_acl_cidr"
-              label="SBC ACL CIDR"
-              mono
-              placeholder="10.0.0.40/29"
-              hint="For the inbound ACL."
-            />
-          </div>
+          <TextField
+            v-model="form.proxy_ip"
+            label="SBC proxy IP"
+            mono
+            required
+            placeholder="10.0.0.42"
+            hint="Tata's SBC IP — where calls are sent."
+          />
           <div class="grid grid-2">
             <TextField
               v-model="form.sip_realm"
@@ -379,6 +370,14 @@ usePoll(() => load({ silent: true }), 10000, { immediate: false });
             />
           </div>
         </template>
+
+        <TextField
+          v-model="form.auth_acl_cidr"
+          label="Carrier source IPs (inbound ACL)"
+          mono
+          placeholder="10.0.0.40/29, 10.0.0.50"
+          hint="IPs/CIDRs this carrier sends calls from, comma-separated. Once any trunk sets this, inbound calls from other addresses are refused (403). Empty on every trunk = accept from anywhere. Applied on save, no restart."
+        />
       </form>
       <template #footer>
         <Button variant="ghost" @click="showForm = false; editing = null">Cancel</Button>

@@ -36,7 +36,6 @@ type Gateway struct {
 	Password     string // register mode
 	Realm        string // register mode + IP-mode (used as both realm and the contact host)
 	ProxyIP      string // where to send: the SBC (IP-auth), or the registrar when Realm isn't resolvable (register)
-	AuthACLCIDR  string // IP-auth mode: SBC /29 to trust inbound from (documentary; ACL is configured separately)
 	FromDomain   string // optional sofia from-domain: host part of From on calls + OPTIONS pings (empty = omit)
 }
 
@@ -255,6 +254,12 @@ func WriteGateways(gws []Gateway) (stale []string, err error) {
 // since the last write, per WriteGateways — then rescans, which loads new and
 // changed gateways fresh. Gateways not in stale are left running, so other
 // trunks' registrations and calls are untouched.
+//
+// It first reloads the ACLs, so a changed carrier ACL file (see
+// WriteCarrierACL) is enforced at once: reloadacl re-reads the XML (always,
+// since FreeSWITCH 1.10), whose preprocessor rebuilds the "carriers" list from
+// the file, and sofia looks the list up by name on every INVITE, so no
+// profile restart is needed.
 func (c *Client) RescanExternalProfile(ctx context.Context, stale []string) error {
 	conn, err := eslgo.Dial(c.addr, c.password, func() {})
 	if err != nil {
@@ -262,6 +267,16 @@ func (c *Client) RescanExternalProfile(ctx context.Context, stale []string) erro
 		return err
 	}
 	defer conn.Close()
+	resp, err := conn.SendCommand(ctx, command.API{Command: "reloadacl"})
+	if err != nil {
+		slog.Error("freeswitch reloadacl failed", "component", "freeswitch", "err", err)
+		return err
+	}
+	if reply := strings.TrimSpace(resp.GetReply()); strings.HasPrefix(reply, "-ERR") {
+		// A broken XML tree keeps the previous ACL loaded; retry like a failed rescan.
+		slog.Error("freeswitch reloadacl rejected", "component", "freeswitch", "reply", reply)
+		return fmt.Errorf("reloadacl: %s", reply)
+	}
 	for _, name := range stale {
 		// -ERR (e.g. not loaded yet) is fine: the goal is "not loaded".
 		if _, err := conn.SendCommand(ctx, command.API{

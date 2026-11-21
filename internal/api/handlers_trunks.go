@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -143,7 +144,6 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 		Password:     t.SIPPassword,
 		Realm:        t.SIPRealm,
 		ProxyIP:      t.ProxyIP,
-		AuthACLCIDR:  t.AuthACLCIDR,
 		FromDomain:   extra.FromDomain,
 	}
 }
@@ -155,14 +155,20 @@ func trunkToGateway(t Trunk) freeswitch.Gateway {
 // already been committed by then, so a failed rescan leaves FreeSWITCH out of
 // sync with the DB: gwSync retries it in the background, and POST
 // /v1/trunks/reload (or the next trunk op) re-renders and rescans at once.
+//
+// It also writes the carrier ACL from the active trunks' auth_acl_cidr; the
+// rescan reloads it.
 func (s *Server) rerenderAllGateways(ctx context.Context) error {
-	gws, err := s.activeGateways(ctx)
+	gws, cidrs, err := s.activeGateways(ctx)
 	if err != nil {
 		return err
 	}
 	stale, err := freeswitch.WriteGateways(gws)
 	if err != nil {
 		return fmt.Errorf("write gateway xml: %w", err)
+	}
+	if err := freeswitch.WriteCarrierACL(cidrs); err != nil {
+		return fmt.Errorf("write carrier acl: %w", err)
 	}
 	if err := s.gwSync.Sync(ctx, stale); err != nil {
 		return fmt.Errorf("freeswitch rescan: %w", err)
@@ -175,20 +181,32 @@ func (s *Server) rerenderAllGateways(ctx context.Context) error {
 func (s *Server) StartGatewaySync(ctx context.Context) { s.gwSync.Run(ctx) }
 
 // activeGateways loads every active trunk with its SIP password decrypted,
-// ready to render. A trunk whose password can't be opened (wrong or missing
-// TRING_SECRETS_KEY) is logged and left out — FreeSWITCH drops that one
-// gateway; the rest still render.
-func (s *Server) activeGateways(ctx context.Context) ([]freeswitch.Gateway, error) {
+// ready to render, plus the addresses their carriers send from. A trunk whose
+// password can't be opened (wrong or missing TRING_SECRETS_KEY) is logged and
+// left out — FreeSWITCH drops that one gateway; the rest still render. Its
+// addresses are kept: inbound calls don't go through the gateway.
+func (s *Server) activeGateways(ctx context.Context) ([]freeswitch.Gateway, []netip.Prefix, error) {
 	rows, err := s.db.Pool.Query(ctx, s.q.ListActiveTrunks)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	var gws []freeswitch.Gateway
+	var (
+		gws   []freeswitch.Gateway
+		cidrs []netip.Prefix
+	)
 	for rows.Next() {
 		t, err := scanTrunk(rows)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		// Stored before the API validated it (the field was unused then):
+		// skip the bad value rather than failing every trunk save.
+		if p, err := freeswitch.ParseCIDRs(t.AuthACLCIDR); err != nil {
+			s.log.Error("trunk carrier address ignored: re-enter its carrier source IPs",
+				"trunk_id", t.ID, "tenant_id", t.TenantID, "err", err)
+		} else {
+			cidrs = append(cidrs, p...)
 		}
 		if t.SIPPassword, err = s.openSecret(t.SIPPassword); err != nil {
 			s.log.Error("trunk not rendered: cannot decrypt its sip_password — re-enter it or fix TRING_SECRETS_KEY",
@@ -197,7 +215,7 @@ func (s *Server) activeGateways(ctx context.Context) ([]freeswitch.Gateway, erro
 		}
 		gws = append(gws, trunkToGateway(t))
 	}
-	return gws, rows.Err()
+	return gws, cidrs, rows.Err()
 }
 
 // syncTrunkError writes a 502 telling the caller their DB change committed but
@@ -228,6 +246,12 @@ func (s *Server) handleCreateTrunk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	cidrs, err := normalizeCIDRs(req.AuthACLCIDR)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.AuthACLCIDR = cidrs
 	var extra interface{}
 	if len(req.ExtraParams) > 0 {
 		extra = req.ExtraParams
@@ -324,6 +348,14 @@ func (s *Server) handlePatchTrunk(w http.ResponseWriter, r *http.Request) {
 	if err := validateTrunkFields(derefStr(req.SIPUsername), derefStr(req.SIPPassword), derefStr(req.SIPRealm), derefStr(req.ProxyIP), req.ExtraParams); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if req.AuthACLCIDR != nil {
+		v, err := normalizeCIDRs(*req.AuthACLCIDR)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		req.AuthACLCIDR = &v
 	}
 	var extra interface{}
 	if len(req.ExtraParams) > 0 {
