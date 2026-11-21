@@ -354,6 +354,17 @@ export interface Trunk {
 
 // An OIDC identity provider for console sign-in. The client secret is
 // write-only: it is never returned.
+// Settings → Recording → Storage. The secret is write-only (has_secret only).
+export interface RecordingStorage {
+  bucket: string;
+  region: string;
+  endpoint: string;
+  prefix: string;
+  use_ssl: boolean;
+  access_key: string;
+  has_secret: boolean;
+}
+
 export interface SsoProvider {
   id: string;
   name: string;
