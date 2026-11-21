@@ -161,18 +161,6 @@ var defaults = map[string]any{
 	"tts_piper_model": "/usr/local/share/piper/voice.onnx",
 	"tts_voice":       "", // speaker id for multi-speaker models ("" → default 0)
 
-	// S3 (or S3-compatible: MinIO, R2, …) for call recordings. When s3_bucket is
-	// set, a finished recording is uploaded to S3 (date-wise key) and the local
-	// spool deleted; the API serves it back from S3. Empty bucket = local only.
-	// s3_endpoint empty = AWS (s3.amazonaws.com).
-	"s3_bucket":     "",
-	"s3_region":     "",
-	"s3_endpoint":   "",
-	"s3_access_key": "",
-	"s3_secret_key": "",
-	"s3_prefix":     "recordings",
-	"s3_use_ssl":    true,
-
 	// fsplug: the FreeSWITCH SIP plug (internal/fsplug), a room.Plug adapter
 	// for inbound PSTN calls over FreeSWITCH. OFF by default — nothing changes
 	// until a live trunk exists. fsplug_fs_sip is declared now for the later

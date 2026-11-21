@@ -58,7 +58,7 @@ func New(cfg Config) (*Store, error) {
 		creds = credentials.NewIAM("")
 	}
 	cli, err := minio.New(endpoint, &minio.Options{
-		Creds:  creds,
+		Creds:     creds,
 		Secure:    cfg.UseSSL,
 		Region:    cfg.Region,
 		Transport: cfg.Transport,
