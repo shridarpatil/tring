@@ -41,7 +41,7 @@ Each tenant picks where finished recordings go under **Settings â†’ Recording â†
 - **Bucket, no keys:** uploads use the server's IAM role (EC2 instance profile, ECS task role, EKS IRSA).
 - **Bucket and access key + secret:** uploads use those keys. The secret is encrypted with `TRING_SECRETS_KEY`, is never returned, and can be overwritten or removed (back to the IAM role) at any time.
 
-Endpoint is empty for AWS S3, or your host for MinIO or Cloudflare R2. A private endpoint address must be listed in `TRING_OUTBOUND_ALLOW_CIDRS`. Saving does a test write and delete of `<prefix>/<tenant-id>/.tring-write-test`, and a failure is returned instead of saved. A change applies to the next recording, with no restart.
+Endpoint is empty for AWS S3 (region is then required), or your host for MinIO or Cloudflare R2. A private endpoint address must be listed in `TRING_OUTBOUND_ALLOW_CIDRS`. Saving writes `<prefix>/<tenant-id>/.tring-write-test`, and a failed write is returned instead of saved. The file is then deleted; if the role can't delete (no `s3:DeleteObject`), the config is still saved and a warning names the file to remove by hand. Changing the access key needs its secret entered again. A change applies to the next recording, with no restart.
 
 Each call stores its recording's full object key, so changing the prefix keeps older recordings playable. Moving to a different bucket does not copy older recordings, and they can't be played until the bucket is set back.
 

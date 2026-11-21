@@ -125,16 +125,21 @@ func (s *Store) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
 }
 
-// Probe checks the store can take a tenant's recordings: it writes and then
-// deletes <prefix>/<tenant>/.tring-write-test, so a wrong bucket, region or
-// permission fails when the config is saved, not after the next call.
-func (s *Store) Probe(ctx context.Context, tenant string) error {
+// Probe checks the store can take a tenant's recordings: it writes
+// <prefix>/<tenant>/.tring-write-test, so a wrong bucket, region or permission
+// fails when the config is saved, not after the next call. It then deletes
+// the file; uploads never delete, so a role without s3:DeleteObject is still
+// usable — a failed delete returns the left-over key (and deleteErr), not err.
+func (s *Store) Probe(ctx context.Context, tenant string) (leftover string, deleteErr, err error) {
 	key := path.Join(s.prefix, tenant, ".tring-write-test")
 	if _, err := s.client.PutObject(ctx, s.bucket, key, strings.NewReader("ok"), 2,
 		minio.PutObjectOptions{ContentType: "text/plain"}); err != nil {
-		return err
+		return "", nil, err
 	}
-	return s.Delete(ctx, key)
+	if err := s.Delete(ctx, key); err != nil {
+		return key, err, nil
+	}
+	return "", nil, nil
 }
 
 // Get opens an object for reading; the caller closes it. Returns an error if

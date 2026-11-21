@@ -247,6 +247,7 @@ type Queries struct {
 
 	// ---- api startup: SIP password encryption at rest (api/secrets.go) ----
 	CountStoredSecrets        string `query:"count-stored-secrets"`
+	CountSealedS3Secrets      string `query:"count-sealed-s3-secrets"`
 	ListPlaintextTrunkSecrets string `query:"list-plaintext-trunk-secrets"`
 	SetTrunkSecret            string `query:"set-trunk-secret"`
 

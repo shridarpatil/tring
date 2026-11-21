@@ -816,6 +816,10 @@ SELECT count(*) FILTER (WHERE sip_password LIKE 'enc:v1:%'),
        count(*) FILTER (WHERE sip_password <> '' AND sip_password NOT LIKE 'enc:v1:%')
 FROM trunks;
 
+-- name: count-sealed-s3-secrets
+-- Tenants whose S3 recording secret is sealed: unusable without the key.
+SELECT count(*) FROM tenants WHERE s3_secret_key LIKE 'enc:v1:%';
+
 -- name: list-plaintext-trunk-secrets
 -- Locked so concurrent api replicas starting together seal each row once.
 SELECT id, sip_password FROM trunks
