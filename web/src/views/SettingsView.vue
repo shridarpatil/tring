@@ -270,7 +270,16 @@ onMounted(load);
           </div>
         </div>
         <p class="section-note">Changes apply to calls that start after you save.</p>
-        <RecordingStorage />
+        <div class="srow stacked">
+          <div>
+            <div class="srow-label">Storage</div>
+            <p class="srow-desc">
+              Where finished recordings are uploaded. Leave the bucket empty to keep them on this server's disk. Leave
+              the keys empty to use the server's IAM role.
+            </p>
+          </div>
+          <RecordingStorage />
+        </div>
       </Card>
 
       <!-- Privacy -->
