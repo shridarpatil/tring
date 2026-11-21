@@ -5,15 +5,21 @@ import { api } from "../api/client";
 import { toast } from "../lib/toast";
 import { confirmDialog } from "../lib/confirm";
 import type { RecordingStorage } from "../api/types";
-import { Button, Badge, TextField, Toggle } from "./ui";
+import { Button, Badge, Select, TextField, Toggle } from "./ui";
 
 // The form under Settings → Recording → Storage (the row heading lives in
-// SettingsView, whose row styles are scoped). Saved on its own (not the page's save bar):
-// the server test-writes the bucket before saving, and the secret is
-// write-only — blank keeps the stored one.
+// SettingsView, whose row styles are scoped). Saved on its own, not with the
+// page's save bar: the server test-writes the bucket before saving, and the
+// secret is write-only — blank keeps the stored one.
 const PATH = "/v1/tenants/me/recording-storage";
 
+const kinds = [
+  { value: "local", label: "Local disk (this server)" },
+  { value: "s3", label: "Amazon S3 or S3-compatible" },
+];
+
 const current = ref<RecordingStorage | null>(null);
+const kind = ref("local");
 const form = ref({
   bucket: "",
   region: "",
@@ -28,6 +34,7 @@ const error = ref("");
 
 function fill(s: RecordingStorage) {
   current.value = s;
+  kind.value = s.bucket ? "s3" : "local";
   form.value = {
     bucket: s.bucket,
     region: s.region,
@@ -47,12 +54,15 @@ onMounted(async () => {
   }
 });
 
+// What is saved now, independent of unsaved edits.
 const mode = computed(() => {
   const s = current.value;
-  if (!s || !s.bucket) return { tone: "neutral" as const, text: "Local disk" };
-  return s.access_key
-    ? { tone: "success" as const, text: "S3 · access keys" }
-    : { tone: "success" as const, text: "S3 · IAM role" };
+  if (!s || !s.bucket)
+    return { tone: "neutral" as const, text: "Now: local disk" };
+  return {
+    tone: "success" as const,
+    text: s.access_key ? "Now: S3 · access keys" : "Now: S3 · IAM role",
+  };
 });
 const hasKeys = computed(
   () =>
@@ -64,12 +74,17 @@ async function save() {
   error.value = "";
   try {
     const { secret_key, ...rest } = form.value;
-    const body = secret_key ? { ...rest, secret_key } : rest;
+    // Local disk = no bucket; the other S3 fields are kept for switching back.
+    const fields = {
+      ...rest,
+      bucket: kind.value === "s3" ? rest.bucket.trim() : "",
+    };
+    const body = secret_key ? { ...fields, secret_key } : fields;
     fill(await api.put<RecordingStorage>(PATH, body));
     toast.success(
-      form.value.bucket
+      kind.value === "s3"
         ? "Storage saved — test upload succeeded"
-        : "Storage saved — recordings stay on local disk",
+        : "Storage saved — recordings stay on this server",
     );
   } catch (e) {
     // Kept next to the fields: a failed test write needs the S3 error in view.
@@ -98,70 +113,88 @@ async function removeKeys() {
 
 <template>
   <form class="vstack" @submit.prevent="save">
-    <div class="hstack">
-      <Badge :tone="mode.tone">{{ mode.text }}</Badge>
-    </div>
     <div class="grid grid-2">
-      <TextField
-        v-model="form.bucket"
-        label="Bucket"
-        mono
-        placeholder="acme-recordings"
-        hint="Empty = local disk."
-      />
-      <TextField
-        v-model="form.region"
-        label="Region"
-        mono
-        placeholder="ap-south-1"
-      />
+      <Select v-model="kind" label="Storage type" :options="kinds" />
+      <div class="hstack">
+        <Badge :tone="mode.tone">{{ mode.text }}</Badge>
+      </div>
     </div>
-    <div class="grid grid-2">
-      <TextField
-        v-model="form.endpoint"
-        label="Endpoint (optional)"
-        mono
-        placeholder="minio.internal:9000"
-        hint="Empty = AWS S3. Set for MinIO or R2."
-      />
-      <TextField
-        v-model="form.prefix"
-        label="Prefix"
-        mono
-        placeholder="recordings"
-      />
-    </div>
-    <div class="grid grid-2">
-      <TextField
-        v-model="form.access_key"
-        label="Access key (optional)"
-        mono
-        autocomplete="off"
-        hint="Empty = server's IAM role."
-      />
-      <TextField
-        v-model="form.secret_key"
-        type="password"
-        label="Secret key (optional)"
-        mono
-        autocomplete="new-password"
-        :placeholder="current?.has_secret ? '••• set (unchanged)' : ''"
-        :hint="
-          current?.has_secret
-            ? 'Leave blank to keep the current secret.'
-            : undefined
-        "
-      />
-    </div>
-    <Toggle v-model="form.use_ssl" label="Use HTTPS" />
+
+    <template v-if="kind === 's3'">
+      <div class="grid grid-2">
+        <TextField
+          v-model="form.bucket"
+          label="Bucket"
+          mono
+          required
+          placeholder="acme-recordings"
+        />
+        <TextField
+          v-model="form.region"
+          label="Region"
+          mono
+          placeholder="ap-south-1"
+        />
+      </div>
+      <div class="grid grid-2">
+        <TextField
+          v-model="form.endpoint"
+          label="Endpoint (optional)"
+          mono
+          placeholder="minio.internal:9000"
+          hint="Empty = AWS S3. Set for MinIO or R2."
+        />
+        <TextField
+          v-model="form.prefix"
+          label="Prefix"
+          mono
+          placeholder="recordings"
+        />
+      </div>
+      <div class="grid grid-2">
+        <TextField
+          v-model="form.access_key"
+          label="Access key (optional)"
+          mono
+          autocomplete="off"
+          hint="Empty = server's IAM role."
+        />
+        <TextField
+          v-model="form.secret_key"
+          type="password"
+          label="Secret key (optional)"
+          mono
+          autocomplete="new-password"
+          :placeholder="current?.has_secret ? '••• set (unchanged)' : ''"
+          :hint="
+            current?.has_secret
+              ? 'Leave blank to keep the current secret.'
+              : undefined
+          "
+        />
+      </div>
+      <Toggle v-model="form.use_ssl" label="Use HTTPS" />
+    </template>
+    <p v-else class="text-lighter">
+      Recordings are kept in this server's recordings folder and served from
+      there.
+    </p>
+
     <p v-if="error" role="alert" data-variant="error">{{ error }}</p>
     <div class="hstack justify-between">
-      <span class="text-lighter"
-        >Saving uploads and deletes a small test file. Applies to the next
-        recording.</span
-      >
+      <span class="text-lighter">
+        {{
+          kind === "s3"
+            ? "Saving uploads and deletes a small test file. Applies to the next recording."
+            : "Applies to the next recording."
+        }}
+      </span>
       <div class="hstack">
-        <Button v-if="hasKeys" type="button" variant="ghost" @click="removeKeys"
+        <Button
+          v-if="kind === 's3' && hasKeys"
+          type="button"
+          variant="ghost"
+          @click="removeKeys"
           >Remove keys</Button
         >
         <Button type="submit" :loading="saving">Save storage</Button>

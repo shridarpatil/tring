@@ -274,8 +274,8 @@ onMounted(load);
           <div>
             <div class="srow-label">Storage</div>
             <p class="srow-desc">
-              Where finished recordings are uploaded. Leave the bucket empty to keep them on this server's disk. Leave
-              the keys empty to use the server's IAM role.
+              Where finished recordings are kept: this server's disk, or an S3 bucket. With S3, leave the keys empty
+              to use the server's IAM role.
             </p>
           </div>
           <RecordingStorage />
