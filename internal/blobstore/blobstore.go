@@ -124,3 +124,13 @@ func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 func IsNotFound(err error) bool {
 	return minio.ToErrorResponse(err).Code == "NoSuchKey"
 }
+
+// Describe turns a store error into a short message safe to show the tenant
+// admin who entered the config: the S3 error code and message, or a generic
+// "unreachable" (dial errors would name internal addresses).
+func Describe(err error) string {
+	if r := minio.ToErrorResponse(err); r.Code != "" {
+		return r.Code + ": " + r.Message
+	}
+	return "could not reach the storage endpoint"
+}
