@@ -126,6 +126,64 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 `transfer_failed_message` is converted to audio with the server's text-to-speech engine when you save it. If text-to-speech isn't set up, or the conversion fails, the update still succeeds, but the caller hears silence and then the call ends. Check the API logs for a `tts:` warning if the message doesn't play.
 :::
 
+## Recording storage
+
+Where finished recordings are uploaded. With no bucket, recordings stay on the server's local spool. See [Recording and call logs](/tring/features/recording-and-call-logs/#storage).
+
+**Auth:** API key with full scope or admin console session.
+
+### The recording storage object
+
+| Field | Type | Description |
+|---|---|---|
+| `bucket` | string | S3 bucket. `""` keeps recordings local. |
+| `region` | string | Bucket region, for example `ap-south-1`. |
+| `endpoint` | string | `""` for AWS S3, or `host[:port]` of an S3-compatible store (MinIO, Cloudflare R2). |
+| `prefix` | string | Object key prefix. Default `recordings`. Objects are `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>`. |
+| `use_ssl` | boolean | Use HTTPS to the endpoint. |
+| `access_key` | string | Static access key. `""` uses the server's IAM role. |
+| `has_secret` | boolean | Whether a secret key is stored. The secret itself is never returned. |
+
+### GET /v1/tenants/me/recording-storage
+
+**Response** `200 OK` with the [recording storage object](#the-recording-storage-object).
+
+### PUT /v1/tenants/me/recording-storage
+
+Replaces the storage config. Send every field. Leave out `secret_key` (or send `""`) to keep the stored secret. Sending an empty `access_key` also removes the secret, so uploads use the IAM role. With a bucket set, the server first writes and deletes `<prefix>/<tenant-id>/.tring-write-test`, and saves nothing if that fails. The change applies to the next recording.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `bucket`, `region`, `endpoint`, `prefix`, `use_ssl`, `access_key` | | yes | As in the [object](#the-recording-storage-object). |
+| `secret_key` | string | no | New secret key. Stored encrypted with `TRING_SECRETS_KEY`. |
+
+```bash
+curl -sS -X PUT "$TRING_URL/v1/tenants/me/recording-storage" \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"bucket":"acme-recordings","region":"ap-south-1","endpoint":"","prefix":"recordings","use_ssl":true,"access_key":""}'
+```
+
+**Response** `200 OK` with the saved [recording storage object](#the-recording-storage-object).
+
+**Errors**
+
+| Status | `error` |
+|---|---|
+| `400` | `invalid JSON body` |
+| `400` | `bucket must be 3-63 lowercase letters, digits, dots or hyphens` (and the matching messages for `region`, `endpoint`, `prefix`, `access_key`) |
+| `400` | `endpoint address not allowed (private or local; list it in TRING_OUTBOUND_ALLOW_CIDRS to permit)` |
+| `400` | `secret_key needs an access_key` / `secret_key is required with an access_key` |
+| `400` | `secret_key needs TRING_SECRETS_KEY on the server (it is stored encrypted)` |
+| `400` | `storage test failed: <S3 code>: <message>` / `storage test failed: could not reach the storage endpoint` |
+| `500` | `update failed` |
+
+### DELETE /v1/tenants/me/recording-storage/keys
+
+Removes the access key and secret. Uploads then use the server's IAM role. The bucket and other fields are kept.
+
+**Response** `204 No Content`.
+
 ## Guest (visitor) calls
 
 Website visitors call you through the [visitor widget](/tring/sdk/visitor-widget/). Each visitor call lands in an IVR flow. You can name the flow when you mint credentials, or fall back to the tenant's default guest flow.

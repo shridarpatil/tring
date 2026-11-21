@@ -444,6 +444,10 @@ func (s *Server) Router() http.Handler {
 					r.Get("/tenants/me", s.handleGetMyTenant)
 					r.Get("/version", s.handleVersion)
 					r.Patch("/tenants/me", s.handlePatchMyTenant)
+					// Recording storage (S3): the secret is write-only; saving test-writes.
+					r.Get("/tenants/me/recording-storage", s.handleGetRecordingStorage)
+					r.Put("/tenants/me/recording-storage", s.handlePutRecordingStorage)
+					r.Delete("/tenants/me/recording-storage/keys", s.handleClearRecordingStorageKeys)
 					r.Get("/guest-config", s.handleGetGuestConfig)
 					r.Patch("/guest-config", s.handlePatchGuestConfig)
 					// Tenant API keys (tk_live_…) — issue/list/revoke. The admin
