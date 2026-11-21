@@ -3,7 +3,6 @@ package blobstore
 import (
 	"context"
 	"errors"
-	"net/http"
 	"sync"
 
 	"github.com/shridarpatil/tring/internal/db"
@@ -11,29 +10,29 @@ import (
 	"github.com/shridarpatil/tring/internal/secretbox"
 )
 
-// Loader returns a tenant's current S3 config (Transport is filled in by the
-// Resolver).
+// Loader returns a tenant's current S3 config.
 type Loader func(ctx context.Context, tenant string) (Config, error)
 
 // Resolver hands out each tenant's Store. The config is read on every call so
 // a save in the console applies to the next recording, while the minio client
 // (and its cached IAM credentials) is reused until that tenant's config changes.
 type Resolver struct {
-	load      Loader
-	transport http.RoundTripper
+	load Loader
+	dial DialFunc
 
 	mu    sync.Mutex
 	cache map[string]cached
 }
 
 type cached struct {
-	cfg   Config // Transport left nil, so configs compare by their S3 fields
+	cfg   Config
 	store *Store
 }
 
-// NewResolver builds a Resolver; transport carries every tenant's S3 traffic.
-func NewResolver(load Loader, transport http.RoundTripper) *Resolver {
-	return &Resolver{load: load, transport: transport, cache: map[string]cached{}}
+// NewResolver builds a Resolver; dial carries every tenant's S3 traffic (nil =
+// minio's default).
+func NewResolver(load Loader, dial DialFunc) *Resolver {
+	return &Resolver{load: load, dial: dial, cache: map[string]cached{}}
 }
 
 // For returns the tenant's Store, or nil (not an error) when the tenant has no
@@ -46,7 +45,6 @@ func (r *Resolver) For(ctx context.Context, tenant string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.Transport = nil
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if c, ok := r.cache[tenant]; ok && c.cfg == cfg {
@@ -56,9 +54,7 @@ func (r *Resolver) For(ctx context.Context, tenant string) (*Store, error) {
 		delete(r.cache, tenant)
 		return nil, nil
 	}
-	built := cfg
-	built.Transport = r.transport
-	s, err := New(built)
+	s, err := build(cfg, r.dial)
 	if err != nil {
 		return nil, err
 	}
@@ -66,12 +62,9 @@ func (r *Resolver) For(ctx context.Context, tenant string) (*Store, error) {
 	return s, nil
 }
 
-// Build makes a Store from cfg with the Resolver's transport, without caching
+// Build makes a Store from cfg with the Resolver's dialer, without caching
 // it: the api tests a config this way before saving it.
-func (r *Resolver) Build(cfg Config) (*Store, error) {
-	cfg.Transport = r.transport
-	return New(cfg)
-}
+func (r *Resolver) Build(cfg Config) (*Store, error) { return build(cfg, r.dial) }
 
 // errSealedNoKey: the stored secret is sealed but this process has no
 // TRING_SECRETS_KEY to open it.
