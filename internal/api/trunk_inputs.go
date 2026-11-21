@@ -3,8 +3,11 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/shridarpatil/tring/internal/freeswitch"
 )
 
 // Trunk fields are rendered into FreeSWITCH gateway XML, where $${global} and
@@ -49,6 +52,22 @@ func validateTrunkFields(username, password, realm, proxy string, extra json.Raw
 		}
 	}
 	return nil
+}
+
+// normalizeCIDRs validates auth_acl_cidr — the comma-separated addresses the
+// trunk's carrier sends SIP from, which feed FreeSWITCH's inbound ACL — and
+// returns it canonical ("10.0.0.5" → "10.0.0.5/32"), so the stored value is
+// what gets enforced. Empty is fine (no restriction from this trunk).
+func normalizeCIDRs(s string) (string, error) {
+	ps, err := freeswitch.ParseCIDRs(s)
+	if err != nil {
+		return "", fmt.Errorf("auth_acl_cidr: %w", err)
+	}
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.String()
+	}
+	return strings.Join(out, ","), nil
 }
 
 func derefStr(p *string) string {

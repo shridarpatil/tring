@@ -18,11 +18,13 @@ The `register` flag picks how the carrier authenticates you.
 | **REGISTER** | `true` | `sip_username`, `sip_password`, `sip_realm`; optionally `proxy_ip` and `extra_params.auth_username` | Aggregators and IMS carriers that issue SIP credentials. FreeSWITCH registers and keeps the registration alive: to the realm, or to `proxy_ip` when set. |
 | **IP-authenticated** | `false` (default) | `proxy_ip`, optionally `sip_realm` | Private circuits where the carrier trusts your IP. No REGISTER, no credentials. Calls are sent to `proxy_ip`. |
 
-`auth_acl_cidr` (the carrier's SBC range, for example `198.51.100.8/29`) is stored with the trunk for reference only. It is **not** rendered into FreeSWITCH. Allowing inbound INVITEs from that range is configured separately in FreeSWITCH's ACL.
+`auth_acl_cidr` is the comma-separated list of IPs and CIDRs the carrier sends SIP from (for example `198.51.100.8/29, 203.0.113.10`), in either mode. It feeds FreeSWITCH's inbound carrier ACL: once any active trunk sets it, the trunk profile answers INVITEs from every address not listed on an active trunk with `403`, so random hosts can't inject fake inbound calls with spoofed caller ID. While no active trunk sets it, any source is accepted. A bare IP is stored as `/32` (`/128` for IPv6), a CIDR is stored as its network address, and a match-all range (`0.0.0.0/0`) is refused with `400`. Changes apply on save with no restart.
 
 ## What gets rendered to FreeSWITCH
 
 Each **active** trunk becomes one file, `t_<trunk-uuid>.xml`, in the dynamic gateway directory (`/etc/freeswitch/sip_profiles/external/dynamic` by default, overridable with `TRING_GATEWAY_DIR`). Inactive and deleted trunks have their files removed. The gateway name is `t_` plus the first 12 hex characters of the trunk UUID, for example `t_9a4c6e803333`.
+
+The active trunks' `auth_acl_cidr` values are written to `carriers.acl` in the same directory, which FreeSWITCH turns into its inbound `carriers` ACL. Every save (and `POST /v1/trunks/reload`) runs `reloadacl` before the rescan, so the ACL applies without a restart.
 
 A REGISTER trunk:
 
@@ -92,7 +94,7 @@ Other keys are stored and returned but ignored. A missing or malformed value is 
 | `sip_realm` | string | REGISTER realm, or the IP-mode realm override. |
 | `register` | boolean | `true` = REGISTER auth, `false` = IP auth. |
 | `proxy_ip` | string | IP mode: the carrier SBC to send calls to. REGISTER mode (optional): the registrar/SBC to send REGISTER and calls to. |
-| `auth_acl_cidr` | string | The carrier's SBC range, stored for reference. |
+| `auth_acl_cidr` | string | IPs/CIDRs the carrier sends SIP from, canonical and comma-separated. Feeds the inbound carrier ACL. |
 | `active` | boolean | Only active trunks are rendered to FreeSWITCH. |
 | `extra_params` | object | See above. |
 | `created_at` | timestamp | |
@@ -141,7 +143,7 @@ Create a trunk, then re-render every gateway file and rescan FreeSWITCH.
 | `sip_password` | string | REGISTER mode | |
 | `sip_realm` | string | REGISTER mode | In IP mode, optional realm override. |
 | `proxy_ip` | string | IP mode; optional in REGISTER mode | Carrier SBC address. In REGISTER mode, the registrar to send REGISTER and calls to. |
-| `auth_acl_cidr` | string | no | Carrier SBC range, for reference. |
+| `auth_acl_cidr` | string | no | Comma-separated IPs/CIDRs the carrier sends SIP from. See [authentication modes](#auth-modes). |
 | `active` | boolean | no | Default `true`. |
 | `extra_params` | object | no | Default `{}`. See [`extra_params`](#extra_params). |
 
@@ -208,6 +210,7 @@ curl -sS -X POST "$TRING_URL/v1/trunks" \
 | `400` | `sip_password may not contain ${ or control characters` |
 | `400` | `sip_realm and proxy_ip must be a host or IP, optionally with :port` |
 | `400` | `extra_params.from_domain must be a host or IP` / `extra_params.auth_username may only contain …` |
+| `400` | `auth_acl_cidr: "…" is not an IP or CIDR` / `auth_acl_cidr: "…" would allow every address` |
 | `409` | `a trunk with this name already exists` |
 | `500` | `trunk insert failed` |
 | `502` | `trunk saved but FreeSWITCH did not reload — retry with POST /v1/trunks/reload`. The trunk **is** saved; FreeSWITCH just hasn't picked it up. |
@@ -328,6 +331,7 @@ curl -sS -X PATCH "$TRING_URL/v1/trunks/4e1f0a2b-4444-4a00-8d00-000000000001" \
 | `400` | `sip_password may not contain ${ or control characters` |
 | `400` | `sip_realm and proxy_ip must be a host or IP, optionally with :port` |
 | `400` | `extra_params.from_domain must be a host or IP` / `extra_params.auth_username may only contain …` |
+| `400` | `auth_acl_cidr: "…" is not an IP or CIDR` / `auth_acl_cidr: "…" would allow every address` |
 | `404` | `trunk not found` |
 | `409` | `a trunk with this name already exists` |
 | `500` | `update failed` |
@@ -383,5 +387,5 @@ curl -sS -X POST "$TRING_URL/v1/trunks/reload" \
 | `500` | `reload failed`. The file-write or FreeSWITCH error is in the API server log. |
 
 :::danger
-Only open your SIP port (`5060`) to your carriers' published IP ranges, never `0.0.0.0/0`, and set `TRING_CARRIER_CIDRS` to the same ranges so FreeSWITCH itself refuses inbound calls from anywhere else. FreeSWITCH's ESL port (`8021`) listens on loopback only. An IP-authenticated trunk trusts the network path, so a wide-open SIP port invites toll fraud.
+Only open your SIP port (`5060`) to your carriers' published IP ranges, never `0.0.0.0/0`, and set each trunk's `auth_acl_cidr` to the same ranges so FreeSWITCH itself refuses inbound calls from anywhere else. FreeSWITCH's ESL port (`8021`) listens on loopback only. An IP-authenticated trunk trusts the network path, so a wide-open SIP port invites toll fraud.
 :::
