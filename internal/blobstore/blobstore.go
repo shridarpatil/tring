@@ -6,7 +6,9 @@ package blobstore
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -14,6 +16,8 @@ import (
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"github.com/shridarpatil/tring/internal/safehttp"
 )
 
 // Config is one tenant's S3 connection config (tenants.s3_*, see Resolver).
@@ -25,11 +29,11 @@ type Config struct {
 	SecretKey string
 	Prefix    string // object-key prefix; default "recordings"
 	UseSSL    bool
-	// Transport carries S3 requests; nil = minio's default. Set to the
-	// safehttp-guarded transport, since the endpoint is tenant-supplied. IAM
-	// role lookups use their own client (they must reach the metadata address).
-	Transport http.RoundTripper
 }
+
+// DialFunc dials S3 endpoints. The Resolver passes the safehttp guard, since
+// the endpoint is tenant-supplied.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // Store is an S3 bucket handle scoped to a key prefix.
 type Store struct {
@@ -40,7 +44,10 @@ type Store struct {
 
 // New builds a Store, or returns (nil, nil) when S3 isn't configured (no
 // bucket) so callers can treat the nil Store as "S3 disabled".
-func New(cfg Config) (*Store, error) {
+func New(cfg Config) (*Store, error) { return build(cfg, nil) }
+
+// build is New with S3 traffic dialed through dial (nil = minio's default).
+func build(cfg Config, dial DialFunc) (*Store, error) {
 	if cfg.Bucket == "" {
 		return nil, nil
 	}
@@ -55,14 +62,17 @@ func New(cfg Config) (*Store, error) {
 	if cfg.AccessKey != "" && cfg.SecretKey != "" {
 		creds = credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, "")
 	} else {
-		creds = credentials.NewIAM("")
+		creds = credentials.New(iamProvider())
 	}
-	cli, err := minio.New(endpoint, &minio.Options{
-		Creds:     creds,
-		Secure:    cfg.UseSSL,
-		Region:    cfg.Region,
-		Transport: cfg.Transport,
-	})
+	opts := &minio.Options{Creds: creds, Secure: cfg.UseSSL, Region: cfg.Region}
+	if dial != nil {
+		tr, err := s3Transport(cfg.UseSSL, dial)
+		if err != nil {
+			return nil, err
+		}
+		opts.Transport = tr
+	}
+	cli, err := minio.New(endpoint, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +81,29 @@ func New(cfg Config) (*Store, error) {
 		prefix = "recordings"
 	}
 	return &Store{client: cli, bucket: cfg.Bucket, prefix: prefix}, nil
+}
+
+// iamProvider fetches IAM-role credentials with a client of its own. Left
+// without one, minio uses the store's client, whose guarded dialer refuses
+// the metadata and container-credential addresses. No proxy: those addresses
+// are link-local.
+func iamProvider() *credentials.IAM {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	return &credentials.IAM{Client: &http.Client{Transport: tr, Timeout: 10 * time.Second}}
+}
+
+// s3Transport is minio's default transport (response-header timeout, no
+// transparent gzip decoding) with dial swapped in and proxy env off, so a
+// proxy can't resolve the endpoint out of the dial guard's sight.
+func s3Transport(secure bool, dial DialFunc) (*http.Transport, error) {
+	tr, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, err
+	}
+	tr.Proxy = nil
+	tr.DialContext = dial
+	return tr, nil
 }
 
 // Enabled reports whether S3 is configured. Safe to call on a nil receiver.
@@ -131,6 +164,9 @@ func IsNotFound(err error) bool {
 func Describe(err error) string {
 	if r := minio.ToErrorResponse(err); r.Code != "" {
 		return r.Code + ": " + r.Message
+	}
+	if errors.Is(err, safehttp.ErrBlocked) {
+		return "the endpoint resolves to a private or local address; list it in TRING_OUTBOUND_ALLOW_CIDRS to allow it"
 	}
 	return "could not reach the storage endpoint"
 }

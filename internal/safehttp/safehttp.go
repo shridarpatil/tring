@@ -17,6 +17,7 @@
 package safehttp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -112,12 +113,11 @@ func ValidateURL(raw string, allow []netip.Prefix) error {
 	return nil
 }
 
-// NewClient returns an *http.Client that refuses to connect to blocked
-// addresses (see Blocked), follows at most maxRedirects redirects (each
-// re-dialed through the guard), ignores proxy env vars (a proxy would resolve
-// the target out of our sight) and gives up after timeout.
-func NewClient(allow []netip.Prefix, timeout time.Duration) *http.Client {
-	dialer := &net.Dialer{
+// Dial returns a DialContext that refuses blocked addresses (see Blocked),
+// checked on the IP actually connected to. For clients built elsewhere (the
+// S3 recording store); pair it with proxy env off.
+func Dial(allow []netip.Prefix) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{
 		Timeout: 10 * time.Second,
 		Control: func(_, address string, _ syscall.RawConn) error {
 			ap, err := netip.ParseAddrPort(address)
@@ -127,9 +127,17 @@ func NewClient(allow []netip.Prefix, timeout time.Duration) *http.Client {
 			return nil
 		},
 	}
+	return d.DialContext
+}
+
+// NewClient returns an *http.Client that refuses to connect to blocked
+// addresses (see Blocked), follows at most maxRedirects redirects (each
+// re-dialed through the guard), ignores proxy env vars (a proxy would resolve
+// the target out of our sight) and gives up after timeout.
+func NewClient(allow []netip.Prefix, timeout time.Duration) *http.Client {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil
-	tr.DialContext = dialer.DialContext
+	tr.DialContext = Dial(allow)
 	return &http.Client{
 		Transport: tr,
 		Timeout:   timeout,

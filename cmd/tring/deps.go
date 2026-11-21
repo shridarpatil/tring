@@ -87,7 +87,7 @@ func (d *deps) recordingStores(database *db.DB) *blobstore.Resolver {
 	}
 	return blobstore.NewResolver(
 		blobstore.DBLoader(database, queries.MustLoad(), d.secrets),
-		safehttp.NewClient(d.outboundAllow, 0).Transport)
+		safehttp.Dial(d.outboundAllow))
 }
 
 func (d *deps) close() {
