@@ -5,6 +5,7 @@ import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
 import SsoProviders from "../components/SsoProviders.vue";
+import RecordingStorage from "../components/RecordingStorage.vue";
 import AudioPicker from "../components/AudioPicker.vue";
 import { Card, Button, Select, Toggle, Badge } from "../components/ui";
 import type { Tenant, GuestConfig, Flow, Paginated } from "../api/types";
@@ -269,6 +270,16 @@ onMounted(load);
           </div>
         </div>
         <p class="section-note">Changes apply to calls that start after you save.</p>
+        <div class="srow stacked">
+          <div>
+            <div class="srow-label">Storage</div>
+            <p class="srow-desc">
+              Where finished recordings are kept: this server's disk, or an S3 bucket. With S3, leave the keys empty
+              to use the server's IAM role.
+            </p>
+          </div>
+          <RecordingStorage />
+        </div>
       </Card>
 
       <!-- Privacy -->

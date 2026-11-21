@@ -128,7 +128,7 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		ConsolePublicURL:  k.String("console_public_url"),
 		AudioDir:          k.String("audio_dir"),
 		RecordingsDir:     k.String("recordings_dir"),
-		Blob:              d.blob,
+		Blob:              d.recordingStores(database),
 		Cache:             d.cache,
 		Hub:               a.hub,
 		Events:            d.pub,

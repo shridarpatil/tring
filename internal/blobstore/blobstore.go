@@ -1,20 +1,26 @@
 // Package blobstore is a thin wrapper over an S3-compatible object store
 // (minio-go) for call recordings. A nil *Store is a valid "disabled" value:
 // callers check Enabled() and fall back to local-disk storage/serving, so the
-// whole S3 path is opt-in via config without conditionals leaking everywhere.
+// whole S3 path is opt-in per tenant (Resolver) without conditionals leaking everywhere.
 package blobstore
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
+	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+
+	"github.com/shridarpatil/tring/internal/safehttp"
 )
 
-// Config is the S3 connection config (from internal/config / TRING_S3_*).
+// Config is one tenant's S3 connection config (tenants.s3_*, see Resolver).
 type Config struct {
 	Bucket    string
 	Region    string
@@ -25,6 +31,10 @@ type Config struct {
 	UseSSL    bool
 }
 
+// DialFunc dials S3 endpoints. The Resolver passes the safehttp guard, since
+// the endpoint is tenant-supplied.
+type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
+
 // Store is an S3 bucket handle scoped to a key prefix.
 type Store struct {
 	client *minio.Client
@@ -34,7 +44,10 @@ type Store struct {
 
 // New builds a Store, or returns (nil, nil) when S3 isn't configured (no
 // bucket) so callers can treat the nil Store as "S3 disabled".
-func New(cfg Config) (*Store, error) {
+func New(cfg Config) (*Store, error) { return build(cfg, nil) }
+
+// build is New with S3 traffic dialed through dial (nil = minio's default).
+func build(cfg Config, dial DialFunc) (*Store, error) {
 	if cfg.Bucket == "" {
 		return nil, nil
 	}
@@ -49,13 +62,17 @@ func New(cfg Config) (*Store, error) {
 	if cfg.AccessKey != "" && cfg.SecretKey != "" {
 		creds = credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, "")
 	} else {
-		creds = credentials.NewIAM("")
+		creds = credentials.New(iamProvider())
 	}
-	cli, err := minio.New(endpoint, &minio.Options{
-		Creds:  creds,
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
-	})
+	opts := &minio.Options{Creds: creds, Secure: cfg.UseSSL, Region: cfg.Region}
+	if dial != nil {
+		tr, err := s3Transport(cfg.UseSSL, dial)
+		if err != nil {
+			return nil, err
+		}
+		opts.Transport = tr
+	}
+	cli, err := minio.New(endpoint, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +81,29 @@ func New(cfg Config) (*Store, error) {
 		prefix = "recordings"
 	}
 	return &Store{client: cli, bucket: cfg.Bucket, prefix: prefix}, nil
+}
+
+// iamProvider fetches IAM-role credentials with a client of its own. Left
+// without one, minio uses the store's client, whose guarded dialer refuses
+// the metadata and container-credential addresses. No proxy: those addresses
+// are link-local.
+func iamProvider() *credentials.IAM {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	return &credentials.IAM{Client: &http.Client{Transport: tr, Timeout: 10 * time.Second}}
+}
+
+// s3Transport is minio's default transport (response-header timeout, no
+// transparent gzip decoding) with dial swapped in and proxy env off, so a
+// proxy can't resolve the endpoint out of the dial guard's sight.
+func s3Transport(secure bool, dial DialFunc) (*http.Transport, error) {
+	tr, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, err
+	}
+	tr.Proxy = nil
+	tr.DialContext = dial
+	return tr, nil
 }
 
 // Enabled reports whether S3 is configured. Safe to call on a nil receiver.
@@ -78,6 +118,28 @@ func (s *Store) Key(tenant string, t time.Time, name string) string {
 func (s *Store) PutFile(ctx context.Context, key, filePath, contentType string) error {
 	_, err := s.client.FPutObject(ctx, s.bucket, key, filePath, minio.PutObjectOptions{ContentType: contentType})
 	return err
+}
+
+// Delete removes the object at key.
+func (s *Store) Delete(ctx context.Context, key string) error {
+	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+// Probe checks the store can take a tenant's recordings: it writes
+// <prefix>/<tenant>/.tring-write-test, so a wrong bucket, region or permission
+// fails when the config is saved, not after the next call. It then deletes
+// the file; uploads never delete, so a role without s3:DeleteObject is still
+// usable — a failed delete returns the left-over key (and deleteErr), not err.
+func (s *Store) Probe(ctx context.Context, tenant string) (leftover string, deleteErr, err error) {
+	key := path.Join(s.prefix, tenant, ".tring-write-test")
+	if _, err := s.client.PutObject(ctx, s.bucket, key, strings.NewReader("ok"), 2,
+		minio.PutObjectOptions{ContentType: "text/plain"}); err != nil {
+		return "", nil, err
+	}
+	if err := s.Delete(ctx, key); err != nil {
+		return key, err, nil
+	}
+	return "", nil, nil
 }
 
 // Get opens an object for reading; the caller closes it. Returns an error if
@@ -99,4 +161,17 @@ func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 // as opposed to the store being unreachable or refusing the request.
 func IsNotFound(err error) bool {
 	return minio.ToErrorResponse(err).Code == "NoSuchKey"
+}
+
+// Describe turns a store error into a short message safe to show the tenant
+// admin who entered the config: the S3 error code and message, or a generic
+// "unreachable" (dial errors would name internal addresses).
+func Describe(err error) string {
+	if r := minio.ToErrorResponse(err); r.Code != "" {
+		return r.Code + ": " + r.Message
+	}
+	if errors.Is(err, safehttp.ErrBlocked) {
+		return "the endpoint resolves to a private or local address; list it in TRING_OUTBOUND_ALLOW_CIDRS to allow it"
+	}
+	return "could not reach the storage endpoint"
 }
