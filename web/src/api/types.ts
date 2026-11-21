@@ -352,8 +352,6 @@ export interface Trunk {
   calls?: { out: number; failed_out: number; in?: number; failed_in?: number; since: string };
 }
 
-// An OIDC identity provider for console sign-in. The client secret is
-// write-only: it is never returned.
 // Settings → Recording → Storage. The secret is write-only (has_secret only).
 export interface RecordingStorage {
   bucket: string;
@@ -363,8 +361,12 @@ export interface RecordingStorage {
   use_ssl: boolean;
   access_key: string;
   has_secret: boolean;
+  // Set on a save that worked but needs attention (test file not deleted).
+  warning?: string;
 }
 
+// An OIDC identity provider for console sign-in. The client secret is
+// write-only: it is never returned.
 export interface SsoProvider {
   id: string;
   name: string;

@@ -31,6 +31,9 @@ const form = ref({
 });
 const saving = ref(false);
 const error = ref("");
+// A save that worked but needs attention, e.g. the test file couldn't be
+// deleted because the role lacks s3:DeleteObject.
+const warning = ref("");
 
 function fill(s: RecordingStorage) {
   current.value = s;
@@ -72,6 +75,7 @@ const hasKeys = computed(
 async function save() {
   saving.value = true;
   error.value = "";
+  warning.value = "";
   try {
     const { secret_key, ...rest } = form.value;
     // Local disk = no bucket; the other S3 fields are kept for switching back.
@@ -80,7 +84,13 @@ async function save() {
       bucket: kind.value === "s3" ? rest.bucket.trim() : "",
     };
     const body = secret_key ? { ...fields, secret_key } : fields;
-    fill(await api.put<RecordingStorage>(PATH, body));
+    const saved = await api.put<RecordingStorage>(PATH, body);
+    fill(saved);
+    if (saved.warning) {
+      warning.value = saved.warning;
+      toast.info("Storage saved, with a warning — see below");
+      return;
+    }
     toast.success(
       kind.value === "s3"
         ? "Storage saved — test upload succeeded"
@@ -103,7 +113,10 @@ async function removeKeys() {
     return;
   try {
     await api.del(`${PATH}/keys`);
-    fill(await api.get<RecordingStorage>(PATH));
+    // Only the keys change: keep any unsaved edits to the other fields.
+    if (current.value)
+      current.value = { ...current.value, access_key: "", has_secret: false };
+    form.value = { ...form.value, access_key: "", secret_key: "" };
     toast.success("Keys removed — using the IAM role");
   } catch (e) {
     toast.error(errMessage(e, "remove failed"));
@@ -133,7 +146,11 @@ async function removeKeys() {
           v-model="form.region"
           label="Region"
           mono
+          :required="!form.endpoint"
           placeholder="ap-south-1"
+          :hint="
+            form.endpoint ? 'Optional for MinIO/R2.' : 'Required for AWS S3.'
+          "
         />
       </div>
       <div class="grid grid-2">
@@ -181,6 +198,7 @@ async function removeKeys() {
     </p>
 
     <p v-if="error" role="alert" data-variant="error">{{ error }}</p>
+    <p v-if="warning" role="alert" data-variant="warning">{{ warning }}</p>
     <div class="hstack justify-between">
       <span class="text-lighter">
         {{
