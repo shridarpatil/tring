@@ -35,3 +35,17 @@ func TestValidateTrunkFields(t *testing.T) {
 		}
 	}
 }
+
+// auth_acl_cidr is stored canonical, as the ACL will enforce it.
+func TestNormalizeCIDRs(t *testing.T) {
+	got, err := normalizeCIDRs("10.79.210.35, 10.79.210.33/29")
+	if err != nil || got != "10.79.210.35/32,10.79.210.32/29" {
+		t.Errorf("got %q, %v", got, err)
+	}
+	if got, err := normalizeCIDRs(""); err != nil || got != "" {
+		t.Errorf("empty: got %q, %v", got, err)
+	}
+	if _, err := normalizeCIDRs("0.0.0.0/0"); err == nil {
+		t.Error("match-all accepted")
+	}
+}

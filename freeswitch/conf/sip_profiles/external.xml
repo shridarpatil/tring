@@ -62,7 +62,8 @@
     <param name="nonce-ttl" value="60"/>
     <param name="auth-calls" value="false"/>
     <!-- Carriers authenticate by IP: only the 'carriers' ACL (acl.conf.xml,
-         from TRING_CARRIER_CIDRS; allow-all while unset) may send INVITEs. -->
+         from the trunks' carrier source IPs; allow-all while none is set) may send
+         INVITEs. -->
     <param name="apply-inbound-acl" value="carriers"/>
     <param name="inbound-late-negotiation" value="true"/>
     <!--
