@@ -109,6 +109,9 @@ type Queries struct {
 	GetTenantAudio           string `query:"get-tenant-audio"`
 	GetTenantSettings        string `query:"get-tenant-settings"`
 	GetTenantRecordCalls     string `query:"get-tenant-record-calls"`
+	GetTenantS3              string `query:"get-tenant-s3"`
+	UpdateTenantS3           string `query:"update-tenant-s3"`
+	ClearTenantS3Keys        string `query:"clear-tenant-s3-keys"`
 	GetTenantMaxCallSeconds  string `query:"get-tenant-max-call-seconds"`
 	GetTenantTransferTimeout string `query:"get-tenant-transfer-timeout"`
 	GetTenantMaskNumbers     string `query:"get-tenant-mask-numbers"`

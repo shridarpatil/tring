@@ -1,20 +1,22 @@
 // Package blobstore is a thin wrapper over an S3-compatible object store
 // (minio-go) for call recordings. A nil *Store is a valid "disabled" value:
 // callers check Enabled() and fall back to local-disk storage/serving, so the
-// whole S3 path is opt-in via config without conditionals leaking everywhere.
+// whole S3 path is opt-in per tenant (Resolver) without conditionals leaking everywhere.
 package blobstore
 
 import (
 	"context"
 	"io"
+	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-// Config is the S3 connection config (from internal/config / TRING_S3_*).
+// Config is one tenant's S3 connection config (tenants.s3_*, see Resolver).
 type Config struct {
 	Bucket    string
 	Region    string
@@ -23,6 +25,10 @@ type Config struct {
 	SecretKey string
 	Prefix    string // object-key prefix; default "recordings"
 	UseSSL    bool
+	// Transport carries S3 requests; nil = minio's default. Set to the
+	// safehttp-guarded transport, since the endpoint is tenant-supplied. IAM
+	// role lookups use their own client (they must reach the metadata address).
+	Transport http.RoundTripper
 }
 
 // Store is an S3 bucket handle scoped to a key prefix.
@@ -53,8 +59,9 @@ func New(cfg Config) (*Store, error) {
 	}
 	cli, err := minio.New(endpoint, &minio.Options{
 		Creds:  creds,
-		Secure: cfg.UseSSL,
-		Region: cfg.Region,
+		Secure:    cfg.UseSSL,
+		Region:    cfg.Region,
+		Transport: cfg.Transport,
 	})
 	if err != nil {
 		return nil, err
@@ -78,6 +85,23 @@ func (s *Store) Key(tenant string, t time.Time, name string) string {
 func (s *Store) PutFile(ctx context.Context, key, filePath, contentType string) error {
 	_, err := s.client.FPutObject(ctx, s.bucket, key, filePath, minio.PutObjectOptions{ContentType: contentType})
 	return err
+}
+
+// Delete removes the object at key.
+func (s *Store) Delete(ctx context.Context, key string) error {
+	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+// Probe checks the store can take a tenant's recordings: it writes and then
+// deletes <prefix>/<tenant>/.tring-write-test, so a wrong bucket, region or
+// permission fails when the config is saved, not after the next call.
+func (s *Store) Probe(ctx context.Context, tenant string) error {
+	key := path.Join(s.prefix, tenant, ".tring-write-test")
+	if _, err := s.client.PutObject(ctx, s.bucket, key, strings.NewReader("ok"), 2,
+		minio.PutObjectOptions{ContentType: "text/plain"}); err != nil {
+		return err
+	}
+	return s.Delete(ctx, key)
 }
 
 // Get opens an object for reading; the caller closes it. Returns an error if
