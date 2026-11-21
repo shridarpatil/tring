@@ -31,7 +31,19 @@ How it works:
 
   The default rate, 8 kHz (`8000`), is all a phone call carries; 16 kHz or higher only helps browser and WhatsApp calls, and makes files bigger. Allowed rates: `8000`, `12000`, `16000`, `24000`, `48000`.
 - Merging needs `ffmpeg` on the gateway host (it ships in the images).
-- The file is named `<leg-id>.<format>` and written to `TRING_RECORDINGS_DIR`. When `TRING_S3_BUCKET` is set, it is uploaded to `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>` and the local copy is deleted. If `ffmpeg` fails, the caller's leg is kept as `<leg-id>.ogg`.
+- The file is named `<leg-id>.<format>` and written to `TRING_RECORDINGS_DIR`. When the tenant has a bucket set (see [Storage](#storage)), it is uploaded to `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>` and the local copy is deleted. If `ffmpeg` fails, the caller's leg is kept as `<leg-id>.ogg`.
+
+### Storage
+
+Each tenant picks where finished recordings go under **Settings → Recording → Storage** (or `PUT /v1/tenants/me/recording-storage`):
+
+- **No bucket:** recordings stay in the local spool (`TRING_RECORDINGS_DIR`) and are served from there.
+- **Bucket, no keys:** uploads use the server's IAM role (EC2 instance profile, ECS task role, EKS IRSA).
+- **Bucket and access key + secret:** uploads use those keys. The secret is encrypted with `TRING_SECRETS_KEY`, is never returned, and can be overwritten or removed (back to the IAM role) at any time.
+
+Endpoint is empty for AWS S3 (region is then required), or your host for MinIO or Cloudflare R2. A private endpoint address must be listed in `TRING_OUTBOUND_ALLOW_CIDRS`. Saving writes `<prefix>/<tenant-id>/.tring-write-test`, and a failed write is returned instead of saved. The file is then deleted; if the role can't delete (no `s3:DeleteObject`), the config is still saved and a warning names the file to remove by hand. Changing the access key needs its secret entered again. A change applies to the next recording, with no restart.
+
+Each call stores its recording's full object key, so changing the prefix keeps older recordings playable. Moving to a different bucket does not copy older recordings, and they can't be played until the bucket is set back.
 
 ### Web video recordings
 

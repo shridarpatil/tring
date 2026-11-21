@@ -137,7 +137,7 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		webhooks = notifier
 		// CDRs + recordings for media-plane calls (web + phone): same calls
 		// table, spool dir, and S3 scheme. S3 stays opt-in.
-		cdrLog := callcdr.New(database, d.blob, k.String("recordings_dir"), logger, d.pub,
+		cdrLog := callcdr.New(database, d.recordingStores(database), k.String("recordings_dir"), logger, d.pub,
 			callcdr.WithRecordingWorkers(k.Int("recording_workers"))).
 			WithWebhooks(notifier).WithCache(redisCache)
 		g.cdr = cdrLog

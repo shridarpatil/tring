@@ -54,8 +54,8 @@ func (s *Server) openSecret(stored string) (string, error) {
 // PrepareStoredSecrets runs once at api startup, after migrations.
 //
 //   - Key set (box != nil): seals every legacy plaintext SIP password.
-//   - No key: refuses (returns an error) if any stored password is already
-//     sealed — they could not be decrypted. Otherwise warns and carries on
+//   - No key: refuses (returns an error) if any stored password or S3
+//     recording secret is already sealed — they could not be decrypted. Otherwise warns and carries on
 //     in plaintext mode, so a deployment that pulls a new image before adding
 //     TRING_SECRETS_KEY keeps working.
 //
@@ -77,6 +77,13 @@ func PrepareStoredSecrets(ctx context.Context, database *db.DB, box *secretbox.B
 	}
 	if sealed > 0 {
 		return fmt.Errorf("%d stored SIP passwords are encrypted but TRING_SECRETS_KEY is not set — restore the key from your backup", sealed)
+	}
+	var sealedS3 int
+	if err := database.Pool.QueryRow(ctx, queries.MustLoad().CountSealedS3Secrets).Scan(&sealedS3); err != nil {
+		return fmt.Errorf("count stored S3 secrets: %w", err)
+	}
+	if sealedS3 > 0 {
+		return fmt.Errorf("%d tenants' S3 recording secrets are encrypted but TRING_SECRETS_KEY is not set — restore the key from your backup", sealedS3)
 	}
 	log.Warn("TRING_SECRETS_KEY is not set: trunk SIP passwords are stored in PLAINTEXT. "+
 		"Generate one (od -An -tx1 -N32 /dev/urandom | tr -d ' \\n'), add it to .env, back it up, and restart",

@@ -224,11 +224,13 @@ the same `calls` table, spool dir, and S3 scheme as the FS path:
 Recording is **always stereo** (agent L / customer R; shrink via sample rate /
 Opus, never mono). `recording_url` is published **only after the file lands**, so
 a no-media call never shows a dead play button. S3 upload (date-wise key) +
-`recording_s3_key` when `TRING_S3_BUCKET` is set; otherwise local spool. Served by
+`recording_s3_key` when the tenant has a bucket set (`tenants.s3_*`, Settings →
+Recording → Storage); otherwise local spool. Served by
 `GET /v1/calls/{id}/recording` (streams from S3 when keyed, else local).
 
 > Both the gateway (uploader, deletes local after upload) and the api (serves
-> recordings) need the S3 config — `docker-compose.yml` shares `.env` across both.
+> recordings) read the tenant's S3 config from the DB per recording
+> (`blobstore.Resolver`), so a console change applies to the next call.
 
 ## 9. Auth — four distinct credentials (do not conflate)
 

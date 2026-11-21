@@ -76,7 +76,7 @@ type Config struct {
 	// to and the API serves them from. See handleGetCallRecording.
 	RecordingsDir string
 	// Blob is the optional S3 store recordings are streamed from when uploaded.
-	Blob *blobstore.Store
+	Blob *blobstore.Resolver
 
 	// Cache is the shared Redis cache. The API uses it to invalidate the
 	// DID routes and flow definitions the gateway caches (flowstore). May be
@@ -153,7 +153,7 @@ type Server struct {
 	recordingsDir string
 	// blob: optional S3 store. When a call's recording lives in S3, the serve
 	// endpoint streams it from here instead of the local dir. nil = local only.
-	blob *blobstore.Store
+	blob *blobstore.Resolver
 
 	// iceServers holds the STATIC ICE entries (STUN, and static TURN as a
 	// fallback when no turnSecret is set), built once at startup. When turnSecret
@@ -444,6 +444,10 @@ func (s *Server) Router() http.Handler {
 					r.Get("/tenants/me", s.handleGetMyTenant)
 					r.Get("/version", s.handleVersion)
 					r.Patch("/tenants/me", s.handlePatchMyTenant)
+					// Recording storage (S3): the secret is write-only; saving test-writes.
+					r.Get("/tenants/me/recording-storage", s.handleGetRecordingStorage)
+					r.Put("/tenants/me/recording-storage", s.handlePutRecordingStorage)
+					r.Delete("/tenants/me/recording-storage/keys", s.handleClearRecordingStorageKeys)
 					r.Get("/guest-config", s.handleGetGuestConfig)
 					r.Patch("/guest-config", s.handlePatchGuestConfig)
 					// Tenant API keys (tk_live_…) — issue/list/revoke. The admin

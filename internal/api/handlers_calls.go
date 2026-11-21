@@ -312,10 +312,20 @@ func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tena
 	}
 
 	// Stored in S3: stream it through (same-origin, header auth — no presign, no
-	// CORS, no token in the URL).
-	if s3Key != nil && *s3Key != "" && s.blob.Enabled() {
-		s.streamS3Recording(w, r, *s3Key)
-		return
+	// CORS, no token in the URL). The tenant's current bucket holds it; a
+	// tenant that has since cleared its bucket falls through to the spool (404).
+	if s3Key != nil && *s3Key != "" {
+		store, err := s.blob.For(r.Context(), tenantID.String())
+		if err != nil {
+			s.log.Error("recording store config unusable", "tenant_id", tenantID, "err", err)
+			writeError(w, http.StatusBadGateway, "recording store unavailable")
+			return
+		}
+		if store.Enabled() {
+			s.streamS3Recording(w, r, store, *s3Key)
+			return
+		}
+		s.log.Warn("recording is in S3 but the tenant has no bucket set", "tenant_id", tenantID, "key", *s3Key)
 	}
 
 	// Local spool fallback (S3 disabled, or not yet uploaded). The gateway writes
@@ -340,7 +350,7 @@ func (s *Server) serveCallRecording(w http.ResponseWriter, r *http.Request, tena
 // as a success. So the object is read on a context that the request deadline
 // cancels only until streaming starts; after that only a client disconnect
 // cancels it. minio's transport still bounds the dial and response headers.
-func (s *Server) streamS3Recording(w http.ResponseWriter, r *http.Request, key string) {
+func (s *Server) streamS3Recording(w http.ResponseWriter, r *http.Request, store *blobstore.Store, key string) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer cancel()
 	var streaming atomic.Bool
@@ -351,7 +361,7 @@ func (s *Server) streamS3Recording(w http.ResponseWriter, r *http.Request, key s
 	})
 	defer stop()
 
-	obj, err := s.blob.Get(ctx, key)
+	obj, err := store.Get(ctx, key)
 	if err != nil {
 		switch {
 		case blobstore.IsNotFound(err):

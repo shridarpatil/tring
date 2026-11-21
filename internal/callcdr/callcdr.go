@@ -42,8 +42,8 @@ import (
 type Log struct {
 	db     *db.DB
 	q      *queries.Queries
-	blob   *blobstore.Store // nil/disabled → recordings stay on local disk
-	dir    string           // local recordings spool (shared with the API's serve)
+	blob   *blobstore.Resolver // per-tenant S3; a tenant without a bucket keeps recordings on local disk
+	dir    string              // local recordings spool (shared with the API's serve)
 	log    *slog.Logger
 	events events.Sink  // nil = events disabled (no-op)
 	hooks  Webhooks     // nil = tenant webhooks off (no-op)
@@ -140,9 +140,9 @@ func (l *Log) emitCall(ctx context.Context, ac *activeCall, webhookID uuid.UUID,
 	l.hooks.Send(ac.tenant, webhookID, event, callrow.Payload(c))
 }
 
-// New builds a Log. blob may be nil (S3 off); dir is the recordings spool;
+// New builds a Log. blob may be nil (S3 off for every tenant); dir is the recordings spool;
 // pub may be nil (events disabled).
-func New(d *db.DB, blob *blobstore.Store, dir string, logger *slog.Logger, pub events.Sink, opts ...Option) *Log {
+func New(d *db.DB, blob *blobstore.Resolver, dir string, logger *slog.Logger, pub events.Sink, opts ...Option) *Log {
 	if logger == nil {
 		logger = slog.Default()
 	}

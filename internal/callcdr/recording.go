@@ -65,11 +65,12 @@ func (l *Log) processRecording(ctx context.Context, j *recordingJob) error {
 				return err
 			}
 		}
-		if err := l.publishRecording(ctx, j, out); err != nil {
+		uploaded, err := l.publishRecording(ctx, j, out)
+		if err != nil {
 			return err
 		}
 		j.Published = true
-		j.RemoveOutput = l.blob.Enabled()
+		j.RemoveOutput = uploaded
 		if err := l.recordings.save(j); err != nil {
 			return err
 		}
@@ -100,33 +101,43 @@ func removeRecordingFile(path string) error {
 	return err
 }
 
-func (l *Log) publishRecording(parent context.Context, j *recordingJob, out string) error {
+// publishRecording makes the rendered file servable: it stamps the call's
+// recording URL and, when the tenant has a bucket, uploads it and stamps the
+// key. It reports whether it uploaded (the local copy can then go).
+func (l *Log) publishRecording(parent context.Context, j *recordingJob, out string) (bool, error) {
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 	if _, err := os.Stat(out); err != nil {
-		return fmt.Errorf("recording output missing: %w", err)
+		return false, fmt.Errorf("recording output missing: %w", err)
 	}
 	// A recovered job must still belong to an existing call before it can
 	// publish locally or upload (the tenant/call may have been deleted).
 	var leg string
 	var key *string
 	if err := l.db.Pool.QueryRow(ctx, l.q.GetCallRecording, j.CallID, j.Tenant).Scan(&leg, &key); err != nil {
-		return fmt.Errorf("recording call lookup: %w", err)
+		return false, fmt.Errorf("recording call lookup: %w", err)
 	}
 	if leg != j.LegID {
-		return fmt.Errorf("recording leg does not match call")
+		return false, fmt.Errorf("recording leg does not match call")
 	}
 	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecording, j.LegID); err != nil {
-		return fmt.Errorf("set recording URL: %w", err)
+		return false, fmt.Errorf("set recording URL: %w", err)
 	}
-	if l.blob.Enabled() {
-		key := l.blob.Key(j.Tenant.String(), j.StartedAt, filepath.Base(out))
-		if err := l.blob.PutFile(ctx, key, out, recordingMIME[filepath.Ext(out)]); err != nil {
-			return fmt.Errorf("upload recording: %w", err)
-		}
-		if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecordingS3, j.LegID, key); err != nil {
-			return fmt.Errorf("stamp recording S3 key: %w", err)
-		}
+	// A config the tenant can't use (e.g. sealed secret, no key) fails the job
+	// so it is retried with its files kept, rather than silently staying local.
+	store, err := l.blob.For(ctx, j.Tenant.String())
+	if err != nil {
+		return false, fmt.Errorf("recording store: %w", err)
 	}
-	return nil
+	if !store.Enabled() {
+		return false, nil
+	}
+	objKey := store.Key(j.Tenant.String(), j.StartedAt, filepath.Base(out))
+	if err := store.PutFile(ctx, objKey, out, recordingMIME[filepath.Ext(out)]); err != nil {
+		return false, fmt.Errorf("upload recording: %w", err)
+	}
+	if _, err := l.db.Pool.Exec(ctx, l.q.SetCallRecordingS3, j.LegID, objKey); err != nil {
+		return false, fmt.Errorf("stamp recording S3 key: %w", err)
+	}
+	return true, nil
 }

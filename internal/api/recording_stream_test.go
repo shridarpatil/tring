@@ -17,7 +17,7 @@ import (
 // fakeS3 serves GET /<bucket>/<key> for one object, writing the body in
 // chunks with a pause between them so a download outlives a short deadline.
 // status != 200 answers with an S3-style XML error instead.
-func fakeS3(t *testing.T, body string, chunks int, pause time.Duration, status int, code string) *blobstore.Store {
+func fakeS3(t *testing.T, body string, chunks int, pause time.Duration, status int, code string) *blobstore.Resolver {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if status != http.StatusOK {
@@ -48,14 +48,11 @@ func fakeS3(t *testing.T, body string, chunks int, pause time.Duration, status i
 		}
 	}))
 	t.Cleanup(srv.Close)
-	st, err := blobstore.New(blobstore.Config{
+	cfg := blobstore.Config{
 		Bucket: "rec", Region: "us-east-1", Endpoint: strings.TrimPrefix(srv.URL, "http://"),
 		AccessKey: "k", SecretKey: "s",
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	return st
+	return blobstore.NewResolver(func(context.Context, string) (blobstore.Config, error) { return cfg, nil }, nil)
 }
 
 func seedS3Call(t *testing.T, f *dbtest.Fixture) string {
@@ -119,5 +116,20 @@ func TestRecordingDownloadStoreErrors(t *testing.T) {
 		if rec.Code != tc.want {
 			t.Errorf("S3 %s: got %d, want %d", tc.code, rec.Code, tc.want)
 		}
+	}
+}
+
+// A call stamped with an S3 key whose tenant has since cleared its bucket:
+// there is no store to read it from, so it is a 404, not a server error.
+func TestServeRecordingS3KeyButNoStore(t *testing.T) {
+	f := dbtest.Setup(t)
+	id := seedS3Call(t, f)
+	none := blobstore.NewResolver(func(context.Context, string) (blobstore.Config, error) {
+		return blobstore.Config{}, nil
+	}, nil)
+	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", GatewayPublicURL: "http://gw.test", Blob: none})
+	rec := serve(t, s, f, "GET", "/v1/calls/"+id+"/recording", "")
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "recording not available") {
+		t.Fatalf("got %d %s, want 404 recording not available", rec.Code, rec.Body.String())
 	}
 }

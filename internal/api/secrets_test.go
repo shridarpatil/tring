@@ -217,6 +217,21 @@ func TestPrepareStoredSecretsWithoutKey(t *testing.T) {
 	}
 }
 
+// A sealed S3 secret also means the key went missing: refuse to start rather
+// than fail every recording upload and playback.
+func TestPrepareStoredSecretsSealedS3WithoutKey(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := f.DB.Pool.Exec(ctx, `UPDATE tenants SET s3_access_key='AKIA', s3_secret_key=$2 WHERE id=$1`,
+		f.TenantID, testBox(t, 1).Seal("s")); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareStoredSecrets(ctx, f.DB, nil, log); err == nil || !strings.Contains(err.Error(), "S3") {
+		t.Fatalf("keyless startup with a sealed S3 secret: err = %v", err)
+	}
+}
+
 func TestOpenSecretWithoutKey(t *testing.T) {
 	s := &Server{}
 	if got, err := s.openSecret("plain"); err != nil || got != "plain" {

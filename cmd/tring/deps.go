@@ -11,8 +11,10 @@ import (
 	"github.com/shridarpatil/tring/internal/blobstore"
 	"github.com/shridarpatil/tring/internal/cache"
 	"github.com/shridarpatil/tring/internal/config"
+	"github.com/shridarpatil/tring/internal/db"
 	"github.com/shridarpatil/tring/internal/events"
 	"github.com/shridarpatil/tring/internal/logging"
+	"github.com/shridarpatil/tring/internal/queries"
 	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/secretbox"
 )
@@ -26,7 +28,6 @@ type deps struct {
 	outboundAllow []netip.Prefix
 	cache         *cache.Cache      // nil when Redis is unreachable
 	pub           *events.Publisher // nil when Redis is unreachable
-	blob          *blobstore.Store
 }
 
 func newDeps(k *koanf.Koanf, gatewayOnly bool) (*deps, error) {
@@ -74,21 +75,19 @@ func newDeps(k *koanf.Koanf, gatewayOnly bool) (*deps, error) {
 		logger.Warn("redis unavailable, event publishing disabled", "err", err)
 	}
 
-	// Optional S3 store for call recordings (upload on the gateway, serving on
-	// the api). Misconfig → warn and use the local volume instead.
-	d.blob, err = blobstore.New(blobstore.Config{
-		Bucket:    k.String("s3_bucket"),
-		Region:    k.String("s3_region"),
-		Endpoint:  k.String("s3_endpoint"),
-		AccessKey: k.String("s3_access_key"),
-		SecretKey: k.String("s3_secret_key"),
-		Prefix:    k.String("s3_prefix"),
-		UseSSL:    k.Bool("s3_use_ssl"),
-	})
-	if err != nil {
-		logger.Warn("S3 recording storage disabled (config error)", "err", err)
-	}
 	return d, nil
+}
+
+// recordingStores builds a role's per-tenant S3 resolver for call recordings
+// (gateway uploads, api serves), configured in the console. The endpoint is
+// tenant-supplied, so S3 traffic dials through the SSRF guard.
+func (d *deps) recordingStores(database *db.DB) *blobstore.Resolver {
+	if database == nil {
+		return nil
+	}
+	return blobstore.NewResolver(
+		blobstore.DBLoader(database, queries.MustLoad(), d.secrets),
+		safehttp.Dial(d.outboundAllow))
 }
 
 func (d *deps) close() {
