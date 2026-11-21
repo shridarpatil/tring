@@ -23,6 +23,9 @@ type recordingStorage struct {
 	UseSSL    bool   `json:"use_ssl"`
 	AccessKey string `json:"access_key"`
 	HasSecret bool   `json:"has_secret"`
+	// Warning is set on a save that worked but needs attention (e.g. the test
+	// file could not be deleted).
+	Warning string `json:"warning,omitempty"`
 }
 
 type putRecordingStorage struct {
@@ -30,7 +33,7 @@ type putRecordingStorage struct {
 	Region    string `json:"region"`
 	Endpoint  string `json:"endpoint"`
 	Prefix    string `json:"prefix"`
-	UseSSL    bool   `json:"use_ssl"`
+	UseSSL    *bool  `json:"use_ssl"` // omitted = true
 	AccessKey string `json:"access_key"`
 	SecretKey string `json:"secret_key"` // "" = keep the stored secret
 }
@@ -89,6 +92,10 @@ func (s *Server) validateStorage(req putRecordingStorage) string {
 		return "access_key must be printable ASCII without spaces"
 	case req.AccessKey == "" && req.SecretKey != "":
 		return "secret_key needs an access_key"
+	case req.Bucket != "" && req.Endpoint == "" && req.Region == "":
+		// Without it minio asks AWS for the bucket's region
+		// (s3:GetBucketLocation), which a minimal recording policy lacks.
+		return "region is required for AWS S3 (for example ap-south-1)"
 	}
 	if req.Endpoint != "" {
 		host := req.Endpoint
@@ -125,6 +132,7 @@ func (s *Server) handlePutRecordingStorage(w http.ResponseWriter, r *http.Reques
 	if req.Prefix == "" {
 		req.Prefix = "recordings"
 	}
+	useSSL := req.UseSSL == nil || *req.UseSSL
 	if msg := s.validateStorage(req); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -149,6 +157,10 @@ func (s *Server) handlePutRecordingStorage(w http.ResponseWriter, r *http.Reques
 	case req.SecretKey != "":
 		sealed := s.sealSecret(req.SecretKey)
 		newSealed, secret = &sealed, req.SecretKey
+	case req.AccessKey != stored.AccessKey:
+		// The stored secret belongs to the old key.
+		writeError(w, http.StatusBadRequest, "enter the secret_key for the new access key")
+		return
 	case stored.SecretKey == "":
 		writeError(w, http.StatusBadRequest, "secret_key is required with an access_key")
 		return
@@ -159,18 +171,21 @@ func (s *Server) handlePutRecordingStorage(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	warning := ""
 	if req.Bucket != "" {
 		cfg := blobstore.Config{Bucket: req.Bucket, Region: req.Region, Endpoint: req.Endpoint,
-			Prefix: req.Prefix, UseSSL: req.UseSSL, AccessKey: req.AccessKey, SecretKey: secret}
-		var store *blobstore.Store
-		if s.blob != nil {
-			store, err = s.blob.Build(cfg)
-		} else {
-			store, err = blobstore.New(cfg)
+			Prefix: req.Prefix, UseSSL: useSSL, AccessKey: req.AccessKey, SecretKey: secret}
+		// Always through the SSRF dial guard, even without the role's resolver.
+		build := s.blob
+		if build == nil {
+			build = blobstore.NewResolver(nil, safehttp.Dial(s.outboundAllow))
 		}
+		var leftover string
+		var deleteErr error
+		store, err := build.Build(cfg)
 		if err == nil {
 			ctx, cancel := context.WithTimeout(r.Context(), storageProbeTimeout)
-			err = store.Probe(ctx, t.ID.String())
+			leftover, deleteErr, err = store.Probe(ctx, t.ID.String())
 			cancel()
 		}
 		if err != nil {
@@ -178,14 +193,27 @@ func (s *Server) handlePutRecordingStorage(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, "storage test failed: "+blobstore.Describe(err))
 			return
 		}
+		if deleteErr != nil {
+			s.log.Warn("recording storage test file not deleted", "tenant_id", t.ID, "key", leftover, "err", deleteErr)
+			warning = "Saved. The test upload worked, but the test file " + leftover +
+				" could not be deleted (" + blobstore.Describe(deleteErr) + "). Recordings will upload fine; " +
+				"delete that file yourself, or grant s3:DeleteObject so future saves clean up."
+		}
 	}
 
 	if _, err := s.db.Pool.Exec(r.Context(), s.q.UpdateTenantS3, t.ID,
-		req.Bucket, req.Region, req.Endpoint, req.Prefix, req.UseSSL, req.AccessKey, newSealed); err != nil {
+		req.Bucket, req.Region, req.Endpoint, req.Prefix, useSSL, req.AccessKey, newSealed); err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return
 	}
-	s.handleGetRecordingStorage(w, r)
+	c, err := s.loadRecordingStorage(r.Context(), t.ID.String())
+	if err != nil {
+		s.writeServerError(w, r, http.StatusInternalServerError, "query failed", err)
+		return
+	}
+	view := storageView(c)
+	view.Warning = warning
+	writeJSON(w, http.StatusOK, view)
 }
 
 // handleClearRecordingStorageKeys drops the static keys; uploads then use the

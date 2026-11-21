@@ -179,3 +179,76 @@ func TestRecordingStorageProbe(t *testing.T) {
 		})
 	}
 }
+
+// An API caller that leaves use_ssl out gets HTTPS, not plain HTTP.
+func TestRecordingStorageUseSSLDefaultsOn(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newSealingServer(f, testBox(t, 1))
+	if _, err := f.DB.Pool.Exec(context.Background(), `UPDATE tenants SET s3_use_ssl=false WHERE id=$1`, f.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	rec := serve(t, s, f, http.MethodPut, storagePath, `{"region":"ap-south-1"}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"use_ssl":true`) {
+		t.Fatalf("got %d %s, want use_ssl true", rec.Code, rec.Body.String())
+	}
+}
+
+// A changed access key must come with its own secret; keeping the old one
+// would pair it with the wrong key.
+func TestRecordingStorageNewKeyNeedsSecret(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newSealingServer(f, testBox(t, 1))
+	if rec := serve(t, s, f, http.MethodPut, storagePath, `{"access_key":"AKIAOLD","secret_key":"old"}`); rec.Code != http.StatusOK {
+		t.Fatalf("seed: %d %s", rec.Code, rec.Body.String())
+	}
+	rec := serve(t, s, f, http.MethodPut, storagePath, `{"access_key":"AKIANEW"}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "new access key") {
+		t.Fatalf("got %d %s, want 400", rec.Code, rec.Body.String())
+	}
+	if a, _ := rawS3Secret(t, f); a != "AKIAOLD" {
+		t.Errorf("access key changed to %q", a)
+	}
+}
+
+// AWS (no endpoint) needs a region: without one minio looks the bucket up
+// with GetBucketLocation, which the documented policy doesn't grant.
+func TestRecordingStorageAWSNeedsRegion(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newSealingServer(f, testBox(t, 1))
+	rec := serve(t, s, f, http.MethodPut, storagePath, `{"bucket":"acme-recordings","use_ssl":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "region") {
+		t.Fatalf("got %d %s, want 400 about region", rec.Code, rec.Body.String())
+	}
+}
+
+// A role that may write but not delete still saves: uploads only need
+// PutObject. The response carries a warning about the leftover test file.
+func TestRecordingStorageProbeDeleteDenied(t *testing.T) {
+	f := dbtest.Setup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>no</Message></Error>`))
+			return
+		}
+		w.Header().Set("ETag", `"abc"`)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	s := NewServer(Config{DB: f.DB, JWTSecret: "test-secret", GatewayPublicURL: "http://gw.test",
+		Secrets: testBox(t, 1), OutboundAllow: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
+	rec := serve(t, s, f, http.MethodPut, storagePath, `{"bucket":"rec-nodelete","region":"us-east-1","endpoint":"`+
+		strings.TrimPrefix(srv.URL, "http://")+`","use_ssl":false,"access_key":"AKIA","secret_key":"s"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if w, _ := got["warning"].(string); !strings.Contains(w, "s3:DeleteObject") || !strings.Contains(w, ".tring-write-test") {
+		t.Errorf("warning = %q", got["warning"])
+	}
+	if got["bucket"] != "rec-nodelete" {
+		t.Errorf("bucket not saved: %v", got["bucket"])
+	}
+}

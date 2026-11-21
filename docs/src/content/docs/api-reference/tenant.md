@@ -137,10 +137,10 @@ Where finished recordings are uploaded. With no bucket, recordings stay on the s
 | Field | Type | Description |
 |---|---|---|
 | `bucket` | string | S3 bucket. `""` keeps recordings local. |
-| `region` | string | Bucket region, for example `ap-south-1`. |
+| `region` | string | Bucket region, for example `ap-south-1`. Required for AWS S3 (empty `endpoint`). |
 | `endpoint` | string | `""` for AWS S3, or `host[:port]` of an S3-compatible store (MinIO, Cloudflare R2). |
 | `prefix` | string | Object key prefix. Default `recordings`. Objects are `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>`. |
-| `use_ssl` | boolean | Use HTTPS to the endpoint. |
+| `use_ssl` | boolean | Use HTTPS to the endpoint. Defaults to `true` when left out of a `PUT`. |
 | `access_key` | string | Static access key. `""` uses the server's IAM role. |
 | `has_secret` | boolean | Whether a secret key is stored. The secret itself is never returned. |
 
@@ -150,7 +150,7 @@ Where finished recordings are uploaded. With no bucket, recordings stay on the s
 
 ### PUT /v1/tenants/me/recording-storage
 
-Replaces the storage config. Send every field. Leave out `secret_key` (or send `""`) to keep the stored secret. Sending an empty `access_key` also removes the secret, so uploads use the IAM role. With a bucket set, the server first writes and deletes `<prefix>/<tenant-id>/.tring-write-test`, and saves nothing if that fails. The change applies to the next recording.
+Replaces the storage config. Send every field. Leave out `secret_key` (or send `""`) to keep the stored secret; a changed `access_key` needs its `secret_key`. Sending an empty `access_key` also removes the secret, so uploads use the IAM role. With a bucket set, the server first writes `<prefix>/<tenant-id>/.tring-write-test` and saves nothing if that fails. It then deletes the file; if the delete is refused, the config is still saved and the response carries a `warning` naming the file. The change applies to the next recording.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -164,7 +164,7 @@ curl -sS -X PUT "$TRING_URL/v1/tenants/me/recording-storage" \
   -d '{"bucket":"acme-recordings","region":"ap-south-1","endpoint":"","prefix":"recordings","use_ssl":true,"access_key":""}'
 ```
 
-**Response** `200 OK` with the saved [recording storage object](#the-recording-storage-object).
+**Response** `200 OK` with the saved [recording storage object](#the-recording-storage-object), plus `warning` (string) when the save worked but needs attention.
 
 **Errors**
 
@@ -173,7 +173,8 @@ curl -sS -X PUT "$TRING_URL/v1/tenants/me/recording-storage" \
 | `400` | `invalid JSON body` |
 | `400` | `bucket must be 3-63 lowercase letters, digits, dots or hyphens` (and the matching messages for `region`, `endpoint`, `prefix`, `access_key`) |
 | `400` | `endpoint address not allowed (private or local; list it in TRING_OUTBOUND_ALLOW_CIDRS to permit)` |
-| `400` | `secret_key needs an access_key` / `secret_key is required with an access_key` |
+| `400` | `secret_key needs an access_key` / `secret_key is required with an access_key` / `enter the secret_key for the new access key` |
+| `400` | `region is required for AWS S3 (for example ap-south-1)` |
 | `400` | `secret_key needs TRING_SECRETS_KEY on the server (it is stored encrypted)` |
 | `400` | `storage test failed: <S3 code>: <message>` / `storage test failed: could not reach the storage endpoint` |
 | `500` | `update failed` |

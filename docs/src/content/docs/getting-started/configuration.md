@@ -186,7 +186,7 @@ Use one gateway writer per spool (the API can share it for serving recordings).
 No database schema change is required.
 
 :::tip[Least privilege for S3]
-Recordings are personal data. Prefer an IAM role over static keys, scope it to `s3:PutObject`, `s3:GetObject` and `s3:DeleteObject` (used by the test write on save) on this bucket and prefix only, keep the bucket private (Block Public Access on), and turn on default encryption and access logging.
+Recordings are personal data. Prefer an IAM role over static keys, scope it to `s3:PutObject` and `s3:GetObject` on this bucket and prefix only (add `s3:DeleteObject` if you want the save test to clean up its test file), keep the bucket private (Block Public Access on), and turn on default encryption and access logging.
 :::
 
 ## 6b. IVR audio library and text-to-speech
