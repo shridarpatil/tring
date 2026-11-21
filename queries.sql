@@ -249,6 +249,28 @@ SELECT max_call_seconds FROM tenants WHERE id = $1;
 -- the sample rate (Hz) and format the finished recording is encoded in.
 SELECT record_calls, recording_sample_rate, recording_format FROM tenants WHERE id = $1;
 
+-- name: get-tenant-s3
+-- The tenant's recording storage (internal/blobstore). Read by the gateway per
+-- recording upload and by the api per playback; s3_secret_key is sealed.
+SELECT s3_bucket, s3_region, s3_endpoint, s3_prefix, s3_use_ssl, s3_access_key, s3_secret_key
+FROM tenants WHERE id = $1;
+
+-- name: update-tenant-s3
+-- Save the tenant's recording storage. $8 NULL keeps the stored secret.
+UPDATE tenants
+SET s3_bucket     = $2,
+    s3_region     = $3,
+    s3_endpoint   = $4,
+    s3_prefix     = $5,
+    s3_use_ssl    = $6,
+    s3_access_key = $7,
+    s3_secret_key = COALESCE($8, s3_secret_key)
+WHERE id = $1;
+
+-- name: clear-tenant-s3-keys
+-- Drop the static S3 keys: uploads fall back to the server's IAM role.
+UPDATE tenants SET s3_access_key = '', s3_secret_key = '' WHERE id = $1;
+
 -- name: set-call-recording
 -- Mark a call as recording: point recording_url at the authenticated serve
 -- endpoint (keyed by the call's own id). Idempotent — only sets it once.
