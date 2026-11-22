@@ -229,6 +229,23 @@ func (s *Server) handleMeCalls(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, c)
 	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	// Tags in one query once the rows are closed, then back onto the items.
+	calls := make([]callrow.Call, len(out))
+	for i := range out {
+		calls[i] = out[i].Call
+	}
+	if err := callrow.FillTags(r.Context(), s.db, s.q, p.TenantID, calls); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	for i := range out {
+		out[i].Tags = calls[i].Tags
+	}
 	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
 }
 

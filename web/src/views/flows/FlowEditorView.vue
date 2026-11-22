@@ -341,6 +341,7 @@ const availableTeams = ref<Team[]>([]);
 // Registered webhooks: a node's "Notify webhook" and the flow's "On call end".
 const availableWebhooks = ref<Webhook[]>([]);
 const endWebhookId = ref("");
+const wrapUpWebhookId = ref("");
 
 function buildIVRFlowData(): IVRFlowData {
   return {
@@ -361,11 +362,13 @@ function buildIVRFlowData(): IVRFlowData {
       condition: (e.sourceHandle as string) || "default",
     })),
     ...(endWebhookId.value ? { end_webhook_id: endWebhookId.value } : {}),
+    ...(wrapUpWebhookId.value ? { wrap_up_webhook_id: wrapUpWebhookId.value } : {}),
   };
 }
 
 function loadFromIVRFlowData(d: IVRFlowData) {
   endWebhookId.value = d.end_webhook_id || "";
+  wrapUpWebhookId.value = d.wrap_up_webhook_id || "";
   removeNodes(nodes.value);
   removeEdges(edges.value);
   for (const n of d.nodes) {
@@ -515,6 +518,18 @@ onMounted(async () => {
             {{ w.name }}{{ w.active ? "" : " (disabled)" }}
           </option>
           <option v-if="endWebhookId && !availableWebhooks.some((w) => w.id === endWebhookId)" :value="endWebhookId">
+            Deleted webhook
+          </option>
+        </select>
+      </label>
+      <label class="fe-endhook" title="Sent call.wrapped_up when the agent finishes (or times out of) wrap-up after a call through this flow">
+        <span>On wrap-up</span>
+        <select v-model="wrapUpWebhookId">
+          <option value="">No webhook</option>
+          <option v-for="w in availableWebhooks" :key="w.id" :value="w.id">
+            {{ w.name }}{{ w.active ? "" : " (disabled)" }}
+          </option>
+          <option v-if="wrapUpWebhookId && !availableWebhooks.some((w) => w.id === wrapUpWebhookId)" :value="wrapUpWebhookId">
             Deleted webhook
           </option>
         </select>

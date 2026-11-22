@@ -13,6 +13,7 @@ test("fmtTalk", () => {
 test("memberTone", () => {
   assert.equal(memberTone("online"), "success");
   assert.equal(memberTone("on_call"), "live");
+  assert.equal(memberTone("wrap_up"), "warning");
   assert.equal(memberTone("away"), "warning");
   assert.equal(memberTone("unknown"), "neutral");
 });

@@ -16,6 +16,9 @@ type teamResp struct {
 	MinLiveAgents int             `json:"min_live_agents"`
 	SLASeconds    int             `json:"sla_seconds"`
 	Hours         json.RawMessage `json:"hours"`
+
+	WrapUpSeconds      int  `json:"wrap_up_seconds"`
+	RequireDisposition bool `json:"require_disposition"`
 }
 
 func teamCall(t *testing.T, s *Server, f *dbtest.Fixture, method, target, body string, wantCode int) teamResp {
@@ -97,4 +100,40 @@ func TestPatchTeamRejectsNegative(t *testing.T) {
 	teamCall(t, s, f, http.MethodPost, "/v1/teams", `{"name":"support"}`, http.StatusCreated)
 	teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"min_live_agents":-1}`, http.StatusBadRequest)
 	teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"sla_seconds":-5}`, http.StatusBadRequest)
+}
+
+func TestUpdateTeamWrapUp(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	teamCall(t, s, f, http.MethodPost, "/v1/teams", `{"name":"support"}`, http.StatusCreated)
+	tr := teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"wrap_up_seconds":45,"require_disposition":true}`, http.StatusOK)
+	if tr.WrapUpSeconds != 45 || !tr.RequireDisposition {
+		t.Errorf("patch = %+v, want 45/true", tr)
+	}
+	tr = teamCall(t, s, f, http.MethodGet, "/v1/teams/support", "", http.StatusOK)
+	if tr.WrapUpSeconds != 45 || !tr.RequireDisposition {
+		t.Errorf("get = %+v, want 45/true", tr)
+	}
+	// An unrelated PATCH leaves wrap-up alone.
+	tr = teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"ring_seconds":25}`, http.StatusOK)
+	if tr.WrapUpSeconds != 45 || !tr.RequireDisposition {
+		t.Errorf("after unrelated patch = %+v, want 45/true", tr)
+	}
+}
+
+func TestUpdateTeamWrapUpRange(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	teamCall(t, s, f, http.MethodPost, "/v1/teams", `{"name":"support"}`, http.StatusCreated)
+	teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"wrap_up_seconds":-1}`, http.StatusBadRequest)
+	teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"wrap_up_seconds":601}`, http.StatusBadRequest)
+	tr := teamCall(t, s, f, http.MethodPatch, "/v1/teams/support", `{"wrap_up_seconds":600}`, http.StatusOK)
+	if tr.WrapUpSeconds != 600 {
+		t.Errorf("wrap_up_seconds = %d, want 600", tr.WrapUpSeconds)
+	}
+	teamCall(t, s, f, http.MethodPost, "/v1/teams", `{"name":"bad","wrap_up_seconds":601}`, http.StatusBadRequest)
+	tr = teamCall(t, s, f, http.MethodPost, "/v1/teams", `{"name":"ok","wrap_up_seconds":30,"require_disposition":true}`, http.StatusCreated)
+	if tr.WrapUpSeconds != 30 || !tr.RequireDisposition {
+		t.Errorf("create = %+v, want 30/true", tr)
+	}
 }

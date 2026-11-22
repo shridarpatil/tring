@@ -14,6 +14,7 @@
 //   server → client:  joined | offer | ice | peer-joined | peer-state | peer-left
 //                     | incoming | incoming-cancel | ready | availability | error
 //                     | supervisor | transfer-failed | resume-call | superseded
+//                     | wrap-up | wrap-up-end
 // Trickle ICE rides `ice` both ways. Resumption: the client stores
 // `session_token` from `joined` and re-sends it in a later `join`.
 
@@ -59,6 +60,12 @@ export const ServerMsgType = {
   // agent presence: another tab/device registered as this agent and now gets
   // the rings. Don't reconnect (two tabs would steal it back and forth forever).
   Superseded: "superseded",
+  // agent presence: the answered call ended and the agent is in wrap-up (not
+  // rung) until ends_at, or until the call's wrap-up is saved.
+  WrapUp: "wrap-up",
+  // agent presence: wrap-up is over (saved, timed out, or the agent placed a
+  // call) — the agent is available again.
+  WrapUpEnd: "wrap-up-end",
 } as const;
 
 /** Browser-facing STUN/TURN entry sent in `joined` (shape matches RTCIceServer). */
@@ -119,4 +126,11 @@ export interface RtcMessage {
 
   // availability (server → agent presence socket): the backend Away/Break toggle
   available?: boolean;
+
+  // wrap-up / wrap-up-end (server → agent presence socket): the call being
+  // wrapped up, when the timer runs out (RFC3339), and whether a disposition
+  // is mandatory
+  call_id?: string;
+  ends_at?: string;
+  require_disposition?: boolean;
 }

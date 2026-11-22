@@ -90,6 +90,10 @@ type Config struct {
 	Hub    *events.Hub
 	Events *events.Publisher
 
+	// Webhooks delivers the call.wrapped_up webhook when an agent saves or a CRM
+	// patches a wrap-up (nil = off). *webhook.Notifier implements it.
+	Webhooks Webhooks
+
 	// Logger is the structured logger; nil falls back to slog.Default().
 	Logger *slog.Logger
 
@@ -194,6 +198,7 @@ type Server struct {
 	outboundAllow []netip.Prefix
 
 	secrets *secretbox.Box // nil = plaintext mode (no TRING_SECRETS_KEY)
+	hooks   Webhooks       // nil = webhooks off
 
 	version string
 
@@ -249,6 +254,7 @@ func NewServer(cfg Config) *Server {
 		consolePublicURL:  strings.TrimRight(cfg.ConsolePublicURL, "/"),
 		outboundAllow:     cfg.OutboundAllow,
 		secrets:           cfg.Secrets,
+		hooks:             cfg.Webhooks,
 		version:           cfg.Version,
 		log:               logger,
 	}
@@ -414,10 +420,15 @@ func (s *Server) Router() http.Handler {
 				r.Get("/flows", s.handleListFlows)
 				r.Get("/flows/{id}", s.handleGetFlow)
 
+				// Wrap-up lists: a 'calls' key may read them to label calls.
+				r.Get("/dispositions", s.handleListDispositions)
+				r.Get("/call-tags", s.handleListCallTags)
+
 				r.Post("/calls", s.handleCreateCall)
 				r.Post("/calls/connect", s.handleConnectCall)
 				r.Get("/calls", s.handleListCalls)
 				r.Get("/calls/{id}", s.handleGetCall)
+				r.Patch("/calls/{id}/wrap-up", s.handlePatchWrapUp)
 				r.Get("/calls/{id}/events", s.handleGetCallEvents)
 				r.Get("/calls/{id}/recording", s.handleGetCallRecording)
 				// Backend-mediated call control (CRM backend, API key). ADR-001.
@@ -429,6 +440,10 @@ func (s *Server) Router() http.Handler {
 				// mint more keys, read trunk config or repoint webhooks.
 				r.Group(func(r chi.Router) {
 					r.Use(s.RequireFullScope)
+					r.Post("/dispositions", s.handleCreateDisposition)
+					r.Patch("/dispositions/{id}", s.handleUpdateDisposition)
+					r.Post("/call-tags", s.handleCreateCallTag)
+					r.Patch("/call-tags/{id}", s.handleUpdateCallTag)
 					r.Post("/campaigns", s.handleCreateCampaign)
 					r.Get("/campaigns", s.handleListCampaigns)
 					r.Get("/campaigns/{id}", s.handleGetCampaign)
@@ -563,6 +578,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls/resume", s.handleSdkResume)
 			r.Get("/sdk/transfer-targets", s.handleSdkTransferTargets)
 			r.Post("/sdk/calls/transfer", s.handleSdkTransfer)
+			r.Get("/sdk/wrap-up-options", s.handleWrapUpOptions)
+			r.Post("/sdk/calls/wrap-up", s.handleSaveWrapUp)
 		})
 		// Outbound origination is backend-only (POST /v1/calls, API key); the
 		// agent JWT authenticates the gateway WebSocket and the routes above only.

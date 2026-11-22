@@ -210,6 +210,7 @@ func (s *Server) runCampaign(tenant uuid.UUID, a campaign.Attempt) {
 		flow = &ivr.Flow{EntryNode: "message", Nodes: []ivr.Node{{ID: "message", Type: ivr.NodeGreeting, Config: map[string]any{"audio_file": a.Payload.Prepared.AudioFile}}}}
 	}
 	s.setEndWebhook(rid, flow.EndWebhookID)
+	s.setWrapUpWebhook(rid, flow.WrapUpWebhookID)
 	driver := ivrdrive.New(ivrdrive.Config{Prompts: &filePrompts{dir: s.cfg.AudioDir, player: player, codec: leg.Codec, g711: &s.g711}, Agents: s.agentRouter, Dialer: ivrDialer{s}, DialAudio: func() string { return holdFile(s.tenantHoldMusic(rid)) }, Room: string(rid), ClientRef: a.ExternalRef, Vars: map[string]string{"caller": a.Phone, "did": cfg.CallerID, "campaign_id": a.CampaignID.String(), "recipient_id": uuidString(a.RecipientID), "attempt_id": a.ID.String(), "external_ref": a.ExternalRef}, HTTP: s.cfg.HTTP, Logger: s.log, OnNodeEvent: func(ev ivrdrive.NodeEvent) { s.sendNodeWebhook(rid, cfg.FlowID, ev) }})
 	done := make(chan error, 1)
 	if !s.brain.StartWithResult(callCtx, rid, flow, driver, nil, func(path []ivr.Step, err error) { s.cfg.Calls.Journey(string(rid), path); done <- err }, func() { s.clearCaller(rid) }) {

@@ -26,6 +26,8 @@ const form = ref({
   maxCallMinutes: 240, // stored as seconds on the tenant
   transferFailedMessage: "",
   transferTimeoutSeconds: 60,
+  wrapUpSeconds: 0,
+  requireDisposition: false,
   maskAgents: false,
   maskManagers: false,
   maskSupervisors: false,
@@ -87,6 +89,8 @@ function fromTenant(t: Tenant) {
     maxCallMinutes: Math.round((t.max_call_seconds ?? 14400) / 60),
     transferFailedMessage: t.transfer_failed_message || "",
     transferTimeoutSeconds: t.transfer_timeout_seconds ?? 60,
+    wrapUpSeconds: t.wrap_up_seconds ?? 0,
+    requireDisposition: t.require_disposition ?? false,
     maskAgents: t.mask_numbers_agents ?? false,
     maskManagers: t.mask_numbers_managers ?? false,
     maskSupervisors: t.mask_numbers_supervisors ?? false,
@@ -130,6 +134,8 @@ async function save() {
       max_call_seconds: Math.round(f.maxCallMinutes * 60),
       transfer_failed_message: f.transferFailedMessage,
       transfer_timeout_seconds: Math.round(f.transferTimeoutSeconds),
+      wrap_up_seconds: Math.round(f.wrapUpSeconds),
+      require_disposition: f.requireDisposition,
       mask_numbers_agents: f.maskAgents,
       mask_numbers_managers: f.maskManagers,
       mask_numbers_supervisors: f.maskSupervisors,
@@ -223,6 +229,22 @@ onMounted(load);
           <div class="hstack">
             <input id="transfer-timeout" v-model.number="form.transferTimeoutSeconds" type="number" min="5" max="600" class="num" />
             <span class="text-light">seconds</span>
+          </div>
+        </div>
+        <div class="srow">
+          <div>
+            <label class="srow-label" for="wrap-up-seconds">Default for calls without a team</label>
+            <p class="srow-desc">
+              Wrap-up time after a call ends, for the agent to pick a disposition and add notes. 0 = off, up to
+              600 seconds. Teams can set their own.
+            </p>
+          </div>
+          <div class="vstack">
+            <div class="hstack">
+              <input id="wrap-up-seconds" v-model.number="form.wrapUpSeconds" type="number" min="0" max="600" class="num" />
+              <span class="text-light">seconds</span>
+            </div>
+            <label class="hstack gap-2"><input v-model="form.requireDisposition" type="checkbox" /> Require disposition</label>
           </div>
         </div>
       </Card>

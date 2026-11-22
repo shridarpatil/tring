@@ -115,7 +115,7 @@ func (s *Server) handleConnectCall(w http.ResponseWriter, r *http.Request) {
 
 // writePlacedCall answers 201 with the call row the gateway just opened.
 func (s *Server) writePlacedCall(w http.ResponseWriter, r *http.Request, tenantID, callID uuid.UUID) {
-	c, err := scanCall(s.db.Pool.QueryRow(r.Context(), s.q.GetCall, callID, tenantID))
+	c, err := callrow.Get(r.Context(), s.db, s.q, tenantID, callID)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "internal error", err)
 		return
@@ -210,8 +210,7 @@ func (s *Server) handleGetCall(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	row := s.db.Pool.QueryRow(r.Context(), s.q.GetCall, id, t.ID)
-	c, err := scanCall(row)
+	c, err := callrow.Get(r.Context(), s.db, s.q, t.ID, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return
@@ -443,8 +442,17 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 
 	// One parameterised query pair for every filter combination ('' = off).
 	idPrefix, digits := callSearch(r.URL.Query().Get("q"))
-	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID, status, idPrefix, digits}
-	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset, status, idPrefix, digits}
+	// disposition_id / tag_id narrow to wrapped-up calls; a malformed id matches
+	// nothing rather than failing. The queries compare uuids (so the indexes
+	// apply), so a malformed id never reaches them.
+	dispID, dispOK := uuidFilter(r.URL.Query().Get("disposition_id"))
+	tagID, tagOK := uuidFilter(r.URL.Query().Get("tag_id"))
+	if !dispOK || !tagOK {
+		writeJSON(w, http.StatusOK, pageEnvelope{Items: []Call{}, Total: 0, Limit: limit, Offset: offset})
+		return
+	}
+	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID, status, idPrefix, digits, dispID, tagID}
+	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset, status, idPrefix, digits, dispID, tagID}
 
 	var total int
 	if err := s.db.Pool.QueryRow(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
@@ -468,7 +476,25 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, c)
 	}
+	rows.Close()
+	if err := callrow.FillTags(r.Context(), s.db, s.q, t.ID, out); err != nil {
+		writeError(w, http.StatusInternalServerError, "query failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
+}
+
+// uuidFilter normalises an optional id filter: "" stays off, a valid uuid is
+// returned in canonical form, and false means it is malformed.
+func uuidFilter(v string) (string, bool) {
+	if v == "" {
+		return "", true
+	}
+	id, err := uuid.Parse(v)
+	if err != nil {
+		return "", false
+	}
+	return id.String(), true
 }
 
 // callSearch splits the call-log search box into phone digits or a call-id

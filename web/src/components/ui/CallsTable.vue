@@ -57,7 +57,7 @@ onUnmounted(() => {
 function fmt(d?: string) {
   return d ? new Date(d).toLocaleString() : "—";
 }
-const cols = () => 7 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
+const cols = () => 8 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
 </script>
 
 <template>
@@ -74,6 +74,7 @@ const cols = () => 7 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
           <th>Status</th>
           <th>Started</th>
           <th class="align-right">Dur</th>
+          <th>Disposition</th>
           <th>Recording</th>
           <th v-if="selectable"></th>
         </tr>
@@ -96,6 +97,13 @@ const cols = () => 7 + (props.hideAgent ? 0 : 1) + (props.selectable ? 1 : 0);
           </td>
           <td class="text-light" style="white-space: nowrap">{{ fmt(c.started_at) }}</td>
           <td class="align-right mono">{{ c.duration_seconds != null ? c.duration_seconds + "s" : "—" }}</td>
+          <td>
+            <div v-if="c.disposition || c.tags?.length" class="hstack" style="flex-wrap: wrap; gap: 0.25rem">
+              <Badge v-if="c.disposition" tone="accent">{{ c.disposition.name }}</Badge>
+              <Badge v-for="t in c.tags" :key="t.id">{{ t.name }}</Badge>
+            </div>
+            <span v-else class="text-lighter">—</span>
+          </td>
           <td>
             <video
               v-if="recUrl[c.id] && recIsVideo[c.id]"

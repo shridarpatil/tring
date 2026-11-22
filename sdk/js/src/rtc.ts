@@ -469,6 +469,8 @@ export type RtcAgentEvent =
   | { type: "resume-call"; room: string; auto?: boolean; phone?: boolean }
   | { type: "incoming-canceled"; room: string }
   | { type: "superseded" }
+  | { type: "wrap-up"; callId: string; endsAt: string; requireDisposition: boolean }
+  | { type: "wrap-up-end"; callId: string }
   | { type: "error"; error: Error };
 
 // The gateway closes an idle presence socket after ~90s with no inbound frame,
@@ -571,6 +573,16 @@ export class RtcAgent extends Emitter<RtcAgentEvent> {
         retire(ws);
         this.ws = null;
         this.emit({ type: "superseded" });
+      } else if (m.type === ServerMsgType.WrapUp) {
+        // The call ended into wrap-up; re-sent on reconnect with the same ends_at.
+        this.emit({
+          type: "wrap-up",
+          callId: m.call_id ?? "",
+          endsAt: m.ends_at ?? "",
+          requireDisposition: m.require_disposition ?? false,
+        });
+      } else if (m.type === ServerMsgType.WrapUpEnd) {
+        this.emit({ type: "wrap-up-end", callId: m.call_id ?? "" });
       }
       // Unknown types are ignored, so older servers/clients interoperate.
     };

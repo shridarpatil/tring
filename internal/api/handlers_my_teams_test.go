@@ -384,3 +384,50 @@ func TestMyTeamsShowsOnlyVisibleTeamsWithMemberStatus(t *testing.T) {
 		t.Fatalf("my-teams/B = %d, want 404", rec.Code)
 	}
 }
+
+// An agent's own call history and a manager's team call list carry a call's
+// tags, as the admin call log does.
+func TestAgentAndTeamCallListsCarryTags(t *testing.T) {
+	f := dbtest.Setup(t)
+	dir := t.TempDir()
+	s := newMyTeamsServer(f, dir)
+	m := f.AddUser(t, "agent", "m@example.com")
+	f.AddTeam(t, "A", map[uuid.UUID]bool{m: true})
+	call := insertTeamCall(t, f, dir, m, "A")
+	var tag uuid.UUID
+	if err := f.DB.Pool.QueryRow(context.Background(),
+		`INSERT INTO call_tags (tenant_id, name) VALUES ($1, 'vip') RETURNING id`, f.TenantID).Scan(&tag); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Pool.Exec(context.Background(),
+		`INSERT INTO call_tag_links (tenant_id, call_id, tag_id) VALUES ($1, $2, $3)`, f.TenantID, call, tag); err != nil {
+		t.Fatal(err)
+	}
+	tok := tokenFor(t, s, f, m, "m@example.com", "agent")
+
+	rec := doReq(t, s.Router(), "GET", "/v1/me/calls", tok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("me/calls: %d %s", rec.Code, rec.Body)
+	}
+	var page struct {
+		Items []myCall `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || len(page.Items[0].Tags) != 1 || page.Items[0].Tags[0].ID != tag {
+		t.Fatalf("me/calls items = %+v, want the call with tag vip", page.Items)
+	}
+
+	rec = doReq(t, s.Router(), "GET", "/v1/my-teams/A", tok, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("my-teams/A: %d %s", rec.Code, rec.Body)
+	}
+	var mt myTeam
+	if err := json.Unmarshal(rec.Body.Bytes(), &mt); err != nil {
+		t.Fatal(err)
+	}
+	if len(mt.Calls) != 1 || len(mt.Calls[0].Tags) != 1 || mt.Calls[0].Tags[0].ID != tag {
+		t.Fatalf("team calls = %+v, want the call with tag vip", mt.Calls)
+	}
+}

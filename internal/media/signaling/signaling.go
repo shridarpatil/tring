@@ -194,6 +194,17 @@ type CallLog interface {
 	Customer(roomID string, pid room.ParticipantID) room.TrackSink
 	// CallID is the calls.id of roomID's live call (uuid.Nil if none).
 	CallID(roomID string) uuid.UUID
+	// WrapUpWebhook sets the webhook sent call.wrapped_up when the call's wrap-up closes.
+	WrapUpWebhook(roomID string, webhookID uuid.UUID)
+	// WrapUpSettings is the wrap-up timer and mandatory-disposition flag for a
+	// team (the tenant's when team is empty or unknown).
+	WrapUpSettings(ctx context.Context, tenant uuid.UUID, team string) (seconds int, requireDisposition bool, err error)
+	// BeginWrapUp marks agentSIP as the agent wrapping up callID; team is the
+	// team whose ring reached the agent ("" = none), which picks the labels the
+	// wrap-up may use.
+	BeginWrapUp(ctx context.Context, tenant, callID uuid.UUID, agentSIP string, requireDisposition bool, team string) error
+	// TimeoutWrapUp closes an unsaved wrap-up; won is false if the agent saved first.
+	TimeoutWrapUp(ctx context.Context, tenant, callID uuid.UUID) (won bool, err error)
 }
 
 // Server is the /rtc signaling surface.
@@ -246,9 +257,11 @@ type Server struct {
 	hangupBy     map[room.RoomID]string                               // who ended the call ("client"/"agent"); first Bye wins, "system" if unset
 	inviteClaims map[room.RoomID]map[string]*routing.Claim            // retained by the answering participant before an invite is withdrawn
 	invites      map[room.RoomID]map[string]bool                      // agents rung into a live call (pionRing.Ring) — the only agents allowed to join it
+	inviteTeams  map[room.RoomID]map[string]string                    // the team whose ring invited each agent (pionRing.Ring) — for its wrap-up settings
 	agentLegs    map[room.ParticipantID]agentLeg                      // agent call legs counted in onCall, released when the participant leaves
 	dialing      map[room.RoomID]bool                                 // rooms with an agent-initiated outbound call in progress (outbound.go)
 	agentDials   map[string]int                                       // "tenant|sip" → that agent's outbound calls in progress
+	wrapUps      map[string]*wrapUp                                   // "tenant|sip" → agent in after-call wrap-up: never a ring candidate (wrapup.go)
 
 	draining  atomic.Bool  // shutting down: no new calls (drain.go)
 	portCalls atomic.Int64 // phone/connect calls in progress (drain.go)
@@ -296,9 +309,11 @@ func New(cfg Config) *Server {
 		transferring: make(map[room.RoomID]*pendingTransfer),
 		invites:      make(map[room.RoomID]map[string]bool),
 		inviteClaims: make(map[room.RoomID]map[string]*routing.Claim),
+		inviteTeams:  make(map[room.RoomID]map[string]string),
 		agentLegs:    make(map[room.ParticipantID]agentLeg),
 		dialing:      make(map[room.RoomID]bool),
 		agentDials:   make(map[string]int),
+		wrapUps:      make(map[string]*wrapUp),
 	}
 	// Build the shared routing engine from Redis-backed backends when a cache is
 	// wired (so the queue/reservations/depth line up with the FreeSWITCH plane on
@@ -417,6 +432,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 	var p *room.Participant
 	var joinClaim *routing.Claim
+	var joinTeam string                    // the team whose ring the agent answers
 	defer func() { joinClaim.Release() }() // failures before the participant owns it
 	freshJoin := true
 	if first.Token != "" {
@@ -441,7 +457,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		// two-tab local test client still works.
 		invited := false
 		if !princ.isVisitor && flowID == "" {
-			invited, joinClaim = s.takeInvite(roomID, princ.sip)
+			invited, joinClaim, joinTeam = s.takeInvite(roomID, princ.sip)
 		}
 		if !s.cfg.DevTokens && s.roomOccupied(roomID) && !invited {
 			s.log.Warn("join refused: call already in progress", "room", roomID, "visitor", princ.isVisitor, "sip", princ.sip)
@@ -516,7 +532,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	// the participant's terminal leave, and a reattach doesn't count it again.
 	agentCallLeg := flowID == "" && !princ.isVisitor
 	if agentCallLeg && freshJoin {
-		s.holdAgentLeg(p, tenant, princ.sip, joinClaim)
+		s.holdAgentLeg(p, tenant, princ.sip, joinClaim, joinTeam)
 		joinClaim = nil
 	}
 
@@ -590,6 +606,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			if sink := s.cfg.Calls.Answered(string(roomID), p.ID(), princ.sip); sink != nil {
 				s.sfu.AddSink(roomID, p.ID(), sink)
 			}
+			s.markLegsConnected(roomID)
 		}
 		s.notifyVisitorsAnswered(roomID)
 	} else if princ.isVisitor && len(s.agentPIDs(roomID)) > 0 {

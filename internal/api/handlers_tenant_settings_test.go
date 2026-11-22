@@ -20,14 +20,14 @@ func TestTenantTransferMessageRoundTrip(t *testing.T) {
 	s := newTestServer(f)
 
 	msg := "Nobody home, please retry."
-	_, err := f.DB.Pool.Exec(ctx, s.q.UpdateTenant, nil, nil, f.TenantID, nil, nil, nil, &msg, nil, nil, nil, nil, nil, nil, nil)
+	_, err := f.DB.Pool.Exec(ctx, s.q.UpdateTenant, nil, nil, f.TenantID, nil, nil, nil, &msg, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	var got, hm, format string
 	var rec bool
 	var mx, rate int
-	if err := f.DB.Pool.QueryRow(ctx, s.q.GetTenantSettings, f.TenantID).Scan(&hm, &rec, &mx, &got, &rate, &format, new(bool), new(bool), new(bool), new(int)); err != nil {
+	if err := f.DB.Pool.QueryRow(ctx, s.q.GetTenantSettings, f.TenantID).Scan(&hm, &rec, &mx, &got, &rate, &format, new(bool), new(bool), new(bool), new(int), new(int), new(bool)); err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	if got != msg {
@@ -134,5 +134,41 @@ func TestTenantTransferTimeout(t *testing.T) {
 	d, err := flowstore.New(f.DB).TenantTransferTimeout(ctx, f.TenantID)
 	if err != nil || d != 45*time.Second {
 		t.Fatalf("gateway read %v (%v), want 45s", d, err)
+	}
+}
+
+// wrap_up_seconds / require_disposition round-trip through the tenant
+// settings and are range-checked.
+func TestTenantSettingsWrapUp(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	s := newTestServer(f)
+
+	patch := func(body string) int {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPatch, "/v1/tenants/me", strings.NewReader(body)).WithContext(withTenantForTest(ctx, f.TenantID))
+		s.handlePatchMyTenant(w, r)
+		return w.Code
+	}
+	for _, bad := range []string{`{"wrap_up_seconds":601}`, `{"wrap_up_seconds":-1}`} {
+		if code := patch(bad); code != http.StatusBadRequest {
+			t.Errorf("PATCH %s = %d, want 400", bad, code)
+		}
+	}
+	if code := patch(`{"wrap_up_seconds":30,"require_disposition":true}`); code != http.StatusOK {
+		t.Fatalf("PATCH = %d, want 200", code)
+	}
+	if code := patch(`{"require_disposition":false}`); code != http.StatusOK {
+		t.Fatalf("PATCH = %d, want 200", code)
+	}
+	w := httptest.NewRecorder()
+	s.handleGetMyTenant(w, httptest.NewRequest(http.MethodGet, "/v1/tenants/me", nil).WithContext(withTenantForTest(ctx, f.TenantID)))
+	var got Tenant
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.WrapUpSeconds != 30 || got.RequireDisposition {
+		t.Fatalf("got %d/%v, want 30/false", got.WrapUpSeconds, got.RequireDisposition)
 	}
 }

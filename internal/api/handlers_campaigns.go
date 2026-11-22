@@ -525,7 +525,7 @@ func (s *Server) campaignTeam(ctx context.Context, tenant uuid.UUID, c campaign.
 	var team Team
 	if err := s.db.Pool.QueryRow(ctx, s.q.GetTeam, tenant, c.Team).Scan(
 		&team.TenantID, &team.Name, &team.Strategy, &team.RingSeconds, &team.MaxWaitSeconds, &team.MohSound,
-		&team.MinLiveAgents, &team.SLASeconds, &team.Hours, &team.CreatedAt); err != nil {
+		&team.MinLiveAgents, &team.SLASeconds, &team.Hours, &team.CreatedAt, &team.WrapUpSeconds, &team.RequireDisposition); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errors.New("select a team belonging to this tenant")
 		}

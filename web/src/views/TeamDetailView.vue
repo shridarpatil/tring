@@ -34,6 +34,8 @@ const form = ref<ReturnType<typeof formFrom>>({
   min_live_agents: 0,
   sla_seconds: 0,
   hours: [],
+  wrap_up_seconds: 0,
+  require_disposition: false,
 });
 // SLA is edited as mm:ss text and parsed into form.sla_seconds; null = invalid.
 const slaText = ref("0:00");
@@ -54,7 +56,11 @@ const minInvalid = computed(() => {
   const v = form.value.min_live_agents as unknown;
   return typeof v !== "number" || !Number.isInteger(v) || v < 0;
 });
-const formInvalid = computed(() => slaParsed.value === null || minInvalid.value);
+const wrapInvalid = computed(() => {
+  const v = form.value.wrap_up_seconds as unknown;
+  return typeof v !== "number" || !Number.isInteger(v) || v < 0 || v > 600;
+});
+const formInvalid = computed(() => slaParsed.value === null || minInvalid.value || wrapInvalid.value);
 // 0 max wait means the server's 2-minute default.
 const effectiveMaxWait = computed(() => form.value.max_wait_seconds || 120);
 const slaPastMaxWait = computed(() => form.value.sla_seconds > 0 && form.value.sla_seconds >= effectiveMaxWait.value);
@@ -69,6 +75,8 @@ function formFrom(t: Team) {
     min_live_agents: t.min_live_agents,
     sla_seconds: t.sla_seconds,
     hours: t.hours ?? [],
+    wrap_up_seconds: t.wrap_up_seconds ?? 0,
+    require_disposition: t.require_disposition ?? false,
   };
 }
 
@@ -217,6 +225,10 @@ watch(() => route.params.name, load, { immediate: true });
             <TextField v-model.number="form.max_wait_seconds" type="number" label="Max wait before removing caller (secs)" />
           </div>
           <p class="text-lighter hint">{{ strategyHint }}</p>
+          <div class="grid grid-3">
+            <TextField v-model.number="form.wrap_up_seconds" type="number" label="Wrap-up time (seconds, 0 = off)" />
+            <label class="hstack gap-2"><input v-model="form.require_disposition" type="checkbox" /> Require disposition</label>
+          </div>
           <div>
             <div class="field-label">Hold music</div>
             <AudioPicker v-model="form.moh_sound" default-label="Default (tenant hold music)" />

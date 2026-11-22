@@ -30,6 +30,13 @@ Unless a section says otherwise, routes take a tenant API key or a console sessi
 | `recording_url` | string | API path of the recording, `/v1/calls/{id}/recording`. Omitted when the call wasn't recorded. Fetch it with your credential; it isn't a public link. |
 | `ivr_path` | array | The IVR steps the call took, same shape as the [simulator's trace steps](/tring/api-reference/flows/#trace-steps), plus an `at` timestamp per step on live calls. `[]` for calls that didn't run a flow. |
 | `room_id` | string | Media-gateway room, used to match live dashboard events. Omitted for calls that don't have one. |
+| `disposition` | object | The wrap-up disposition, `{id, name}`. `null` until chosen. |
+| `notes` | string | Wrap-up notes, at most 2000 characters. `null` until set. |
+| `tags` | array | Wrap-up tags, `[{id, name}]`. `[]` when none. |
+| `wrapped_up_at` | timestamp | When the wrap-up closed, by the agent's save or the timer. `null` while it is open or if the call had none. |
+| `wrap_up_end` | string | `done` (the agent saved) or `timeout` (the timer ran out). `null` otherwise. |
+
+Wrap-up only applies to answered calls and must be switched on; see [Call wrap-up](/tring/features/agents-and-routing/#call-wrap-up). Edit the outcome with [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up).
 
 ### Status values
 
@@ -196,6 +203,8 @@ List calls, newest first.
 | `status` | Only calls with this status: `ringing`, `answered`, `ended` or `failed`. |
 | `q` | Search. Digits (with any `+`, spaces, dashes or brackets) match the **caller or called number** in any format: `9800000001`, `+91 98000-00001` and `09800000001` all find a call stored as `+919800000001`. Anything else is a **call ID** (or FreeSWITCH leg ID), matched from the start, so a shortened ID works. |
 | `active` | `true` returns only in-progress calls (`ringing` or `answered`, not ended), **oldest first**, up to 100, unpaginated. `page`, `limit` and `status` are ignored. |
+| `disposition_id` | Only calls with this disposition. A malformed ID matches nothing. |
+| `tag_id` | Only calls carrying this tag. A malformed ID matches nothing. |
 | `page` | 1-based page number. See [Pagination](/tring/api-reference/overview/#pagination). |
 | `limit` | With `page`: page size, default `25`. Without `page`: how many of the newest calls to return, default `50`. Max `200` either way. |
 

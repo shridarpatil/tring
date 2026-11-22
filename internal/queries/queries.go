@@ -252,6 +252,36 @@ type Queries struct {
 	ListPlaintextTrunkSecrets string `query:"list-plaintext-trunk-secrets"`
 	SetTrunkSecret            string `query:"set-trunk-secret"`
 
+	// ---- call wrap-up ----
+	GetTeamWrapUp               string `query:"get-team-wrap-up"`
+	GetTenantWrapUp             string `query:"get-tenant-wrap-up"`
+	CreateDisposition           string `query:"create-disposition"`
+	ListDispositions            string `query:"list-dispositions"`
+	UpdateDisposition           string `query:"update-disposition"`
+	CreateCallTag               string `query:"create-call-tag"`
+	ListCallTags                string `query:"list-call-tags"`
+	UpdateCallTag               string `query:"update-call-tag"`
+	DeleteDispositionTeams      string `query:"delete-disposition-teams"`
+	InsertDispositionTeam       string `query:"insert-disposition-team"`
+	DeleteCallTagTeams          string `query:"delete-call-tag-teams"`
+	InsertCallTagTeam           string `query:"insert-call-tag-team"`
+	ListWrapUpDispositions      string `query:"list-wrap-up-dispositions"`
+	ListWrapUpCallTags          string `query:"list-wrap-up-call-tags"`
+	ArchiveTeamOnlyDispositions string `query:"archive-team-only-dispositions"`
+	ArchiveTeamOnlyCallTags     string `query:"archive-team-only-call-tags"`
+	FirstUnknownTeam            string `query:"first-unknown-team"`
+	BeginCallWrapUp             string `query:"begin-call-wrap-up"`
+	TimeoutCallWrapUp           string `query:"timeout-call-wrap-up"`
+	GetCallWrapUpState          string `query:"get-call-wrap-up-state"`
+	SaveCallWrapUp              string `query:"save-call-wrap-up"`
+	PatchCallWrapUp             string `query:"patch-call-wrap-up"`
+	DeleteCallTagLinks          string `query:"delete-call-tag-links"`
+	InsertCallTagLink           string `query:"insert-call-tag-link"`
+	CountActiveDispositionsIn   string `query:"count-active-dispositions-in"`
+	CountActiveTagsIn           string `query:"count-active-tags-in"`
+	SetCallWrapUpWebhook        string `query:"set-call-wrap-up-webhook"`
+	ListCallTagsForCalls        string `query:"list-call-tags-for-calls"`
+
 	// ---- call settlement (callcdr) ----
 	MarkCallAnswered string `query:"mark-call-answered"`
 	SettleCall       string `query:"settle-call"`

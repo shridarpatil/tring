@@ -11,6 +11,7 @@ Webhooks push call events from Tring to your backend as signed HTTP `POST` reque
 |---|---|---|
 | Any IVR node: **Notify webhook** in the node's properties panel | `ivr.node` | The step finishes, with its result and the caller's input. A **Transfer** sends it when someone answers, or when nobody does. |
 | The flow: **On call end** in the flow editor's toolbar | `call.ended` | A call through this flow ends, however it ended: the caller hung up in a menu or the queue, after talking to an agent, or the flow ended the call. |
+| The flow: **On wrap-up**, next to **On call end** | `call.wrapped_up` | The agent's [wrap-up](/tring/features/agents-and-routing/#call-wrap-up) of a call through this flow is closed, and again every time the outcome is edited through the API. |
 
 Nodes that send a webhook show a bell icon on the canvas.
 
@@ -18,6 +19,9 @@ Nodes that send a webhook show a bell icon on the canvas.
 - **A menu node** sends the option chosen (`digit:2`).
 - **A transfer node** sends `answered` the moment an agent or the dialed number picks up, useful for a CRM screen-pop, or `no_answer`.
 - **On call end** sends the settled call record: duration, hang-up cause and the agent who handled it.
+- **On wrap-up** sends the call record with the disposition, notes and tags the agent chose.
+
+`call.wrapped_up` is sent once per wrap-up, by whichever closes it: the agent's save (sent by the API) or the timer running out (sent by the gateway, with `disposition: null`). A timeout that loses the race to a save sends nothing. It is also sent on every [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up). Calls that ran no flow send none.
 
 A webhook that is **disabled** on the Webhooks page is never sent, from any flow. Turn it back on and every flow that picks it sends again, with no flow changes. Webhooks are sent in the background, so a slow or failing endpoint never delays the caller. This is the difference from the [HTTP callback node](/tring/features/ivr-flows/#http-callback), which waits for your response and branches on it.
 
@@ -71,7 +75,7 @@ Tring-Signature: t=1760000000,v1=5d41402abc4b2a76b9719d911017c592...
 }
 ```
 
-`call.ended` carries `{ "call": <call record> }`, the same shape as the [Calls API](/tring/api-reference/calls/), so one decoder works for both. Both payloads are described field by field in the [Webhooks API](/tring/api-reference/webhooks/#ivrnode). `delivery_id` matches the `Tring-Delivery` header; use it to drop duplicates, because a retry resends the same delivery.
+`call.ended` and `call.wrapped_up` carry `{ "call": <call record> }`, the same shape as the [Calls API](/tring/api-reference/calls/), so one decoder works for both. Both payloads are described field by field in the [Webhooks API](/tring/api-reference/webhooks/#ivrnode). `delivery_id` matches the `Tring-Delivery` header; use it to drop duplicates, because a retry resends the same delivery.
 
 ## Signature
 

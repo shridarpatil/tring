@@ -10,6 +10,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/shridarpatil/tring/internal/callrow"
 )
 
 // ---- Team views (/v1/my-teams) ------------------------------------------
@@ -189,7 +191,11 @@ func (s *Server) teamCallsToday(r *http.Request, tenantID uuid.UUID, team string
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, callrow.FillTags(r.Context(), s.db, s.q, tenantID, out)
 }
 
 // handleMyTeamCallRecording serves a recording to a manager of a team the call
