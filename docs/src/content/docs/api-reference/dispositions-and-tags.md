@@ -82,7 +82,7 @@ Rename, archive or change the teams of a label. Send any of the fields: `{"name"
 
 Set or change a call's disposition, notes and tags from your backend, for example after your CRM's own wrap-up form. It works at any time, including long after the agent's wrap-up window closed, and on calls that were never wrapped up.
 
-**Auth:** any tenant API key, including `calls`-scoped keys, or a console session. In the console only admins can edit an outcome.
+**Auth:** any tenant API key, including `calls`-scoped keys, or a console session. The console shows outcomes read-only; corrections go through this endpoint.
 
 **Request body**
 
