@@ -70,6 +70,20 @@ func (s *Server) handleMeAvailability(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a)
 }
 
+// handleMeLogout revokes the caller's console sessions server-side. Console
+// JWTs are stateless, so clearing browser storage alone would leave a copied
+// token usable until expiry; bumping session_epoch kills it now. This signs
+// the user out on every device, not just this one, which is the safe reading
+// of "sign out" for a shared-desk call centre and needs no token denylist.
+func (s *Server) handleMeLogout(w http.ResponseWriter, r *http.Request) {
+	p := principalFromCtx(r.Context())
+	if _, err := s.db.Pool.Exec(r.Context(), s.q.RevokeUserSessions, p.TenantID, p.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "logout failed")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type mePasswordRequest struct {
 	Current string `json:"current"`
 	New     string `json:"new"`

@@ -607,6 +607,12 @@ UPDATE users SET password_hash = $3, session_epoch = session_epoch + 1
 WHERE tenant_id = $1 AND id = $2
 RETURNING session_epoch;
 
+-- name: revoke-user-sessions
+-- Sign-out: bumping session_epoch revokes every console token the user holds
+-- (tokens are stateless JWTs; loadPrincipal compares epochs).
+UPDATE users SET session_epoch = session_epoch + 1
+WHERE tenant_id = $1 AND id = $2;
+
 -- name: get-tenant
 -- Full tenant row in the shape AuthRequired / login both load.
 SELECT id, name, outbound_strategy, failover_causes
