@@ -1557,3 +1557,25 @@ func TestIVRAgentTransferDeclineTakesNoAnswerAtOnce(t *testing.T) {
 		t.Fatalf("no_answer took %v after alice declined, want it at once", d)
 	}
 }
+
+func (f *fakeCallLog) WrapUpWebhook(string, uuid.UUID) {}
+func (f *fakeCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
+	return 0, false, nil
+}
+func (f *fakeCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool) error {
+	return nil
+}
+func (f *fakeCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+func (o *orderedCallLog) WrapUpWebhook(string, uuid.UUID) {}
+func (o *orderedCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
+	return 0, false, nil
+}
+func (o *orderedCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool) error {
+	return nil
+}
+func (o *orderedCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
+}
