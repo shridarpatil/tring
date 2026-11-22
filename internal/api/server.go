@@ -414,6 +414,10 @@ func (s *Server) Router() http.Handler {
 				r.Get("/flows", s.handleListFlows)
 				r.Get("/flows/{id}", s.handleGetFlow)
 
+				// Wrap-up lists: a 'calls' key may read them to label calls.
+				r.Get("/dispositions", s.handleListDispositions)
+				r.Get("/call-tags", s.handleListCallTags)
+
 				r.Post("/calls", s.handleCreateCall)
 				r.Post("/calls/connect", s.handleConnectCall)
 				r.Get("/calls", s.handleListCalls)
@@ -429,6 +433,10 @@ func (s *Server) Router() http.Handler {
 				// mint more keys, read trunk config or repoint webhooks.
 				r.Group(func(r chi.Router) {
 					r.Use(s.RequireFullScope)
+					r.Post("/dispositions", s.handleCreateDisposition)
+					r.Patch("/dispositions/{id}", s.handleUpdateDisposition)
+					r.Post("/call-tags", s.handleCreateCallTag)
+					r.Patch("/call-tags/{id}", s.handleUpdateCallTag)
 					r.Post("/campaigns", s.handleCreateCampaign)
 					r.Get("/campaigns", s.handleListCampaigns)
 					r.Get("/campaigns/{id}", s.handleGetCampaign)
