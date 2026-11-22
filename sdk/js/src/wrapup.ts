@@ -39,7 +39,7 @@ export interface WrapUpPanel {
   root: HTMLElement;
   /** Open the panel, or replace it when a different call's wrap-up is shown. */
   show(ev: WrapUpEvent): void;
-  /** Close the panel only if it is showing this call. */
+  /** End this call's wrap-up: close the panel if it is showing it, and ignore any later show of it. */
   end(callId: string): void;
 }
 
@@ -82,6 +82,15 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
     root.classList.remove("tring-wrapup-visible");
     root.textContent = "";
   };
+  // Calls whose wrap-up ended here (wrap-up-end, save, or the safety timer).
+  // A wrap-up for one of them arriving later is stale — e.g. sent after the
+  // end that raced it, while the agent is already on a new call — and must not
+  // reopen the card over the call panel.
+  const finished = new Set<string>();
+  const finish = (callId: string) => {
+    finished.add(callId);
+    if (current === callId) close();
+  };
 
   const el = <K extends keyof HTMLElementTagNameMap>(
     tag: K,
@@ -96,7 +105,7 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
 
   function show(ev: WrapUpEvent): void {
     // A resend for the call on screen (reconnect) must not wipe what was typed.
-    if (current === ev.callId) return;
+    if (current === ev.callId || finished.has(ev.callId)) return;
     close();
     current = ev.callId;
     const callId = ev.callId;
@@ -195,11 +204,11 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
       if (current !== callId) return; // closed or replaced while saving
       busy = false;
       if (res.status === 200) {
-        close();
+        finish(callId);
       } else if (res.status === 409) {
         errEl.textContent = "Wrap-up already ended";
         done.disabled = true;
-        closeTimer = window.setTimeout(close, 2000);
+        closeTimer = window.setTimeout(() => finish(callId), 2000);
       } else {
         errEl.textContent = res.error || "Could not save wrap-up, try again";
         refreshDone();
@@ -214,15 +223,13 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
     };
     renderTime();
     tick = window.setInterval(renderTime, 500);
-    fallback = window.setTimeout(close, Math.max(0, endsAtMs - Date.now()) + END_GRACE_MS);
+    fallback = window.setTimeout(() => finish(callId), Math.max(0, endsAtMs - Date.now()) + END_GRACE_MS);
   }
 
   return {
     root,
     show,
-    end(callId) {
-      if (current === callId) close();
-    },
+    end: finish,
   };
 }
 
