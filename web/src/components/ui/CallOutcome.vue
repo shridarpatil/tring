@@ -6,6 +6,7 @@ import { ref, computed, watch } from "vue";
 import { api } from "../../api/client";
 import { errMessage } from "../../lib/errors";
 import { toast } from "../../lib/toast";
+import { outcomePatch } from "../../lib/outcome";
 import type { Call, WrapUpLabel } from "../../api/types";
 import Badge from "./Badge.vue";
 import Button from "./Button.vue";
@@ -41,14 +42,16 @@ const dispositionOptions = computed(() => [
 ]);
 const tagOptions = computed(() => props.tags.filter((t) => !t.archived || tagIds.value.includes(t.id)));
 
+const patch = computed(() =>
+  outcomePatch(props.call, { dispositionId: dispositionId.value, notes: notes.value, tagIds: tagIds.value }),
+);
+const dirty = computed(() => Object.keys(patch.value).length > 0);
+
 async function save() {
+  if (!dirty.value) return;
   saving.value = true;
   try {
-    const updated = await api.patch<Call>(`/v1/calls/${props.call.id}/wrap-up`, {
-      disposition_id: dispositionId.value || null,
-      notes: notes.value.trim() || null,
-      tag_ids: tagIds.value,
-    });
+    const updated = await api.patch<Call>(`/v1/calls/${props.call.id}/wrap-up`, patch.value);
     emit("saved", updated);
     toast.success("Outcome saved");
   } catch (e) {
@@ -74,7 +77,7 @@ async function save() {
           {{ t.name }}{{ t.archived ? " (archived)" : "" }}
         </label>
       </fieldset>
-      <div><Button type="submit" size="sm" :loading="saving">Save outcome</Button></div>
+      <div><Button type="submit" size="sm" :loading="saving" :disabled="!dirty">Save outcome</Button></div>
     </form>
     <div v-else class="vstack">
       <div>
