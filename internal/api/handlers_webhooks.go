@@ -91,7 +91,7 @@ func isTokenRune(r rune) bool {
 		strings.ContainsRune("!#$%&'*+-.^_`|~", r))
 }
 
-// sealWebhookHeaders encodes headers for storage ('' = none).
+// sealWebhookHeaders encodes headers for storage (empty string = none).
 func (s *Server) sealWebhookHeaders(h map[string]string) string {
 	if len(h) == 0 {
 		return ""
