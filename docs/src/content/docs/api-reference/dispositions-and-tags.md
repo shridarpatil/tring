@@ -11,6 +11,8 @@ Both lists have the same shape and the same routes. Admins manage them in the co
 
 Each label is either **shared** (`teams` is `[]`: every team's wrap-up offers it) or **limited** to the teams listed. An agent's wrap-up offers the shared labels plus those limited to the call's wrap-up team, which is the team whose ring reached the agent. A call that reached the agent without a team ring (a direct transfer, click-to-call, "all available agents") gets shared labels only. The same rule applies when a label is saved on a call, by the agent or with [`PATCH /v1/calls/{id}/wrap-up`](#patch-v1callsidwrap-up). Call-log filters list every label, whatever its teams.
 
+Team names must be existing teams of your tenant; a blank name in `teams` is rejected (send `[]` for a shared label).
+
 Deleting a team archives the labels limited to that team alone, so they don't quietly become shared. A label also limited to other teams keeps those. If you restore an archived label whose teams were all deleted, it comes back shared; limit it again with `PATCH`.
 
 ## The label object
@@ -61,7 +63,7 @@ curl -sS "$TRING_URL/v1/dispositions?include_archived=1" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `name required, max 64 characters` |
-| `400` | `unknown team: <name>` |
+| `400` | `unknown team: <name>` / `team name is blank` |
 | `409` | `name already exists` |
 
 ### PATCH /v1/{list}/{id}
@@ -72,7 +74,7 @@ Rename, archive or change the teams of a label. Send any of the fields: `{"name"
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `name required, max 64 characters` |
-| `400` | `unknown team: <name>` |
+| `400` | `unknown team: <name>` / `team name is blank` |
 | `404` | `not found` |
 | `409` | `name already exists` |
 
