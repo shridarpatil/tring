@@ -443,8 +443,14 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 	// One parameterised query pair for every filter combination ('' = off).
 	idPrefix, digits := callSearch(r.URL.Query().Get("q"))
 	// disposition_id / tag_id narrow to wrapped-up calls; a malformed id matches
-	// nothing (the queries compare as text) rather than failing.
-	dispID, tagID := r.URL.Query().Get("disposition_id"), r.URL.Query().Get("tag_id")
+	// nothing rather than failing. The queries compare uuids (so the indexes
+	// apply), so a malformed id never reaches them.
+	dispID, dispOK := uuidFilter(r.URL.Query().Get("disposition_id"))
+	tagID, tagOK := uuidFilter(r.URL.Query().Get("tag_id"))
+	if !dispOK || !tagOK {
+		writeJSON(w, http.StatusOK, pageEnvelope{Items: []Call{}, Total: 0, Limit: limit, Offset: offset})
+		return
+	}
 	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID, status, idPrefix, digits, dispID, tagID}
 	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset, status, idPrefix, digits, dispID, tagID}
 
@@ -476,6 +482,19 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, pageEnvelope{Items: out, Total: total, Limit: limit, Offset: offset})
+}
+
+// uuidFilter normalises an optional id filter: "" stays off, a valid uuid is
+// returned in canonical form, and false means it is malformed.
+func uuidFilter(v string) (string, bool) {
+	if v == "" {
+		return "", true
+	}
+	id, err := uuid.Parse(v)
+	if err != nil {
+		return "", false
+	}
+	return id.String(), true
 }
 
 // callSearch splits the call-log search box into phone digits or a call-id

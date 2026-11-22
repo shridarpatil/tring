@@ -343,6 +343,11 @@ func TestListCallsFilters(t *testing.T) {
 	if ids, total, _ := list("?tag_id=" + tag.String()); len(ids) != 1 || ids[0] != c2.String() || total != 1 {
 		t.Fatalf("tag filter = %v total %v", ids, total)
 	}
+	for _, q := range []string{"?disposition_id=not-a-uuid", "?tag_id=nope", "?disposition_id=" + dA.String() + "&tag_id=x"} {
+		if ids, total, _ := list(q); len(ids) != 0 || total != 0 {
+			t.Fatalf("malformed filter %s = %v total %v, want none", q, ids, total)
+		}
+	}
 	ids, total, raw := list("")
 	if len(ids) != 3 || total != 3 || strings.Contains(raw, `"tags":null`) || !strings.Contains(raw, `"tags":[]`) {
 		t.Fatalf("unfiltered = %v total %v raw %s (untagged %s)", ids, total, raw, untagged)

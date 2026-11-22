@@ -531,7 +531,8 @@ WHERE c.id = $1 AND c.tenant_id = $2;
 -- instead of failing the enum cast); $5 call-id prefix (calls.id or leg_id);
 -- $6 phone digits, matched inside from/to with formatting stripped. A search
 -- sets $5, $6 or both (an all-digit id prefix); a call matching either is found.
--- $7 disposition id and $8 tag id (as text, '' = off) narrow to wrapped-up calls.
+-- $7 disposition id and $8 tag id ('' = off; the handler passes only valid
+-- uuids) narrow to wrapped-up calls, compared as uuid so the indexes apply.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
@@ -546,9 +547,9 @@ WHERE c.tenant_id = $1
        OR ($5 <> '' AND (c.id::text LIKE $5 || '%' OR c.leg_id LIKE $5 || '%'))
        OR ($6 <> '' AND (regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
                       OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $6 || '%')))
-  AND ($7 = '' OR c.disposition_id::text = $7)
+  AND ($7 = '' OR c.disposition_id = NULLIF($7, '')::uuid)
   AND ($8 = '' OR EXISTS (SELECT 1 FROM call_tag_links l
-                          WHERE l.tenant_id = c.tenant_id AND l.call_id = c.id AND l.tag_id::text = $8))
+                          WHERE l.tenant_id = c.tenant_id AND l.call_id = c.id AND l.tag_id = NULLIF($8, '')::uuid))
 ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 
 -- name: list-active-calls
@@ -592,9 +593,9 @@ WHERE c.tenant_id = $1
        OR ($3 <> '' AND (c.id::text LIKE $3 || '%' OR c.leg_id LIKE $3 || '%'))
        OR ($4 <> '' AND (regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $4 || '%'
                       OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%')))
-  AND ($5 = '' OR c.disposition_id::text = $5)
+  AND ($5 = '' OR c.disposition_id = NULLIF($5, '')::uuid)
   AND ($6 = '' OR EXISTS (SELECT 1 FROM call_tag_links l
-                          WHERE l.tenant_id = c.tenant_id AND l.call_id = c.id AND l.tag_id::text = $6));
+                          WHERE l.tenant_id = c.tenant_id AND l.call_id = c.id AND l.tag_id = NULLIF($6, '')::uuid));
 
 -- ===========================================================================
 -- console auth
