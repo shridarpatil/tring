@@ -97,6 +97,14 @@ jobs:
             sleep 2
           done
 
+      - name: gofmt
+        # Fails listing the unformatted files; fix with gofmt -w.
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
       - name: go vet
         run: go vet ./...
 
