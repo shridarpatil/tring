@@ -4,7 +4,6 @@ import { useRoute, useRouter } from "vue-router";
 import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
-import { auth } from "../stores/auth";
 import { usePagedList } from "../composables/usePagedList";
 import type { Call, CallEvent, WrapUpLabel } from "../api/types";
 import { Button, Select, CallsTable, Modal, TextField, Pagination, CallDetailModal, CallFullLogModal, CallOutcome } from "../components/ui";
@@ -29,7 +28,7 @@ const params = computed(() => ({
   tag_id: tagFilter.value,
 }));
 
-// Wrap-up labels for the filters and the outcome editor; archived ones are
+// Wrap-up labels for the filters; archived ones are
 // included because old calls keep them.
 const dispositions = ref<WrapUpLabel[]>([]);
 const callTags = ref<WrapUpLabel[]>([]);
@@ -134,13 +133,6 @@ const fullLogRows = computed(() =>
     : [],
 );
 
-// An edit returns the updated call: refresh the open detail and its list row.
-function outcomeSaved(c: Call) {
-  detailCall.value = c;
-  const i = calls.value.findIndex((x) => x.id === c.id);
-  if (i >= 0) calls.value[i] = c;
-}
-
 const showConnect = ref(false);
 const placing = ref(false);
 const connectForm = ref({ agent_number: "", client_number: "" });
@@ -235,10 +227,6 @@ async function connect() {
         <CallOutcome
           v-if="detailCall"
           :call="detailCall"
-          :editable="auth.isAdmin()"
-          :dispositions="dispositions"
-          :tags="callTags"
-          @saved="outcomeSaved"
         />
       </template>
     </CallDetailModal>
