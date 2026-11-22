@@ -1603,7 +1603,8 @@ RETURNING wrap_up_webhook_id;
 -- Admin/supervisor edit of an existing wrap-up: disposition and notes only,
 -- never the state columns. $3 disposition (NULL clears), $4 notes (NULL clears).
 UPDATE calls SET disposition_id = $3, notes = $4
-WHERE id = $2 AND tenant_id = $1;
+WHERE id = $2 AND tenant_id = $1
+RETURNING wrap_up_webhook_id;
 
 -- name: delete-call-tag-links
 DELETE FROM call_tag_links WHERE tenant_id = $1 AND call_id = $2;
@@ -1632,3 +1633,12 @@ SELECT l.call_id, t.id, t.name
 FROM call_tag_links l JOIN call_tags t ON t.id = l.tag_id AND t.tenant_id = l.tenant_id
 WHERE l.tenant_id = $1 AND l.call_id = ANY($2::uuid[])
 ORDER BY lower(t.name);
+
+-- name: get-call-wrap-up-state
+-- What the REST save checks before writing: who is wrapping the call, whether a
+-- disposition is mandatory (as fixed when wrap-up began), and whether the save
+-- window is still open. One read tells a foreign call (404) from a closed one
+-- (409).
+SELECT wrap_up_agent_id, wrap_up_require, wrapped_up_at IS NOT NULL,
+       (ended_at IS NULL OR ended_at > now() - interval '1 hour')
+FROM calls WHERE id = $2 AND tenant_id = $1;

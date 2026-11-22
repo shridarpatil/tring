@@ -263,6 +263,7 @@ type Queries struct {
 	UpdateCallTag             string `query:"update-call-tag"`
 	BeginCallWrapUp           string `query:"begin-call-wrap-up"`
 	TimeoutCallWrapUp         string `query:"timeout-call-wrap-up"`
+	GetCallWrapUpState        string `query:"get-call-wrap-up-state"`
 	SaveCallWrapUp            string `query:"save-call-wrap-up"`
 	PatchCallWrapUp           string `query:"patch-call-wrap-up"`
 	DeleteCallTagLinks        string `query:"delete-call-tag-links"`

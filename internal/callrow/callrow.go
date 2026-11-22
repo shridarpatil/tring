@@ -50,9 +50,12 @@ type Call struct {
 	// (migration 0039): null/omitted until the agent saves or the timer closes
 	// it. WrapUpEnd is "done" | "timeout".
 	Disposition *Disposition `json:"disposition"`
-	Notes       *string      `json:"notes,omitempty"`
-	WrappedUpAt *time.Time   `json:"wrapped_up_at,omitempty"`
-	WrapUpEnd   *string      `json:"wrap_up_end,omitempty"`
+	Notes       *string      `json:"notes"`
+	WrappedUpAt *time.Time   `json:"wrapped_up_at"`
+	WrapUpEnd   *string      `json:"wrap_up_end"`
+	// Tags are the call's wrap-up tags: always an array, never null. Filled by
+	// FillTags (one query per list), not by Scan.
+	Tags []Tag `json:"tags"`
 	// QueueTeam / QueuedAt / QueueSLASeconds describe the team queue the call
 	// is waiting in right now. Only list-active-calls fills them (ScanActive).
 	QueueTeam       *string    `json:"queue_team,omitempty"`
@@ -62,6 +65,12 @@ type Call struct {
 
 // Disposition is the {id, name} a wrapped-up call carries.
 type Disposition struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+}
+
+// Tag is the {id, name} of a wrap-up tag on a call.
+type Tag struct {
 	ID   uuid.UUID `json:"id"`
 	Name string    `json:"name"`
 }
@@ -94,6 +103,7 @@ func scan(scanner interface{ Scan(...interface{}) error }, c *Call, extra ...int
 	var ivrPath []byte
 	var dispID *uuid.UUID
 	var dispName *string
+	c.Tags = []Tag{}
 	dest := append([]interface{}{
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
 		&c.AgentID, &c.LegID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
@@ -118,7 +128,43 @@ func RecordingCacheKey(tenantID uuid.UUID) string { return "tenant:recording:" +
 
 // Get loads one of the tenant's calls by id.
 func Get(ctx context.Context, d *db.DB, q *queries.Queries, tenantID, id uuid.UUID) (Call, error) {
-	return Scan(d.Pool.QueryRow(ctx, q.GetCall, id, tenantID))
+	c, err := Scan(d.Pool.QueryRow(ctx, q.GetCall, id, tenantID))
+	if err != nil {
+		return c, err
+	}
+	calls := []Call{c}
+	if err := FillTags(ctx, d, q, tenantID, calls); err != nil {
+		return c, err
+	}
+	return calls[0], nil
+}
+
+// FillTags loads the tags of every call in calls with one query.
+func FillTags(ctx context.Context, d *db.DB, q *queries.Queries, tenantID uuid.UUID, calls []Call) error {
+	if len(calls) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(calls))
+	at := make(map[uuid.UUID]int, len(calls))
+	for i, c := range calls {
+		ids[i] = c.ID
+		at[c.ID] = i
+	}
+	rows, err := d.Pool.Query(ctx, q.ListCallTagsForCalls, tenantID, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var callID uuid.UUID
+		var t Tag
+		if err := rows.Scan(&callID, &t.ID, &t.Name); err != nil {
+			return err
+		}
+		i := at[callID]
+		calls[i].Tags = append(calls[i].Tags, t)
+	}
+	return rows.Err()
 }
 
 // Payload is the `data` of a call.* webhook: {"call": <Call>}.

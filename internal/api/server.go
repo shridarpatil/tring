@@ -90,6 +90,10 @@ type Config struct {
 	Hub    *events.Hub
 	Events *events.Publisher
 
+	// Webhooks delivers the call.wrapped_up webhook when an agent saves or a CRM
+	// patches a wrap-up (nil = off). *webhook.Notifier implements it.
+	Webhooks Webhooks
+
 	// Logger is the structured logger; nil falls back to slog.Default().
 	Logger *slog.Logger
 
@@ -194,6 +198,7 @@ type Server struct {
 	outboundAllow []netip.Prefix
 
 	secrets *secretbox.Box // nil = plaintext mode (no TRING_SECRETS_KEY)
+	hooks   Webhooks       // nil = webhooks off
 
 	version string
 
@@ -249,6 +254,7 @@ func NewServer(cfg Config) *Server {
 		consolePublicURL:  strings.TrimRight(cfg.ConsolePublicURL, "/"),
 		outboundAllow:     cfg.OutboundAllow,
 		secrets:           cfg.Secrets,
+		hooks:             cfg.Webhooks,
 		version:           cfg.Version,
 		log:               logger,
 	}
@@ -422,6 +428,7 @@ func (s *Server) Router() http.Handler {
 				r.Post("/calls/connect", s.handleConnectCall)
 				r.Get("/calls", s.handleListCalls)
 				r.Get("/calls/{id}", s.handleGetCall)
+				r.Patch("/calls/{id}/wrap-up", s.handlePatchWrapUp)
 				r.Get("/calls/{id}/events", s.handleGetCallEvents)
 				r.Get("/calls/{id}/recording", s.handleGetCallRecording)
 				// Backend-mediated call control (CRM backend, API key). ADR-001.
@@ -571,6 +578,8 @@ func (s *Server) Router() http.Handler {
 			r.Post("/sdk/calls/resume", s.handleSdkResume)
 			r.Get("/sdk/transfer-targets", s.handleSdkTransferTargets)
 			r.Post("/sdk/calls/transfer", s.handleSdkTransfer)
+			r.Get("/sdk/wrap-up-options", s.handleWrapUpOptions)
+			r.Post("/sdk/calls/wrap-up", s.handleSaveWrapUp)
 		})
 		// Outbound origination is backend-only (POST /v1/calls, API key); the
 		// agent JWT authenticates the gateway WebSocket and the routes above only.
