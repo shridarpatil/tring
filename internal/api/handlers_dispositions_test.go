@@ -167,13 +167,24 @@ func TestLabelTeams(t *testing.T) {
 			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown team: Theirs") {
 				t.Fatalf("other tenant's team = %d: %s", rec.Code, rec.Body.String())
 			}
-			// Blank names are dropped: [" "] is shared.
+			// A blank team name is rejected, never dropped (that would make a
+			// meant-to-be-limited label shared).
 			rec = serve(t, s, f, "POST", path, `{"name":"Blank","teams":[" ",""]}`)
-			if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"teams":[]`) {
-				t.Fatalf("blank teams = %d: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "team name is blank") {
+				t.Fatalf("blank teams create = %d: %s", rec.Code, rec.Body.String())
 			}
-			if got := labelList(t, s, f, path); len(got) != 3 {
-				t.Fatalf("list after rejected creates = %+v", got)
+			rec = serve(t, s, f, "PATCH", path+"/"+lim.ID.String(), `{"teams":[" "]}`)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "team name is blank") {
+				t.Fatalf("blank teams patch = %d: %s", rec.Code, rec.Body.String())
+			}
+			got := labelList(t, s, f, path)
+			if len(got) != 2 {
+				t.Fatalf("list after rejected requests = %+v", got)
+			}
+			for _, it := range got {
+				if it.ID == lim.ID && strings.Join(it.Teams, ",") != "Sales,Support" {
+					t.Fatalf("rejected blank patch changed teams: %+v", it)
+				}
 			}
 
 			// Rename without teams keeps them; teams present replaces.
@@ -193,12 +204,12 @@ func TestLabelTeams(t *testing.T) {
 			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"teams":[]`) {
 				t.Fatalf("share limited = %d: %s", rec.Code, rec.Body.String())
 			}
-			got := labelList(t, s, f, path)
+			got = labelList(t, s, f, path)
 			teams := map[string]string{}
 			for _, it := range got {
 				teams[it.Name] = strings.Join(it.Teams, ",")
 			}
-			if len(got) != 3 || teams["Limited 2"] != "" || teams["Shared"] != "Support" || teams["Blank"] != "" {
+			if len(got) != 2 || teams["Limited 2"] != "" || teams["Shared"] != "Support" {
 				t.Fatalf("list = %+v", got)
 			}
 		})

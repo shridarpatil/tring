@@ -74,20 +74,24 @@ func scanLabel(row pgx.Row) (labelItem, error) {
 	return it, err
 }
 
-// cleanTeams trims, de-duplicates and sorts a label's team names, dropping
-// blank ones (so [" "] means shared, like []).
-func cleanTeams(in []string) []string {
-	out := make([]string, 0, len(in))
+// cleanTeams trims, de-duplicates and sorts a label's team names. ok is false
+// when a name is blank: dropping it could turn a meant-to-be-limited label
+// into a shared one, so the request is rejected instead.
+func cleanTeams(in []string) (out []string, ok bool) {
+	out = make([]string, 0, len(in))
 	seen := make(map[string]bool, len(in))
 	for _, n := range in {
 		n = strings.TrimSpace(n)
-		if n != "" && !seen[n] {
+		if n == "" {
+			return nil, false
+		}
+		if !seen[n] {
 			seen[n] = true
 			out = append(out, n)
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, true
 }
 
 // setLabelTeams replaces label id's team set inside tx. When a name isn't one
@@ -158,6 +162,11 @@ func (s *Server) createLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 		writeError(w, http.StatusBadRequest, "name required, max 64 characters")
 		return
 	}
+	teams, ok := cleanTeams(req.Teams)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "team name is blank")
+		return
+	}
 	ctx := r.Context()
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
@@ -174,8 +183,8 @@ func (s *Server) createLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 		writeError(w, http.StatusInternalServerError, "request failed")
 		return
 	}
-	if len(req.Teams) > 0 {
-		it.Teams = cleanTeams(req.Teams)
+	if len(teams) > 0 {
+		it.Teams = teams
 		if !s.writeLabelTeams(w, r, tx, q, t.ID, it.ID, it.Teams) {
 			return
 		}
@@ -211,6 +220,14 @@ func (s *Server) updateLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 		}
 		req.Name = &name
 	}
+	var teams []string // nil = keep the current set
+	if req.Teams != nil {
+		var ok bool
+		if teams, ok = cleanTeams(*req.Teams); !ok {
+			writeError(w, http.StatusBadRequest, "team name is blank")
+			return
+		}
+	}
 	ctx := r.Context()
 	tx, err := s.db.Pool.Begin(ctx)
 	if err != nil {
@@ -231,8 +248,8 @@ func (s *Server) updateLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 		writeError(w, http.StatusInternalServerError, "request failed")
 		return
 	}
-	if req.Teams != nil {
-		it.Teams = cleanTeams(*req.Teams)
+	if teams != nil {
+		it.Teams = teams
 		if !s.writeLabelTeams(w, r, tx, q, t.ID, id, it.Teams) {
 			return
 		}
