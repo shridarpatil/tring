@@ -361,3 +361,33 @@ func TestWrapUpOptionsActiveOnly(t *testing.T) {
 		t.Fatalf("options = %+v", out)
 	}
 }
+
+func TestPatchDoesNotClobberConcurrentSave(t *testing.T) {
+	w := newWrapFix(t)
+	disp := w.label(t, "dispositions", w.f.TenantID, "Resolved", false)
+	tag := w.label(t, "call_tags", w.f.TenantID, "billing", false)
+	oldTag := w.label(t, "call_tags", w.f.TenantID, "old", false)
+	call := w.call(t, w.agent, false, time.Minute, "")
+	w.exec(t, `INSERT INTO call_tag_links (tenant_id, call_id, tag_id) VALUES ($1, $2, $3)`, w.f.TenantID, call, oldTag)
+	// A save that committed after the PATCH handler started.
+	w.exec(t, `UPDATE calls SET disposition_id = $2, notes = 'agent notes', wrapped_up_at = now(), wrap_up_end = 'done' WHERE id = $1`, call, disp)
+
+	path := "/v1/calls/" + call.String() + "/wrap-up"
+	if rec := serve(t, w.s, w.f, "PATCH", path, `{"tag_ids":["`+tag.String()+`"]}`); rec.Code != 200 {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
+	}
+	c := w.getCall(t, call)
+	tags := c["tags"].([]any)
+	if c["notes"] != "agent notes" || c["disposition"] == nil || len(tags) != 1 || tags[0].(map[string]any)["id"] != tag.String() {
+		t.Fatalf("patch clobbered the save: %v", c)
+	}
+
+	// notes:null clears notes only.
+	if rec := serve(t, w.s, w.f, "PATCH", path, `{"notes":null}`); rec.Code != 200 {
+		t.Fatalf("clear notes: %d %s", rec.Code, rec.Body)
+	}
+	c = w.getCall(t, call)
+	if c["notes"] != nil || c["disposition"] == nil || len(c["tags"].([]any)) != 1 {
+		t.Fatalf("notes:null changed more than notes: %v", c)
+	}
+}
