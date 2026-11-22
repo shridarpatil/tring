@@ -121,7 +121,12 @@ func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *ro
 // releaseAgentLeg drops a left participant's hold on its agent's on-call count.
 // No-op for participants that never held one (callers, supervisors, reattaches).
 // The end of a connected call the agent kept puts them in wrap-up when their
-// team (or tenant) has one; otherwise they are available again at once.
+// team (or tenant) has one; otherwise they are available again.
+//
+// The decision reads the DB, so it runs off the call-end path: the caller
+// runs this from the room's leave event, ahead of hanging up the other party
+// and settling the CDR, which must not wait on it. Until it lands the agent
+// still counts as on the call, so no ring sees them free in between.
 func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
 	s.mu.Lock()
 	leg, ok := s.agentLegs[pid]
@@ -130,13 +135,14 @@ func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
 	if !ok {
 		return
 	}
-	// Resolved before taking s.mu: it reads the DB.
-	if d, require := s.wrapUpSettings(leg); d > 0 {
-		s.startWrapUp(leg, d, require)
-	} else {
-		s.setAgentOnCall(leg.tenant, leg.sip, false)
-	}
-	leg.claim.Release()
+	go func() {
+		if d, require := s.wrapUpSettings(leg); d > 0 {
+			s.startWrapUp(leg, d, require)
+		} else {
+			s.setAgentOnCall(leg.tenant, leg.sip, false)
+		}
+		leg.claim.Release()
+	}()
 }
 
 // droppedAgentLeg returns the agent's call participant whose socket dropped and

@@ -28,9 +28,10 @@ type wrapCallLog struct {
 	secs     map[string]int // team → wrap-up seconds; "" is the tenant default
 	require  bool
 	rooms    map[string]uuid.UUID
-	teams    []string    // WrapUpSettings lookups, in order
-	begins   []uuid.UUID // BeginWrapUp call ids
-	timeouts []uuid.UUID // TimeoutWrapUp call ids
+	teams    []string      // WrapUpSettings lookups, in order
+	begins   []uuid.UUID   // BeginWrapUp call ids
+	timeouts []uuid.UUID   // TimeoutWrapUp call ids
+	gate     chan struct{} // when set, WrapUpSettings blocks until it is closed
 }
 
 func newWrapCallLog(secs map[string]int, require bool) *wrapCallLog {
@@ -61,11 +62,15 @@ func (w *wrapCallLog) CallID(roomID string) uuid.UUID {
 
 func (w *wrapCallLog) WrapUpSettings(_ context.Context, _ uuid.UUID, team string) (int, bool, error) {
 	w.wmu.Lock()
-	defer w.wmu.Unlock()
 	w.teams = append(w.teams, team)
 	secs, ok := w.secs[team]
 	if !ok {
 		secs = w.secs[""]
+	}
+	gate := w.gate
+	w.wmu.Unlock()
+	if gate != nil {
+		<-gate
 	}
 	return secs, w.require, nil
 }
@@ -245,9 +250,15 @@ func TestNoWrapUpWhenOff(t *testing.T) {
 	before := time.Now()
 	caller.Leave()
 	h.waitStatus("alice", presence.StatusOnline)
-	freed, ok := h.pstr.FreedAt(context.Background(), h.tenant.String(), "alice")
-	if !ok || freed.Before(before) {
-		t.Fatalf("freed-at = %v (ok=%v), want stamped at call end (after %v)", freed, ok, before)
+	// The online marker is written just before the freed-at stamp.
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		freed, ok := h.pstr.FreedAt(context.Background(), h.tenant.String(), "alice")
+		if ok && !freed.Before(before) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("freed-at = %v (ok=%v), want stamped at call end (after %v)", freed, ok, before)
+		}
 	}
 	noWrapUp(t, h.pres, 200*time.Millisecond)
 	if _, begins, _ := wl.calls(); len(begins) != 0 {
@@ -535,4 +546,49 @@ func TestClickToCallEndsWrapUp(t *testing.T) {
 	}
 	h.readUntil(h.pres, msgWrapUpEnd)
 	h.answer() // the call proceeds: alice is rung for it and joins
+}
+
+// The wrap-up decision reads the DB, so the call's end must not wait on it:
+// the other party is hung up and the call settled while the lookup is still
+// out, and meanwhile the agent stays on_call — never ringable — until it lands.
+func TestCallEndDoesNotWaitForWrapUpLookup(t *testing.T) {
+	wl := newWrapCallLog(map[string]int{"": 30}, false)
+	h := newWrapHarness(t, wl, map[string][]string{"sales": {"alice"}})
+	_, caller, callID := h.teamCall("sales")
+	agent := h.answerAs("alice", h.pres)
+	gate := make(chan struct{})
+	wl.wmu.Lock()
+	wl.gate = gate
+	wl.wmu.Unlock()
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+
+	h.send(agent, msg{Type: msgBye})
+	if got := waitEnd(t, h.cl); !strings.HasPrefix(got, "ended:") {
+		t.Fatalf("settled %q, want ended", got)
+	}
+	waitGone(t, h.srv, caller.Room().ID(), caller.ID())
+	if !h.srv.agentOnCall(h.tenant.String(), "alice") {
+		t.Fatal("agent read as free while the wrap-up decision is pending")
+	}
+	if got := ringAllCandidates(t, h.srv, h.tenant.String()); len(got) != 0 {
+		t.Fatalf("ring candidates = %v while the wrap-up decision is pending, want none", got)
+	}
+	if got := h.status("alice"); got != presence.StatusOnCall {
+		t.Fatalf("presence = %q while the decision is pending, want on_call", got)
+	}
+
+	close(gate)
+	if m := h.readUntil(h.pres, msgWrapUp); m.CallID != callID.String() {
+		t.Fatalf("wrap-up %+v, want call_id %s", m, callID)
+	}
+	h.waitStatus("alice", presence.StatusWrapUp)
+	if h.srv.agentOnCall(h.tenant.String(), "alice") {
+		t.Fatal("agent still on a call after entering wrap-up")
+	}
 }
