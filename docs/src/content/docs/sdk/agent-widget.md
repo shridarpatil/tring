@@ -128,12 +128,12 @@ Hold and resume still look up the agent's active **FreeSWITCH** call leg. Calls 
 
 When the team (or tenant) has [wrap-up](/tring/features/agents-and-routing/#call-wrap-up) switched on, a **Call wrap-up** card opens after an answered call ends, with a countdown. The agent picks a disposition (marked `*` when required), any tags (up to 10) and notes (up to 2000 characters), then saves. The agent is available again on save or when the countdown ends. After a page refresh the card comes back with the original countdown. A save the server refuses with `409` shows "Wrap-up already ended".
 
-The panel's lists come from the agent's tenant. Your own UI can use the same two agent-JWT endpoints:
+The panel's lists come from the agent's tenant: the shared dispositions and tags plus those [limited to](/tring/api-reference/dispositions-and-tags/#teams) the call's wrap-up team. Your own UI can use the same two agent-JWT endpoints:
 
 | Method | Path | Body | Success | Errors |
 |---|---|---|---|---|
-| `GET` | `/v1/sdk/wrap-up-options` | none | `200 {"dispositions": [{"id","name"}], "tags": [{"id","name"}]}`, live labels only | `401` |
-| `POST` | `/v1/sdk/calls/wrap-up` | `{"call_id": "…", "disposition_id": "…", "notes": "…", "tag_ids": ["…"]}` (`call_id` required) | `200` with the call object | `400` `call_id required`, `notes too long (max 2000 characters)`, `too many tags (max 10)`, `disposition required` (when the team requires it), `unknown or archived disposition or tag`; `401`; `404` `call not found` (not this agent's call); `409` `wrap-up already closed` |
+| `GET` | `/v1/sdk/wrap-up-options?call_id=…` | none | `200 {"dispositions": [{"id","name"}], "tags": [{"id","name"}]}`, the live labels allowed for that call's wrap-up team | `400` `call_id required`; `401`; `404` `call not found` (not this agent's wrap-up) |
+| `POST` | `/v1/sdk/calls/wrap-up` | `{"call_id": "…", "disposition_id": "…", "notes": "…", "tag_ids": ["…"]}` (`call_id` required) | `200` with the call object | `400` `call_id required`, `notes too long (max 2000 characters)`, `too many tags (max 10)`, `disposition required` (when the team requires it), `unknown or archived disposition or tag` (also for one not allowed for the call's wrap-up team); `401`; `404` `call not found` (not this agent's call); `409` `wrap-up already closed` |
 
 The save is accepted while the call's `wrapped_up_at` is still empty and the call ended less than an hour ago (or is still open). It is one-shot: once it succeeds or the timer closes the wrap-up, later saves get `409`. After a gateway restart the panel is gone, but the API save still works within that hour. Edit later with [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up) from your backend.
 
