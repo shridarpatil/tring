@@ -383,3 +383,12 @@ export interface SsoProvider {
   sso_only_users: number; // users on these domains with no password
   created_at: string;
 }
+
+// A tenant-managed wrap-up label (disposition or call tag); archived ones stay
+// on past calls but are no longer offered to agents.
+export interface WrapUpLabel {
+  id: string;
+  name: string;
+  archived: boolean;
+  created_at: string;
+}

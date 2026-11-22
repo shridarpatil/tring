@@ -57,6 +57,7 @@ const routes: RouteRecordRaw[] = [
       // has a URL that can be shared. Optional param = same view instance, so
       // the list's page/filter survive opening and closing a call.
       { path: "calls/:id?", name: "calls", component: () => import("../views/CallsView.vue"), meta: { admin: true } },
+      { path: "dispositions", name: "dispositions", component: () => import("../views/DispositionsView.vue"), meta: { admin: true } },
       { path: "webhooks", name: "webhooks", component: () => import("../views/WebhooksView.vue"), meta: { admin: true } },
       { path: "api-keys", name: "api-keys", component: () => import("../views/ApiKeysView.vue"), meta: { admin: true } },
       { path: "flows", name: "flows", component: () => import("../views/flows/FlowsListView.vue"), meta: { admin: true } },
