@@ -172,7 +172,7 @@ func TestMergeStereoSeparatesChannels(t *testing.T) {
 		t.Skip("ffmpeg not installed")
 	}
 	dir := t.TempDir()
-	agent := filepath.Join(dir, "agent.ogg")    // → FL
+	agent := filepath.Join(dir, "agent.ogg")       // → FL
 	customer := filepath.Join(dir, "customer.ogg") // → FR
 	genTone(t, agent, 300)
 	genTone(t, customer, 1200)
