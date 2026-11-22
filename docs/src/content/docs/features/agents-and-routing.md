@@ -77,7 +77,7 @@ Presence needs Redis (`TRING_REDIS_ADDR`). Without it, the console cannot show w
 
 ## Call wrap-up
 
-Wrap-up gives an agent a timed window after a call to record how it went: a **disposition**, **tags** and **notes**. The disposition and tag lists are managed per tenant; see [Dispositions & call tags](/tring/api-reference/dispositions-and-tags/).
+Wrap-up gives an agent a timed window after a call to record how it went: a **disposition**, **tags** and **notes**. The disposition and tag lists are managed per tenant, and each entry is shared by all teams or limited to chosen teams. The agent is offered the shared entries plus those of the team whose ring reached them; a call with no team ring gets shared entries only. See [Dispositions & call tags](/tring/api-reference/dispositions-and-tags/#teams).
 
 Two settings control it, on each team and as a tenant default:
 
