@@ -43,14 +43,15 @@ func (l *Log) WrapUpSettings(ctx context.Context, tenant uuid.UUID, team string)
 	return seconds, requireDisposition, err
 }
 
-// BeginWrapUp records which agent is wrapping up callID and whether a
-// disposition is mandatory, as the settings stood when wrap-up began.
-func (l *Log) BeginWrapUp(ctx context.Context, tenant, callID uuid.UUID, agentSIP string, requireDisposition bool) error {
+// BeginWrapUp records which agent is wrapping up callID, whether a
+// disposition is mandatory (as the settings stood when wrap-up began), and the
+// team whose ring reached the agent ("" = none).
+func (l *Log) BeginWrapUp(ctx context.Context, tenant, callID uuid.UUID, agentSIP string, requireDisposition bool, team string) error {
 	agentID, _, err := l.agentBySIP(ctx, tenant, agentSIP)
 	if err != nil {
 		return err
 	}
-	_, err = l.db.Pool.Exec(ctx, l.q.BeginCallWrapUp, tenant, callID, agentID, requireDisposition)
+	_, err = l.db.Pool.Exec(ctx, l.q.BeginCallWrapUp, tenant, callID, agentID, requireDisposition, team)
 	return err
 }
 

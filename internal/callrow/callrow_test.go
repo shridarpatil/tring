@@ -37,18 +37,18 @@ func TestWrapUpQueries(t *testing.T) {
 	}
 
 	var dispID, tagID uuid.UUID
-	if err := pool.QueryRow(ctx, q.CreateDisposition, f.TenantID, "Sale").Scan(&dispID, new(string), new(*string), new(any)); err != nil {
+	if err := pool.QueryRow(ctx, q.CreateDisposition, f.TenantID, "Sale").Scan(&dispID, new(string), new(*string), new(any), new([]string)); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, q.CreateCallTag, f.TenantID, "vip").Scan(&tagID, new(string), new(*string), new(any)); err != nil {
+	if err := pool.QueryRow(ctx, q.CreateCallTag, f.TenantID, "vip").Scan(&tagID, new(string), new(*string), new(any), new([]string)); err != nil {
 		t.Fatal(err)
 	}
 	// Names are unique per tenant, case-insensitively.
-	if err := pool.QueryRow(ctx, q.CreateDisposition, f.TenantID, "SALE").Scan(new(uuid.UUID), new(string), new(*string), new(any)); err == nil {
+	if err := pool.QueryRow(ctx, q.CreateDisposition, f.TenantID, "SALE").Scan(new(uuid.UUID), new(string), new(*string), new(any), new([]string)); err == nil {
 		t.Fatal("duplicate disposition name accepted")
 	}
 
-	if _, err := pool.Exec(ctx, q.BeginCallWrapUp, f.TenantID, callID, f.UserID, true); err != nil {
+	if _, err := pool.Exec(ctx, q.BeginCallWrapUp, f.TenantID, callID, f.UserID, true, ""); err != nil {
 		t.Fatal(err)
 	}
 	save := func(agent uuid.UUID) error {
@@ -71,7 +71,7 @@ func TestWrapUpQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	var n int
-	if err := pool.QueryRow(ctx, q.CountActiveTagsIn, f.TenantID, []uuid.UUID{tagID, uuid.New()}).Scan(&n); err != nil || n != 1 {
+	if err := pool.QueryRow(ctx, q.CountActiveTagsIn, f.TenantID, []uuid.UUID{tagID, uuid.New()}, "").Scan(&n); err != nil || n != 1 {
 		t.Fatalf("count-active-tags-in = %d, %v; want 1", n, err)
 	}
 

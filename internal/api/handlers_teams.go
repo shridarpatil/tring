@@ -289,13 +289,33 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteTeam, t.ID, name)
+	// Labels limited to this team alone are archived with it: the delete
+	// cascades their last team row away, which would otherwise make them
+	// shared by every team. A label also on another team keeps that one.
+	ctx := r.Context()
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	for _, q := range []string{s.q.ArchiveTeamOnlyDispositions, s.q.ArchiveTeamOnlyCallTags} {
+		if _, err := tx.Exec(ctx, q, t.ID, name); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete failed")
+			return
+		}
+	}
+	tag, err := tx.Exec(ctx, s.q.DeleteTeam, t.ID, name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "team not found")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
 	s.invalidateTeam(r.Context(), t.ID, name)
@@ -414,4 +434,10 @@ func (s *Server) listTeamMembers(r *http.Request, tenantID uuid.UUID, name strin
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// isForeignKeyViolation reports a Postgres foreign-key violation (SQLSTATE 23503).
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }

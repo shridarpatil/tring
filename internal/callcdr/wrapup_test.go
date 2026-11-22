@@ -62,8 +62,12 @@ func TestTimeoutWrapUpOnce(t *testing.T) {
 	seedAgent(t, fx, "alice")
 	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil)
 	id := endedCall(t, fx, l, "once")
-	if err := l.BeginWrapUp(ctx, fx.TenantID, id, "alice", true); err != nil {
+	if err := l.BeginWrapUp(ctx, fx.TenantID, id, "alice", true, "sales"); err != nil {
 		t.Fatal(err)
+	}
+	var team *string
+	if err := fx.DB.Pool.QueryRow(ctx, `SELECT wrap_up_team FROM calls WHERE id = $1`, id).Scan(&team); err != nil || team == nil || *team != "sales" {
+		t.Fatalf("wrap_up_team = %v (%v), want sales", team, err)
 	}
 	if won, err := l.TimeoutWrapUp(ctx, fx.TenantID, id); err != nil || !won {
 		t.Fatalf("first timeout = %v, %v; want won", won, err)
@@ -83,7 +87,7 @@ func TestWrapUpTimeoutLosesToSave(t *testing.T) {
 	spy := &hookSpy{}
 	l := callcdr.New(fx.DB, nil, t.TempDir(), nil, nil).WithWebhooks(spy)
 	id := endedCall(t, fx, l, "loses")
-	if err := l.BeginWrapUp(ctx, fx.TenantID, id, "alice", false); err != nil {
+	if err := l.BeginWrapUp(ctx, fx.TenantID, id, "alice", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fx.DB.Pool.Exec(ctx, `UPDATE calls SET wrap_up_webhook_id = $2 WHERE id = $1`, id, uuid.New()); err != nil {
@@ -118,7 +122,7 @@ func TestTimeoutWrapUpSendsWebhook(t *testing.T) {
 	l.WrapUpWebhook(roomID, hookID) // live call: stored on the row
 	l.Ended(roomID, "caller_hangup")
 	spy.got, spy.ids, spy.call = nil, nil, nil // drop any call.ended
-	if err := l.BeginWrapUp(ctx, fx.TenantID, id, "alice", false); err != nil {
+	if err := l.BeginWrapUp(ctx, fx.TenantID, id, "alice", false, ""); err != nil {
 		t.Fatal(err)
 	}
 	if won, err := l.TimeoutWrapUp(ctx, fx.TenantID, id); err != nil || !won {

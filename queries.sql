@@ -1541,48 +1541,116 @@ SELECT wrap_up_seconds, require_disposition FROM teams WHERE tenant_id = $1 AND 
 SELECT wrap_up_seconds, require_disposition FROM tenants WHERE id = $1;
 
 -- name: create-disposition
+-- A new label has no teams yet (shared); the handler adds any in the same tx.
 INSERT INTO dispositions (tenant_id, name) VALUES ($1, $2)
-RETURNING id, name, archived_at, created_at;
+RETURNING id, name, archived_at, created_at, '{}'::text[];
 
 -- name: list-dispositions
--- $2 include_archived: the console manages archived rows; the wrap-up form
--- offers only live ones.
-SELECT id, name, archived_at, created_at FROM dispositions
-WHERE tenant_id = $1 AND ($2 OR archived_at IS NULL)
-ORDER BY lower(name);
+-- $2 include_archived: the console manages archived rows. Each row carries its
+-- teams ({} = shared by all teams).
+SELECT d.id, d.name, d.archived_at, d.created_at,
+       COALESCE((SELECT array_agg(dt.team_name ORDER BY dt.team_name) FROM disposition_teams dt
+                 WHERE dt.tenant_id = d.tenant_id AND dt.disposition_id = d.id), '{}')
+FROM dispositions d
+WHERE d.tenant_id = $1 AND ($2 OR d.archived_at IS NULL)
+ORDER BY lower(d.name);
 
 -- name: update-disposition
 -- Partial: $3 name (NULL keeps), $4 archived (NULL keeps, true archives, false restores).
-UPDATE dispositions SET
+UPDATE dispositions d SET
     name        = COALESCE($3, name),
     archived_at = CASE WHEN $4::boolean IS NULL THEN archived_at
                        WHEN $4 THEN COALESCE(archived_at, now())
                        ELSE NULL END
 WHERE id = $2 AND tenant_id = $1
-RETURNING id, name, archived_at, created_at;
+RETURNING id, name, archived_at, created_at,
+          COALESCE((SELECT array_agg(dt.team_name ORDER BY dt.team_name) FROM disposition_teams dt
+                    WHERE dt.tenant_id = d.tenant_id AND dt.disposition_id = d.id), '{}');
+
+-- name: delete-disposition-teams
+DELETE FROM disposition_teams WHERE tenant_id = $1 AND disposition_id = $2;
+
+-- name: insert-disposition-team
+INSERT INTO disposition_teams (tenant_id, disposition_id, team_name) VALUES ($1, $2, $3);
+
+-- name: list-wrap-up-dispositions
+-- Live dispositions a wrap-up for team $2 may use: shared ones (no team rows)
+-- and those limited to $2. A teamless call ($2 = '') gets shared ones only.
+SELECT d.id, d.name FROM dispositions d
+WHERE d.tenant_id = $1 AND d.archived_at IS NULL
+  AND (NOT EXISTS (SELECT 1 FROM disposition_teams dt WHERE dt.tenant_id = $1 AND dt.disposition_id = d.id)
+       OR EXISTS (SELECT 1 FROM disposition_teams dt
+                  WHERE dt.tenant_id = $1 AND dt.disposition_id = d.id AND dt.team_name = $2))
+ORDER BY lower(d.name);
+
+-- name: archive-team-only-dispositions
+-- Run before deleting team $2: a disposition limited to that team alone would
+-- otherwise lose its last team row and silently become shared.
+UPDATE dispositions d SET archived_at = COALESCE(d.archived_at, now())
+WHERE d.tenant_id = $1
+  AND EXISTS (SELECT 1 FROM disposition_teams dt
+              WHERE dt.tenant_id = $1 AND dt.disposition_id = d.id AND dt.team_name = $2)
+  AND NOT EXISTS (SELECT 1 FROM disposition_teams dt
+                  WHERE dt.tenant_id = $1 AND dt.disposition_id = d.id AND dt.team_name <> $2);
 
 -- name: create-call-tag
 INSERT INTO call_tags (tenant_id, name) VALUES ($1, $2)
-RETURNING id, name, archived_at, created_at;
+RETURNING id, name, archived_at, created_at, '{}'::text[];
 
 -- name: list-call-tags
-SELECT id, name, archived_at, created_at FROM call_tags
-WHERE tenant_id = $1 AND ($2 OR archived_at IS NULL)
-ORDER BY lower(name);
+SELECT c.id, c.name, c.archived_at, c.created_at,
+       COALESCE((SELECT array_agg(ct.team_name ORDER BY ct.team_name) FROM call_tag_teams ct
+                 WHERE ct.tenant_id = c.tenant_id AND ct.tag_id = c.id), '{}')
+FROM call_tags c
+WHERE c.tenant_id = $1 AND ($2 OR c.archived_at IS NULL)
+ORDER BY lower(c.name);
 
 -- name: update-call-tag
-UPDATE call_tags SET
+UPDATE call_tags c SET
     name        = COALESCE($3, name),
     archived_at = CASE WHEN $4::boolean IS NULL THEN archived_at
                        WHEN $4 THEN COALESCE(archived_at, now())
                        ELSE NULL END
 WHERE id = $2 AND tenant_id = $1
-RETURNING id, name, archived_at, created_at;
+RETURNING id, name, archived_at, created_at,
+          COALESCE((SELECT array_agg(ct.team_name ORDER BY ct.team_name) FROM call_tag_teams ct
+                    WHERE ct.tenant_id = c.tenant_id AND ct.tag_id = c.id), '{}');
+
+-- name: delete-call-tag-teams
+DELETE FROM call_tag_teams WHERE tenant_id = $1 AND tag_id = $2;
+
+-- name: insert-call-tag-team
+INSERT INTO call_tag_teams (tenant_id, tag_id, team_name) VALUES ($1, $2, $3);
+
+-- name: list-wrap-up-call-tags
+-- Same team rule as list-wrap-up-dispositions.
+SELECT c.id, c.name FROM call_tags c
+WHERE c.tenant_id = $1 AND c.archived_at IS NULL
+  AND (NOT EXISTS (SELECT 1 FROM call_tag_teams ct WHERE ct.tenant_id = $1 AND ct.tag_id = c.id)
+       OR EXISTS (SELECT 1 FROM call_tag_teams ct
+                  WHERE ct.tenant_id = $1 AND ct.tag_id = c.id AND ct.team_name = $2))
+ORDER BY lower(c.name);
+
+-- name: archive-team-only-call-tags
+UPDATE call_tags c SET archived_at = COALESCE(c.archived_at, now())
+WHERE c.tenant_id = $1
+  AND EXISTS (SELECT 1 FROM call_tag_teams ct
+              WHERE ct.tenant_id = $1 AND ct.tag_id = c.id AND ct.team_name = $2)
+  AND NOT EXISTS (SELECT 1 FROM call_tag_teams ct
+                  WHERE ct.tenant_id = $1 AND ct.tag_id = c.id AND ct.team_name <> $2);
+
+-- name: first-unknown-team
+-- The first of the names in $2 that is not a team of the tenant (no row = all
+-- exist), so a label's team list can be rejected naming the culprit.
+SELECT n.name FROM unnest($2::text[]) AS n(name)
+WHERE NOT EXISTS (SELECT 1 FROM teams t WHERE t.tenant_id = $1 AND t.name = n.name)
+ORDER BY n.name LIMIT 1;
 
 -- name: begin-call-wrap-up
--- The gateway marks which agent is wrapping up and whether a disposition is
--- mandatory, as the settings stood when wrap-up began.
-UPDATE calls SET wrap_up_agent_id = $3, wrap_up_require = $4
+-- The gateway marks which agent is wrapping up, whether a disposition is
+-- mandatory (as the settings stood when wrap-up began), and the team whose
+-- ring reached the agent ($5, '' = none), which picks the allowed labels.
+UPDATE calls SET wrap_up_agent_id = $3, wrap_up_require = $4, wrap_up_team = NULLIF($5, '')
 WHERE id = $2 AND tenant_id = $1;
 
 -- name: timeout-call-wrap-up
@@ -1619,14 +1687,21 @@ INSERT INTO call_tag_links (tenant_id, call_id, tag_id) VALUES ($1, $2, $3)
 ON CONFLICT DO NOTHING;
 
 -- name: count-active-dispositions-in
--- How many of the ids in $2 are live dispositions of the tenant; compared with
+-- How many of the ids in $2 are live dispositions of the tenant allowed for
+-- wrap-up team $3 (shared, or limited to $3; '' = shared only); compared with
 -- the number sent to validate a save.
-SELECT count(*) FROM dispositions
-WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL;
+SELECT count(*) FROM dispositions d
+WHERE d.tenant_id = $1 AND d.id = ANY($2::uuid[]) AND d.archived_at IS NULL
+  AND (NOT EXISTS (SELECT 1 FROM disposition_teams dt WHERE dt.tenant_id = $1 AND dt.disposition_id = d.id)
+       OR EXISTS (SELECT 1 FROM disposition_teams dt
+                  WHERE dt.tenant_id = $1 AND dt.disposition_id = d.id AND dt.team_name = $3));
 
 -- name: count-active-tags-in
-SELECT count(*) FROM call_tags
-WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL;
+SELECT count(*) FROM call_tags c
+WHERE c.tenant_id = $1 AND c.id = ANY($2::uuid[]) AND c.archived_at IS NULL
+  AND (NOT EXISTS (SELECT 1 FROM call_tag_teams ct WHERE ct.tenant_id = $1 AND ct.tag_id = c.id)
+       OR EXISTS (SELECT 1 FROM call_tag_teams ct
+                  WHERE ct.tenant_id = $1 AND ct.tag_id = c.id AND ct.team_name = $3));
 
 -- name: set-call-wrap-up-webhook
 -- Remembers which webhook the flow picked for the wrap-up event, for delivery
@@ -1643,7 +1718,9 @@ ORDER BY lower(t.name);
 -- What the REST save checks before writing: who is wrapping the call, whether a
 -- disposition is mandatory (as fixed when wrap-up began), and whether the save
 -- window is still open. One read tells a foreign call (404) from a closed one
--- (409).
+-- (409). The last column is the wrap-up team ('' = none) the labels are
+-- checked against.
 SELECT wrap_up_agent_id, wrap_up_require, wrapped_up_at IS NOT NULL,
-       (ended_at IS NULL OR ended_at > now() - interval '1 hour')
+       (ended_at IS NULL OR ended_at > now() - interval '1 hour'),
+       COALESCE(wrap_up_team, '')
 FROM calls WHERE id = $2 AND tenant_id = $1;

@@ -360,14 +360,7 @@ func TestWrapUpOptionsActiveOnly(t *testing.T) {
 	w.label(t, "dispositions", w.f.TenantID, "Old", true)
 	w.label(t, "call_tags", w.f.TenantID, "live-tag", false)
 	w.label(t, "call_tags", w.f.TenantID, "old-tag", true)
-	rec := doReq(t, w.s.Router(), "GET", "/v1/sdk/wrap-up-options", w.tok, "")
-	if rec.Code != 200 {
-		t.Fatalf("options: %d %s", rec.Code, rec.Body)
-	}
-	var out wrapUpOptions
-	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
-		t.Fatal(err)
-	}
+	out := w.options(t, w.call(t, w.agent, false, time.Minute, ""))
 	if len(out.Dispositions) != 1 || out.Dispositions[0].Name != "Live" || len(out.Tags) != 1 || out.Tags[0].Name != "live-tag" {
 		t.Fatalf("options = %+v", out)
 	}
@@ -448,4 +441,118 @@ func TestWrapUpSideEffectsSurviveCancelledRequest(t *testing.T) {
 			t.Fatalf("webhooks = %d, want 1", w.hooks.count())
 		}
 	})
+}
+
+// options fetches the wrap-up options for call.
+func (w *wrapFix) options(t *testing.T, call uuid.UUID) wrapUpOptions {
+	t.Helper()
+	rec := doReq(t, w.s.Router(), "GET", "/v1/sdk/wrap-up-options?call_id="+call.String(), w.tok, "")
+	if rec.Code != 200 {
+		t.Fatalf("options: %d %s", rec.Code, rec.Body)
+	}
+	var out wrapUpOptions
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// teamLabel inserts a live label limited to teams.
+func (w *wrapFix) teamLabel(t *testing.T, table, name string, teams ...string) uuid.UUID {
+	t.Helper()
+	id := w.label(t, table, w.f.TenantID, name, false)
+	link := map[string]string{"dispositions": "disposition_teams (tenant_id, disposition_id, team_name)",
+		"call_tags": "call_tag_teams (tenant_id, tag_id, team_name)"}[table]
+	for _, tm := range teams {
+		w.exec(t, `INSERT INTO `+link+` VALUES ($1, $2, $3)`, w.f.TenantID, id, tm)
+	}
+	return id
+}
+
+func optionNames(o []wrapUpOption) string {
+	names := []string{}
+	for _, x := range o {
+		names = append(names, x.Name)
+	}
+	return strings.Join(names, ",")
+}
+
+// The form offers shared labels plus those of the call's wrap-up team; a
+// teamless call gets shared only.
+func TestWrapUpOptionsPerTeam(t *testing.T) {
+	w := newWrapFix(t)
+	w.f.AddTeam(t, "A", nil)
+	w.f.AddTeam(t, "B", nil)
+	w.label(t, "dispositions", w.f.TenantID, "Shared", false)
+	w.teamLabel(t, "dispositions", "A only", "A")
+	w.teamLabel(t, "dispositions", "B only", "B")
+	w.teamLabel(t, "dispositions", "A and B", "A", "B")
+	w.label(t, "call_tags", w.f.TenantID, "shared-tag", false)
+	w.teamLabel(t, "call_tags", "b-tag", "B")
+
+	aCall := w.call(t, w.agent, false, time.Minute, "")
+	w.exec(t, `UPDATE calls SET wrap_up_team = 'A' WHERE id = $1`, aCall)
+	out := w.options(t, aCall)
+	if got := optionNames(out.Dispositions); got != "A and B,A only,Shared" {
+		t.Fatalf("team A dispositions = %s", got)
+	}
+	if got := optionNames(out.Tags); got != "shared-tag" {
+		t.Fatalf("team A tags = %s", got)
+	}
+
+	out = w.options(t, w.call(t, w.agent, false, time.Minute, ""))
+	if got := optionNames(out.Dispositions); got != "Shared" {
+		t.Fatalf("teamless dispositions = %s", got)
+	}
+
+	if rec := doReq(t, w.s.Router(), "GET", "/v1/sdk/wrap-up-options", w.tok, ""); rec.Code != 400 || !strings.Contains(rec.Body.String(), "call_id required") {
+		t.Fatalf("no call_id = %d %s", rec.Code, rec.Body)
+	}
+	other := w.call(t, w.f.AddUser(t, "agent", "other@example.com"), false, time.Minute, "")
+	if rec := doReq(t, w.s.Router(), "GET", "/v1/sdk/wrap-up-options?call_id="+other.String(), w.tok, ""); rec.Code != 404 {
+		t.Fatalf("someone else's call = %d, want 404", rec.Code)
+	}
+}
+
+// Save and PATCH accept only labels allowed for the call's wrap-up team.
+func TestWrapUpTeamRuleOnSaveAndPatch(t *testing.T) {
+	w := newWrapFix(t)
+	w.f.AddTeam(t, "A", nil)
+	w.f.AddTeam(t, "B", nil)
+	aDisp := w.teamLabel(t, "dispositions", "A only", "A")
+	bDisp := w.teamLabel(t, "dispositions", "B only", "B")
+	bTag := w.teamLabel(t, "call_tags", "b-tag", "B")
+	shared := w.label(t, "call_tags", w.f.TenantID, "shared-tag", false)
+
+	call := w.call(t, w.agent, false, time.Minute, "")
+	w.exec(t, `UPDATE calls SET wrap_up_team = 'A' WHERE id = $1`, call)
+	for _, body := range []string{saveBody(call, bDisp, ""), saveBody(call, aDisp, "", bTag)} {
+		if code, out := w.post(t, body); code != 400 || !strings.Contains(out, "unknown or archived disposition or tag") {
+			t.Fatalf("save %s = %d %s, want 400", body, code, out)
+		}
+	}
+	if code, out := w.post(t, saveBody(call, aDisp, "", shared)); code != 200 {
+		t.Fatalf("allowed save = %d %s", code, out)
+	}
+
+	patch := func(id uuid.UUID, body string) int {
+		return serve(t, w.s, w.f, "PATCH", "/v1/calls/"+id.String()+"/wrap-up", body).Code
+	}
+	if c := patch(call, `{"disposition_id":"`+bDisp.String()+`"}`); c != 400 {
+		t.Fatalf("patch B disposition on A call = %d, want 400", c)
+	}
+	if c := patch(call, `{"tag_ids":["`+bTag.String()+`"]}`); c != 400 {
+		t.Fatalf("patch B tag on A call = %d, want 400", c)
+	}
+	// Only the ids a PATCH sets are checked.
+	if c := patch(call, `{"notes":"x"}`); c != 200 {
+		t.Fatalf("notes patch = %d", c)
+	}
+	teamless := w.call(t, w.agent, false, time.Minute, "timeout")
+	if c := patch(teamless, `{"disposition_id":"`+aDisp.String()+`"}`); c != 400 {
+		t.Fatalf("patch A disposition on teamless call = %d, want 400", c)
+	}
+	if c := patch(teamless, `{"tag_ids":["`+shared.String()+`"]}`); c != 200 {
+		t.Fatalf("patch shared tag on teamless call = %d, want 200", c)
+	}
 }

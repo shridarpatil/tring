@@ -1562,7 +1562,7 @@ func (f *fakeCallLog) WrapUpWebhook(string, uuid.UUID) {}
 func (f *fakeCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
 	return 0, false, nil
 }
-func (f *fakeCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool) error {
+func (f *fakeCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool, string) error {
 	return nil
 }
 func (f *fakeCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
@@ -1573,7 +1573,7 @@ func (o *orderedCallLog) WrapUpWebhook(string, uuid.UUID) {}
 func (o *orderedCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
 	return 0, false, nil
 }
-func (o *orderedCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool) error {
+func (o *orderedCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool, string) error {
 	return nil
 }
 func (o *orderedCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
