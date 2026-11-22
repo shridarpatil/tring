@@ -521,6 +521,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/me/token", s.handleMeToken)
 			r.Post("/me/availability", s.handleMeAvailability)
 			r.Post("/me/password", s.handleMePassword)
+			r.Post("/me/logout", s.handleMeLogout)
 			r.Get("/me/stats", s.handleMeStats)
 			r.Get("/me/dashboard", s.handleMeDashboard)
 			r.Get("/me/calls", s.handleMeCalls)
