@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { errMessage } from "../lib/errors";
 import { toast } from "../lib/toast";
 import type { WrapUpLabel } from "../api/types";
-import { Button, Panel, TextField, Toggle, Badge } from "../components/ui";
+import { Button, Panel, TextField, Toggle, Badge, DataTable } from "../components/ui";
 
 interface LabelList {
   title: string;
@@ -16,6 +16,8 @@ interface LabelList {
   editingId: string;
   editName: string;
 }
+
+const cols = [{ key: "name", label: "Name" }];
 
 const lists = ref<LabelList[]>([
   { title: "Dispositions", hint: "The outcome an agent picks after a call. Pick exactly one.", path: "/v1/dispositions" },
@@ -89,28 +91,27 @@ onMounted(() => lists.value.forEach(load));
           <Button type="submit" :disabled="!l.newName.trim()">Add</Button>
         </form>
         <Toggle v-model="l.showArchived" label="Show archived" />
-        <p v-if="!visible(l).length" class="text-light">Nothing here yet.</p>
-        <table v-else>
-          <tbody>
-            <tr v-for="it in visible(l)" :key="it.id">
-              <td>
-                <form v-if="l.editingId === it.id" class="hstack" @submit.prevent="rename(l, it)">
-                  <TextField v-model="l.editName" />
-                  <Button type="submit" size="sm">Save</Button>
-                  <Button variant="ghost" size="sm" @click="l.editingId = ''">Cancel</Button>
-                </form>
-                <span v-else :class="it.archived ? 'text-lighter' : ''">{{ it.name }}</span>
-                <Badge v-if="it.archived" tone="neutral">archived</Badge>
-              </td>
-              <td class="text-right">
-                <Button variant="ghost" size="sm" @click="startEdit(l, it)">Rename</Button>
-                <Button variant="ghost" size="sm" @click="patch(l, it, { archived: !it.archived })">
-                  {{ it.archived ? "Restore" : "Archive" }}
-                </Button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <DataTable :columns="cols" :rows="visible(l)" empty-text="Nothing here yet.">
+          <template #cell-name="{ row }">
+            <form v-if="l.editingId === row.id" class="hstack" @submit.prevent="rename(l, row)">
+              <TextField v-model="l.editName" />
+              <Button type="submit" size="sm">Save</Button>
+              <Button variant="ghost" size="sm" @click="l.editingId = ''">Cancel</Button>
+            </form>
+            <template v-else>
+              <span :class="row.archived ? 'text-lighter' : ''">{{ row.name }}</span>
+              <Badge v-if="row.archived" tone="neutral">archived</Badge>
+            </template>
+          </template>
+          <template #row-actions="{ row }">
+            <div class="hstack">
+              <Button variant="secondary" size="sm" @click="startEdit(l, row)">Rename</Button>
+              <Button variant="secondary" size="sm" @click="patch(l, row, { archived: !row.archived })">
+                {{ row.archived ? "Restore" : "Archive" }}
+              </Button>
+            </div>
+          </template>
+        </DataTable>
       </div>
     </Panel>
   </div>
