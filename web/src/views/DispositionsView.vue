@@ -4,11 +4,12 @@ import { api } from "../api/client";
 import { errMessage } from "../lib/errors";
 import { toast } from "../lib/toast";
 import type { WrapUpLabel } from "../api/types";
-import { Button, Panel, TextField, Toggle, Badge, DataTable } from "../components/ui";
+import { Button, Panel, TextField, Toggle, Badge } from "../components/ui";
 
 interface LabelList {
   title: string;
   hint: string;
+  placeholder: string;
   path: string;
   items: WrapUpLabel[];
   showArchived: boolean;
@@ -17,11 +18,9 @@ interface LabelList {
   editName: string;
 }
 
-const cols = [{ key: "name", label: "Name" }];
-
 const lists = ref<LabelList[]>([
-  { title: "Dispositions", hint: "The outcome an agent picks after a call. Pick exactly one.", path: "/v1/dispositions" },
-  { title: "Tags", hint: "Free-form labels an agent can add to a call. Pick any number.", path: "/v1/call-tags" },
+  { title: "Dispositions", hint: "The outcome an agent picks. Exactly one.", placeholder: "New disposition…", path: "/v1/dispositions" },
+  { title: "Tags", hint: "Labels an agent adds. Any number.", placeholder: "New tag…", path: "/v1/call-tags" },
 ].map((l) => ({ ...l, items: [], showArchived: false, newName: "", editingId: "", editName: "" })));
 
 async function load(l: LabelList) {
@@ -82,37 +81,40 @@ onMounted(() => lists.value.forEach(load));
       What agents record after a call. Archiving hides a label from agents but keeps it on past calls.
     </p>
 
-    <Panel v-for="l in lists" :key="l.path" pad>
-      <template #title>{{ l.title }}</template>
-      <div class="vstack">
-        <p class="text-light">{{ l.hint }}</p>
-        <form class="hstack" @submit.prevent="add(l)">
-          <TextField v-model="l.newName" placeholder="New name (max 64 characters)" />
-          <Button type="submit" :disabled="!l.newName.trim()">Add</Button>
-        </form>
-        <Toggle v-model="l.showArchived" label="Show archived" />
-        <DataTable :columns="cols" :rows="visible(l)" empty-text="Nothing here yet.">
-          <template #cell-name="{ row }">
-            <form v-if="l.editingId === row.id" class="hstack" @submit.prevent="rename(l, row)">
+    <div class="grid grid-2">
+      <Panel v-for="l in lists" :key="l.path" pad>
+        <template #title>{{ l.title }}</template>
+        <template #actions>
+          <Toggle v-model="l.showArchived" label="Show archived" />
+        </template>
+        <div class="vstack">
+          <p class="text-light">{{ l.hint }}</p>
+          <form class="hstack" @submit.prevent="add(l)">
+            <TextField v-model="l.newName" :placeholder="l.placeholder" />
+            <Button type="submit" :disabled="!l.newName.trim()">Add</Button>
+          </form>
+          <p v-if="!visible(l).length" class="text-lighter">Nothing here yet.</p>
+          <div v-for="it in visible(l)" :key="it.id" class="hstack justify-between">
+            <form v-if="l.editingId === it.id" class="hstack" @submit.prevent="rename(l, it)">
               <TextField v-model="l.editName" />
               <Button type="submit" size="sm">Save</Button>
               <Button variant="ghost" size="sm" @click="l.editingId = ''">Cancel</Button>
             </form>
             <template v-else>
-              <span :class="row.archived ? 'text-lighter' : ''">{{ row.name }}</span>
-              <Badge v-if="row.archived" tone="neutral">archived</Badge>
+              <div>
+                <span :class="it.archived ? 'text-lighter' : ''">{{ it.name }}</span>
+                <Badge v-if="it.archived" tone="neutral">archived</Badge>
+              </div>
+              <div class="hstack">
+                <Button variant="secondary" size="sm" @click="startEdit(l, it)">Rename</Button>
+                <Button variant="secondary" size="sm" @click="patch(l, it, { archived: !it.archived })">
+                  {{ it.archived ? "Restore" : "Archive" }}
+                </Button>
+              </div>
             </template>
-          </template>
-          <template #row-actions="{ row }">
-            <div class="hstack">
-              <Button variant="secondary" size="sm" @click="startEdit(l, row)">Rename</Button>
-              <Button variant="secondary" size="sm" @click="patch(l, row, { archived: !row.archived })">
-                {{ row.archived ? "Restore" : "Archive" }}
-              </Button>
-            </div>
-          </template>
-        </DataTable>
-      </div>
-    </Panel>
+          </div>
+        </div>
+      </Panel>
+    </div>
   </div>
 </template>
