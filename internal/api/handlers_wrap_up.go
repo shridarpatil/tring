@@ -278,39 +278,23 @@ func (s *Server) handlePatchWrapUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	cur, err := callrow.Get(ctx, s.db, s.q, t.ID, callID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "call not found")
-		return
-	}
-	if err != nil {
-		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
-		return
-	}
-	in := wrapUpInput{notes: cur.Notes}
-	if cur.Disposition != nil {
-		in.disposition = &cur.Disposition.ID
-	}
-	for _, tg := range cur.Tags {
-		in.tags = append(in.tags, tg.ID)
-	}
-	setTags := req.TagIDs != nil
-	if req.Disposition != nil {
-		in.disposition = nil
+	// Only fields the request sets are written (the query's set flags); nothing
+	// is read first, so a save that commits meanwhile is never overwritten.
+	var in wrapUpInput
+	setDisp, setNotes, setTags := req.Disposition != nil, req.Notes != nil, req.TagIDs != nil
+	if setDisp {
 		if err := json.Unmarshal(req.Disposition, &in.disposition); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid disposition_id")
 			return
 		}
 	}
-	if req.Notes != nil {
-		in.notes = nil
+	if setNotes {
 		if err := json.Unmarshal(req.Notes, &in.notes); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid notes")
 			return
 		}
 	}
 	if setTags {
-		in.tags = nil
 		if err := json.Unmarshal(req.TagIDs, &in.tags); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid tag_ids")
 			return
@@ -327,16 +311,7 @@ func (s *Server) handlePatchWrapUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	// Only ids this request sets are checked: an unchanged label the admin has
-	// since archived must not block an edit of the notes.
-	check := wrapUpInput{}
-	if req.Disposition != nil {
-		check.disposition = in.disposition
-	}
-	if setTags {
-		check.tags = in.tags
-	}
-	ok, err := s.checkWrapUpIDs(ctx, tx, t.ID, check)
+	ok, err := s.checkWrapUpIDs(ctx, tx, t.ID, in)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return
@@ -346,7 +321,11 @@ func (s *Server) handlePatchWrapUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hookID *uuid.UUID
-	err = tx.QueryRow(ctx, s.q.PatchCallWrapUp, t.ID, callID, in.disposition, in.notes).Scan(&hookID)
+	err = tx.QueryRow(ctx, s.q.PatchCallWrapUp, t.ID, callID, in.disposition, in.notes, setDisp, setNotes).Scan(&hookID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "call not found")
+		return
+	}
 	if err == nil && setTags {
 		err = s.replaceTagLinks(ctx, tx, t.ID, callID, in.tags)
 	}
@@ -359,6 +338,10 @@ func (s *Server) handlePatchWrapUp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.emitWrapUp(ctx, t.ID, callID, hookID)
 	c, err := callrow.Get(ctx, s.db, s.q, t.ID, callID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "call not found")
+		return
+	}
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return

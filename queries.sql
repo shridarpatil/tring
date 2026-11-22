@@ -1600,9 +1600,13 @@ WHERE id = $2 AND tenant_id = $1 AND wrap_up_agent_id = $5 AND wrapped_up_at IS 
 RETURNING wrap_up_webhook_id;
 
 -- name: patch-call-wrap-up
--- Admin/supervisor edit of an existing wrap-up: disposition and notes only,
--- never the state columns. $3 disposition (NULL clears), $4 notes (NULL clears).
-UPDATE calls SET disposition_id = $3, notes = $4
+-- Admin/supervisor/CRM edit of an existing wrap-up: disposition and notes only,
+-- never the state columns. $3 disposition and $4 notes (NULL clears) apply only
+-- when $5 / $6 say the request set them, so a field the request left out keeps
+-- whatever a concurrent save just wrote.
+UPDATE calls SET
+    disposition_id = CASE WHEN $5::boolean THEN $3::uuid ELSE disposition_id END,
+    notes          = CASE WHEN $6::boolean THEN $4::text ELSE notes END
 WHERE id = $2 AND tenant_id = $1
 RETURNING wrap_up_webhook_id;
 
