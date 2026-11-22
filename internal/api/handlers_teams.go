@@ -89,7 +89,13 @@ type createTeamRequest struct {
 	MinLiveAgents  int             `json:"min_live_agents"`
 	SLASeconds     int             `json:"sla_seconds"`
 	Hours          json.RawMessage `json:"hours"`
+	// Post-call wrap-up window (0 = none) and whether a disposition is mandatory in it.
+	WrapUpSeconds      int  `json:"wrap_up_seconds"`
+	RequireDisposition bool `json:"require_disposition"`
 }
+
+// validWrapUpSeconds reports whether n is nil or within the 0-600 window.
+func validWrapUpSeconds(n *int) bool { return n == nil || (*n >= 0 && *n <= 600) }
 
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
@@ -120,6 +126,10 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		req.MohSound = "local_stream://moh"
 	}
 
+	if !validWrapUpSeconds(&req.WrapUpSeconds) {
+		writeError(w, http.StatusBadRequest, "wrap_up_seconds must be 0-600")
+		return
+	}
 	if msg := validateLiveSettings(&req.MinLiveAgents, &req.SLASeconds, req.Hours); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -132,7 +142,7 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateTeam,
 		t.ID, req.Name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
-		req.MinLiveAgents, req.SLASeconds, []byte(hours), 0, false).Scan(
+		req.MinLiveAgents, req.SLASeconds, []byte(hours), req.WrapUpSeconds, req.RequireDisposition).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
 		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if isUniqueViolation(err) {
@@ -192,6 +202,9 @@ type patchTeamRequest struct {
 	MinLiveAgents  *int            `json:"min_live_agents"`
 	SLASeconds     *int            `json:"sla_seconds"`
 	Hours          json.RawMessage `json:"hours"` // nil = unchanged
+
+	WrapUpSeconds      *int  `json:"wrap_up_seconds"`
+	RequireDisposition *bool `json:"require_disposition"`
 }
 
 func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +219,10 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "strategy must be ring_all|round_robin|sequential|longest_wait")
 		return
 	}
+	if !validWrapUpSeconds(req.WrapUpSeconds) {
+		writeError(w, http.StatusBadRequest, "wrap_up_seconds must be 0-600")
+		return
+	}
 	if msg := validateLiveSettings(req.MinLiveAgents, req.SLASeconds, req.Hours); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -218,7 +235,7 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTeam,
 		t.ID, name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
-		req.MinLiveAgents, req.SLASeconds, hours, nil, nil).Scan(
+		req.MinLiveAgents, req.SLASeconds, hours, req.WrapUpSeconds, req.RequireDisposition).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
 		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -136,3 +136,39 @@ func TestTenantTransferTimeout(t *testing.T) {
 		t.Fatalf("gateway read %v (%v), want 45s", d, err)
 	}
 }
+
+// wrap_up_seconds / require_disposition round-trip through the tenant
+// settings and are range-checked.
+func TestTenantSettingsWrapUp(t *testing.T) {
+	f := dbtest.Setup(t)
+	ctx := context.Background()
+	s := newTestServer(f)
+
+	patch := func(body string) int {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPatch, "/v1/tenants/me", strings.NewReader(body)).WithContext(withTenantForTest(ctx, f.TenantID))
+		s.handlePatchMyTenant(w, r)
+		return w.Code
+	}
+	for _, bad := range []string{`{"wrap_up_seconds":601}`, `{"wrap_up_seconds":-1}`} {
+		if code := patch(bad); code != http.StatusBadRequest {
+			t.Errorf("PATCH %s = %d, want 400", bad, code)
+		}
+	}
+	if code := patch(`{"wrap_up_seconds":30,"require_disposition":true}`); code != http.StatusOK {
+		t.Fatalf("PATCH = %d, want 200", code)
+	}
+	if code := patch(`{"require_disposition":false}`); code != http.StatusOK {
+		t.Fatalf("PATCH = %d, want 200", code)
+	}
+	w := httptest.NewRecorder()
+	s.handleGetMyTenant(w, httptest.NewRequest(http.MethodGet, "/v1/tenants/me", nil).WithContext(withTenantForTest(ctx, f.TenantID)))
+	var got Tenant
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.WrapUpSeconds != 30 || got.RequireDisposition {
+		t.Fatalf("got %d/%v, want 30/false", got.WrapUpSeconds, got.RequireDisposition)
+	}
+}

@@ -32,6 +32,8 @@ export interface Tenant {
   mask_numbers_agents?: boolean;
   mask_numbers_managers?: boolean;
   mask_numbers_supervisors?: boolean;
+  wrap_up_seconds?: number; // default for calls without a team; 0 = off
+  require_disposition?: boolean;
 }
 
 // An uploaded sound in the tenant's library, reusable for IVR prompts + hold music.
@@ -86,6 +88,8 @@ export interface Team {
   min_live_agents: number; // 0 = no staffing alert
   sla_seconds: number; // 0 = no SLA
   hours: TeamDay[]; // [] = always open
+  wrap_up_seconds: number; // 0 = no wrap-up
+  require_disposition: boolean;
   created_at: string;
   members?: TeamMember[]; // populated only on the single-team GET
 }
