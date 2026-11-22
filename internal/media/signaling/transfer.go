@@ -168,6 +168,10 @@ func (s *Server) commitTransfer(c *conn, p *room.Participant, tenant uuid.UUID, 
 	if !ok {
 		return nil, errTransferInProgress
 	}
+	// Handing the call on means no wrap-up for this agent — set before the
+	// ring, as hanging up mid-ring is this agent's leg ending. Cleared if the
+	// call comes back to them.
+	s.setLegTransferred(p.ID(), true)
 
 	// The agent stays until someone answers, and gets the call back if nobody
 	// does. Meanwhile the customer hears the ring's hold music, so the agent is
@@ -308,6 +312,7 @@ func (s *Server) ringTransfer(ctx context.Context, rid room.RoomID, tenant uuid.
 		}
 		s.mu.Unlock()
 		s.isolateAgent(rid, agentPID, false)
+		s.setLegTransferred(agentPID, false)
 		if c := s.connFor(agentPID); c != nil {
 			_ = c.send(msg{Type: msgTransferFailed, Reason: reason})
 		}
@@ -377,15 +382,16 @@ func (s *Server) releaseAgent(rid room.RoomID, pid room.ParticipantID) {
 }
 
 // targetReachable reports whether a transfer can be handed to its target: a
-// specific SIP must be online, not Away and not on a call; a team must exist
-// (its members may all be busy — the caller queues). Best-effort — the ring
-// itself is the source of truth, this only avoids an obviously-dead transfer.
+// specific SIP must be online, not Away, not on a call and not wrapping up; a
+// team must exist (its members may all be busy — the caller queues).
+// Best-effort — the ring itself is the source of truth, this only avoids an
+// obviously-dead transfer.
 func (s *Server) targetReachable(ctx context.Context, tenant, sip, team string) bool {
 	free := func(sip string) bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		k := tenant + "|" + sip
-		return s.agents[tenant][sip] != nil && s.onCall[k] == 0 && !s.away[k]
+		return s.agents[tenant][sip] != nil && s.onCall[k] == 0 && s.wrapUps[k] == nil && !s.away[k]
 	}
 	if sip != "" {
 		return free(sip)

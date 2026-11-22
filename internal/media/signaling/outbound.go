@@ -168,6 +168,8 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, sip strin
 		return
 	}
 	defer release()
+	// An agent placing a call is done wrapping up the last one.
+	s.endWrapUpForCall(tenant.String(), sip)
 
 	leg, callerID, to, err := s.originateOut(context.Background(), roomID, tenant, to, "", func(room.Progress) {
 		if c := s.connFor(agentPID); c != nil {
@@ -229,6 +231,7 @@ func (s *Server) handleAgentDial(roomID room.RoomID, tenant uuid.UUID, sip strin
 		}
 		ccancel()
 	}
+	s.markLegsConnected(roomID) // after the call row opened: the leg wraps up that call
 
 	s.log.Info("outbound: call attached", "room", roomID, "to", to, "caller_id", callerID)
 

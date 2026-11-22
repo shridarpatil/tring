@@ -39,12 +39,20 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 	if n == 0 {
 		delete(s.onCall, k)
 	}
+	// A leg that never connected, ending while the agent still wraps up an
+	// earlier call (they joined a room to dial, then didn't), returns them to
+	// that wrap-up, not to available.
+	wrapping := s.wrapUps[k] != nil
 	s.mu.Unlock()
 	if n > 0 {
+		s.setAgentOnCallPresence(tenant, sip)
+		return
+	}
+	if wrapping {
 		if pres := s.cfg.Presence; pres != nil {
-			pres.MarkOnCall(context.Background(), tenant, sip)
+			pres.MarkWrapUp(context.Background(), tenant, sip)
 		}
-		s.publishPresence(tenant, sip, presence.StatusOnCall, time.Time{})
+		s.publishPresence(tenant, sip, presence.StatusWrapUp, time.Time{})
 		return
 	}
 	var freed time.Time
@@ -55,22 +63,41 @@ func (s *Server) setAgentOnCall(tenant, sip string, on bool) {
 	s.publishPresence(tenant, sip, presence.StatusOnline, freed)
 }
 
-// agentLeg identifies the agent whose on-call count a call participant holds.
+// setAgentOnCallPresence (re)publishes an agent as busy on a call.
+func (s *Server) setAgentOnCallPresence(tenant, sip string) {
+	if pres := s.cfg.Presence; pres != nil {
+		pres.MarkOnCall(context.Background(), tenant, sip)
+	}
+	s.publishPresence(tenant, sip, presence.StatusOnCall, time.Time{})
+}
+
+// agentLeg identifies the agent whose on-call count a call participant holds,
+// and what its end needs to decide on a wrap-up.
 type agentLeg struct {
 	tenant, sip string
 	p           *room.Participant
 	claim       *routing.Claim
+	// team is the team whose ring reached the agent ("" for a direct-agent or
+	// ring-all ring, a click-to-call, or a plain join): its wrap-up settings
+	// apply when the leg ends.
+	team string
+	// callID is the call row the leg connected to and connected is whether it
+	// did (markLegsConnected); transferred is set when the agent handed the
+	// call to someone else. Only a connected, kept call is wrapped up.
+	callID      uuid.UUID
+	connected   bool
+	transferred bool
 }
 
 // holdAgentLeg counts p as one of the agent's active call legs until
 // releaseAgentLeg runs on p's terminal leave. If p already left (the Left event
 // fired before this registration), it releases at once so the count can't leak.
-func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *routing.Claim) {
+func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *routing.Claim, team string) {
 	s.setAgentOnCall(tenant, sip, true)
 	s.mu.Lock()
 	gone := p.State() == room.StateLeft
 	if !gone {
-		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip, p: p, claim: claim}
+		s.agentLegs[p.ID()] = agentLeg{tenant: tenant, sip: sip, p: p, claim: claim, team: team}
 	}
 	s.mu.Unlock()
 	if gone {
@@ -93,15 +120,23 @@ func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *ro
 
 // releaseAgentLeg drops a left participant's hold on its agent's on-call count.
 // No-op for participants that never held one (callers, supervisors, reattaches).
+// The end of a connected call the agent kept puts them in wrap-up when their
+// team (or tenant) has one; otherwise they are available again at once.
 func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
 	s.mu.Lock()
 	leg, ok := s.agentLegs[pid]
 	delete(s.agentLegs, pid)
 	s.mu.Unlock()
-	if ok {
-		s.setAgentOnCall(leg.tenant, leg.sip, false)
-		leg.claim.Release()
+	if !ok {
+		return
 	}
+	// Resolved before taking s.mu: it reads the DB.
+	if d, require := s.wrapUpSettings(leg); d > 0 {
+		s.startWrapUp(leg, d, require)
+	} else {
+		s.setAgentOnCall(leg.tenant, leg.sip, false)
+	}
+	leg.claim.Release()
 }
 
 // droppedAgentLeg returns the agent's call participant whose socket dropped and
@@ -204,6 +239,11 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 			Auto:  outbound,
 		})
 	}
+	// A refreshed page has lost its wrap-up form too: show it again with the
+	// original deadline (the timer kept running).
+	if m, ok := s.agentWrapUp(tenant, sip); ok {
+		_ = c.send(m)
+	}
 	// superseded is set on disconnect when a newer, still-live socket (another
 	// tab/device) replaced this one: that socket owns the agent's presence, so
 	// this one must not mark them offline. Deferred funcs run LIFO, so the
@@ -214,9 +254,13 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 	if pres := s.cfg.Presence; pres != nil {
 		// A presence socket can reconnect mid-call (network blip, token
 		// refresh): stay on_call, or team routing rings a busy agent.
+		// Likewise a wrap-up outlives the socket: stay wrap_up.
 		if s.agentOnCall(tenant, sip) {
 			pres.MarkOnCall(context.Background(), tenant, sip)
 			s.publishPresence(tenant, sip, presence.StatusOnCall, time.Time{})
+		} else if _, ok := s.agentWrapUp(tenant, sip); ok {
+			pres.MarkWrapUp(context.Background(), tenant, sip)
+			s.publishPresence(tenant, sip, presence.StatusWrapUp, time.Time{})
 		} else {
 			pres.MarkOnline(context.Background(), tenant, sip)
 			s.publishPresence(tenant, sip, presence.StatusOnline, time.Time{})
@@ -239,10 +283,12 @@ func (s *Server) handleAgentPresence(c *conn, tenant, sip string) {
 					if !owner {
 						continue
 					}
-					// Preserve on_call across TTL re-asserts — don't flip a busy
-					// agent back to available every 10s.
+					// Preserve on_call and wrap_up across TTL re-asserts — don't
+					// flip a busy agent back to available every 10s.
 					if s.agentOnCall(tenant, sip) {
 						pres.MarkOnCall(context.Background(), tenant, sip)
+					} else if _, ok := s.agentWrapUp(tenant, sip); ok {
+						pres.MarkWrapUp(context.Background(), tenant, sip)
 					} else {
 						pres.MarkOnline(context.Background(), tenant, sip)
 					}
@@ -391,9 +437,9 @@ func (s *Server) setAway(c *conn, tenant, sip string, away bool) bool {
 	}
 	wasAway := s.away[k]
 	delete(s.away, k)
-	busy := s.onCall[k] > 0
+	busy := s.onCall[k] > 0 || s.wrapUps[k] != nil
 	s.mu.Unlock()
-	// A busy agent's clock starts when the call ends (setAgentOnCall).
+	// A busy agent's clock starts when the call (or its wrap-up) ends.
 	if wasAway && !busy && s.cfg.Presence != nil {
 		freed := s.cfg.Presence.MarkFreed(context.Background(), tenant, sip)
 		s.publishPresence(tenant, sip, presence.StatusOnline, freed)
@@ -436,14 +482,14 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 	ring := make(chan struct{})
 	eff := &pionRing{
 		s: s, tenant: tenant, roomID: rid, roomName: name, label: t.Label, maskedLabel: t.MaskedLabel,
-		strategy: strategy, moh: moh, ring: ring, only: t.AgentSIP,
+		strategy: strategy, moh: moh, ring: ring, only: t.AgentSIP, team: t.Team,
 		rung: map[string]bool{}, active: map[string]bool{}, declined: map[string]bool{},
 		declineCh: make(chan struct{}, 1),
 	}
 
-	// candidates excludes agents who declined this call (as well as busy, Away
-	// and offline ones) so the router never re-rings a decliner and the
-	// queue/hold logic sees the true remaining pool.
+	// candidates excludes agents who declined this call (as well as busy,
+	// wrapping-up, Away and offline ones) so the router never re-rings a
+	// decliner and the queue/hold logic sees the true remaining pool.
 	candidates := func(ctx context.Context) []string {
 		var sips []string
 		if !ringAll && members != nil {
@@ -453,7 +499,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 		defer s.mu.Unlock()
 		free := func(sip string) bool {
 			k := tenant + "|" + sip
-			return s.onCall[k] == 0 && !s.away[k] && !eff.declined[sip]
+			return s.onCall[k] == 0 && s.wrapUps[k] == nil && !s.away[k] && !eff.declined[sip]
 		}
 		var out []string
 		if ringAll {
@@ -507,6 +553,7 @@ func (s *Server) Prepare(ctx context.Context, roomID string, t ivrdrive.Target, 
 		}
 		delete(s.declines, rid)
 		delete(s.invites, rid) // ring over: a late answer can no longer join
+		delete(s.inviteTeams, rid)
 		s.mu.Unlock()
 	}
 	return candidates, eff, cleanup
@@ -532,6 +579,9 @@ type pionRing struct {
 	// only is the one agent a direct transfer rings ("" for a team / ring-all):
 	// once they decline, nobody is left to answer (Exhausted).
 	only string
+	// team is the team this ring is for ("" for a direct agent / ring-all); the
+	// answering agent's leg carries it, for its wrap-up settings.
+	team string
 
 	declineCh chan struct{} // buffered(1) notify: an agent declined; Ring re-checks `active`
 
@@ -649,7 +699,8 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 
 	var poppedNow []string // agents actually rung this call — recorded on the timeline below
 	pop := func(sip string) {
-		if p.s.onCall[p.tenant+"|"+sip] > 0 || p.s.away[p.tenant+"|"+sip] || ctx.Err() != nil {
+		k := p.tenant + "|" + sip
+		if p.s.onCall[k] > 0 || p.s.wrapUps[k] != nil || p.s.away[k] || ctx.Err() != nil {
 			return
 		}
 		if c := p.s.agents[p.tenant][sip]; c != nil {
@@ -662,6 +713,10 @@ func (p *pionRing) Ring(ctx context.Context, ordered []string, perAttempt time.D
 				p.s.inviteClaims[p.roomID] = map[string]*routing.Claim{}
 			}
 			p.s.inviteClaims[p.roomID][sip] = p.claims[sip]
+			if p.s.inviteTeams[p.roomID] == nil {
+				p.s.inviteTeams[p.roomID] = map[string]string{}
+			}
+			p.s.inviteTeams[p.roomID][sip] = p.team
 			p.rung[sip] = true
 			p.active[sip] = true
 			poppedNow = append(poppedNow, sip)
@@ -737,6 +792,10 @@ func (p *pionRing) cancelSips(sips []string) {
 		delete(p.s.inviteClaims[p.roomID], sip)
 		if len(p.s.inviteClaims[p.roomID]) == 0 {
 			delete(p.s.inviteClaims, p.roomID)
+		}
+		delete(p.s.inviteTeams[p.roomID], sip)
+		if len(p.s.inviteTeams[p.roomID]) == 0 {
+			delete(p.s.inviteTeams, p.roomID)
 		}
 		if c := p.s.agents[p.tenant][sip]; c != nil {
 			_ = c.send(msg{Type: msgCancelRing, Room: p.roomName})
@@ -827,21 +886,23 @@ func (s *Server) roomOccupied(roomID room.RoomID) bool {
 
 // takeInvite consumes the room's ring invitations if sip is one of the agents
 // rung for it. The first answer takes them all, so with ring_all only one agent
-// gets in.
-func (s *Server) takeInvite(roomID room.RoomID, sip string) (bool, *routing.Claim) {
+// gets in. team is the team whose ring reached sip ("" when none did).
+func (s *Server) takeInvite(roomID room.RoomID, sip string) (bool, *routing.Claim, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.invites[roomID][sip] {
-		return false, nil
+		return false, nil, ""
 	}
 	original := s.inviteClaims[roomID][sip]
 	claim := original.Retain()
 	if original != nil && claim == nil {
-		return false, nil
+		return false, nil, ""
 	}
+	team := s.inviteTeams[roomID][sip]
 	delete(s.invites, roomID)
 	delete(s.inviteClaims, roomID)
-	return true, claim
+	delete(s.inviteTeams, roomID)
+	return true, claim, team
 }
 
 // ensure the server satisfies the brain's ring-transport + handoff-wait seams.

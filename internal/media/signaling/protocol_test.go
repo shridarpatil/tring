@@ -17,6 +17,7 @@ func TestWireContractFrozen(t *testing.T) {
 		SDP: "s", Kind: "video", Candidate: json.RawMessage(`{}`),
 		Participant: "p", State: "st", ICEServers: []ICEServer{{URLs: []string{"u"}}},
 		From: "fr", ToTeam: "sales", ToSip: "bob", Reason: "re", Phone: true,
+		CallID: "c", EndsAt: "e", RequireDisposition: true,
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -30,7 +31,8 @@ func TestWireContractFrozen(t *testing.T) {
 	want := []string{
 		"type", "room", "name", "session_token", "flow_id", "digit", "sdp",
 		"kind", "candidate", "participant_id", "state", "ice_servers", "from",
-		"to_team", "to_sip", "reason", "phone",
+		"to_team", "to_sip", "reason", "phone", "call_id", "ends_at",
+		"require_disposition",
 	}
 	gotKeys := make([]string, 0, len(got))
 	for k := range got {
