@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -139,6 +140,12 @@ func (s *Server) replaceTagLinks(ctx context.Context, tx pgx.Tx, tenantID, callI
 	return nil
 }
 
+// afterCommit is the context for a wrap-up's post-commit side effects: the
+// request's values without its cancellation, bounded on its own.
+func afterCommit(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+}
+
 // emitWrapUp sends call.wrapped_up to the webhook the flow picked, when there
 // is one. Called only after the wrap-up transaction has committed.
 func (s *Server) emitWrapUp(ctx context.Context, tenantID, callID uuid.UUID, hookID *uuid.UUID) {
@@ -240,6 +247,11 @@ func (s *Server) handleSaveWrapUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Committed: the side effects must run even if the client goes away now
+	// (an agent page navigating after Done cancels the request) — a lost
+	// wrap-up-done keeps the agent unringable until the timer.
+	ctx, cancel := afterCommit(r)
+	defer cancel()
 	s.emitWrapUp(ctx, tenantID, req.CallID, hookID)
 	if err := s.gatewayControl(ctx, tenantID, "/control/wrap-up-done", map[string]string{
 		"sip": claims.SipUsername, "call_id": req.CallID.String(),
@@ -250,6 +262,7 @@ func (s *Server) handleSaveWrapUp(w http.ResponseWriter, r *http.Request) {
 	}
 	c, err := callrow.Get(ctx, s.db, s.q, tenantID, req.CallID)
 	if err != nil {
+		s.log.Warn("wrap-up saved; call row read for the response failed", "call", req.CallID, "err", err)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 		return
 	}
@@ -336,6 +349,8 @@ func (s *Server) handlePatchWrapUp(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return
 	}
+	ctx, cancel := afterCommit(r)
+	defer cancel()
 	s.emitWrapUp(ctx, t.ID, callID, hookID)
 	c, err := callrow.Get(ctx, s.db, s.q, t.ID, callID)
 	if errors.Is(err, pgx.ErrNoRows) {
