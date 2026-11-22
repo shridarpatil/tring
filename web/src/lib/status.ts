@@ -1,7 +1,7 @@
 // Shared status → UI mappings so Dashboard, Calls, Agents, and Trunks render
 // the same state identically. One source of truth for the live-state language.
 
-type SignalState = "online" | "on_call" | "away" | "offline" | "ringing";
+type SignalState = "online" | "on_call" | "away" | "wrap_up" | "offline" | "ringing";
 type BadgeTone = "neutral" | "success" | "live" | "danger" | "warning" | "accent";
 
 // Agent presence (agents.status from FreeSWITCH).
@@ -13,6 +13,8 @@ export function agentSignalState(status?: string): SignalState {
       return "on_call";
     case "away":
       return "away";
+    case "wrap_up":
+      return "wrap_up";
     default:
       return "offline";
   }

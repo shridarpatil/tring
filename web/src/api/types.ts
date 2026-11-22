@@ -58,7 +58,7 @@ export interface Agent {
   created_at: string;
   // Live effective state, populated on list responses: combines connection
   // presence with available_for_calls ("away" = connected but unavailable).
-  status?: "online" | "offline" | "on_call" | "away" | "unknown";
+  status?: "online" | "offline" | "on_call" | "away" | "wrap_up" | "unknown";
   // When an online agent last became free (call ended, connected, or back from
   // Away); drives the dashboard's idle timer. Absent when unknown.
   idle_since?: string;
@@ -113,7 +113,7 @@ export interface QueueDepth {
   members: number;
   agents: string[]; // member SIP usernames, sorted
   staffing_known: boolean; // false when presence couldn't be read: counts unreliable
-  live: number; // on_call + available
+  live: number; // on_call + available + wrap-up
   on_call: number;
   available: number;
   away: number;
@@ -213,6 +213,12 @@ export interface Call {
   room_id?: string;
   supervised?: string;
   supervisor?: string;
+  // Wrap-up outcome the agent recorded after the call (null/empty until then).
+  disposition?: { id: string; name: string } | null;
+  notes?: string | null;
+  tags?: { id: string; name: string }[];
+  wrapped_up_at?: string | null;
+  wrap_up_end?: "done" | "timeout" | null;
 }
 
 // A registered webhook that IVR flows pick by id (a node's "Notify webhook",
@@ -288,6 +294,7 @@ export interface IVRFlowData {
   nodes: IVRNode[];
   edges: IVREdge[];
   entry_node: string;
+  wrap_up_webhook_id?: string; // webhook sent call.wrapped_up when the agent finishes wrap-up
   end_webhook_id?: string; // webhook sent call.ended when a call through this flow ends
 }
 

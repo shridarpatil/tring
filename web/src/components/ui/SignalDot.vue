@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { ClipboardPen } from "lucide-vue-next";
 
 // Signature component: live presence/call state as a first-class signal.
 // on_call / ringing pulse a radiating ring (disabled under reduced-motion).
 const props = withDefaults(
   defineProps<{
-    state?: "online" | "on_call" | "away" | "offline" | "ringing";
+    state?: "online" | "on_call" | "away" | "wrap_up" | "offline" | "ringing";
     label?: string;
     hideLabel?: boolean;
     size?: "sm" | "md";
@@ -19,6 +20,7 @@ const colorVar = computed(
       online: "var(--color-online)",
       on_call: "var(--color-oncall)",
       away: "var(--color-away)",
+      wrap_up: "var(--color-away)",
       offline: "var(--color-offline)",
       ringing: "var(--primary)",
     })[props.state],
@@ -32,6 +34,7 @@ const defaultText = computed(
       online: "Online",
       on_call: "On call",
       away: "Away",
+      wrap_up: "Wrap-up",
       offline: "Offline",
       ringing: "Ringing",
     })[props.state],
@@ -41,7 +44,8 @@ const text = computed(() => props.label ?? defaultText.value);
 
 <template>
   <span class="sig" :style="{ '--dot': colorVar }">
-    <span class="dot-wrap" :class="`sz-${size}`">
+    <ClipboardPen v-if="state === 'wrap_up'" class="wrap-icon" :class="`sz-${size}`" aria-hidden="true" />
+    <span v-else class="dot-wrap" :class="`sz-${size}`">
       <span v-if="pulse" class="ring"></span>
       <span class="dot"></span>
     </span>
@@ -54,6 +58,9 @@ const text = computed(() => props.label ?? defaultText.value);
 .dot-wrap { position: relative; display: inline-flex; }
 .sz-sm { height: 0.5rem; width: 0.5rem; }
 .sz-md { height: 0.625rem; width: 0.625rem; }
+.wrap-icon { color: var(--dot); }
+.wrap-icon.sz-sm { height: 0.75rem; width: 0.75rem; }
+.wrap-icon.sz-md { height: 0.875rem; width: 0.875rem; }
 .dot {
   position: relative;
   display: inline-flex;
