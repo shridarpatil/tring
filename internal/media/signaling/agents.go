@@ -126,13 +126,19 @@ func (s *Server) holdAgentLeg(p *room.Participant, tenant, sip string, claim *ro
 // The decision reads the DB, so it runs off the call-end path: the caller
 // runs this from the room's leave event, ahead of hanging up the other party
 // and settling the CDR, which must not wait on it. Until it lands the agent
-// still counts as on the call, so no ring sees them free in between.
+// still counts as on the call, so no ring sees them free in between. A leg
+// that can't wrap up needs no lookup and is released at once.
 func (s *Server) releaseAgentLeg(pid room.ParticipantID) {
 	s.mu.Lock()
 	leg, ok := s.agentLegs[pid]
 	delete(s.agentLegs, pid)
 	s.mu.Unlock()
 	if !ok {
+		return
+	}
+	if !s.mayWrapUp(leg) {
+		s.setAgentOnCall(leg.tenant, leg.sip, false)
+		leg.claim.Release()
 		return
 	}
 	go func() {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,6 +23,9 @@ type wrapUp struct {
 	endsAt  time.Time
 	require bool
 	timer   *time.Timer // nil until startWrapUp has done its writes
+	// shown is held while startWrapUp marks presence and sends the form, so
+	// a finish racing it orders its wrap-up-end after them.
+	shown sync.Mutex
 }
 
 // wrapUpTimeout bounds each wrap-up DB call made on the call-end path.
@@ -62,13 +66,19 @@ func (s *Server) setLegTransferred(pid room.ParticipantID, on bool) {
 	}
 }
 
+// mayWrapUp reports whether leg's end could start a wrap-up — a connected
+// call the agent kept, with a call row — before any settings lookup.
+func (s *Server) mayWrapUp(leg agentLeg) bool {
+	return leg.connected && !leg.transferred && leg.callID != uuid.Nil && s.cfg.Calls != nil
+}
+
 // wrapUpSettings resolves the wrap-up for a leg that just ended: its team's
 // seconds and mandatory-disposition flag (the tenant's when the leg came from
 // no team). 0 seconds — wrap-up off, a call that never connected, or a failed
 // lookup — means the agent goes straight back to available. Never call it
 // under s.mu: it reads the DB.
 func (s *Server) wrapUpSettings(leg agentLeg) (time.Duration, bool) {
-	if !leg.connected || leg.transferred || leg.callID == uuid.Nil || s.cfg.Calls == nil {
+	if !s.mayWrapUp(leg) {
 		return 0, false
 	}
 	tid, err := uuid.Parse(leg.tenant)
@@ -111,7 +121,6 @@ func (s *Server) startWrapUp(leg agentLeg, d time.Duration, require bool) {
 		prev.timer.Stop()
 	}
 	s.wrapUps[k] = w
-	c := s.agents[leg.tenant][leg.sip]
 	s.mu.Unlock()
 
 	tid, _ := uuid.Parse(leg.tenant) // valid: wrapUpSettings parsed it
@@ -120,29 +129,42 @@ func (s *Server) startWrapUp(leg agentLeg, d time.Duration, require bool) {
 		// click-to-call doesn't see it): close its row rather than leave it open.
 		s.timeoutWrapUpRow(tid, prev.callID)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), wrapUpTimeout)
+	err := s.cfg.Calls.BeginWrapUp(ctx, tid, w.callID, leg.sip, require)
+	cancel()
+	if err != nil {
+		// Without its row the form could never be saved: skip the wrap-up.
+		s.log.Warn("wrap-up begin write failed; skipping wrap-up", "tenant", leg.tenant, "sip", leg.sip, "call", w.callID, "err", err)
+		s.finishWrapUp(leg.tenant, leg.sip, w.callID, w, true)
+		return
+	}
+
+	// Only now is the wrap-up shown. A dial or click-to-call during the
+	// write above already ended it (and sent wrap-up-end): marking presence
+	// or sending the form now would reopen it over the new call. Holding
+	// w.shown across the sends makes a finish that lands after this check
+	// wait, so its wrap-up-end always follows the wrap-up. The timer is armed
+	// here too, so it can't time out a row BeginWrapUp hasn't written.
+	s.mu.Lock()
+	if s.wrapUps[k] != w {
+		s.mu.Unlock()
+		return
+	}
+	w.shown.Lock()
+	defer w.shown.Unlock()
+	w.timer = time.AfterFunc(time.Until(w.endsAt), func() {
+		s.finishWrapUp(leg.tenant, leg.sip, w.callID, w, true)
+	})
+	c := s.agents[leg.tenant][leg.sip]
+	s.mu.Unlock()
+
 	if pres := s.cfg.Presence; pres != nil {
 		pres.MarkWrapUp(context.Background(), leg.tenant, leg.sip)
 	}
 	s.publishPresence(leg.tenant, leg.sip, presence.StatusWrapUp, time.Time{})
-	ctx, cancel := context.WithTimeout(context.Background(), wrapUpTimeout)
-	if err := s.cfg.Calls.BeginWrapUp(ctx, tid, w.callID, leg.sip, require); err != nil {
-		s.log.Warn("wrap-up begin write failed", "tenant", leg.tenant, "sip", leg.sip, "call", w.callID, "err", err)
-	}
-	cancel()
 	if c != nil {
 		_ = c.send(wrapUpMsg(w))
 	}
-
-	// Arm the timer last, so it can't time out a row BeginWrapUp hasn't
-	// written. A wrap-up already ended meanwhile (done, or a dial) has left
-	// the map and gets no timer.
-	s.mu.Lock()
-	if s.wrapUps[k] == w {
-		w.timer = time.AfterFunc(time.Until(w.endsAt), func() {
-			s.finishWrapUp(leg.tenant, leg.sip, w.callID, w, true)
-		})
-	}
-	s.mu.Unlock()
 }
 
 // endWrapUp ends sip's wrap-up of callID: saved (the API's wrap-up-done) or,
@@ -172,6 +194,10 @@ func (s *Server) finishWrapUp(tenant, sip string, callID uuid.UUID, w *wrapUp, t
 	away := s.away[k]
 	busy := s.onCall[k] > 0
 	s.mu.Unlock()
+	// Wait out startWrapUp showing this wrap-up, if it is mid-way: its
+	// wrap_up presence and form must land before this ends them.
+	cur.shown.Lock()
+	cur.shown.Unlock() //nolint:staticcheck // a barrier, not a critical section
 
 	if timedOut {
 		tid, _ := uuid.Parse(tenant)

@@ -32,6 +32,10 @@ type wrapCallLog struct {
 	begins   []uuid.UUID   // BeginWrapUp call ids
 	timeouts []uuid.UUID   // TimeoutWrapUp call ids
 	gate     chan struct{} // when set, WrapUpSettings blocks until it is closed
+	// beginGate, when set, holds BeginWrapUp until it is closed; beginErr
+	// makes it fail.
+	beginGate chan struct{}
+	beginErr  error
 }
 
 func newWrapCallLog(secs map[string]int, require bool) *wrapCallLog {
@@ -77,9 +81,15 @@ func (w *wrapCallLog) WrapUpSettings(_ context.Context, _ uuid.UUID, team string
 
 func (w *wrapCallLog) BeginWrapUp(_ context.Context, _, callID uuid.UUID, _ string, _ bool) error {
 	w.wmu.Lock()
+	gate := w.beginGate
+	w.wmu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	w.wmu.Lock()
 	defer w.wmu.Unlock()
 	w.begins = append(w.begins, callID)
-	return nil
+	return w.beginErr
 }
 
 func (w *wrapCallLog) TimeoutWrapUp(_ context.Context, _, callID uuid.UUID) (bool, error) {
@@ -590,5 +600,99 @@ func TestCallEndDoesNotWaitForWrapUpLookup(t *testing.T) {
 	h.waitStatus("alice", presence.StatusWrapUp)
 	if h.srv.agentOnCall(h.tenant.String(), "alice") {
 		t.Fatal("agent still on a call after entering wrap-up")
+	}
+}
+
+// A dial placed while the wrap-up's row is still being written ends that
+// wrap-up; the write finishing afterwards must not reopen the form over the
+// new call or mark the agent wrap_up again. The ended leg holds no routing
+// reservation here — as when its claim was lost or expired mid-call — since a
+// held one refuses the dial's join until the release lands.
+func TestDialDuringWrapUpBeginNoStaleWrapUp(t *testing.T) {
+	wl := newWrapCallLog(map[string]int{"": 30}, false)
+	h := newWrapHarness(t, wl, nil, connectLeg{err: errors.New("486 Busy")})
+	gate := make(chan struct{})
+	wl.beginGate = gate
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+	tenant := h.tenant.String()
+	rid := room.RoomID(tenant + "/prev")
+	if _, err := h.srv.rooms.Join(rid, "caller"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := h.srv.rooms.Join(rid, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	callID := wl.open(string(rid))
+	h.srv.holdAgentLeg(p, tenant, "alice", nil, "")
+	h.srv.markLegsConnected(rid)
+	p.Leave()
+	for deadline := time.Now().Add(2 * time.Second); !inWrapUp(h.srv, tenant, "alice"); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("wrap-up never started")
+		}
+	}
+
+	c := h.dial()
+	h.send(c, msg{Type: msgJoin, Room: "next"})
+	h.readUntil(c, msgJoined)
+	h.send(c, msg{Type: msgDial, To: "9812345678"})
+	select {
+	case <-h.o.dialed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the dial was never placed")
+	}
+	if end := h.readUntil(h.pres, msgWrapUpEnd); end.CallID != callID.String() {
+		t.Fatalf("wrap-up-end %+v, want call_id %s", end, callID)
+	}
+
+	close(gate)
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, begins, _ := wl.calls(); len(begins) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("BeginWrapUp never returned")
+		}
+	}
+	noWrapUp(t, h.pres, 300*time.Millisecond)
+	if got := h.status("alice"); got != presence.StatusOnCall {
+		t.Fatalf("presence = %q, want on_call (still in the dial's room)", got)
+	}
+	if inWrapUp(h.srv, tenant, "alice") {
+		t.Fatal("wrap-up reopened after the dial ended it")
+	}
+}
+
+// A failed BeginWrapUp leaves no row to save the form into: the agent goes
+// straight back online and never sees the form.
+func TestWrapUpBeginFailureSkipsWrapUp(t *testing.T) {
+	wl := newWrapCallLog(map[string]int{"": 30}, false)
+	wl.beginErr = errors.New("db down")
+	h := newWrapHarness(t, wl, map[string][]string{"sales": {"alice"}})
+	_, caller, _ := h.teamCall("sales")
+	h.answerAs("alice", h.pres)
+	caller.Leave()
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, begins, _ := wl.calls(); len(begins) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("BeginWrapUp never called")
+		}
+	}
+	h.waitStatus("alice", presence.StatusOnline)
+	noWrapUp(t, h.pres, 300*time.Millisecond)
+	if inWrapUp(h.srv, h.tenant.String(), "alice") {
+		t.Fatal("agent still in wrap-up after BeginWrapUp failed")
+	}
+	if got := ringAllCandidates(t, h.srv, h.tenant.String()); len(got) != 1 {
+		t.Fatalf("ring candidates = %v, want alice back", got)
 	}
 }
