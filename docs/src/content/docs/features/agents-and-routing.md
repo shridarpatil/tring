@@ -16,7 +16,7 @@ An agent is a person who takes calls in the browser through the [agent widget](/
 | `display_name` | Name shown in the console, transfer pickers and call logs. |
 | `role` | `admin`, `supervisor` or `agent`. See [Roles](#roles-and-logins). |
 | `available_for_calls` | Your Away/Break switch, controlled from your backend. |
-| `status` | Live state on list responses: `online`, `on_call`, `away` or `offline`. |
+| `status` | Live state on list responses: `online`, `on_call`, `wrap_up`, `away` or `offline`. |
 
 Create agents in the console (**Agents**) or with `POST /v1/agents` (`sip_username` required, `display_name` optional). See the [Agents API](/tring/api-reference/agents/).
 
@@ -57,7 +57,7 @@ Two separate things decide whether an agent can be rung:
 
 | | Controlled by | Meaning |
 |---|---|---|
-| **Presence** | The agent's browser | The widget holds a presence socket to the gateway. Connected and idle is `online`; in a call is `on_call`; disconnected is `offline`. Stored in Redis with a 30-second TTL, refreshed every 10 seconds, so a crashed browser drops out within 30 seconds. |
+| **Presence** | The agent's browser | The widget holds a presence socket to the gateway. Connected and idle is `online`; in a call is `on_call`; filling in the [wrap-up](#call-wrap-up) after a call is `wrap_up`; disconnected is `offline`. Stored in Redis with a 30-second TTL, refreshed every 10 seconds, so a crashed browser drops out within 30 seconds. |
 | **Availability** | Your backend | `available_for_calls`. Set it with `POST /v1/agents/{id}/availability` and `{"available": false}` when the agent goes on break. |
 
 ```bash
@@ -74,6 +74,30 @@ Unavailable agents are never rung, whatever the target: a team, "all available a
 :::
 
 Presence needs Redis (`TRING_REDIS_ADDR`). Without it, the console cannot show who is online.
+
+## Call wrap-up
+
+Wrap-up gives an agent a timed window after a call to record how it went: a **disposition**, **tags** and **notes**. The disposition and tag lists are managed per tenant; see [Dispositions & call tags](/tring/api-reference/dispositions-and-tags/).
+
+Two settings control it, on each team and as a tenant default:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `wrap_up_seconds` | `0` | Length of the window, 0 to 600 seconds. `0` turns wrap-up off. |
+| `require_disposition` | `false` | The agent must pick a disposition to save. |
+
+Set them on the team page in the console or with the [Teams](/tring/api-reference/teams/) and [tenant](/tring/api-reference/tenant/) APIs. The settings that apply are those of the team whose ring reached the agent. A transfer to another team uses that team's settings. Calls that reached the agent without a team ring (a direct-to-agent transfer, click-to-call, "all available agents") use the tenant default. [Agent-assisted campaigns](/tring/features/campaigns/#agent-assisted-campaigns) use the campaign team's settings.
+
+How it behaves:
+
+- Only calls that were answered get a wrap-up. An agent who blind-transfers the call away gets none; if the transfer fails and the call comes back to them, they wrap up when it ends.
+- While wrapping up the agent's status is `wrap_up`: connected but not rung. On the team board they count as live but not available.
+- The agent saves in the [agent widget](/tring/sdk/agent-widget/#wrap-up) (or your own UI) before the timer runs out. The agent is available again as soon as they save.
+- If the timer runs out first, the call's `wrap_up_end` is `timeout`, its disposition stays empty, and the agent becomes available.
+- An agent who places a call (the dial pad or a CRM click-to-call) ends their wrap-up first.
+- Your backend can set or change the outcome at any time with [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up). Console users edit it from the call log (admins only).
+
+The outcome is part of the [call object](/tring/api-reference/calls/#the-call-object), and the flow's **On wrap-up** [webhook](/tring/features/webhooks/#choosing-what-sends) reports it.
 
 ## Teams
 

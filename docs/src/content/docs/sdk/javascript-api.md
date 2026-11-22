@@ -117,6 +117,8 @@ await tring.disconnect();
 | `call:transferring` | `{ call: Call }` | This agent's transfer is ringing the target. The agent stays on the call, muted and hearing nothing, until the target answers (`call:ended`) or doesn't (`call:transfer-failed`). |
 | `call:transfer-failed` | `{ call: Call, reason: string }` | The transfer didn't happen and the call is still this agent's: it was refused up front (for example the target is unavailable), or nobody answered in time (`reason: "no answer"`). |
 | `call:supervisor` | `{ call: Call, present: boolean, mode: string, name: string }` | A supervisor started (`present: true`) or stopped watching this call. `mode` is, for example, `"whisper"`. The customer is never told. |
+| `wrapup` | `{ callId: string, endsAt: string, requireDisposition: boolean }` | The agent's answered call ended into a [wrap-up](/tring/features/agents-and-routing/#call-wrap-up). `endsAt` is an ISO timestamp. Re-sent with the original `endsAt` after a reconnect. Save the outcome with `POST /v1/sdk/calls/wrap-up`. |
+| `wrapupend` | `{ callId: string }` | The wrap-up closed: saved, timed out, or replaced by a new call. |
 | `error` | `{ error: Error }` | A signaling, microphone or token error. If accepting a call fails, you get `error`, then `call:ended` for that call. |
 
 ```js
@@ -126,6 +128,8 @@ tring.on("reconnecting", () => setBadge("reconnecting"));
 tring.on("call:ringing", ({ call }) => showIncoming(call.displayName ?? "Incoming call"));
 tring.on("call:answered", ({ call }) => openRecordFor(call.to));
 tring.on("call:ended", () => hidePanel());
+tring.on("wrapup", ({ callId, endsAt }) => showWrapUpForm(callId, endsAt));
+tring.on("wrapupend", () => hideWrapUpForm());
 tring.on("error", ({ error }) => console.warn(error.message));
 ```
 
