@@ -165,6 +165,8 @@ async function copyLink() {
         </div>
       </div>
 
+      <slot name="outcome" />
+
       <!-- Activity stream -->
       <div>
         <div class="cd-section-label text-lighter">Activity</div>

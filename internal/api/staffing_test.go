@@ -57,3 +57,11 @@ func TestTeamStaffingUnknown(t *testing.T) {
 		t.Fatalf("sales = %+v, want known", got["sales"])
 	}
 }
+
+// A wrap_up agent is connected, so live, but neither available nor on a call.
+func TestTeamStaffingWrapUp(t *testing.T) {
+	got := teamStaffing([][2]string{{"support", "a"}, {"support", "b"}}, map[string]string{"a": "wrap_up", "b": "online"})
+	if want := (staffCounts{Members: 2, Live: 2, Available: 1}); got["support"] != want {
+		t.Fatalf("support = %+v, want %+v", got["support"], want)
+	}
+}

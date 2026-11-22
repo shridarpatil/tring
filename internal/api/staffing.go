@@ -6,7 +6,8 @@ import (
 )
 
 // staffCounts is one team's members split by live state for the dashboard.
-// Live = OnCall + Available: an agent on a call counts live even while Away.
+// Live = OnCall + Available + wrap-up: an agent on a call counts live even
+// while Away, and one in wrap-up is live but neither available nor on a call.
 // Unknown is set when any member's presence couldn't be read.
 type staffCounts struct {
 	Members, Live, OnCall, Available, Away int
@@ -28,6 +29,9 @@ func teamStaffing(members [][2]string, status map[string]string) map[string]staf
 		case "online":
 			c.Live++
 			c.Available++
+		case "wrap_up":
+			// Connected but finishing a call: live, yet not ringable and not on a call.
+			c.Live++
 		case "away":
 			c.Away++
 		case "unknown":

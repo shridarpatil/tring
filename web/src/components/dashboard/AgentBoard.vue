@@ -15,6 +15,7 @@ const PER_GROUP = 8;
 const GROUPS = [
   { key: "on_call", label: "ON CALL" },
   { key: "online", label: "AVAILABLE" },
+  { key: "wrap_up", label: "WRAP-UP" },
   { key: "away", label: "AWAY" },
   { key: "offline", label: "OFFLINE" },
 ] as const;
@@ -28,7 +29,7 @@ const teamNames = computed(() => props.teams.map((t) => t.team).sort((a, b) => a
 const teamsOf = computed(() => agentTeams(props.teams));
 
 const groupOf = (a: Agent): GroupKey =>
-  a.status === "on_call" || a.status === "online" || a.status === "away" ? a.status : "offline";
+  a.status === "on_call" || a.status === "online" || a.status === "wrap_up" || a.status === "away" ? a.status : "offline";
 
 const filtered = computed(() => {
   const q = search.value.trim().toLowerCase();
@@ -46,7 +47,7 @@ const groups = computed(() =>
     return { ...g, total: all.length, shown: expanded[g.key] ? all : all.slice(0, PER_GROUP) };
   }).filter((g) => g.total > 0),
 );
-const liveCount = computed(() => props.agents.filter((a) => a.status === "on_call" || a.status === "online").length);
+const liveCount = computed(() => props.agents.filter((a) => a.status === "on_call" || a.status === "online" || a.status === "wrap_up").length);
 const awayCount = computed(() => props.agents.filter((a) => a.status === "away").length);
 
 // An agent's current call, matched from the live calls by agent_id.

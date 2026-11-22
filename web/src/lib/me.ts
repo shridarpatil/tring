@@ -18,6 +18,7 @@ export function memberTone(status: string): "success" | "live" | "warning" | "ne
     case "on_call":
       return "live";
     case "away":
+    case "wrap_up":
       return "warning";
     default:
       return "neutral";
