@@ -20,7 +20,9 @@ import (
 	"github.com/shridarpatil/tring/internal/events"
 	tringmigrate "github.com/shridarpatil/tring/internal/migrate"
 	"github.com/shridarpatil/tring/internal/queries"
+	"github.com/shridarpatil/tring/internal/safehttp"
 	"github.com/shridarpatil/tring/internal/tts"
+	"github.com/shridarpatil/tring/internal/webhook"
 )
 
 type apiRole struct {
@@ -111,6 +113,12 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		logger.Warn("redis unavailable, dashboard live stream disabled", "err", err)
 	}
 
+	// call.wrapped_up for wrap-ups saved through the REST API; built like the
+	// gateway's notifier (same SSRF-guarded client, cache and sealed headers).
+	notifier := webhook.New(database).WithLogger(logger).
+		WithHTTPClient(safehttp.NewClient(d.outboundAllow, webhook.DeliveryTimeout)).
+		WithCache(d.cache).WithSecrets(d.secrets)
+
 	apiSrv := api.NewServer(api.Config{
 		DB:                database,
 		CampaignLimits:    campaign.Limits{Concurrent: k.Int("campaign_max_concurrent"), PerTenant: k.Int("campaign_tenant_concurrent"), StartsPerSecond: k.Int("campaign_starts_per_second"), TotalCalls: k.Int("campaign_total_call_capacity"), ReservedCalls: k.Int("campaign_reserved_calls")},
@@ -132,6 +140,7 @@ func startAPI(d *deps, o options) (*apiRole, error) {
 		Cache:             d.cache,
 		Hub:               a.hub,
 		Events:            d.pub,
+		Webhooks:          notifier,
 		TrustedProxies:    csv(k.String("trusted_proxies")),
 		OutboundAllow:     d.outboundAllow,
 		Secrets:           d.secrets,
