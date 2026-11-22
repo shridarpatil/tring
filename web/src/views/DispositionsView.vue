@@ -82,7 +82,7 @@ onMounted(() => lists.value.forEach(load));
       What agents record after a call. Archiving hides a label from agents but keeps it on past calls.
     </p>
 
-    <Panel v-for="l in lists" :key="l.path">
+    <Panel v-for="l in lists" :key="l.path" pad>
       <template #title>{{ l.title }}</template>
       <div class="vstack">
         <p class="text-light">{{ l.hint }}</p>
