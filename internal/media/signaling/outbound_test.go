@@ -850,7 +850,7 @@ func (f *fakeOutboundCallLog) WrapUpWebhook(string, uuid.UUID) {}
 func (f *fakeOutboundCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
 	return 0, false, nil
 }
-func (f *fakeOutboundCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool) error {
+func (f *fakeOutboundCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool, string) error {
 	return nil
 }
 func (f *fakeOutboundCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {

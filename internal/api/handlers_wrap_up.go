@@ -37,28 +37,48 @@ type wrapUpOption struct {
 	Name string    `json:"name"`
 }
 
-// handleWrapUpOptions is GET /v1/sdk/wrap-up-options: the active dispositions
-// and tags of the agent's tenant (the admin lists need a full-scope key).
+// handleWrapUpOptions is GET /v1/sdk/wrap-up-options?call_id=: the active
+// dispositions and tags the agent's wrap-up of that call may use — shared ones
+// plus those of the call's wrap-up team (the admin lists need a full-scope
+// key). 404 unless this agent is the one wrapping the call up.
 func (s *Server) handleWrapUpOptions(w http.ResponseWriter, r *http.Request) {
 	claims := agentFromCtx(r.Context())
 	if claims == nil {
 		writeError(w, http.StatusUnauthorized, "no agent")
 		return
 	}
+	agentID, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "bad agent id")
+		return
+	}
+	callID, err := uuid.Parse(r.URL.Query().Get("call_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "call_id required")
+		return
+	}
+	st, err := s.wrapUpState(r.Context(), s.db.Pool, claims.TenantID, callID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (st.owner == nil || *st.owner != agentID)) {
+		writeError(w, http.StatusNotFound, "call not found")
+		return
+	}
+	if err != nil {
+		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
+		return
+	}
 	out := wrapUpOptions{Dispositions: []wrapUpOption{}, Tags: []wrapUpOption{}}
 	for _, l := range []struct {
 		query string
 		into  *[]wrapUpOption
-	}{{s.q.ListDispositions, &out.Dispositions}, {s.q.ListCallTags, &out.Tags}} {
-		rows, err := s.db.Pool.Query(r.Context(), l.query, claims.TenantID, false)
+	}{{s.q.ListWrapUpDispositions, &out.Dispositions}, {s.q.ListWrapUpCallTags, &out.Tags}} {
+		rows, err := s.db.Pool.Query(r.Context(), l.query, claims.TenantID, st.team)
 		if err != nil {
 			s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 			return
 		}
 		for rows.Next() {
 			var o wrapUpOption
-			var archived, created any
-			if err := rows.Scan(&o.ID, &o.Name, &archived, &created); err != nil {
+			if err := rows.Scan(&o.ID, &o.Name); err != nil {
 				rows.Close()
 				s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 				return
@@ -102,13 +122,31 @@ func checkWrapUpInput(in *wrapUpInput) string {
 	return ""
 }
 
+// wrapUpState is a call's wrap-up row as get-call-wrap-up-state reads it.
+type wrapUpState struct {
+	owner         *uuid.UUID // agent wrapping the call up
+	require       bool       // disposition mandatory
+	wrapped, open bool       // already closed; save window still open
+	team          string     // wrap-up team, "" = none (shared labels only)
+}
+
+func (s *Server) wrapUpState(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, tenantID, callID uuid.UUID) (wrapUpState, error) {
+	var st wrapUpState
+	err := db.QueryRow(ctx, s.q.GetCallWrapUpState, tenantID, callID).Scan(&st.owner, &st.require, &st.wrapped, &st.open, &st.team)
+	return st, err
+}
+
 // checkWrapUpIDs confirms the disposition and every tag are live rows of the
-// tenant. call_tag_links has no tenant-composite FK, so this is the only thing
-// keeping another tenant's tag off a call: it MUST run before any insert.
-func (s *Server) checkWrapUpIDs(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, in wrapUpInput) (bool, error) {
+// tenant allowed for the call's wrap-up team (shared, or limited to team; ""
+// = shared only). call_tag_links has no tenant-composite FK, so this is the
+// only thing keeping another tenant's tag off a call: it MUST run before any
+// insert.
+func (s *Server) checkWrapUpIDs(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, team string, in wrapUpInput) (bool, error) {
 	if in.disposition != nil {
 		var n int
-		if err := tx.QueryRow(ctx, s.q.CountActiveDispositionsIn, tenantID, []uuid.UUID{*in.disposition}).Scan(&n); err != nil {
+		if err := tx.QueryRow(ctx, s.q.CountActiveDispositionsIn, tenantID, []uuid.UUID{*in.disposition}, team).Scan(&n); err != nil {
 			return false, err
 		}
 		if n != 1 {
@@ -117,7 +155,7 @@ func (s *Server) checkWrapUpIDs(ctx context.Context, tx pgx.Tx, tenantID uuid.UU
 	}
 	if len(in.tags) > 0 {
 		var n int
-		if err := tx.QueryRow(ctx, s.q.CountActiveTagsIn, tenantID, in.tags).Scan(&n); err != nil {
+		if err := tx.QueryRow(ctx, s.q.CountActiveTagsIn, tenantID, in.tags, team).Scan(&n); err != nil {
 			return false, err
 		}
 		if n != len(in.tags) {
@@ -194,10 +232,8 @@ func (s *Server) handleSaveWrapUp(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, tenantID := r.Context(), claims.TenantID
 
-	var owner *uuid.UUID
-	var require, wrapped, open bool
-	err = s.db.Pool.QueryRow(ctx, s.q.GetCallWrapUpState, tenantID, req.CallID).Scan(&owner, &require, &wrapped, &open)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (owner == nil || *owner != agentID)) {
+	st, err := s.wrapUpState(ctx, s.db.Pool, tenantID, req.CallID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (st.owner == nil || *st.owner != agentID)) {
 		writeError(w, http.StatusNotFound, "call not found")
 		return
 	}
@@ -205,11 +241,11 @@ func (s *Server) handleSaveWrapUp(w http.ResponseWriter, r *http.Request) {
 		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return
 	}
-	if wrapped || !open {
+	if st.wrapped || !st.open {
 		writeError(w, http.StatusConflict, "wrap-up already closed")
 		return
 	}
-	if require && in.disposition == nil {
+	if st.require && in.disposition == nil {
 		writeError(w, http.StatusBadRequest, "disposition required")
 		return
 	}
@@ -220,7 +256,7 @@ func (s *Server) handleSaveWrapUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	ok, err := s.checkWrapUpIDs(ctx, tx, tenantID, in)
+	ok, err := s.checkWrapUpIDs(ctx, tx, tenantID, st.team, in)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return
@@ -324,7 +360,17 @@ func (s *Server) handlePatchWrapUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-	ok, err := s.checkWrapUpIDs(ctx, tx, t.ID, in)
+	// The labels must suit the call's wrap-up team, so read it first.
+	st, err := s.wrapUpState(ctx, tx, t.ID, callID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "call not found")
+		return
+	}
+	if err != nil {
+		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
+		return
+	}
+	ok, err := s.checkWrapUpIDs(ctx, tx, t.ID, st.team, in)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return

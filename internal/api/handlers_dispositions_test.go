@@ -132,3 +132,101 @@ func TestDispositionCrossTenant(t *testing.T) {
 		})
 	}
 }
+
+// Labels are shared (teams []) or limited to chosen teams; PATCH replaces the
+// set only when teams is present.
+func TestLabelTeams(t *testing.T) {
+	for _, path := range labelPaths {
+		t.Run(path, func(t *testing.T) {
+			f := dbtest.Setup(t)
+			s := newTestServer(f)
+			f.AddTeam(t, "Sales", nil)
+			f.AddTeam(t, "Support", nil)
+
+			rec := serve(t, s, f, "POST", path, `{"name":"Shared"}`)
+			var shared labelItem
+			if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &shared) != nil || shared.Teams == nil || len(shared.Teams) != 0 {
+				t.Fatalf("create shared = %d: %s", rec.Code, rec.Body.String())
+			}
+			rec = serve(t, s, f, "POST", path, `{"name":"Limited","teams":["Support","Sales","Sales"]}`)
+			var lim labelItem
+			if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &lim) != nil || strings.Join(lim.Teams, ",") != "Sales,Support" {
+				t.Fatalf("create limited = %d: %s", rec.Code, rec.Body.String())
+			}
+			rec = serve(t, s, f, "POST", path, `{"name":"Nope","teams":["Ghost"]}`)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown team: Ghost") {
+				t.Fatalf("unknown team create = %d: %s", rec.Code, rec.Body.String())
+			}
+			if got := labelList(t, s, f, path); len(got) != 2 {
+				t.Fatalf("list after rejected create = %+v", got)
+			}
+
+			// Rename without teams keeps them; teams present replaces.
+			rec = serve(t, s, f, "PATCH", path+"/"+lim.ID.String(), `{"name":"Limited 2"}`)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"teams":["Sales","Support"]`) {
+				t.Fatalf("rename = %d: %s", rec.Code, rec.Body.String())
+			}
+			rec = serve(t, s, f, "PATCH", path+"/"+lim.ID.String(), `{"teams":["Ghost"]}`)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown team: Ghost") {
+				t.Fatalf("unknown team patch = %d: %s", rec.Code, rec.Body.String())
+			}
+			rec = serve(t, s, f, "PATCH", path+"/"+shared.ID.String(), `{"teams":["Support"]}`)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"teams":["Support"]`) {
+				t.Fatalf("limit shared = %d: %s", rec.Code, rec.Body.String())
+			}
+			rec = serve(t, s, f, "PATCH", path+"/"+lim.ID.String(), `{"teams":[]}`)
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"teams":[]`) {
+				t.Fatalf("share limited = %d: %s", rec.Code, rec.Body.String())
+			}
+			got := labelList(t, s, f, path)
+			teams := map[string]string{}
+			for _, it := range got {
+				teams[it.Name] = strings.Join(it.Teams, ",")
+			}
+			if len(got) != 2 || teams["Limited 2"] != "" || teams["Shared"] != "Support" {
+				t.Fatalf("list = %+v", got)
+			}
+		})
+	}
+}
+
+// Deleting a team archives the labels limited to it alone (they would
+// otherwise silently become shared); labels also on another team keep it.
+func TestTeamDeleteArchivesTeamOnlyLabels(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	f.AddTeam(t, "A", nil)
+	f.AddTeam(t, "B", nil)
+	mk := func(path, body string) labelItem {
+		rec := serve(t, s, f, "POST", path, body)
+		var it labelItem
+		if rec.Code != http.StatusCreated || json.Unmarshal(rec.Body.Bytes(), &it) != nil {
+			t.Fatalf("create %s = %d: %s", body, rec.Code, rec.Body.String())
+		}
+		return it
+	}
+	mk("/v1/dispositions", `{"name":"A only","teams":["A"]}`)
+	mk("/v1/dispositions", `{"name":"A and B","teams":["A","B"]}`)
+	mk("/v1/dispositions", `{"name":"Shared"}`)
+	mk("/v1/call-tags", `{"name":"a-tag","teams":["A"]}`)
+
+	if rec := serve(t, s, f, "DELETE", "/v1/teams/A", ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete team = %d: %s", rec.Code, rec.Body.String())
+	}
+	got := map[string]labelItem{}
+	for _, it := range labelList(t, s, f, "/v1/dispositions?include_archived=1") {
+		got[it.Name] = it
+	}
+	if it := got["A only"]; !it.Archived || len(it.Teams) != 0 {
+		t.Fatalf("A only = %+v, want archived", it)
+	}
+	if it := got["A and B"]; it.Archived || strings.Join(it.Teams, ",") != "B" {
+		t.Fatalf("A and B = %+v, want live with [B]", it)
+	}
+	if it := got["Shared"]; it.Archived {
+		t.Fatalf("Shared archived: %+v", it)
+	}
+	if tags := labelList(t, s, f, "/v1/call-tags?include_archived=1"); len(tags) != 1 || !tags[0].Archived {
+		t.Fatalf("tags = %+v, want a-tag archived", tags)
+	}
+}

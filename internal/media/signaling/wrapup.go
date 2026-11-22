@@ -130,7 +130,7 @@ func (s *Server) startWrapUp(leg agentLeg, d time.Duration, require bool) {
 		s.timeoutWrapUpRow(tid, prev.callID)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), wrapUpTimeout)
-	err := s.cfg.Calls.BeginWrapUp(ctx, tid, w.callID, leg.sip, require)
+	err := s.cfg.Calls.BeginWrapUp(ctx, tid, w.callID, leg.sip, require, leg.team)
 	cancel()
 	if err != nil {
 		// Without its row the form could never be saved: skip the wrap-up.

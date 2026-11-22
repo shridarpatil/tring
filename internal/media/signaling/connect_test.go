@@ -441,7 +441,7 @@ func (c *connectCallLog) WrapUpWebhook(string, uuid.UUID) {}
 func (c *connectCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
 	return 0, false, nil
 }
-func (c *connectCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool) error {
+func (c *connectCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool, string) error {
 	return nil
 }
 func (c *connectCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {

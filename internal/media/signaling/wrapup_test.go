@@ -24,14 +24,15 @@ import (
 // room no call was opened in, as callcdr's is) and recorded wrap-up calls.
 type wrapCallLog struct {
 	*connectCallLog
-	wmu      sync.Mutex
-	secs     map[string]int // team → wrap-up seconds; "" is the tenant default
-	require  bool
-	rooms    map[string]uuid.UUID
-	teams    []string      // WrapUpSettings lookups, in order
-	begins   []uuid.UUID   // BeginWrapUp call ids
-	timeouts []uuid.UUID   // TimeoutWrapUp call ids
-	gate     chan struct{} // when set, WrapUpSettings blocks until it is closed
+	wmu        sync.Mutex
+	secs       map[string]int // team → wrap-up seconds; "" is the tenant default
+	require    bool
+	rooms      map[string]uuid.UUID
+	teams      []string      // WrapUpSettings lookups, in order
+	begins     []uuid.UUID   // BeginWrapUp call ids
+	beginTeams []string      // BeginWrapUp teams, in order
+	timeouts   []uuid.UUID   // TimeoutWrapUp call ids
+	gate       chan struct{} // when set, WrapUpSettings blocks until it is closed
 	// beginGate, when set, holds BeginWrapUp until it is closed; beginErr
 	// makes it fail.
 	beginGate chan struct{}
@@ -79,7 +80,7 @@ func (w *wrapCallLog) WrapUpSettings(_ context.Context, _ uuid.UUID, team string
 	return secs, w.require, nil
 }
 
-func (w *wrapCallLog) BeginWrapUp(_ context.Context, _, callID uuid.UUID, _ string, _ bool) error {
+func (w *wrapCallLog) BeginWrapUp(_ context.Context, _, callID uuid.UUID, _ string, _ bool, team string) error {
 	w.wmu.Lock()
 	gate := w.beginGate
 	w.wmu.Unlock()
@@ -89,6 +90,7 @@ func (w *wrapCallLog) BeginWrapUp(_ context.Context, _, callID uuid.UUID, _ stri
 	w.wmu.Lock()
 	defer w.wmu.Unlock()
 	w.begins = append(w.begins, callID)
+	w.beginTeams = append(w.beginTeams, team)
 	return w.beginErr
 }
 
@@ -495,6 +497,12 @@ func TestTransferredTeamSettingsApply(t *testing.T) {
 	}
 	if teams, _, _ := wl.calls(); len(teams) != 1 || teams[0] != "B" {
 		t.Fatalf("settings looked up for %v, want [B] (alice transferred away)", teams)
+	}
+	wl.wmu.Lock()
+	beginTeams := append([]string(nil), wl.beginTeams...)
+	wl.wmu.Unlock()
+	if len(beginTeams) != 1 || beginTeams[0] != "B" {
+		t.Fatalf("BeginWrapUp teams %v, want [B] (the labels follow team B)", beginTeams)
 	}
 	noWrapUp(t, h.pres, 200*time.Millisecond)
 }

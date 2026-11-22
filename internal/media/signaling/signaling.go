@@ -199,8 +199,10 @@ type CallLog interface {
 	// WrapUpSettings is the wrap-up timer and mandatory-disposition flag for a
 	// team (the tenant's when team is empty or unknown).
 	WrapUpSettings(ctx context.Context, tenant uuid.UUID, team string) (seconds int, requireDisposition bool, err error)
-	// BeginWrapUp marks agentSIP as the agent wrapping up callID.
-	BeginWrapUp(ctx context.Context, tenant, callID uuid.UUID, agentSIP string, requireDisposition bool) error
+	// BeginWrapUp marks agentSIP as the agent wrapping up callID; team is the
+	// team whose ring reached the agent ("" = none), which picks the labels the
+	// wrap-up may use.
+	BeginWrapUp(ctx context.Context, tenant, callID uuid.UUID, agentSIP string, requireDisposition bool, team string) error
 	// TimeoutWrapUp closes an unsaved wrap-up; won is false if the agent saved first.
 	TimeoutWrapUp(ctx context.Context, tenant, callID uuid.UUID) (won bool, err error)
 }
