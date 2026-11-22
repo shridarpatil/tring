@@ -24,7 +24,8 @@ export interface WrapUpSave {
 
 /** REST access for the panel; the widget builds it from its agent-token flow. */
 export interface WrapUpApi {
-  options(): Promise<WrapUpOptions | null>;
+  /** The labels this call's wrap-up may use (shared + the call's wrap-up team). */
+  options(callId: string): Promise<WrapUpOptions | null>;
   /** Resolves with the HTTP status (0 on a network error) and any server message. */
   save(body: WrapUpSave): Promise<{ status: number; error?: string }>;
 }
@@ -55,18 +56,23 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
   root.setAttribute("role", "dialog");
   root.setAttribute("aria-label", "Call wrap-up");
 
-  // Options are fetched once per page load and cached; a failed fetch is not
-  // cached so the next wrap-up retries.
-  let cached: Promise<WrapUpOptions | null> | null = null;
-  const loadOptions = (): Promise<WrapUpOptions | null> => {
+  // Options depend on the call (its wrap-up team picks the labels), so they
+  // are cached for the call on screen only; a failed fetch is not cached so a
+  // later show retries.
+  let cached: { callId: string; p: Promise<WrapUpOptions | null> } | null = null;
+  const loadOptions = (callId: string): Promise<WrapUpOptions | null> => {
     if (!api) return Promise.resolve(null);
-    if (!cached) {
-      cached = api.options().then((o) => {
-        if (!o) cached = null;
-        return o;
-      });
+    if (cached?.callId !== callId) {
+      const entry = {
+        callId,
+        p: api.options(callId).then((o) => {
+          if (!o && cached === entry) cached = null;
+          return o;
+        }),
+      };
+      cached = entry;
     }
-    return cached;
+    return cached.p;
   };
 
   let current: string | null = null; // call_id on screen
@@ -86,9 +92,12 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
   // A wrap-up for one of them arriving later is stale — e.g. sent after the
   // end that raced it, while the agent is already on a new call — and must not
   // reopen the card over the call panel.
+  // Capped at the most recent 50 (a Set iterates oldest first) so a long-lived
+  // agent page doesn't grow it by one id per call forever.
   const finished = new Set<string>();
   const finish = (callId: string) => {
     finished.add(callId);
+    if (finished.size > 50) finished.delete(finished.values().next().value as string);
     if (current === callId) close();
   };
 
@@ -175,7 +184,7 @@ export function createWrapUpPanel(api?: WrapUpApi): WrapUpPanel {
     renderDispositions();
     renderTags();
 
-    void loadOptions().then((o) => {
+    void loadOptions(callId).then((o) => {
       if (!o || current !== callId) return;
       opts = o;
       const keep = dispSel.value;

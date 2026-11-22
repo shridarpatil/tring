@@ -123,7 +123,8 @@ function makeCallControl(
     transfer: (body) => post(`/v1/sdk/calls/transfer`, body),
     targets: () => getJSON(`/v1/sdk/transfer-targets`) as Promise<TransferTargets | null>,
     wrapUp: {
-      options: () => getJSON(`/v1/sdk/wrap-up-options`) as Promise<WrapUpOptions | null>,
+      options: (callId) =>
+        getJSON(`/v1/sdk/wrap-up-options?call_id=${encodeURIComponent(callId)}`) as Promise<WrapUpOptions | null>,
       // Unlike post(), keeps the status: 400 shows the server's message, 409
       // means the window already closed.
       save: async (body) => {

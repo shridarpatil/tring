@@ -392,10 +392,12 @@ export interface SsoProvider {
 }
 
 // A tenant-managed wrap-up label (disposition or call tag); archived ones stay
-// on past calls but are no longer offered to agents.
+// on past calls but are no longer offered to agents. Shared when teams is
+// empty, else offered only to wrap-ups for those teams.
 export interface WrapUpLabel {
   id: string;
   name: string;
   archived: boolean;
   created_at: string;
+  teams: string[]; // [] = shared by all teams
 }
