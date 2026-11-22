@@ -443,8 +443,8 @@ func (s *Server) handleListCalls(w http.ResponseWriter, r *http.Request) {
 
 	// One parameterised query pair for every filter combination ('' = off).
 	idPrefix, digits := callSearch(r.URL.Query().Get("q"))
-	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID, status, idPrefix, digits}
-	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset, status, idPrefix, digits}
+	countQuery, countArgs := s.q.CountCalls, []interface{}{t.ID, status, idPrefix, digits, "", ""}
+	listQuery, listArgs := s.q.ListCalls, []interface{}{t.ID, limit, offset, status, idPrefix, digits, "", ""}
 
 	var total int
 	if err := s.db.Pool.QueryRow(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {

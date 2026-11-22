@@ -64,6 +64,10 @@ type Team struct {
 	SLASeconds    int             `json:"sla_seconds"`
 	Hours         json.RawMessage `json:"hours"`
 	CreatedAt     time.Time       `json:"created_at"`
+	// WrapUpSeconds is the post-call wrap-up window (0 = none);
+	// RequireDisposition makes picking a disposition mandatory in it.
+	WrapUpSeconds      int  `json:"wrap_up_seconds"`
+	RequireDisposition bool `json:"require_disposition"`
 	// Members is populated only on the single-team GET, not the list.
 	Members []TeamMember `json:"members,omitempty"`
 }
@@ -128,9 +132,9 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateTeam,
 		t.ID, req.Name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
-		req.MinLiveAgents, req.SLASeconds, []byte(hours)).Scan(
+		req.MinLiveAgents, req.SLASeconds, []byte(hours), 0, false).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if isUniqueViolation(err) {
 		writeError(w, http.StatusConflict, "a team with this name already exists")
 		return
@@ -155,7 +159,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var tm Team
 		if err := rows.Scan(&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-			&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt); err != nil {
+			&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
@@ -214,9 +218,9 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTeam,
 		t.ID, name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
-		req.MinLiveAgents, req.SLASeconds, hours).Scan(
+		req.MinLiveAgents, req.SLASeconds, hours, nil, nil).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
@@ -359,7 +363,7 @@ func (s *Server) loadTeam(w http.ResponseWriter, r *http.Request, tenantID uuid.
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTeam, tenantID, name).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return Team{}, false

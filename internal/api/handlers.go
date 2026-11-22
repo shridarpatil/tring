@@ -31,7 +31,8 @@ func (s *Server) handleGetMyTenant(w http.ResponseWriter, r *http.Request) {
 	// current selection.
 	t := *tenantFromCtx(r.Context())
 	_ = s.db.Pool.QueryRow(r.Context(), s.q.GetTenantSettings, t.ID).Scan(&t.HoldMusic, &t.RecordCalls, &t.MaxCallSeconds, &t.TransferFailedMessage, &t.RecordingSampleRate, &t.RecordingFormat,
-		&t.MaskNumbersAgents, &t.MaskNumbersManagers, &t.MaskNumbersSupervisors, &t.TransferTimeoutSeconds)
+		&t.MaskNumbersAgents, &t.MaskNumbersManagers, &t.MaskNumbersSupervisors, &t.TransferTimeoutSeconds,
+		&t.WrapUpSeconds, &t.RequireDisposition)
 	writeJSON(w, http.StatusOK, t)
 }
 
@@ -707,9 +708,10 @@ func (s *Server) handlePatchMyTenant(w http.ResponseWriter, r *http.Request) {
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTenant,
 		req.OutboundStrategy, causes, t.ID, req.HoldMusic, req.RecordCalls, req.MaxCallSeconds,
 		req.TransferFailedMessage, xferAudio, req.RecordingSampleRate, req.RecordingFormat,
-		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors, req.TransferTimeoutSeconds).
+		req.MaskNumbersAgents, req.MaskNumbersManagers, req.MaskNumbersSupervisors, req.TransferTimeoutSeconds, nil, nil).
 		Scan(&out.ID, &out.Name, &out.OutboundStrategy, &out.FailoverCauses, &out.HoldMusic, &out.RecordCalls, &out.MaxCallSeconds, &out.TransferFailedMessage, &out.RecordingSampleRate, &out.RecordingFormat,
-			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors, &out.TransferTimeoutSeconds)
+			&out.MaskNumbersAgents, &out.MaskNumbersManagers, &out.MaskNumbersSupervisors, &out.TransferTimeoutSeconds,
+			&out.WrapUpSeconds, &out.RequireDisposition)
 	if err != nil {
 		s.writeServerError(w, r, http.StatusInternalServerError, "update failed", err)
 		return

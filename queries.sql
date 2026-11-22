@@ -46,12 +46,12 @@ FROM users u WHERE u.tenant_id = $1 AND u.sip_username = $2;
 -- ===========================================================================
 
 -- name: create-team
-INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at;
+INSERT INTO teams (tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, wrap_up_seconds, require_disposition)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at, wrap_up_seconds, require_disposition;
 
 -- name: list-teams
-SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at, wrap_up_seconds, require_disposition
 FROM teams WHERE tenant_id = $1 ORDER BY name;
 
 -- name: list-team-names
@@ -59,7 +59,7 @@ FROM teams WHERE tenant_id = $1 ORDER BY name;
 SELECT name FROM teams WHERE tenant_id = $1 ORDER BY name;
 
 -- name: get-team
-SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at
+SELECT tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at, wrap_up_seconds, require_disposition
 FROM teams WHERE tenant_id = $1 AND name = $2;
 
 -- name: get-team-moh
@@ -78,9 +78,11 @@ UPDATE teams SET
     moh_sound        = COALESCE($6, moh_sound),
     min_live_agents  = COALESCE($7, min_live_agents),
     sla_seconds      = COALESCE($8, sla_seconds),
-    hours            = COALESCE($9, hours)
+    hours            = COALESCE($9, hours),
+    wrap_up_seconds  = COALESCE($10, wrap_up_seconds),
+    require_disposition = COALESCE($11, require_disposition)
 WHERE tenant_id = $1 AND name = $2
-RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at;
+RETURNING tenant_id, name, strategy, ring_seconds, max_wait_seconds, moh_sound, min_live_agents, sla_seconds, hours, created_at, wrap_up_seconds, require_disposition;
 
 -- name: delete-team
 DELETE FROM teams WHERE tenant_id = $1 AND name = $2;
@@ -219,15 +221,18 @@ SET outbound_strategy       = COALESCE($1, outbound_strategy),
     mask_numbers_agents      = COALESCE($11, mask_numbers_agents),
     mask_numbers_managers    = COALESCE($12, mask_numbers_managers),
     mask_numbers_supervisors = COALESCE($13, mask_numbers_supervisors),
-    transfer_timeout_seconds = COALESCE($14, transfer_timeout_seconds)
+    transfer_timeout_seconds = COALESCE($14, transfer_timeout_seconds),
+    wrap_up_seconds          = COALESCE($15, wrap_up_seconds),
+    require_disposition      = COALESCE($16, require_disposition)
 WHERE id = $3
 RETURNING id, name, outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
-          mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds;
+          mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds, wrap_up_seconds, require_disposition;
 
 -- name: get-tenant-settings
 -- Tenant-level settings the Settings page reads (not carried in the auth context).
 SELECT hold_music, record_calls, max_call_seconds, transfer_failed_message, recording_sample_rate, recording_format,
-       mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds
+       mask_numbers_agents, mask_numbers_managers, mask_numbers_supervisors, transfer_timeout_seconds,
+       wrap_up_seconds, require_disposition
 FROM tenants WHERE id = $1;
 
 -- name: get-tenant-mask-numbers
@@ -514,8 +519,10 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
-       COALESCE(c.room_id, '')
+       COALESCE(c.room_id, ''),
+       c.disposition_id, d.name, c.notes, c.wrapped_up_at, c.wrap_up_end
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+LEFT JOIN dispositions d ON d.id = c.disposition_id AND d.tenant_id = c.tenant_id
 WHERE c.id = $1 AND c.tenant_id = $2;
 
 -- name: list-calls
@@ -524,18 +531,24 @@ WHERE c.id = $1 AND c.tenant_id = $2;
 -- instead of failing the enum cast); $5 call-id prefix (calls.id or leg_id);
 -- $6 phone digits, matched inside from/to with formatting stripped. A search
 -- sets $5, $6 or both (an all-digit id prefix); a call matching either is found.
+-- $7 disposition id and $8 tag id (as text, '' = off) narrow to wrapped-up calls.
 SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to_number,
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
-       COALESCE(c.room_id, '')
+       COALESCE(c.room_id, ''),
+       c.disposition_id, d.name, c.notes, c.wrapped_up_at, c.wrap_up_end
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+LEFT JOIN dispositions d ON d.id = c.disposition_id AND d.tenant_id = c.tenant_id
 WHERE c.tenant_id = $1
   AND ($4 = '' OR c.status::text = $4)
   AND (($5 = '' AND $6 = '')
        OR ($5 <> '' AND (c.id::text LIKE $5 || '%' OR c.leg_id LIKE $5 || '%'))
        OR ($6 <> '' AND (regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $6 || '%'
                       OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $6 || '%')))
+  AND ($7 = '' OR c.disposition_id::text = $7)
+  AND ($8 = '' OR EXISTS (SELECT 1 FROM call_tag_links l
+                          WHERE l.tenant_id = c.tenant_id AND l.call_id = c.id AND l.tag_id::text = $8))
 ORDER BY c.started_at DESC LIMIT $2 OFFSET $3;
 
 -- name: list-active-calls
@@ -555,8 +568,10 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, ''),
+       c.disposition_id, d.name, c.notes, c.wrapped_up_at, c.wrap_up_end,
        qs.team, qs.enqueued_at, qs.sla_seconds
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+LEFT JOIN dispositions d ON d.id = c.disposition_id AND d.tenant_id = c.tenant_id
 LEFT JOIN LATERAL (
     SELECT team, enqueued_at, sla_seconds FROM queue_stints
     WHERE tenant_id = c.tenant_id AND call_id = c.id AND ended_at IS NULL
@@ -568,14 +583,18 @@ WHERE c.tenant_id = $1 AND c.started_at > now() - interval '4 hours'
 ORDER BY c.started_at ASC LIMIT 100;
 
 -- name: count-calls
--- Same filters as list-calls: $2 status, $3 call-id prefix, $4 phone digits.
+-- Same filters as list-calls: $2 status, $3 call-id prefix, $4 phone digits,
+-- $5 disposition id, $6 tag id.
 SELECT count(*) FROM calls c
 WHERE c.tenant_id = $1
   AND ($2 = '' OR c.status::text = $2)
   AND (($3 = '' AND $4 = '')
        OR ($3 <> '' AND (c.id::text LIKE $3 || '%' OR c.leg_id LIKE $3 || '%'))
        OR ($4 <> '' AND (regexp_replace(c.from_number, '[^0-9]', '', 'g') LIKE '%' || $4 || '%'
-                      OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%')));
+                      OR regexp_replace(c.to_number,   '[^0-9]', '', 'g') LIKE '%' || $4 || '%')))
+  AND ($5 = '' OR c.disposition_id::text = $5)
+  AND ($6 = '' OR EXISTS (SELECT 1 FROM call_tag_links l
+                          WHERE l.tenant_id = c.tenant_id AND l.call_id = c.id AND l.tag_id::text = $6));
 
 -- ===========================================================================
 -- console auth
@@ -1036,8 +1055,10 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, ''),
+       c.disposition_id, d.name, c.notes, c.wrapped_up_at, c.wrap_up_end,
        NOT (c.agent_id IS NOT DISTINCT FROM $2 OR c.id IN (SELECT call_id FROM ev WHERE type = 'answered'))
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id AND a.tenant_id = c.tenant_id
+LEFT JOIN dispositions d ON d.id = c.disposition_id AND d.tenant_id = c.tenant_id
 WHERE c.tenant_id = $1
   AND c.started_at >= date_trunc('day', now()) - make_interval(days => $5::int)
   AND (c.agent_id = $2
@@ -1071,8 +1092,10 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
        COALESCE(c.room_id, ''),
+       c.disposition_id, d.name, c.notes, c.wrapped_up_at, c.wrap_up_end,
        qs.team, qs.enqueued_at, qs.sla_seconds
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+LEFT JOIN dispositions d ON d.id = c.disposition_id AND d.tenant_id = c.tenant_id
 LEFT JOIN LATERAL (
     SELECT team, enqueued_at, sla_seconds FROM queue_stints
     WHERE tenant_id = c.tenant_id AND call_id = c.id AND ended_at IS NULL
@@ -1270,8 +1293,10 @@ SELECT c.id, c.tenant_id, c.direction::text, c.status::text, c.from_number, c.to
        c.agent_id, c.leg_id, c.started_at, c.answered_at, c.ended_at,
        c.duration_seconds, c.hangup_cause, c.recording_url, c.ivr_path,
        COALESCE(NULLIF(a.display_name, ''), a.sip_username), c.client_ref, c.source::text,
-       COALESCE(c.room_id, '')
+       COALESCE(c.room_id, ''),
+       c.disposition_id, d.name, c.notes, c.wrapped_up_at, c.wrap_up_end
 FROM calls c LEFT JOIN users a ON a.id = c.agent_id
+LEFT JOIN dispositions d ON d.id = c.disposition_id AND d.tenant_id = c.tenant_id
 WHERE c.tenant_id = $1 AND c.started_at >= date_trunc('day', now())
   AND (c.team = $2
        OR c.id IN (SELECT call_id FROM queue_stints
@@ -1501,3 +1526,109 @@ SELECT EXISTS (SELECT 1 FROM webhooks WHERE tenant_id=$1 AND id=$2 AND active);
 
 -- name: campaign-running-slots
 SELECT count(*) FROM campaign_attempts WHERE tenant_id=$1 AND status='active';
+
+-- ===========================================================================
+-- call wrap-up (dispositions, tags, notes after a call)
+-- ===========================================================================
+
+-- name: get-team-wrap-up
+-- Wrap-up settings of a team; the tenant row (get-tenant-wrap-up) is the
+-- fallback for a call with no team.
+SELECT wrap_up_seconds, require_disposition FROM teams WHERE tenant_id = $1 AND name = $2;
+
+-- name: get-tenant-wrap-up
+SELECT wrap_up_seconds, require_disposition FROM tenants WHERE id = $1;
+
+-- name: create-disposition
+INSERT INTO dispositions (tenant_id, name) VALUES ($1, $2)
+RETURNING id, name, archived_at, created_at;
+
+-- name: list-dispositions
+-- $2 include_archived: the console manages archived rows; the wrap-up form
+-- offers only live ones.
+SELECT id, name, archived_at, created_at FROM dispositions
+WHERE tenant_id = $1 AND ($2 OR archived_at IS NULL)
+ORDER BY lower(name);
+
+-- name: update-disposition
+-- Partial: $3 name (NULL keeps), $4 archived (NULL keeps, true archives, false restores).
+UPDATE dispositions SET
+    name        = COALESCE($3, name),
+    archived_at = CASE WHEN $4::boolean IS NULL THEN archived_at
+                       WHEN $4 THEN COALESCE(archived_at, now())
+                       ELSE NULL END
+WHERE id = $2 AND tenant_id = $1
+RETURNING id, name, archived_at, created_at;
+
+-- name: create-call-tag
+INSERT INTO call_tags (tenant_id, name) VALUES ($1, $2)
+RETURNING id, name, archived_at, created_at;
+
+-- name: list-call-tags
+SELECT id, name, archived_at, created_at FROM call_tags
+WHERE tenant_id = $1 AND ($2 OR archived_at IS NULL)
+ORDER BY lower(name);
+
+-- name: update-call-tag
+UPDATE call_tags SET
+    name        = COALESCE($3, name),
+    archived_at = CASE WHEN $4::boolean IS NULL THEN archived_at
+                       WHEN $4 THEN COALESCE(archived_at, now())
+                       ELSE NULL END
+WHERE id = $2 AND tenant_id = $1
+RETURNING id, name, archived_at, created_at;
+
+-- name: begin-call-wrap-up
+-- The gateway marks which agent is wrapping up and whether a disposition is
+-- mandatory, as the settings stood when wrap-up began.
+UPDATE calls SET wrap_up_agent_id = $3, wrap_up_require = $4
+WHERE id = $2 AND tenant_id = $1;
+
+-- name: timeout-call-wrap-up
+-- Closes an unsaved wrap-up when its timer runs out. RETURNING lets the caller
+-- fire the wrap-up webhook only for the row it actually closed.
+UPDATE calls SET wrapped_up_at = now(), wrap_up_end = 'timeout'
+WHERE id = $2 AND tenant_id = $1 AND wrapped_up_at IS NULL
+RETURNING wrap_up_webhook_id;
+
+-- name: save-call-wrap-up
+-- The wrapping agent's one-shot save. The window also admits a call with no
+-- ended_at yet (a post-call IVR step can keep it open after the agent leaves).
+UPDATE calls SET disposition_id = $3, notes = $4, wrapped_up_at = now(), wrap_up_end = 'done'
+WHERE id = $2 AND tenant_id = $1 AND wrap_up_agent_id = $5 AND wrapped_up_at IS NULL
+  AND (ended_at IS NULL OR ended_at > now() - interval '1 hour')
+RETURNING wrap_up_webhook_id;
+
+-- name: patch-call-wrap-up
+-- Admin/supervisor edit of an existing wrap-up: disposition and notes only,
+-- never the state columns. $3 disposition (NULL clears), $4 notes (NULL clears).
+UPDATE calls SET disposition_id = $3, notes = $4
+WHERE id = $2 AND tenant_id = $1;
+
+-- name: delete-call-tag-links
+DELETE FROM call_tag_links WHERE tenant_id = $1 AND call_id = $2;
+
+-- name: insert-call-tag-link
+INSERT INTO call_tag_links (tenant_id, call_id, tag_id) VALUES ($1, $2, $3)
+ON CONFLICT DO NOTHING;
+
+-- name: count-active-dispositions-in
+-- How many of the ids in $2 are live dispositions of the tenant; compared with
+-- the number sent to validate a save.
+SELECT count(*) FROM dispositions
+WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL;
+
+-- name: count-active-tags-in
+SELECT count(*) FROM call_tags
+WHERE tenant_id = $1 AND id = ANY($2::uuid[]) AND archived_at IS NULL;
+
+-- name: set-call-wrap-up-webhook
+-- Remembers which webhook the flow picked for the wrap-up event, for delivery
+-- once the wrap-up closes.
+UPDATE calls SET wrap_up_webhook_id = $3 WHERE id = $2 AND tenant_id = $1;
+
+-- name: list-call-tags-for-calls
+SELECT l.call_id, t.id, t.name
+FROM call_tag_links l JOIN call_tags t ON t.id = l.tag_id AND t.tenant_id = l.tenant_id
+WHERE l.tenant_id = $1 AND l.call_id = ANY($2::uuid[])
+ORDER BY lower(t.name);

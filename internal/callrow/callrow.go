@@ -46,11 +46,24 @@ type Call struct {
 	// lets the dashboard match a call.supervised event to its row. Empty for
 	// FreeSWITCH-only calls.
 	RoomID string `json:"room_id,omitempty"`
+	// Disposition / Notes / WrappedUpAt / WrapUpEnd are the call's wrap-up
+	// (migration 0039): null/omitted until the agent saves or the timer closes
+	// it. WrapUpEnd is "done" | "timeout".
+	Disposition *Disposition `json:"disposition"`
+	Notes       *string      `json:"notes,omitempty"`
+	WrappedUpAt *time.Time   `json:"wrapped_up_at,omitempty"`
+	WrapUpEnd   *string      `json:"wrap_up_end,omitempty"`
 	// QueueTeam / QueuedAt / QueueSLASeconds describe the team queue the call
 	// is waiting in right now. Only list-active-calls fills them (ScanActive).
 	QueueTeam       *string    `json:"queue_team,omitempty"`
 	QueuedAt        *time.Time `json:"queued_at,omitempty"`
 	QueueSLASeconds *int       `json:"queue_sla_seconds,omitempty"`
+}
+
+// Disposition is the {id, name} a wrapped-up call carries.
+type Disposition struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
 }
 
 // Scan reads one row in the get-call / list-calls column order.
@@ -79,13 +92,18 @@ func scan(scanner interface{ Scan(...interface{}) error }, c *Call, extra ...int
 	// RawMessage field — pgx returns jsonb as raw bytes and we pass them
 	// through to the client unchanged.
 	var ivrPath []byte
+	var dispID *uuid.UUID
+	var dispName *string
 	dest := append([]interface{}{
 		&c.ID, &c.TenantID, &c.Direction, &c.Status, &c.FromNumber, &c.ToNumber,
 		&c.AgentID, &c.LegID, &c.StartedAt, &c.AnsweredAt, &c.EndedAt,
 		&c.DurationSec, &c.HangupCause, &c.RecordingURL, &ivrPath, &c.AgentName, &c.ClientRef, &c.Source,
-		&c.RoomID,
+		&c.RoomID, &dispID, &dispName, &c.Notes, &c.WrappedUpAt, &c.WrapUpEnd,
 	}, extra...)
 	err := scanner.Scan(dest...)
+	if dispID != nil && dispName != nil {
+		c.Disposition = &Disposition{ID: *dispID, Name: *dispName}
+	}
 	if len(ivrPath) > 0 {
 		c.IVRPath = ivrPath
 	}
