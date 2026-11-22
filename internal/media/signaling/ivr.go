@@ -92,6 +92,7 @@ func (s *Server) startIVR(roomID room.RoomID, flowID, callerRef string, vars map
 	}
 
 	s.setEndWebhook(roomID, flow.EndWebhookID)
+	s.setWrapUpWebhook(roomID, flow.WrapUpWebhookID)
 
 	onJourney := func(path []ivr.Step) {
 		if s.cfg.Calls != nil {
@@ -270,4 +271,13 @@ func (s *Server) setEndWebhook(roomID room.RoomID, webhookID string) {
 	if cl, ok := s.cfg.Calls.(interface{ EndWebhook(string, uuid.UUID) }); ok {
 		cl.EndWebhook(string(roomID), id)
 	}
+}
+
+// setWrapUpWebhook records the flow's wrap-up webhook on the room's CDR.
+func (s *Server) setWrapUpWebhook(roomID room.RoomID, webhookID string) {
+	id, err := uuid.Parse(webhookID)
+	if err != nil {
+		return // none set
+	}
+	s.cfg.Calls.WrapUpWebhook(string(roomID), id)
 }

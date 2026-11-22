@@ -194,6 +194,15 @@ type CallLog interface {
 	Customer(roomID string, pid room.ParticipantID) room.TrackSink
 	// CallID is the calls.id of roomID's live call (uuid.Nil if none).
 	CallID(roomID string) uuid.UUID
+	// WrapUpWebhook sets the webhook sent call.wrapped_up when the call's wrap-up closes.
+	WrapUpWebhook(roomID string, webhookID uuid.UUID)
+	// WrapUpSettings is the wrap-up timer and mandatory-disposition flag for a
+	// team (the tenant's when team is empty or unknown).
+	WrapUpSettings(ctx context.Context, tenant uuid.UUID, team string) (seconds int, requireDisposition bool, err error)
+	// BeginWrapUp marks agentSIP as the agent wrapping up callID.
+	BeginWrapUp(ctx context.Context, tenant, callID uuid.UUID, agentSIP string, requireDisposition bool) error
+	// TimeoutWrapUp closes an unsaved wrap-up; won is false if the agent saved first.
+	TimeoutWrapUp(ctx context.Context, tenant, callID uuid.UUID) (won bool, err error)
 }
 
 // Server is the /rtc signaling surface.
