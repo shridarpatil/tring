@@ -142,7 +142,7 @@ func main() {
 	}()
 
 	err = run(o, roles{
-		api:     func() (apiStopper, error) { return startAPI(d, o) },
+		api: func() (apiStopper, error) { return startAPI(d, o) },
 		gateway: func() (gatewayStopper, error) {
 			// A gateway-only node never migrates; it waits for the main node to.
 			// All mode just migrated in the api role.
@@ -154,7 +154,7 @@ func main() {
 			}
 			return startGateway(d)
 		},
-		seed:    func() error { return runSeed(d, o) },
+		seed: func() error { return runSeed(d, o) },
 	}, ctx.Done())
 	if err != nil {
 		d.log.Error("tring stopped", "err", err)

@@ -16,16 +16,28 @@ type blockingDriver struct{ dtmf chan string }
 func (d *blockingDriver) Greeting(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	return ivr.NodeResult{Outcome: "default", Action: "play_audio"}, nil
 }
-func (d *blockingDriver) Menu(context.Context, *ivr.Node) (ivr.NodeResult, error)    { return ivr.NodeResult{}, nil }
-func (d *blockingDriver) Gather(context.Context, *ivr.Node) (ivr.NodeResult, error)  { return ivr.NodeResult{}, nil }
+func (d *blockingDriver) Menu(context.Context, *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{}, nil
+}
+func (d *blockingDriver) Gather(context.Context, *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{}, nil
+}
 func (d *blockingDriver) Transfer(ctx context.Context, n *ivr.Node) (ivr.NodeResult, error) {
 	<-ctx.Done()
 	return ivr.NodeResult{Action: "transfer", Outcome: ""}, nil // terminal on abandon
 }
-func (d *blockingDriver) HTTPCallback(context.Context, *ivr.Node) (ivr.NodeResult, error) { return ivr.NodeResult{}, nil }
-func (d *blockingDriver) Timing(context.Context, *ivr.Node) (ivr.NodeResult, error)       { return ivr.NodeResult{}, nil }
-func (d *blockingDriver) GotoFlow(context.Context, *ivr.Node) (ivr.NodeResult, error)     { return ivr.NodeResult{}, nil }
-func (d *blockingDriver) Hangup(context.Context, *ivr.Node) (ivr.NodeResult, error)       { return ivr.NodeResult{Outcome: ""}, nil }
+func (d *blockingDriver) HTTPCallback(context.Context, *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{}, nil
+}
+func (d *blockingDriver) Timing(context.Context, *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{}, nil
+}
+func (d *blockingDriver) GotoFlow(context.Context, *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{}, nil
+}
+func (d *blockingDriver) Hangup(context.Context, *ivr.Node) (ivr.NodeResult, error) {
+	return ivr.NodeResult{Outcome: ""}, nil
+}
 
 func flowGreetThenTransfer() *ivr.Flow {
 	return &ivr.Flow{

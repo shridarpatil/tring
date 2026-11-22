@@ -19,12 +19,12 @@ func (genericPlug) Hangup(room.CallID) error              { return nil }
 
 type genericSource struct{}
 
-func (genericSource) ID() room.ParticipantID    { return "src" }
+func (genericSource) ID() room.ParticipantID        { return "src" }
 func (genericSource) ReadRTP() (*rtp.Packet, error) { return &rtp.Packet{}, nil }
-func (genericSource) Close() error               { return nil }
+func (genericSource) Close() error                  { return nil }
 
 // Compile-time guarantees the contract is implementable without any transport.
 var (
-	_ room.Plug             = genericPlug{}
+	_ room.Plug              = genericPlug{}
 	_ room.ParticipantSource = genericSource{}
 )
