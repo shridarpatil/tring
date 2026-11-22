@@ -108,6 +108,7 @@ func (s *Server) runAgentCampaign(ctx context.Context, tenant uuid.UUID, rid roo
 	if sink := s.cfg.Calls.Answered(string(rid), agentPID, agent.sip); sink != nil {
 		s.sfu.AddSink(rid, agentPID, sink)
 	}
+	s.markLegsConnected(rid)
 	if c := s.connFor(agentPID); c != nil {
 		_ = c.send(msg{Type: msgAnswered})
 	}

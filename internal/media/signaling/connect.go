@@ -190,6 +190,7 @@ func (s *Server) ControlHandler() http.Handler {
 	mux.HandleFunc("POST /control/call", s.handleControlCall)
 	mux.HandleFunc("POST /control/agent-kick", s.handleControlAgentKick)
 	mux.HandleFunc("POST /control/transfer", s.handleControlTransfer)
+	mux.HandleFunc("POST /control/wrap-up-done", s.handleControlWrapUpDone)
 	return mux
 }
 
