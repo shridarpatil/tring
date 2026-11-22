@@ -96,11 +96,13 @@ type wrapHarness struct {
 	*callHarness
 	wl   *wrapCallLog
 	pstr *presence.Store
+	sink *captureSink
 }
 
 func newWrapHarness(t *testing.T, wl *wrapCallLog, members map[string][]string, results ...connectLeg) *wrapHarness {
 	t.Helper()
 	pstr := testPresence(t)
+	sink := &captureSink{}
 	h := &callHarness{t: t, tenant: uuid.New(), o: newConnectOriginator(results...), cl: wl.connectCallLog}
 	sf, err := sfu.New(sfu.Config{})
 	if err != nil {
@@ -109,12 +111,12 @@ func newWrapHarness(t *testing.T, wl *wrapCallLog, members map[string][]string, 
 	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+912240000000", Name: "t_0a1b2c3d4e5f"}}}
 	h.srv = New(Config{
 		SFU: sf, Originator: h.o, Trunks: trunks, Calls: wl, JWTSecret: []byte(testControlSecret),
-		Presence: pstr, Teams: queueTeams{members: members},
+		Presence: pstr, Events: sink, Teams: queueTeams{members: members},
 	})
 	ts := httptest.NewServer(h.srv.Handler())
 	t.Cleanup(ts.Close)
 	h.url = strings.Replace(ts.URL, "http://", "ws://", 1)
-	wh := &wrapHarness{callHarness: h, wl: wl, pstr: pstr}
+	wh := &wrapHarness{callHarness: h, wl: wl, pstr: pstr, sink: sink}
 	h.pres = wh.online("alice")
 	return wh
 }
@@ -474,4 +476,63 @@ func TestTransferredTeamSettingsApply(t *testing.T) {
 		t.Fatalf("settings looked up for %v, want [B] (alice transferred away)", teams)
 	}
 	noWrapUp(t, h.pres, 200*time.Millisecond)
+}
+
+// An agent who went Away during wrap-up leaves it as Away: the dashboard reads
+// that as online + unavailable, so the last publish must be online (with no
+// idle clock restart), never a stale wrap_up.
+func TestWrapUpEndWhileAwayPublishesOnline(t *testing.T) {
+	wl := newWrapCallLog(map[string]int{"": 30}, false)
+	h := newWrapHarness(t, wl, map[string][]string{"sales": {"alice"}})
+	_, caller, callID := h.teamCall("sales")
+	h.answerAs("alice", h.pres)
+	caller.Leave()
+	h.readUntil(h.pres, msgWrapUp)
+	go h.srv.PushAvailability(h.tenant.String(), "alice", false)
+	h.readUntil(h.pres, msgAvailability)
+
+	if !h.srv.endWrapUp(h.tenant.String(), "alice", callID, false) {
+		t.Fatal("wrap-up did not end")
+	}
+	h.readUntil(h.pres, msgWrapUpEnd)
+	h.sink.mu.Lock()
+	n := len(h.sink.statuses)
+	last, idle := h.sink.statuses[n-1], h.sink.idleSince[len(h.sink.idleSince)-1]
+	h.sink.mu.Unlock()
+	if last != presence.StatusOnline || idle != nil {
+		t.Fatalf("last publish = %q (idle_since %v), want online with no idle_since", last, idle)
+	}
+	if got := h.status("alice"); got != presence.StatusOnline {
+		t.Fatalf("presence = %q, want online", got)
+	}
+	if got := ringAllCandidates(t, h.srv, h.tenant.String()); len(got) != 0 {
+		t.Fatalf("ring candidates = %v, want none while Away", got)
+	}
+}
+
+// A CRM click-to-call from an agent in wrap-up ends the wrap-up (as a
+// timeout) and places the call, instead of refusing them as busy.
+func TestClickToCallEndsWrapUp(t *testing.T) {
+	wl := newWrapCallLog(map[string]int{"": 30}, false)
+	h := newWrapHarness(t, wl, map[string][]string{"sales": {"alice"}}, newConnectLeg("out-client"))
+	_, caller, callID := h.teamCall("sales")
+	h.answerAs("alice", h.pres)
+	caller.Leave()
+	h.readUntil(h.pres, msgWrapUp)
+
+	req := httptest.NewRequest(http.MethodPost, "/control/call", strings.NewReader(`{"agent_sip":"alice","to":"9812345678","agent_label":"Lead 42"}`))
+	req.Header.Set("Authorization", "Bearer "+controlToken(t, controlAudience, h.tenant, time.Minute))
+	rec := httptest.NewRecorder()
+	h.srv.ControlHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("control call: %d %s, want 201", rec.Code, rec.Body)
+	}
+	if inWrapUp(h.srv, h.tenant.String(), "alice") {
+		t.Fatal("wrap-up still active after the call was placed")
+	}
+	if _, _, timeouts := wl.calls(); len(timeouts) != 1 || timeouts[0] != callID {
+		t.Fatalf("TimeoutWrapUp calls %v, want [%s]", timeouts, callID)
+	}
+	h.readUntil(h.pres, msgWrapUpEnd)
+	h.answer() // the call proceeds: alice is rung for it and joins
 }
