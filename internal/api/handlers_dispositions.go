@@ -74,13 +74,14 @@ func scanLabel(row pgx.Row) (labelItem, error) {
 	return it, err
 }
 
-// cleanTeams trims, de-duplicates and sorts a label's team names.
+// cleanTeams trims, de-duplicates and sorts a label's team names, dropping
+// blank ones (so [" "] means shared, like []).
 func cleanTeams(in []string) []string {
 	out := make([]string, 0, len(in))
 	seen := make(map[string]bool, len(in))
 	for _, n := range in {
 		n = strings.TrimSpace(n)
-		if !seen[n] {
+		if n != "" && !seen[n] {
 			seen[n] = true
 			out = append(out, n)
 		}
@@ -175,7 +176,7 @@ func (s *Server) createLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 	}
 	if len(req.Teams) > 0 {
 		it.Teams = cleanTeams(req.Teams)
-		if !s.writeLabelTeams(w, ctx, tx, q, t.ID, it.ID, it.Teams) {
+		if !s.writeLabelTeams(w, r, tx, q, t.ID, it.ID, it.Teams) {
 			return
 		}
 	}
@@ -232,7 +233,7 @@ func (s *Server) updateLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 	}
 	if req.Teams != nil {
 		it.Teams = cleanTeams(*req.Teams)
-		if !s.writeLabelTeams(w, ctx, tx, q, t.ID, id, it.Teams) {
+		if !s.writeLabelTeams(w, r, tx, q, t.ID, id, it.Teams) {
 			return
 		}
 	}
@@ -245,15 +246,15 @@ func (s *Server) updateLabel(w http.ResponseWriter, r *http.Request, q labelQuer
 
 // writeLabelTeams runs setLabelTeams and answers the request on failure (400
 // for an unknown team); ok is false when it did.
-func (s *Server) writeLabelTeams(w http.ResponseWriter, ctx context.Context, tx pgx.Tx, q labelQueries, tenantID, id uuid.UUID, teams []string) bool {
-	unknown, ok, err := s.setLabelTeams(ctx, tx, q, tenantID, id, teams)
+func (s *Server) writeLabelTeams(w http.ResponseWriter, r *http.Request, tx pgx.Tx, q labelQueries, tenantID, id uuid.UUID, teams []string) bool {
+	unknown, ok, err := s.setLabelTeams(r.Context(), tx, q, tenantID, id, teams)
 	switch {
 	case err != nil && isForeignKeyViolation(err):
 		// The team was deleted between the check and the insert.
 		writeError(w, http.StatusBadRequest, "unknown team")
 		return false
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, "request failed")
+		s.writeServerError(w, r, http.StatusInternalServerError, "request failed", err)
 		return false
 	case !ok:
 		writeError(w, http.StatusBadRequest, "unknown team: "+unknown)

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -157,8 +158,22 @@ func TestLabelTeams(t *testing.T) {
 			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown team: Ghost") {
 				t.Fatalf("unknown team create = %d: %s", rec.Code, rec.Body.String())
 			}
-			if got := labelList(t, s, f, path); len(got) != 2 {
-				t.Fatalf("list after rejected create = %+v", got)
+			// Another tenant's team name is unknown here.
+			other, _, _ := otherTenant(t, f)
+			if _, err := f.DB.Pool.Exec(context.Background(), `INSERT INTO teams (tenant_id, name) VALUES ($1, 'Theirs')`, other); err != nil {
+				t.Fatal(err)
+			}
+			rec = serve(t, s, f, "POST", path, `{"name":"Cross","teams":["Theirs"]}`)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown team: Theirs") {
+				t.Fatalf("other tenant's team = %d: %s", rec.Code, rec.Body.String())
+			}
+			// Blank names are dropped: [" "] is shared.
+			rec = serve(t, s, f, "POST", path, `{"name":"Blank","teams":[" ",""]}`)
+			if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"teams":[]`) {
+				t.Fatalf("blank teams = %d: %s", rec.Code, rec.Body.String())
+			}
+			if got := labelList(t, s, f, path); len(got) != 3 {
+				t.Fatalf("list after rejected creates = %+v", got)
 			}
 
 			// Rename without teams keeps them; teams present replaces.
@@ -183,7 +198,7 @@ func TestLabelTeams(t *testing.T) {
 			for _, it := range got {
 				teams[it.Name] = strings.Join(it.Teams, ",")
 			}
-			if len(got) != 2 || teams["Limited 2"] != "" || teams["Shared"] != "Support" {
+			if len(got) != 3 || teams["Limited 2"] != "" || teams["Shared"] != "Support" || teams["Blank"] != "" {
 				t.Fatalf("list = %+v", got)
 			}
 		})
