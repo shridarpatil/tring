@@ -154,6 +154,34 @@ func TestMePasswordChange(t *testing.T) {
 	}
 }
 
+// Logout must revoke the token server-side, not just drop it from the browser:
+// a copy of the token (and any other session of the user) stops working.
+func TestMeLogoutRevokesSessions(t *testing.T) {
+	f := dbtest.Setup(t)
+	s := newTestServer(f)
+	id := f.AddUser(t, "agent", "a@example.com")
+	other := f.AddUser(t, "agent", "x@example.com")
+	tok := tokenFor(t, s, f, id, "a@example.com", "agent")
+	tok2 := tokenFor(t, s, f, id, "a@example.com", "agent")
+	otherTok := tokenFor(t, s, f, other, "x@example.com", "agent")
+	h := s.Router()
+
+	if rec := doReq(t, h, "POST", "/v1/me/logout", tok, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("logout: %d %s", rec.Code, rec.Body)
+	}
+	for name, tk := range map[string]string{"same token": tok, "other session": tok2} {
+		if rec := doReq(t, h, "GET", "/v1/me", tk, ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s after logout: %d, want 401", name, rec.Code)
+		}
+	}
+	if rec := doReq(t, h, "GET", "/v1/me", otherTok, ""); rec.Code != http.StatusOK {
+		t.Fatalf("another user's session: %d, want 200", rec.Code)
+	}
+	if rec := doReq(t, h, "POST", "/v1/me/logout", tok, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("logout with revoked token: %d, want 401", rec.Code)
+	}
+}
+
 func TestMeStatsTakenAndMissed(t *testing.T) {
 	f := dbtest.Setup(t)
 	s := newTestServer(f)

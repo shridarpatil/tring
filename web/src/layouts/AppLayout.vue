@@ -75,7 +75,14 @@ onMounted(async () => {
   }
 });
 
-function logout() {
+// Revoke the session server-side first so a copied token dies too; sign out
+// locally whatever the outcome (a revoked token's 401 already signs out).
+async function logout() {
+  try {
+    await api.post("/v1/me/logout");
+  } catch {
+    /* still clear the local session */
+  }
   auth.signOut();
 }
 </script>
