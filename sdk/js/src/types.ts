@@ -128,6 +128,12 @@ export type TringEvent =
   // front (target unavailable, …), nobody answered (reason "no answer"), or the
   // agent it rang declined (reason "declined").
   | { type: "call:transfer-failed"; call: Call; reason: string }
+  // The call ended into a timed post-call wrap-up (disposition/notes/tags).
+  // Re-sent with the original endsAt after a reconnect. The widget shows its own
+  // panel; a CRM with its own form can react to these instead.
+  | { type: "wrapup"; callId: string; endsAt: string; requireDisposition: boolean }
+  // The wrap-up window closed (saved, timed out or superseded by a newer call).
+  | { type: "wrapupend"; callId: string }
   | { type: "error"; error: Error };
 
 // ---- Guest (web-to-web customer) calling --------------------------------

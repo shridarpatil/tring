@@ -64,6 +64,10 @@ type Team struct {
 	SLASeconds    int             `json:"sla_seconds"`
 	Hours         json.RawMessage `json:"hours"`
 	CreatedAt     time.Time       `json:"created_at"`
+	// WrapUpSeconds is the post-call wrap-up window (0 = none);
+	// RequireDisposition makes picking a disposition mandatory in it.
+	WrapUpSeconds      int  `json:"wrap_up_seconds"`
+	RequireDisposition bool `json:"require_disposition"`
 	// Members is populated only on the single-team GET, not the list.
 	Members []TeamMember `json:"members,omitempty"`
 }
@@ -85,7 +89,13 @@ type createTeamRequest struct {
 	MinLiveAgents  int             `json:"min_live_agents"`
 	SLASeconds     int             `json:"sla_seconds"`
 	Hours          json.RawMessage `json:"hours"`
+	// Post-call wrap-up window (0 = none) and whether a disposition is mandatory in it.
+	WrapUpSeconds      int  `json:"wrap_up_seconds"`
+	RequireDisposition bool `json:"require_disposition"`
 }
+
+// validWrapUpSeconds reports whether n is nil or within the 0-600 window.
+func validWrapUpSeconds(n *int) bool { return n == nil || (*n >= 0 && *n <= 600) }
 
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	t := tenantFromCtx(r.Context())
@@ -116,6 +126,10 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 		req.MohSound = "local_stream://moh"
 	}
 
+	if !validWrapUpSeconds(&req.WrapUpSeconds) {
+		writeError(w, http.StatusBadRequest, "wrap_up_seconds must be 0-600")
+		return
+	}
 	if msg := validateLiveSettings(&req.MinLiveAgents, &req.SLASeconds, req.Hours); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -128,9 +142,9 @@ func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.CreateTeam,
 		t.ID, req.Name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
-		req.MinLiveAgents, req.SLASeconds, []byte(hours)).Scan(
+		req.MinLiveAgents, req.SLASeconds, []byte(hours), req.WrapUpSeconds, req.RequireDisposition).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if isUniqueViolation(err) {
 		writeError(w, http.StatusConflict, "a team with this name already exists")
 		return
@@ -155,7 +169,7 @@ func (s *Server) handleListTeams(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var tm Team
 		if err := rows.Scan(&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-			&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt); err != nil {
+			&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition); err != nil {
 			writeError(w, http.StatusInternalServerError, "scan failed")
 			return
 		}
@@ -188,6 +202,9 @@ type patchTeamRequest struct {
 	MinLiveAgents  *int            `json:"min_live_agents"`
 	SLASeconds     *int            `json:"sla_seconds"`
 	Hours          json.RawMessage `json:"hours"` // nil = unchanged
+
+	WrapUpSeconds      *int  `json:"wrap_up_seconds"`
+	RequireDisposition *bool `json:"require_disposition"`
 }
 
 func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +219,10 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "strategy must be ring_all|round_robin|sequential|longest_wait")
 		return
 	}
+	if !validWrapUpSeconds(req.WrapUpSeconds) {
+		writeError(w, http.StatusBadRequest, "wrap_up_seconds must be 0-600")
+		return
+	}
 	if msg := validateLiveSettings(req.MinLiveAgents, req.SLASeconds, req.Hours); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -214,9 +235,9 @@ func (s *Server) handlePatchTeam(w http.ResponseWriter, r *http.Request) {
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.UpdateTeam,
 		t.ID, name, req.Strategy, req.RingSeconds, req.MaxWaitSeconds, req.MohSound,
-		req.MinLiveAgents, req.SLASeconds, hours).Scan(
+		req.MinLiveAgents, req.SLASeconds, hours, req.WrapUpSeconds, req.RequireDisposition).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return
@@ -268,13 +289,33 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
-	tag, err := s.db.Pool.Exec(r.Context(), s.q.DeleteTeam, t.ID, name)
+	// Labels limited to this team alone are archived with it: the delete
+	// cascades their last team row away, which would otherwise make them
+	// shared by every team. A label also on another team keeps that one.
+	ctx := r.Context()
+	tx, err := s.db.Pool.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	for _, q := range []string{s.q.ArchiveTeamOnlyDispositions, s.q.ArchiveTeamOnlyCallTags} {
+		if _, err := tx.Exec(ctx, q, t.ID, name); err != nil {
+			writeError(w, http.StatusInternalServerError, "delete failed")
+			return
+		}
+	}
+	tag, err := tx.Exec(ctx, s.q.DeleteTeam, t.ID, name)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
 	if tag.RowsAffected() == 0 {
 		writeError(w, http.StatusNotFound, "team not found")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "delete failed")
 		return
 	}
 	s.invalidateTeam(r.Context(), t.ID, name)
@@ -359,7 +400,7 @@ func (s *Server) loadTeam(w http.ResponseWriter, r *http.Request, tenantID uuid.
 	var tm Team
 	err := s.db.Pool.QueryRow(r.Context(), s.q.GetTeam, tenantID, name).Scan(
 		&tm.TenantID, &tm.Name, &tm.Strategy, &tm.RingSeconds, &tm.MaxWaitSeconds, &tm.MohSound,
-		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt)
+		&tm.MinLiveAgents, &tm.SLASeconds, &tm.Hours, &tm.CreatedAt, &tm.WrapUpSeconds, &tm.RequireDisposition)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "team not found")
 		return Team{}, false
@@ -393,4 +434,10 @@ func (s *Server) listTeamMembers(r *http.Request, tenantID uuid.UUID, name strin
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// isForeignKeyViolation reports a Postgres foreign-key violation (SQLSTATE 23503).
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }

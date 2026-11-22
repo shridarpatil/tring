@@ -38,7 +38,7 @@ func TestClaimLostKeepsAnsweredCall(t *testing.T) {
 		t.Fatal("acquire claim")
 	}
 	t.Cleanup(claim.Release)
-	s.holdAgentLeg(agent, tenant, "alice", claim)
+	s.holdAgentLeg(agent, tenant, "alice", claim, "")
 
 	select {
 	case <-claim.Lost():

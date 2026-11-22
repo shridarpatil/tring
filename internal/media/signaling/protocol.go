@@ -48,6 +48,8 @@ const (
 	msgAnswered       = "answered"        // s→caller: the other party accepted (web agent / click-to-call customer)
 	msgResumeCall     = "resume-call"     // s→agent presence: a call is holding your dropped slot (page refresh) — {room, phone, auto}; join it to resume
 	msgSuperseded     = "superseded"      // s→agent presence: another tab/device took over this agent's ringing; don't reconnect
+	msgWrapUp         = "wrap-up"         // s→agent presence: the answered call ended; wrap it up until ends_at — {call_id, ends_at, require_disposition}
+	msgWrapUpEnd      = "wrap-up-end"     // s→agent presence: wrap-up is over (saved, timed out, or a new call) — {call_id}
 )
 
 // msg is the single envelope for every /rtc message.
@@ -102,6 +104,12 @@ type msg struct {
 
 	// availability (s→agent): a pointer so `false` (Away) still goes on the wire
 	Available *bool `json:"available,omitempty"`
+
+	// wrap-up / wrap-up-end (s→agent): the call being wrapped up (calls.id),
+	// when its timer runs out (RFC3339), and whether a disposition is mandatory
+	CallID             string `json:"call_id,omitempty"`
+	EndsAt             string `json:"ends_at,omitempty"`
+	RequireDisposition bool   `json:"require_disposition,omitempty"`
 }
 
 // ICEServer is the browser-facing STUN/TURN entry sent in `joined` (ephemeral

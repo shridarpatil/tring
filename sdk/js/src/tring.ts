@@ -132,6 +132,10 @@ export class Tring extends Emitter<TringEvent> {
       }
       this.emit({ type: "superseded" });
     });
+    this.agent.on("wrap-up", ({ callId, endsAt, requireDisposition }) =>
+      this.emit({ type: "wrapup", callId, endsAt, requireDisposition }),
+    );
+    this.agent.on("wrap-up-end", ({ callId }) => this.emit({ type: "wrapupend", callId }));
     this.agent.on("error", ({ error }) => this.emit({ type: "error", error }));
     this.agent.on("incoming", ({ from, auto, phone }) => this.handleIncoming(from, auto, phone));
     this.agent.on("resume-call", ({ auto, phone }) => this.handleIncoming(undefined, auto, phone, true));

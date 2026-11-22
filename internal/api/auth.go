@@ -58,6 +58,11 @@ type Tenant struct {
 	MaskNumbersAgents      bool `json:"mask_numbers_agents"`
 	MaskNumbersManagers    bool `json:"mask_numbers_managers"`
 	MaskNumbersSupervisors bool `json:"mask_numbers_supervisors"`
+	// WrapUpSeconds / RequireDisposition are the tenant default for post-call
+	// wrap-up (a team's own settings override). Populated only by the tenant
+	// settings handlers.
+	WrapUpSeconds      int  `json:"wrap_up_seconds"`
+	RequireDisposition bool `json:"require_disposition"`
 }
 
 // AuthRequired gates all /v1/* tenant-scoped routes on either a tenant API

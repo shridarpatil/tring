@@ -74,6 +74,7 @@ export default defineConfig({
             { label: 'Trunks', slug: 'api-reference/trunks' },
             { label: 'Flows', slug: 'api-reference/flows' },
             { label: 'Calls', slug: 'api-reference/calls' },
+            { label: 'Dispositions & tags', slug: 'api-reference/dispositions-and-tags' },
             { label: 'Campaigns', slug: 'api-reference/campaigns' },
             { label: 'Webhooks', slug: 'api-reference/webhooks' },
           ],

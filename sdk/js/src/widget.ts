@@ -11,6 +11,7 @@
 import { Tring } from "./tring";
 import type { Call } from "./types";
 import { videoErrorMessage, type VideoSource } from "./video";
+import { createWrapUpPanel, WRAPUP_CSS, type WrapUpApi, type WrapUpOptions } from "./wrapup";
 import { IncomingCallNotification, supportsCallNotifications } from "./call-notifications";
 
 export interface WidgetOpts {
@@ -78,6 +79,7 @@ interface CallControl {
   hold(action: "hold" | "resume"): Promise<boolean>;
   transfer(body: { to_sip?: string; to_team?: string }): Promise<boolean>;
   targets(): Promise<TransferTargets | null>;
+  wrapUp: WrapUpApi;
 }
 
 // makeCallControl posts to POST {apiBase}/v1/sdk/calls/* with a FRESH agent
@@ -120,6 +122,26 @@ function makeCallControl(
     hold: (action) => post(`/v1/sdk/calls/${action}`),
     transfer: (body) => post(`/v1/sdk/calls/transfer`, body),
     targets: () => getJSON(`/v1/sdk/transfer-targets`) as Promise<TransferTargets | null>,
+    wrapUp: {
+      options: (callId) =>
+        getJSON(`/v1/sdk/wrap-up-options?call_id=${encodeURIComponent(callId)}`) as Promise<WrapUpOptions | null>,
+      // Unlike post(), keeps the status: 400 shows the server's message, 409
+      // means the window already closed.
+      save: async (body) => {
+        try {
+          const res = await fetch(`${apiBase}/v1/sdk/calls/wrap-up`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${await freshToken()}`, "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          let error: string | undefined;
+          if (!res.ok) error = ((await res.json().catch(() => null)) as { error?: string } | null)?.error;
+          return { status: res.status, error };
+        } catch {
+          return { status: 0 };
+        }
+      },
+    },
   };
 }
 
@@ -162,6 +184,8 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   const control = makeCallControl(opts.apiBase, credentials, token);
   const panel = createPanel(control);
   document.body.appendChild(panel.root);
+  const wrapUp = createWrapUpPanel(control?.wrapUp);
+  document.body.appendChild(wrapUp.root);
   const badge = createStatusBadge();
   document.body.appendChild(badge.root);
 
@@ -234,6 +258,8 @@ export async function bootstrap(opts: WidgetOpts): Promise<Tring> {
   tring.on("call:supervisor", ({ present, mode, name }) => panel.setSupervisor(present, mode, name));
   tring.on("call:transferring", () => panel.setTransfer("ringing"));
   tring.on("call:transfer-failed", ({ reason }) => panel.setTransfer("failed", reason));
+  tring.on("wrapup", (ev) => wrapUp.show(ev));
+  tring.on("wrapupend", ({ callId }) => wrapUp.end(callId));
   tring.on("call:ended", () => panel.hide()); // hide() resets the supervisor badge too
   tring.on("error", ({ error }) => panel.setStatus("error", error.message));
 
@@ -920,7 +946,7 @@ function injectStyles(): void {
   if (document.getElementById("tring-styles")) return;
   const style = document.createElement("style");
   style.id = "tring-styles";
-  style.textContent = `
+  style.textContent = WRAPUP_CSS + `
     #${PANEL_ID} {
       position: fixed; right: 1.5rem; bottom: 1.5rem;
       width: 400px; max-width: calc(100vw - 2rem); box-sizing: border-box;

@@ -436,3 +436,14 @@ func TestConnectSelectsTrunkOncePerLeg(t *testing.T) {
 		t.Fatalf("OutboundTrunks called %d times for a two-leg connect, want 2", calls)
 	}
 }
+
+func (c *connectCallLog) WrapUpWebhook(string, uuid.UUID) {}
+func (c *connectCallLog) WrapUpSettings(context.Context, uuid.UUID, string) (int, bool, error) {
+	return 0, false, nil
+}
+func (c *connectCallLog) BeginWrapUp(context.Context, uuid.UUID, uuid.UUID, string, bool, string) error {
+	return nil
+}
+func (c *connectCallLog) TimeoutWrapUp(context.Context, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, nil
+}

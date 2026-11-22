@@ -5,8 +5,8 @@ import { errMessage } from "../lib/errors";
 import { api } from "../api/client";
 import { toast } from "../lib/toast";
 import { usePagedList } from "../composables/usePagedList";
-import type { Call, CallEvent } from "../api/types";
-import { Button, Select, CallsTable, Modal, TextField, Pagination, CallDetailModal, CallFullLogModal } from "../components/ui";
+import type { Call, CallEvent, WrapUpLabel } from "../api/types";
+import { Button, Select, CallsTable, Modal, TextField, Pagination, CallDetailModal, CallFullLogModal, CallOutcome } from "../components/ui";
 import { toCallDetail, toFullLog } from "../lib/callDetail";
 
 const statusFilter = ref("");
@@ -19,7 +19,32 @@ watch(search, (v) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => (searchQuery.value = v.trim()), 300);
 });
-const params = computed(() => ({ status: statusFilter.value, q: searchQuery.value }));
+const dispositionFilter = ref("");
+const tagFilter = ref("");
+const params = computed(() => ({
+  status: statusFilter.value,
+  q: searchQuery.value,
+  disposition_id: dispositionFilter.value,
+  tag_id: tagFilter.value,
+}));
+
+// Wrap-up labels for the filters; archived ones are
+// included because old calls keep them.
+const dispositions = ref<WrapUpLabel[]>([]);
+const callTags = ref<WrapUpLabel[]>([]);
+const labelOption = (l: WrapUpLabel) => ({ value: l.id, label: l.archived ? `${l.name} (archived)` : l.name });
+const dispositionOptions = computed(() => [{ value: "", label: "All" }, ...dispositions.value.map(labelOption)]);
+const tagOptions = computed(() => [{ value: "", label: "All" }, ...callTags.value.map(labelOption)]);
+(async () => {
+  try {
+    [dispositions.value, callTags.value] = await Promise.all([
+      api.get<WrapUpLabel[]>("/v1/dispositions?include_archived=1"),
+      api.get<WrapUpLabel[]>("/v1/call-tags?include_archived=1"),
+    ]);
+  } catch (e) {
+    toast.error(errMessage(e, "failed to load dispositions and tags"));
+  }
+})();
 const {
   items: calls,
   page,
@@ -152,6 +177,10 @@ async function connect() {
       />
       <span class="text-light">Status</span>
       <Select v-model="statusFilter" :options="statusOptions" />
+      <span class="text-light">Disposition</span>
+      <Select v-model="dispositionFilter" :options="dispositionOptions" />
+      <span class="text-light">Tag</span>
+      <Select v-model="tagFilter" :options="tagOptions" />
     </div>
 
     <div class="card" style="padding: 0">
@@ -193,7 +222,14 @@ async function connect() {
       :call="detailProp"
       @update:open="(v) => { if (!v) closeCall(); }"
       @view-full-log="showFullLog"
-    />
+    >
+      <template #outcome>
+        <CallOutcome
+          v-if="detailCall"
+          :call="detailCall"
+        />
+      </template>
+    </CallDetailModal>
     <CallFullLogModal
       :open="fullLogOpen"
       :rows="fullLogRows"

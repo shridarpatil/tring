@@ -129,15 +129,21 @@ func (l *Log) CallID(roomID string) uuid.UUID {
 // object GET /v1/calls/{id} returns), to webhookID. Best-effort: a missing
 // row or a lookup error logs and skips it.
 func (l *Log) emitCall(ctx context.Context, ac *activeCall, webhookID uuid.UUID, event string) {
+	l.emitCallID(ctx, ac.tenant, ac.id, webhookID, event)
+}
+
+// emitCallID is emitCall for a call that is no longer live (wrap-up closes
+// after the active call is gone).
+func (l *Log) emitCallID(ctx context.Context, tenant, callID, webhookID uuid.UUID, event string) {
 	if l.hooks == nil || webhookID == uuid.Nil {
 		return
 	}
-	c, err := callrow.Get(ctx, l.db, l.q, ac.tenant, ac.id)
+	c, err := callrow.Get(ctx, l.db, l.q, tenant, callID)
 	if err != nil {
-		l.log.Warn("cdr: webhook payload lookup failed", "event", event, "call", ac.id, "err", err)
+		l.log.Warn("cdr: webhook payload lookup failed", "event", event, "call", callID, "err", err)
 		return
 	}
-	l.hooks.Send(ac.tenant, webhookID, event, callrow.Payload(c))
+	l.hooks.Send(tenant, webhookID, event, callrow.Payload(c))
 }
 
 // New builds a Log. blob may be nil (S3 off for every tenant); dir is the recordings spool;

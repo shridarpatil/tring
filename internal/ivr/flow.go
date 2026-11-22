@@ -56,6 +56,9 @@ type Flow struct {
 	// ran this flow ends ("" = none). A node's own webhook is its config's
 	// "webhook_id".
 	EndWebhookID string `json:"end_webhook_id,omitempty"`
+	// WrapUpWebhookID is the registered webhook sent call.wrapped_up when the
+	// agent's wrap-up for a call that ran this flow closes ("" = none).
+	WrapUpWebhookID string `json:"wrap_up_webhook_id,omitempty"`
 }
 
 // Parse unmarshals a flow definition and enforces the one invariant the walker

@@ -47,6 +47,7 @@ const (
 	EventCampaignAttempt = "campaign.attempt.finished" // campaign attempt reached a terminal outcome
 	EventIVRNode         = "ivr.node"                  // an IVR node with a webhook finished (a transfer: answered or not)
 	EventCallEnded       = "call.ended"                // a call whose flow has an "on call end" webhook ended
+	EventCallWrappedUp   = "call.wrapped_up"           // an agent saved, or the timer closed, a call's wrap-up
 )
 
 type Notifier struct {
