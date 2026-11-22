@@ -95,7 +95,7 @@ How it behaves:
 - The agent saves in the [agent widget](/tring/sdk/agent-widget/#wrap-up) (or your own UI) before the timer runs out. The agent is available again as soon as they save.
 - If the timer runs out first, the call's `wrap_up_end` is `timeout`, its disposition stays empty, and the agent becomes available.
 - An agent who places a call (the dial pad or a CRM click-to-call) ends their wrap-up first.
-- Your backend can set or change the outcome at any time with [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up). Console users edit it from the call log (admins only).
+- Your backend can set or change the outcome at any time with [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up). The console call log shows the outcome read-only.
 
 The outcome is part of the [call object](/tring/api-reference/calls/#the-call-object), and the flow's **On wrap-up** [webhook](/tring/features/webhooks/#choosing-what-sends) reports it.
 
