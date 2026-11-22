@@ -3,8 +3,8 @@ import { ref, onMounted } from "vue";
 import { api } from "../api/client";
 import { errMessage } from "../lib/errors";
 import { toast } from "../lib/toast";
-import type { WrapUpLabel } from "../api/types";
-import { Button, Panel, TextField, Toggle, Badge } from "../components/ui";
+import type { Team, WrapUpLabel } from "../api/types";
+import { Button, Panel, TextField, Toggle, Badge, Modal } from "../components/ui";
 
 interface LabelList {
   title: string;
@@ -48,14 +48,49 @@ function startEdit(l: LabelList, it: WrapUpLabel) {
   l.editName = it.name;
 }
 
-async function patch(l: LabelList, it: WrapUpLabel, body: { name?: string; archived?: boolean }) {
+async function patch(l: LabelList, it: WrapUpLabel, body: { name?: string; archived?: boolean; teams?: string[] }) {
   try {
     await api.patch(`${l.path}/${it.id}`, body);
     l.editingId = "";
     await load(l);
+    return true;
   } catch (e) {
     toast.error(errMessage(e, "update failed"));
+    return false;
   }
+}
+
+// Teams editor: an entry is shared (no teams) or limited to the checked ones.
+const teamNames = ref<string[]>([]);
+const teamsFor = ref<{ list: LabelList; item: WrapUpLabel } | null>(null);
+const teamsOpen = ref(false);
+const pickedTeams = ref<string[]>([]);
+const savingTeams = ref(false);
+
+async function loadTeams() {
+  try {
+    teamNames.value = (await api.get<Team[]>("/v1/teams")).map((t) => t.name).sort((a, b) => a.localeCompare(b));
+  } catch (e) {
+    toast.error(errMessage(e, "failed to load teams"));
+  }
+}
+
+function editTeams(list: LabelList, item: WrapUpLabel) {
+  teamsFor.value = { list, item };
+  pickedTeams.value = [...item.teams];
+  teamsOpen.value = true;
+}
+
+async function saveTeams() {
+  if (!teamsFor.value) return;
+  savingTeams.value = true;
+  const ok = await patch(teamsFor.value.list, teamsFor.value.item, { teams: pickedTeams.value });
+  savingTeams.value = false;
+  if (ok) teamsOpen.value = false;
+}
+
+function teamsLine(it: WrapUpLabel) {
+  return it.teams.length ? it.teams.join(", ") : "All teams";
 }
 
 function rename(l: LabelList, it: WrapUpLabel) {
@@ -71,7 +106,10 @@ function visible(l: LabelList) {
   return l.showArchived ? l.items : l.items.filter((i) => !i.archived);
 }
 
-onMounted(() => lists.value.forEach(load));
+onMounted(() => {
+  lists.value.forEach(load);
+  loadTeams();
+});
 </script>
 
 <template>
@@ -104,8 +142,10 @@ onMounted(() => lists.value.forEach(load));
               <div>
                 <span :class="it.archived ? 'text-lighter' : ''">{{ it.name }}</span>
                 <Badge v-if="it.archived" tone="neutral">archived</Badge>
+                <div class="text-light">{{ teamsLine(it) }}</div>
               </div>
               <div class="hstack">
+                <Button variant="secondary" size="sm" @click="editTeams(l, it)">Teams</Button>
                 <Button variant="secondary" size="sm" @click="startEdit(l, it)">Rename</Button>
                 <Button variant="secondary" size="sm" @click="patch(l, it, { archived: !it.archived })">
                   {{ it.archived ? "Restore" : "Archive" }}
@@ -116,5 +156,23 @@ onMounted(() => lists.value.forEach(load));
         </div>
       </Panel>
     </div>
+
+    <Modal v-model:open="teamsOpen" size="sm" :title="teamsFor ? `Teams for ${teamsFor.item.name}` : 'Teams'">
+      <form id="label-teams-form" class="vstack" @submit.prevent="saveTeams">
+        <label class="hstack gap-2">
+          <input type="checkbox" :checked="!pickedTeams.length" :disabled="!pickedTeams.length" @change="pickedTeams = []" />
+          All teams (shared)
+        </label>
+        <label v-for="name in teamNames" :key="name" class="hstack gap-2">
+          <input v-model="pickedTeams" type="checkbox" :value="name" />
+          {{ name }}
+        </label>
+        <p v-if="!teamNames.length" class="text-lighter">No teams yet.</p>
+      </form>
+      <template #footer>
+        <Button variant="ghost" @click="teamsOpen = false">Cancel</Button>
+        <Button type="submit" form="label-teams-form" :loading="savingTeams">Save</Button>
+      </template>
+    </Modal>
   </div>
 </template>
