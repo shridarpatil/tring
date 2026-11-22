@@ -83,6 +83,9 @@ func (s *Server) Call(ctx context.Context, tenant uuid.UUID, req CallRequest) (u
 	if claim == nil {
 		return uuid.Nil, errAgentBusy
 	}
+	// The agent placing a call from their CRM is done wrapping up the last
+	// one: end it (as a timeout) before the availability check reads it.
+	s.endWrapUpForCall(tenant.String(), req.AgentSIP)
 	// The first availability read may have preceded another call's answer.
 	if s.agentOnCall(tenant.String(), req.AgentSIP) ||
 		(s.cfg.Presence.Enabled() && !s.cfg.Presence.Available(ctx, tenant.String(), req.AgentSIP)) {

@@ -181,17 +181,17 @@ func (s *Server) finishWrapUp(tenant, sip string, callID uuid.UUID, w *wrapUp, t
 		return true
 	}
 	if !busy {
+		// Away is reported as it always is: online, which the dashboard and
+		// the API show as away from available_for_calls. Their idle clock
+		// restarts only when they come back (setAway), so no freed stamp.
 		var freed time.Time
 		if pres := s.cfg.Presence; pres != nil {
 			pres.MarkOnline(context.Background(), tenant, sip)
-			// Away: their idle clock restarts when they come back (setAway).
 			if !away {
 				freed = pres.MarkFreed(context.Background(), tenant, sip)
 			}
 		}
-		if !away {
-			s.publishPresence(tenant, sip, presence.StatusOnline, freed)
-		}
+		s.publishPresence(tenant, sip, presence.StatusOnline, freed)
 	}
 	_ = c.send(msg{Type: msgWrapUpEnd, CallID: callID.String()})
 	return true
