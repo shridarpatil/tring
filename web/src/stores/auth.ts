@@ -6,7 +6,9 @@ import { safeRedirect, type MeUser } from "../lib/roles";
 // thing persisted in localStorage; the password never touches storage.
 // On refresh the JWT keeps the operator signed in until it expires
 // (server-side TTL == 12h); after that, /v1/* returns 401 and the api
-// client clears the token, sending the user back to /login.
+// client clears the token, sending the user back to /login. The Sign out
+// button also calls POST /v1/me/logout, which revokes the user's tokens
+// server-side (logout() below only clears this browser's copy).
 //
 // Same-origin only: the Vue console is embedded in the Go binary (at
 // /login, /agent and /admin), so all API calls use relative paths and hit the backend

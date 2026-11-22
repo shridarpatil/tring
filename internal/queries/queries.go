@@ -190,6 +190,7 @@ type Queries struct {
 	// ---- api: /v1/me ----
 	GetUserPasswordHash string `query:"get-user-password-hash"`
 	SetUserPassword     string `query:"set-user-password"`
+	RevokeUserSessions  string `query:"revoke-user-sessions"`
 	GetMeStatsToday     string `query:"get-me-stats-today"`
 	GetMeStats7d        string `query:"get-me-stats-7d"`
 	ListMyCalls         string `query:"list-my-calls"`
