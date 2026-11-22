@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -22,14 +23,19 @@ type sentHook struct {
 }
 
 type fakeHooks struct {
-	mu   sync.Mutex
-	sent []sentHook
+	mu     sync.Mutex
+	sent   []sentHook
+	onSend func() // when set, runs after each Send is recorded
 }
 
 func (h *fakeHooks) Send(tenant, id uuid.UUID, event string, data interface{}) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.sent = append(h.sent, sentHook{tenant, id, event, data})
+	onSend := h.onSend
+	h.mu.Unlock()
+	if onSend != nil {
+		onSend()
+	}
 }
 
 func (h *fakeHooks) count() int {
@@ -390,4 +396,51 @@ func TestPatchDoesNotClobberConcurrentSave(t *testing.T) {
 	if c["notes"] != nil || c["disposition"] == nil || len(c["tags"].([]any)) != 1 {
 		t.Fatalf("notes:null changed more than notes: %v", c)
 	}
+}
+
+// A client that goes away once the outcome is committed (the agent's page
+// navigating after Done) must not cut the post-commit side effects short. The
+// request context is cancelled from inside the webhook send — the first side
+// effect — so everything after it runs on a cancelled request context.
+func TestWrapUpSideEffectsSurviveCancelledRequest(t *testing.T) {
+	t.Run("save", func(t *testing.T) {
+		w := newWrapFix(t)
+		call := w.call(t, w.agent, false, time.Minute, "")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		w.hooks.onSend = cancel
+		req := httptest.NewRequest("POST", "/v1/sdk/calls/wrap-up", strings.NewReader(saveBody(call, uuid.Nil, "bye"))).WithContext(ctx)
+		req.Header.Set("Authorization", "Bearer "+w.tok)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		w.s.Router().ServeHTTP(rec, req)
+		if w.hooks.count() != 1 {
+			t.Fatalf("webhooks = %d, want 1", w.hooks.count())
+		}
+		w.gw.mu.Lock()
+		paths := append([]string(nil), w.gw.paths...)
+		w.gw.mu.Unlock()
+		if len(paths) != 1 || paths[0] != "POST /control/wrap-up-done" {
+			t.Fatalf("gateway saw %v, want wrap-up-done despite the cancelled request", paths)
+		}
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), call.String()) {
+			t.Fatalf("save = %d %s, want 200 with the call row", rec.Code, rec.Body)
+		}
+	})
+	t.Run("patch", func(t *testing.T) {
+		w := newWrapFix(t)
+		call := w.call(t, w.agent, false, time.Minute, "timeout")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		w.hooks.onSend = cancel
+		req := authedRequest(t, w.s, w.f, "PATCH", "/v1/calls/"+call.String()+"/wrap-up", `{"notes":"later"}`).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		w.s.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"notes":"later"`) {
+			t.Fatalf("patch = %d %s, want 200 with the call row", rec.Code, rec.Body)
+		}
+		if w.hooks.count() != 1 {
+			t.Fatalf("webhooks = %d, want 1", w.hooks.count())
+		}
+	})
 }
