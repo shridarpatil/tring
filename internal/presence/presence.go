@@ -43,6 +43,7 @@ const (
 	StatusOffline = "offline"
 	StatusOnline  = "online"  // connected and available to ring
 	StatusOnCall  = "on_call" // connected but busy on a call — don't ring
+	StatusWrapUp  = "wrap_up" // connected, filling the post-call wrap-up form — don't ring
 )
 
 // Store reads/writes agent presence markers in Redis.
@@ -167,6 +168,17 @@ func (s *Store) MarkOnCall(ctx context.Context, tenant, sip string) {
 	s.c.Set(ctx, key(tenant, sip), []byte(StatusOnCall), TTL)
 }
 
+// MarkWrapUp (re)asserts that an agent is online but in WRAP-UP: the call has
+// ended and they are filling its disposition form, refreshing TTL. They are
+// connected but not ringable, so Available() is false until they return to
+// MarkOnline.
+func (s *Store) MarkWrapUp(ctx context.Context, tenant, sip string) {
+	if !s.Enabled() {
+		return
+	}
+	s.c.Set(ctx, key(tenant, sip), []byte(StatusWrapUp), TTL)
+}
+
 // Offline clears an agent's marker (best-effort).
 func (s *Store) Offline(ctx context.Context, tenant, sip string) {
 	if !s.Enabled() {
@@ -187,7 +199,8 @@ func (s *Store) Forget(ctx context.Context, tenant, sip string) {
 	}
 }
 
-// Status returns "online", "on_call", or "offline". Only meaningful when Enabled().
+// Status returns "online", "on_call", "wrap_up", or "offline". Only meaningful
+// when Enabled().
 func (s *Store) Status(ctx context.Context, tenant, sip string) string {
 	if !s.Enabled() {
 		return StatusOffline
@@ -196,8 +209,11 @@ func (s *Store) Status(ctx context.Context, tenant, sip string) string {
 	if !ok {
 		return StatusOffline
 	}
-	if string(v) == StatusOnCall {
+	switch string(v) {
+	case StatusOnCall:
 		return StatusOnCall
+	case StatusWrapUp:
+		return StatusWrapUp
 	}
 	return StatusOnline
 }
@@ -209,7 +225,7 @@ func (s *Store) Available(ctx context.Context, tenant, sip string) bool {
 		return false
 	}
 	v, ok := s.c.Get(ctx, key(tenant, sip))
-	return ok && string(v) != StatusOnCall
+	return ok && string(v) != StatusOnCall && string(v) != StatusWrapUp
 }
 
 // IsOnline reports whether an agent currently has a live marker (online or on a

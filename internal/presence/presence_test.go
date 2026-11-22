@@ -100,3 +100,29 @@ func TestAvailabilityStaleFillLoses(t *testing.T) {
 		t.Fatalf("fill on a miss: got (%v, %v), want away", v, ok)
 	}
 }
+
+// A wrap-up agent is connected but must not be rung: Available is false while
+// Status and IsOnline still report the live marker.
+func TestWrapUpNotAvailable(t *testing.T) {
+	s := New(testRedis(t))
+	ctx := context.Background()
+
+	tenant := "test-" + uuid.NewString()
+	t.Cleanup(func() { s.Offline(ctx, tenant, "1001") })
+
+	s.MarkWrapUp(ctx, tenant, "1001")
+	if s.Available(ctx, tenant, "1001") {
+		t.Error("wrap_up agent must not be Available")
+	}
+	if got := s.Status(ctx, tenant, "1001"); got != "wrap_up" {
+		t.Errorf("Status = %q, want wrap_up", got)
+	}
+	if !s.IsOnline(ctx, tenant, "1001") {
+		t.Error("wrap_up agent is connected, IsOnline should be true")
+	}
+
+	s.MarkOnline(ctx, tenant, "1001")
+	if !s.Available(ctx, tenant, "1001") {
+		t.Error("after MarkOnline the agent should be Available")
+	}
+}
