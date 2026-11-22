@@ -25,6 +25,8 @@ All endpoints on this page act on the tenant the credential belongs to. They acc
 | `mask_numbers_agents` | boolean | Mask client phone numbers (the caller on inbound calls, the callee on outbound calls, and `client_ref`) for agents who manage no team. Default `false`. |
 | `mask_numbers_managers` | boolean | Mask client phone numbers for team managers. Default `false`. |
 | `mask_numbers_supervisors` | boolean | Mask client phone numbers for supervisors. Default `false`. Admins, API keys and webhooks are never masked; see [masking client numbers by role](/tring/features/agents-and-routing/#masking-client-numbers-by-role). |
+| `wrap_up_seconds` | integer | Default [wrap-up](/tring/features/agents-and-routing/#call-wrap-up) window, `0` to `600`, for calls that reach an agent without a team ring. `0` (default) is off. A team's own setting overrides it. |
+| `require_disposition` | boolean | Default for whether a disposition is mandatory in the wrap-up. Default `false`. |
 
 The default `failover_causes` are `NETWORK_OUT_OF_ORDER`, `GATEWAY_DOWN`, `USER_NOT_REGISTERED`, `SUBSCRIBER_ABSENT`, `NORMAL_TEMPORARY_FAILURE`, `RECOVERY_ON_TIMER_EXPIRE` and `NO_ROUTE_DESTINATION`.
 
@@ -92,6 +94,8 @@ Update one or more tenant settings. Fields you leave out keep their current valu
 | `mask_numbers_agents` | boolean | no | Mask client numbers for agents. |
 | `mask_numbers_managers` | boolean | no | Mask client numbers for team managers. |
 | `mask_numbers_supervisors` | boolean | no | Mask client numbers for supervisors. |
+| `wrap_up_seconds` | integer | no | Default wrap-up window in seconds, `0` to `600`. |
+| `require_disposition` | boolean | no | Default for requiring a disposition. |
 
 ```bash
 curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
@@ -112,7 +116,8 @@ curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
 | Status | `error` |
 |---|---|
 | `400` | `invalid JSON body` |
-| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, transfer_timeout_seconds, recording_sample_rate, recording_format or mask_numbers_* is required` |
+| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, transfer_timeout_seconds, recording_sample_rate, recording_format, mask_numbers_*, wrap_up_seconds or require_disposition is required` |
+| `400` | `wrap_up_seconds must be 0-600` |
 | `400` | `transfer_timeout_seconds must be between 5 and 600` |
 | `400` | `recording_sample_rate must be one of 8000, 12000, 16000, 24000, 48000` |
 | `400` | `recording_format must be one of ogg, mp3, wav` |

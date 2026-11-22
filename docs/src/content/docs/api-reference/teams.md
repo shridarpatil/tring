@@ -21,6 +21,8 @@ All endpoints accept a tenant API key or a console session.
 | `ring_seconds` | integer | How long to ring an agent before moving on. |
 | `max_wait_seconds` | integer | How long a caller can wait in the team's queue. |
 | `moh_sound` | string | What the caller hears while waiting. `local_stream://moh` (the default) means "no team override": the tenant's `hold_music` plays if set, otherwise the built-in music. |
+| `wrap_up_seconds` | integer | Post-call wrap-up window for calls this team's ring reaches, `0` to `600`. `0` (default) is off. |
+| `require_disposition` | boolean | Agents must pick a disposition to save the wrap-up. Default `false`. |
 | `created_at` | timestamp | When the team was created. |
 | `members` | array | The team's agents. **Only in `GET /v1/teams/{name}`.** |
 
@@ -59,6 +61,8 @@ Create a team.
 | `strategy` | string | no | `ring_all`, `round_robin`, `sequential` or `longest_wait`. Default `ring_all`. |
 | `ring_seconds` | integer | no | Default `20`. Zero or negative values use the default. |
 | `max_wait_seconds` | integer | no | Default `120`. Zero or negative values use the default. |
+| `wrap_up_seconds` | integer | no | Wrap-up window, `0` to `600`. Default `0` (off). |
+| `require_disposition` | boolean | no | Default `false`. |
 | `moh_sound` | string | no | A sound's `file_path` from the [sound library](/tring/api-reference/audio/) to override the tenant's hold music for this team. Default `local_stream://moh`, which uses the tenant's [`hold_music`](/tring/api-reference/tenant/#the-tenant-object). |
 
 ```bash
@@ -88,6 +92,7 @@ curl -sS -X POST "$TRING_URL/v1/teams" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `name required` |
+| `400` | `wrap_up_seconds must be 0-600` |
 | `400` | `strategy must be ring_all\|round_robin\|sequential\|longest_wait` |
 | `409` | `a team with this name already exists` |
 | `500` | `create failed` |
@@ -191,6 +196,8 @@ Update a team's settings. Fields you leave out keep their current value. The nam
 | `ring_seconds` | integer | no | Ring time per agent, in seconds. |
 | `max_wait_seconds` | integer | no | Maximum queue wait, in seconds. |
 | `moh_sound` | string | no | Hold sound for the queue. |
+| `wrap_up_seconds` | integer | no | Wrap-up window, `0` to `600`. `0` turns it off. |
+| `require_disposition` | boolean | no | Make a disposition mandatory in the wrap-up. |
 
 :::caution
 Unlike create, `PATCH` doesn't apply defaults or range checks to `ring_seconds` and `max_wait_seconds`. Send positive values.
@@ -211,6 +218,7 @@ curl -sS -X PATCH "$TRING_URL/v1/teams/support" \
 |---|---|
 | `400` | `invalid JSON body` |
 | `400` | `strategy must be ring_all\|round_robin\|sequential\|longest_wait` |
+| `400` | `wrap_up_seconds must be 0-600` |
 | `404` | `team not found` |
 | `500` | `update failed` |
 
