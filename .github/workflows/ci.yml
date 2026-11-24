@@ -372,18 +372,34 @@ jobs:
     steps:
       # A tag with a suffix (v0.2.0-rc1) is a prerelease, which install.sh's
       # "latest release" lookup skips.
-      - name: Create release
+      #
+      # Idempotent: publishing a release from the GitHub UI creates the tag,
+      # which triggers this run with the release already there. Then (and on a
+      # re-run) the install notes are prepended to the existing body once,
+      # instead of failing with "tag_name already exists".
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           DOCKER_ORG: ${{ secrets.DOCKERHUB_USERNAME }}
         run: |
-          pre=""
-          case "$TAG" in *-*) pre="--prerelease" ;; esac
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "Tring $TAG" --generate-notes $pre \
-            --notes "Set \`TRING_TAG=$TAG\` in \`.env\`, then \`docker compose pull && docker compose up -d\`.
+          notes="Set \`TRING_TAG=$TAG\` in \`.env\`, then \`docker compose pull && docker compose up -d\`.
 
           Images: \`$DOCKER_ORG/{tring,tring-freeswitch}:$TAG\` (also on ghcr.io/${{ github.repository_owner }}).
 
           Upgrading from the separate \`tring-api\` / \`tring-gateway\` images: replace \`docker-compose.yml\` first (\`TRING_VERSION=$TAG sh install.sh\`), then \`docker compose pull && docker compose up -d --remove-orphans\`. See https://shridarpatil.github.io/tring/getting-started/upgrading/."
+
+          if body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null); then
+            case "$body" in
+              *"TRING_TAG=$TAG"*) echo "Release $TAG already has install notes"; exit 0 ;;
+            esac
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes "$notes
+
+          $body"
+            exit 0
+          fi
+
+          pre=""
+          case "$TAG" in *-*) pre="--prerelease" ;; esac
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Tring $TAG" --generate-notes $pre --notes "$notes"
