@@ -1,15 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { deleteProviderMessage, parseSsoFragment, splitDomains, ssoButtonName, ssoErrorMessage } from "./sso.ts";
+import { deleteProviderMessage, splitDomains, ssoButtonName, ssoCode, ssoErrorMessage } from "./sso.ts";
 
-test("parseSsoFragment", () => {
-  assert.deepEqual(parseSsoFragment("#sso_code=abc"), { code: "abc", redirect: "" });
-  assert.deepEqual(parseSsoFragment("#sso_code=abc&redirect=%2Fadmin%2Fcalls%3Fx%3D1"), {
-    code: "abc",
-    redirect: "/admin/calls?x=1",
-  });
-  assert.equal(parseSsoFragment(""), null);
-  assert.equal(parseSsoFragment("#foo=bar"), null);
+test("ssoCode", () => {
+  assert.equal(ssoCode("abc"), "abc");
+  assert.equal(ssoCode(undefined), "");
+  assert.equal(ssoCode(["a", "b"]), "");
 });
 
 test("ssoErrorMessage", () => {
