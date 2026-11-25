@@ -30,8 +30,10 @@ import (
 //
 // The state record and the one-time code live in Redis and are consumed with
 // GETDEL, so each is single-use; without Redis SSO is unavailable. The console
-// token never appears in a URL: only the 60 s one-time code does, and only in
-// the fragment, which browsers don't send and access logs don't record.
+// token never appears in a URL: only the 60 s one-time code does. It rides in
+// the query, not the fragment, because proxies that rewrite Location (e.g.
+// Warpgate) drop fragments; a logged code is useless without the browser's
+// HttpOnly binding cookie.
 //
 // Both are bound to the browser that started the flow by the tring_sso cookie
 // (its SHA-256 is stored in the state and code records): a callback URL or
@@ -360,8 +362,7 @@ func (s *Server) handleSSOCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.log.Info("sso login", "tenant_id", st.TenantID, "provider_id", st.ProviderID, "user_id", userID)
-	// Fragment, not query: the code must not reach access logs or proxies.
-	target := "/login#sso_code=" + url.QueryEscape(code)
+	target := "/login?sso_code=" + url.QueryEscape(code)
 	if st.Redirect != "" {
 		target += "&redirect=" + url.QueryEscape(st.Redirect)
 	}

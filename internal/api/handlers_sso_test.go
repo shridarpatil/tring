@@ -152,10 +152,10 @@ func doReqCookie(t *testing.T, h http.Handler, method, path, cookie, body string
 	return rec
 }
 
-// ssoFrag is the success redirect's fragment parameters.
-func ssoFrag(t *testing.T, loc *url.URL) url.Values {
+// ssoParams is the success redirect's query parameters.
+func ssoParams(t *testing.T, loc *url.URL) url.Values {
 	t.Helper()
-	v, err := url.ParseQuery(loc.EscapedFragment())
+	v, err := url.ParseQuery(loc.RawQuery)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,9 +315,10 @@ func TestSSOFullFlow(t *testing.T) {
 		t.Fatal("token request verifier does not match the auth request challenge")
 	}
 
-	// The code travels in the fragment so it never reaches access logs.
-	code := ssoFrag(t, loc).Get("sso_code")
-	if code == "" || loc.RawQuery != "" || len(ssoFrag(t, loc)) != 1 || strings.Contains(loc.String(), "?") {
+	// The code travels in the query, not the fragment: proxies that rewrite
+	// Location (Warpgate) drop fragments. It is useless without the cookie.
+	code := ssoParams(t, loc).Get("sso_code")
+	if code == "" || loc.Fragment != "" || len(ssoParams(t, loc)) != 1 {
 		t.Fatalf("location = %s", loc)
 	}
 	status, resp := exchangeSSO(t, h, code, ck)
@@ -346,7 +347,7 @@ func TestSSOStateSingleUse(t *testing.T) {
 
 	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
-	if loc := callbackLocation(t, h, q.Get("state"), ck); !ssoFrag(t, loc).Has("sso_code") {
+	if loc := callbackLocation(t, h, q.Get("state"), ck); !ssoParams(t, loc).Has("sso_code") {
 		t.Fatalf("first callback: %s", loc)
 	}
 	assertSSOError(t, logs, callbackLocation(t, h, q.Get("state"), ck), "expired", "unknown or used state")
@@ -363,7 +364,7 @@ func TestSSOExchangeSingleUse(t *testing.T) {
 	f.AddUser(t, "agent", "ann@sso.example.com")
 
 	loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "ann@sso.example.com")
-	code := ssoFrag(t, loc).Get("sso_code")
+	code := ssoParams(t, loc).Get("sso_code")
 	if st, _ := exchangeSSO(t, h, code, ck); st != http.StatusOK {
 		t.Fatalf("first exchange: %d", st)
 	}
@@ -405,7 +406,7 @@ func TestSSOCallbackEmailUnverified(t *testing.T) {
 	// Some IdPs send the string "true"; that one counts.
 	_, q, ck := startSSO(t, h, "ann@sso.example.com", "")
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", "true")
-	if loc := callbackLocation(t, h, q.Get("state"), ck); !ssoFrag(t, loc).Has("sso_code") {
+	if loc := callbackLocation(t, h, q.Get("state"), ck); !ssoParams(t, loc).Has("sso_code") {
 		t.Fatalf(`email_verified="true": %s`, loc)
 	}
 }
@@ -457,7 +458,7 @@ func TestSSOCallbackEmailCaseInsensitive(t *testing.T) {
 	id := f.AddUser(t, "agent", "ann@sso.example.com")
 
 	loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "  Ann@SSO.Example.COM ")
-	st, resp := exchangeSSO(t, h, ssoFrag(t, loc).Get("sso_code"), ck)
+	st, resp := exchangeSSO(t, h, ssoParams(t, loc).Get("sso_code"), ck)
 	if st != http.StatusOK || resp.User.ID != id.String() || resp.User.Email != "ann@sso.example.com" {
 		t.Fatalf("exchange: %d %+v (location %s)", st, resp, loc)
 	}
@@ -540,8 +541,8 @@ func TestSSORedirectOnlySameOriginPaths(t *testing.T) {
 		_, q, ck := startSSO(t, h, "ann@sso.example.com", redirect)
 		idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
 		loc := callbackLocation(t, h, q.Get("state"), ck)
-		frag := ssoFrag(t, loc)
-		if !frag.Has("sso_code") || loc.RawQuery != "" {
+		frag := ssoParams(t, loc)
+		if !frag.Has("sso_code") || loc.Fragment != "" {
 			t.Fatalf("%q: location %s", redirect, loc)
 		}
 		if got := frag.Get("redirect"); got != want || (want == "" && frag.Has("redirect")) {
@@ -666,7 +667,7 @@ func TestSSOExchangeRequiresBrowserBinding(t *testing.T) {
 
 	for _, cookie := range []string{"", "someone-elses-cookie"} {
 		loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "ann@sso.example.com")
-		code := ssoFrag(t, loc).Get("sso_code")
+		code := ssoParams(t, loc).Get("sso_code")
 		body, _ := json.Marshal(map[string]string{"code": code})
 		rec := doReqCookie(t, h, "POST", "/v1/console/sso/exchange", cookie, string(body))
 		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "invalid or expired code") {
@@ -681,7 +682,7 @@ func TestSSOExchangeRequiresBrowserBinding(t *testing.T) {
 
 	// The right cookie works and is cleared on success.
 	loc, ck := ssoLogin(t, h, idp, "ann@sso.example.com", "ann@sso.example.com")
-	body, _ := json.Marshal(map[string]string{"code": ssoFrag(t, loc).Get("sso_code")})
+	body, _ := json.Marshal(map[string]string{"code": ssoParams(t, loc).Get("sso_code")})
 	rec := doReqCookie(t, h, "POST", "/v1/console/sso/exchange", ck, string(body))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("exchange: %d %s", rec.Code, rec.Body)
@@ -728,7 +729,7 @@ func TestSSOHostedDomainRequired(t *testing.T) {
 
 	ok := func(hd string) {
 		t.Helper()
-		if loc := ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", hd); !ssoFrag(t, loc).Has("sso_code") {
+		if loc := ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", hd); !ssoParams(t, loc).Has("sso_code") {
 			t.Fatalf("hd=%q: %s", hd, loc)
 		}
 	}
@@ -748,7 +749,7 @@ func TestSSOHostedDomainSecondaryDomain(t *testing.T) {
 	f.AddUser(t, "agent", "bob@demo2.test")
 
 	loc := ssoLoginHD(t, h, idp, "bob@demo2.test", "bob@demo2.test", "demo.test")
-	if !ssoFrag(t, loc).Has("sso_code") {
+	if !ssoParams(t, loc).Has("sso_code") {
 		t.Fatalf("secondary domain: %s", loc)
 	}
 }
@@ -762,7 +763,7 @@ func TestSSOHostedDomainOffIgnoresHD(t *testing.T) {
 	f.AddUser(t, "agent", "ann@demo.test")
 
 	for _, hd := range []string{"", "other.test"} {
-		if loc := ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", hd); !ssoFrag(t, loc).Has("sso_code") {
+		if loc := ssoLoginHD(t, h, idp, "ann@demo.test", "ann@demo.test", hd); !ssoParams(t, loc).Has("sso_code") {
 			t.Fatalf("hd=%q: %s", hd, loc)
 		}
 	}
@@ -857,7 +858,7 @@ func TestSSOStartWithoutEmail(t *testing.T) {
 
 	idp.setClaims(q.Get("nonce"), "ann@sso.example.com", true)
 	loc := callbackLocation(t, h, q.Get("state"), ck)
-	frag := ssoFrag(t, loc)
+	frag := ssoParams(t, loc)
 	if frag.Get("redirect") != "/admin/calls" {
 		t.Fatalf("location = %s", loc)
 	}

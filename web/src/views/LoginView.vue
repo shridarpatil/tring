@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router";
 import { auth } from "../stores/auth";
 import { api, ApiError } from "../api/client";
 import { homeRoute, safeRedirect, type MeUser } from "../lib/roles";
-import { parseSsoFragment, ssoButtonName, ssoErrorMessage, ssoUnavailableMessage } from "../lib/sso";
+import { ssoButtonName, ssoCode, ssoErrorMessage, ssoUnavailableMessage } from "../lib/sso";
 import { KeyRound } from "lucide-vue-next";
 import { Button, TextField } from "../components/ui";
 
@@ -118,12 +118,11 @@ async function loadButton() {
 }
 
 onMounted(async () => {
-  // The code and redirect arrive in the URL fragment (never sent to servers or
-  // logs); failures arrive as ?sso_error=. Clear both so neither lingers in the
-  // address bar or history.
-  const frag = parseSsoFragment(location.hash);
+  // A successful SSO round trip lands here as ?sso_code=&redirect=, a failure
+  // as ?sso_error=. Clear both so neither lingers in the address bar or history.
+  const code = ssoCode(route.query.sso_code);
   const err = ssoErrorMessage(route.query.sso_error);
-  if (!frag && !err) {
+  if (!code && !err) {
     void loadButton();
     return;
   }
@@ -133,11 +132,10 @@ onMounted(async () => {
     error.value = err;
     return;
   }
-  if (!frag) return;
   loading.value = true;
   try {
-    const res = await api.post<LoginResponse>("/v1/console/sso/exchange", { code: frag.code });
-    finish(res, frag.redirect);
+    const res = await api.post<LoginResponse>("/v1/console/sso/exchange", { code });
+    finish(res, route.query.redirect);
   } catch (e) {
     error.value = e instanceof ApiError ? e.message : "Single sign-on failed";
     loading.value = false;
