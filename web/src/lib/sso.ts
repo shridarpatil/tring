@@ -1,11 +1,9 @@
 // Pure helpers for the SSO login flow and the SSO settings form, kept free of
 // Vue so they are unit-testable.
 
-/** What the server's /login redirect leaves in the URL fragment after a successful IdP round trip. */
-export function parseSsoFragment(hash: string): { code: string; redirect: string } | null {
-  const p = new URLSearchParams(hash.replace(/^#/, ""));
-  const code = p.get("sso_code");
-  return code ? { code, redirect: p.get("redirect") ?? "" } : null;
+/** The one-time code from the server's /login?sso_code= redirect after a successful IdP round trip; "" when absent. */
+export function ssoCode(v: unknown): string {
+  return typeof v === "string" ? v : "";
 }
 
 const ssoErrors: Record<string, string> = {
