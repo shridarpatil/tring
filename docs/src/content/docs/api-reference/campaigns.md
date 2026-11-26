@@ -15,7 +15,7 @@ All endpoints require a tenant administrator console session or a `full` tenant 
   "config": {
     "type": "tts",
     "text": "Hello. This is a reminder about your appointment tomorrow.",
-    "caller_id": "+912240000000",
+    "caller_id": "+9122XXXXXXXX",
     "timezone": "Asia/Kolkata",
     "window_start": "09:00",
     "window_end": "18:00",
