@@ -133,7 +133,7 @@ func TestCallRingsAgentThenCustomer(t *testing.T) {
 		t.Errorf("settled %q, want ended:client_hangup", got)
 	}
 	// Answered only once the customer picked up, not on the agent's join.
-	want := []string{"started:+912265915000>+919812345678", "customer:out-client"}
+	want := []string{"started:+912240000000>+919812345678", "customer:out-client"}
 	got := h.cl.snapshot()
 	if len(got) != 4 || strings.Join(got[:2], ",") != strings.Join(want, ",") || !strings.HasPrefix(got[2], "answered:") {
 		t.Errorf("cdr events %v, want %v then answered, ended", got, want)

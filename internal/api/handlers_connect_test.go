@@ -95,7 +95,7 @@ func TestCreateCallViaGateway(t *testing.T) {
 		t.Fatalf("seed agent: %v", err)
 	}
 	if err := f.DB.Pool.QueryRow(ctx, `INSERT INTO calls (tenant_id, direction, status, from_number, to_number, leg_id, source)
-		VALUES ($1, 'outbound', 'ringing', '+912265915000', '+919812345678', 'leg-call', 'phone') RETURNING id`, f.TenantID).Scan(&callID); err != nil {
+		VALUES ($1, 'outbound', 'ringing', '+912240000000', '+919812345678', 'leg-call', 'phone') RETURNING id`, f.TenantID).Scan(&callID); err != nil {
 		t.Fatalf("seed call: %v", err)
 	}
 
@@ -119,7 +119,7 @@ func TestCreateCallViaGateway(t *testing.T) {
 	post := func(agent string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
 		s.Router().ServeHTTP(rec, authedRequest(t, s, f, "POST", "/v1/calls",
-			`{"agent_id":"`+agent+`","to":"9812345678","agent_label":"Lead 42","caller_id":"+912265915002"}`))
+			`{"agent_id":"`+agent+`","to":"9812345678","agent_label":"Lead 42","caller_id":"+912240000002"}`))
 		return rec
 	}
 
@@ -133,7 +133,7 @@ func TestCreateCallViaGateway(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil || c.ID != callID {
 			t.Errorf("agent_id %q: body %s, want call %s", agent, rec.Body, callID)
 		}
-		want := map[string]string{"agent_sip": "Administrator", "to": "9812345678", "agent_label": "Lead 42", "caller_id": "+912265915002"}
+		want := map[string]string{"agent_sip": "Administrator", "to": "9812345678", "agent_label": "Lead 42", "caller_id": "+912240000002"}
 		if gotPath != "/control/call" || len(gotBody) != len(want) {
 			t.Errorf("agent_id %q: gateway got %s %v, want /control/call %v", agent, gotPath, gotBody, want)
 		}

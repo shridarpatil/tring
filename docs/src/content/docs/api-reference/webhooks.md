@@ -68,7 +68,7 @@ The body is a JSON envelope:
     "node_label": "Account number",
     "outcome": "default",
     "dtmf": "40213",
-    "vars": { "caller": "+919800000001", "did": "+912265915000", "account": "40213" }
+    "vars": { "caller": "+919800000001", "did": "+912240000000", "account": "40213" }
   }
 }
 ```
@@ -98,7 +98,7 @@ The body is a JSON envelope:
       "direction": "inbound",
       "status": "ended",
       "from_number": "+919800000001",
-      "to_number": "+912265915000",
+      "to_number": "+912240000000",
       "agent_id": "a1b2c3d4-0000-4000-8000-000000000001",
       "agent_name": "Agent One",
       "source": "phone",

@@ -80,7 +80,7 @@ func TestCarrierCallRelaysG711(t *testing.T) {
 	client, _ := sipgo.NewClient(ua, sipgo.WithClientHostname(carrierIP))
 	dc := sipgo.NewDialogClientCache(client, sip.ContactHeader{Address: sip.Uri{User: "carrier", Host: carrierIP}})
 	host, port := splitHostPort(fsSIP)
-	dlg, err := dc.Invite(ctx, sip.Uri{User: "912265915089", Host: host, Port: port}, []byte(offer),
+	dlg, err := dc.Invite(ctx, sip.Uri{User: "912240000089", Host: host, Port: port}, []byte(offer),
 		sip.NewHeader("Content-Type", "application/sdp"))
 	if err != nil {
 		t.Fatalf("carrier INVITE: %v", err)

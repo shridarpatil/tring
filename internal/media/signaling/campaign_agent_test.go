@@ -20,9 +20,9 @@ func agentCampaignHarness(t *testing.T, members []string, results ...connectLeg)
 	h.srv.cfg.Teams = teams
 	h.srv.agentRouter = brain.NewAgentRouter(teams, h.srv.router, h.srv, nil, h.srv.log)
 	trunks := h.srv.cfg.Trunks.(fakeTrunkResolver)
-	trunks.owned = map[string]bool{"+912265915000": true}
+	trunks.owned = map[string]bool{"+912240000000": true}
 	h.srv.cfg.Trunks = trunks
-	m := &campaignMemory{done: make(chan string, 1), a: campaign.Attempt{ID: uuid.New(), CampaignID: uuid.New(), Phone: "+919876543210", Payload: campaign.Payload{Config: campaign.Config{Type: "agent", Team: "sales", AgentWaitSeconds: 2, CallerID: "+912265915000", RingSeconds: 5, MaxSeconds: 10}, Prepared: campaign.Prepared{Team: "sales"}}}}
+	m := &campaignMemory{done: make(chan string, 1), a: campaign.Attempt{ID: uuid.New(), CampaignID: uuid.New(), Phone: "+919876543210", Payload: campaign.Payload{Config: campaign.Config{Type: "agent", Team: "sales", AgentWaitSeconds: 2, CallerID: "+912240000000", RingSeconds: 5, MaxSeconds: 10}, Prepared: campaign.Prepared{Team: "sales"}}}}
 	h.srv.cfg.Campaigns = m
 	// Presence registers Away until its availability read completes.
 	deadline := time.Now().Add(time.Second)

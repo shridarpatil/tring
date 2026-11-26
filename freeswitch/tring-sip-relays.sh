@@ -4,8 +4,8 @@
 # calls to a relay's numbers are handed to that server, and calls FROM that
 # server go out over the carrier.
 #
-#   TRING_SIP_RELAYS="uat=10.0.5.20:5080:+912265915001-+912265915030;acme=10.0.6.30:5080:+912265915089"
-#   TRING_SIP_RELAY_GATEWAY=t_4cc0a6963ea0   (the carrier trunk's gateway name)
+#   TRING_SIP_RELAYS="uat=10.0.5.20:5080:+912240000001-+912240000030;acme=10.0.6.30:5080:+912240000089"
+#   TRING_SIP_RELAY_GATEWAY=t_0a1b2c3d4e5f   (the carrier trunk's gateway name)
 #
 # Each relay is name=ipv4:port:numbers, relays separated by ';'. numbers is a
 # comma-separated list of E.164 numbers and/or A-B ranges (same length, at most

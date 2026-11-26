@@ -135,8 +135,8 @@ The gateway role runs browser WebRTC on `/rtc`, the IVR, agent routing and call 
 When a second Tring server (UAT, or a dedicated instance for one client) can't have its own carrier connection, the server that holds the trunk relays calls for it:
 
 ```
-TRING_SIP_RELAYS=uat=10.0.5.20:5080:+912265915001-+912265915030
-TRING_SIP_RELAY_GATEWAY=t_4cc0a6963ea0
+TRING_SIP_RELAYS=uat=10.0.5.20:5080:+912240000001-+912240000030
+TRING_SIP_RELAY_GATEWAY=t_0a1b2c3d4e5f
 ```
 
 - **On the trunk server:** set the two variables above and restart the `freeswitch` container. Store the numbers in the format the carrier sends (for Tata, `+91…`).

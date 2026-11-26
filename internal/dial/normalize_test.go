@@ -84,7 +84,7 @@ func TestPassthroughRejectsDialStringSyntax(t *testing.T) {
 }
 
 func TestIsNumber(t *testing.T) {
-	for _, s := range []string{"+912265915000", "02265915000", "9196"} {
+	for _, s := range []string{"+912240000000", "02240000000", "9196"} {
 		if !IsNumber(s) {
 			t.Errorf("IsNumber(%q) = false", s)
 		}

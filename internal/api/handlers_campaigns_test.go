@@ -21,7 +21,7 @@ import (
 )
 
 func apiCampaignConfig() campaign.Config {
-	return campaign.Config{Type: "tts", Text: "Appointment tomorrow", CallerID: "+912265915000", Timezone: "Asia/Kolkata", WindowStart: "09:00", WindowEnd: "18:00", Concurrency: 2, CallsPerMinute: 30, MaxAttempts: 1, RetryMinutes: 30, RingSeconds: 10, MaxSeconds: 30}
+	return campaign.Config{Type: "tts", Text: "Appointment tomorrow", CallerID: "+912240000000", Timezone: "Asia/Kolkata", WindowStart: "09:00", WindowEnd: "18:00", Concurrency: 2, CallsPerMinute: 30, MaxAttempts: 1, RetryMinutes: 30, RingSeconds: 10, MaxSeconds: 30}
 }
 func campaignRequest(t *testing.T, s *Server, f *dbtest.Fixture, method, path string, body any, want int) *httptest.ResponseRecorder {
 	t.Helper()
@@ -200,7 +200,7 @@ exec ffmpeg -v error -f lavfi -i anullsrc=r=22050:cl=mono -t 0.2 -y "$out"
 	if err := f.DB.Pool.QueryRow(context.Background(), "INSERT INTO trunks(tenant_id,name) VALUES($1,'campaign-test') RETURNING id", f.TenantID).Scan(&trunk); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.DB.Pool.Exec(context.Background(), "INSERT INTO numbers(tenant_id,e164,type,provider,trunk_id) VALUES($1,'+912265915000','outbound','tata',$2)", f.TenantID, trunk); err != nil {
+	if _, err := f.DB.Pool.Exec(context.Background(), "INSERT INTO numbers(tenant_id,e164,type,provider,trunk_id) VALUES($1,'+912240000000','outbound','tata',$2)", f.TenantID, trunk); err != nil {
 		t.Fatal(err)
 	}
 	c := campaignFromResponse(t, campaignRequest(t, s, f, "POST", "/v1/campaigns", map[string]any{"name": "TTS", "config": apiCampaignConfig()}, 201))

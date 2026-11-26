@@ -1154,11 +1154,11 @@ func TestInboundPhoneCallMasksCallerForAgent(t *testing.T) {
 	agent.send(map[string]any{"type": "register"})
 	agent.readUntil("ready")
 
-	fp.inbound(room.InboundCall{CallID: "m1", From: "+919900112233", To: "02265915000"})
+	fp.inbound(room.InboundCall{CallID: "m1", From: "+919900112233", To: "02240000000"})
 
 	select {
 	case b := <-gotBody:
-		if b != `{"caller":"+919900112233","did":"02265915000"}` {
+		if b != `{"caller":"+919900112233","did":"02240000000"}` {
 			t.Fatalf("callback body = %s, want caller and did filled", b)
 		}
 	case <-time.After(3 * time.Second):

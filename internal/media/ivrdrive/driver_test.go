@@ -771,10 +771,10 @@ func TestTransferDialPassesCallerIDFromVar(t *testing.T) {
 	fake := &fakePrompts{played: make(chan string, 16)}
 	dialer := &fakeDialer{outcome: "completed"}
 	d := ivrdrive.New(ivrdrive.Config{Prompts: fake, Dialer: dialer, Room: "r"})
-	d.Vars()["cid"] = "02265915000"
+	d.Vars()["cid"] = "02240000000"
 	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "+919812345678", "caller_id": "{{cid}}"}), nil)
-	if dialer.gotCID != "02265915000" {
-		t.Fatalf("caller id = %q, want 02265915000", dialer.gotCID)
+	if dialer.gotCID != "02240000000" {
+		t.Fatalf("caller id = %q, want 02240000000", dialer.gotCID)
 	}
 	// Unset caller_id → "" (the trunk's rotation picks one).
 	dialer2 := &fakeDialer{outcome: "completed"}
@@ -840,10 +840,10 @@ func TestSeededVarsAreAvailableToTheFlow(t *testing.T) {
 	dialer := &fakeDialer{outcome: "completed"}
 	d := ivrdrive.New(ivrdrive.Config{
 		Prompts: fake, Dialer: dialer, Room: "r",
-		Vars: map[string]string{"caller": "+919812345678", "did": "02265915000"},
+		Vars: map[string]string{"caller": "+919812345678", "did": "02240000000"},
 	})
 	runFlow(t, d, fake, dialFlow(map[string]interface{}{"number": "{{caller}}", "caller_id": "{{did}}"}), nil)
-	if dialer.gotNum != "+919812345678" || dialer.gotCID != "02265915000" {
+	if dialer.gotNum != "+919812345678" || dialer.gotCID != "02240000000" {
 		t.Fatalf("dial = %+v, want caller/did vars substituted", dialer)
 	}
 }

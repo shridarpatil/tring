@@ -498,7 +498,7 @@
   <!-- internal_sip_port: default 5060 (stock FS convention). Override via
        TRING_INTERNAL_SIP_PORT when a carrier owns 5060 on the same IP and the
        internal profile must move aside (e.g. Tata SIP-over-AWS, where the
-       external trunk profile takes 10.54.229.182:5060 and internal is pushed
+       external trunk profile takes 10.0.0.10:5060 and internal is pushed
        to 5080 — or set TRING_INTERNAL_IP=127.0.0.1 to keep 5060 on loopback). -->
   <X-PRE-PROCESS cmd="exec-set" data="internal_sip_port=sh -c 'echo ${TRING_INTERNAL_SIP_PORT:-5060}'"/>
   <X-PRE-PROCESS cmd="set" data="internal_tls_port=5061"/>

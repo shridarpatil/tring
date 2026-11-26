@@ -125,7 +125,7 @@ func newWrapHarness(t *testing.T, wl *wrapCallLog, members map[string][]string, 
 	if err != nil {
 		t.Fatalf("sfu.New: %v", err)
 	}
-	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+912265915000", Name: "t_4cc0a6963ea0"}}}
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+912240000000", Name: "t_0a1b2c3d4e5f"}}}
 	h.srv = New(Config{
 		SFU: sf, Originator: h.o, Trunks: trunks, Calls: wl, JWTSecret: []byte(testControlSecret),
 		Presence: pstr, Events: sink, Teams: queueTeams{members: members},

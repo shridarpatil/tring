@@ -34,7 +34,7 @@ func newDialLeg(id room.ParticipantID) (*room.Leg, *fakeOutboundSource, chan str
 	}, src, done
 }
 
-var tataTrunk = fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "02265915000", Name: "t_tata"}}}
+var tataTrunk = fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "02240000000", Name: "t_tata"}}}
 
 // pstnRoom registers rid as an inbound phone call (callID) on s, the way
 // handleInboundPhone does, so the IVR-dial teardown paths can find it.
@@ -91,7 +91,7 @@ func TestIVRDialAnswerAttachesLeg(t *testing.T) {
 	answered, res := dialAsync(context.Background(), s, rid, "")
 	waitAnswered(t, answered, "answered was not called when the callee picked up")
 	req := <-orig.calls
-	if req.To != "+919812345678" || req.CallerID != "02265915000" || req.Trunks[0] != "t_tata" {
+	if req.To != "+919812345678" || req.CallerID != "02240000000" || req.Trunks[0] != "t_tata" {
 		t.Fatalf("originate = %+v; want normalized To, trunk DID as caller-ID", req)
 	}
 	if pid := waitOutboundLeg(t, s, rid); pid != src.ID() {
@@ -278,12 +278,12 @@ func TestIVRDialPresentsOwnedCallerID(t *testing.T) {
 	leg, src, done := newDialLeg("out-ivr-5")
 	orig := newFakeOriginator(leg)
 	trunks := tataTrunk
-	trunks.owned = map[string]bool{"02265915123": true}
+	trunks.owned = map[string]bool{"02240000123": true}
 	s := newOutboundServer(t, orig, trunks)
 
-	answered, res := dialAsync(context.Background(), s, room.RoomID(uuid.NewString()+"/pstn-g"), "02265915123")
+	answered, res := dialAsync(context.Background(), s, room.RoomID(uuid.NewString()+"/pstn-g"), "02240000123")
 	waitAnswered(t, answered, "callee never answered")
-	if req := <-orig.calls; req.CallerID != "02265915123" {
+	if req := <-orig.calls; req.CallerID != "02240000123" {
 		t.Fatalf("caller id = %q, want the override", req.CallerID)
 	}
 	src.Close()

@@ -65,9 +65,9 @@ func campaignFixture(t *testing.T, leg connectLeg, audio string) (*Server, *camp
 	cl := newConnectCallLog()
 	s := newConnectServer(t, o, cl)
 	trunks := s.cfg.Trunks.(fakeTrunkResolver)
-	trunks.owned = map[string]bool{"+912265915000": true}
+	trunks.owned = map[string]bool{"+912240000000": true}
 	s.cfg.Trunks = trunks
-	m := &campaignMemory{done: make(chan string, 1), a: campaign.Attempt{ID: uuid.New(), CampaignID: uuid.New(), Phone: "+919876543210", Payload: campaign.Payload{Config: campaign.Config{CallerID: "+912265915000", RingSeconds: 5, MaxSeconds: 10}, Prepared: campaign.Prepared{AudioFile: audio}}}}
+	m := &campaignMemory{done: make(chan string, 1), a: campaign.Attempt{ID: uuid.New(), CampaignID: uuid.New(), Phone: "+919876543210", Payload: campaign.Payload{Config: campaign.Config{CallerID: "+912240000000", RingSeconds: 5, MaxSeconds: 10}, Prepared: campaign.Prepared{AudioFile: audio}}}}
 	s.cfg.Campaigns = m
 	s.cfg.AudioDir = filepath.Dir(audio)
 	return s, m, o

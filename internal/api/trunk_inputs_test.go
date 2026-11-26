@@ -10,7 +10,7 @@ func TestValidateTrunkFields(t *testing.T) {
 		user, pw, realm, proxy, extra string
 	}{
 		{"", "", "", "", ""},
-		{"+912265915000", "pa$$w0rd!#%", "mu.ims.ttl.in", "10.79.210.35:5060", `{"from_domain":"10.59.35.62","auth_username":"+912265915000@mu.ims.ttl.in"}`},
+		{"+912240000000", "pa$$w0rd!#%", "ims.example.net", "192.0.2.35:5060", `{"from_domain":"198.51.100.62","auth_username":"+912240000000@ims.example.net"}`},
 		{"u", "p", "[2001:db8::1]:5060", "sip:carrier.example.com;transport=tcp", ""},
 	}
 	for _, c := range ok {
@@ -38,8 +38,8 @@ func TestValidateTrunkFields(t *testing.T) {
 
 // auth_acl_cidr is stored canonical, as the ACL will enforce it.
 func TestNormalizeCIDRs(t *testing.T) {
-	got, err := normalizeCIDRs("10.79.210.35, 10.79.210.33/29")
-	if err != nil || got != "10.79.210.35/32,10.79.210.32/29" {
+	got, err := normalizeCIDRs("192.0.2.35, 192.0.2.33/29")
+	if err != nil || got != "192.0.2.35/32,192.0.2.32/29" {
 		t.Errorf("got %q, %v", got, err)
 	}
 	if got, err := normalizeCIDRs(""); err != nil || got != "" {

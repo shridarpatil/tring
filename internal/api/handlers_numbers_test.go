@@ -283,17 +283,17 @@ func seedOwnTrunk(t *testing.T, f *dbtest.Fixture, name string) string {
 func TestPatchNumberEditsE164TypeAndTrunk(t *testing.T) {
 	f := dbtest.Setup(t)
 	trunk := seedOwnTrunk(t, f, "tata")
-	numID := insertInboundForHandlerTest(t, f, "02265915000")
+	numID := insertInboundForHandlerTest(t, f, "02240000000")
 	s := newTestServer(f)
 
 	rec := serve(t, s, f, "PATCH", "/v1/numbers/"+numID,
-		`{"e164":"+912265915000","type":"outbound","trunk_id":"`+trunk+`"}`)
+		`{"e164":"+912240000000","type":"outbound","trunk_id":"`+trunk+`"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
 	}
 	var out map[string]interface{}
 	_ = json.Unmarshal(rec.Body.Bytes(), &out)
-	if out["e164"] != "+912265915000" || out["type"] != "outbound" || out["trunk_id"] != trunk {
+	if out["e164"] != "+912240000000" || out["type"] != "outbound" || out["trunk_id"] != trunk {
 		t.Errorf("returned row = %v, want the edited e164/type/trunk", out)
 	}
 }

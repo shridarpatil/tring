@@ -151,7 +151,7 @@ func newConnectServer(t *testing.T, o *connectOriginator, cl CallLog) *Server {
 	if err != nil {
 		t.Fatalf("sfu.New: %v", err)
 	}
-	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+912265915000", Name: "t_4cc0a6963ea0"}}}
+	trunks := fakeTrunkResolver{trunks: []trunkselect.Trunk{{E164: "+912240000000", Name: "t_0a1b2c3d4e5f"}}}
 	return New(Config{SFU: s, Originator: o, Trunks: trunks, Calls: cl, JWTSecret: []byte(testControlSecret)})
 }
 

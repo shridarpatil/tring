@@ -15,7 +15,7 @@ import (
 )
 
 func testConfig() Config {
-	return Config{Type: "tts", Text: "Hello", CallerID: "+912265915000", Timezone: "UTC", WindowStart: "00:00", WindowEnd: "23:59", Concurrency: 3, CallsPerMinute: 300, MaxAttempts: 2, RetryMinutes: 1, RingSeconds: 10, MaxSeconds: 30}
+	return Config{Type: "tts", Text: "Hello", CallerID: "+912240000000", Timezone: "UTC", WindowStart: "00:00", WindowEnd: "23:59", Concurrency: 3, CallsPerMinute: 300, MaxAttempts: 2, RetryMinutes: 1, RingSeconds: 10, MaxSeconds: 30}
 }
 func TestWindowsAndValidation(t *testing.T) {
 	c := testConfig()

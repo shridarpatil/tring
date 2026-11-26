@@ -54,7 +54,7 @@ func TestHandlersRejectESLSyntax(t *testing.T) {
 		{"agent newline", "POST", "/v1/agents", `{"sip_username":"a\n\napi status"}`, http.StatusBadRequest},
 		{"agent ok", "POST", "/v1/agents", `{"sip_username":"kalpesh@example.com"}`, http.StatusCreated},
 		{"number comma", "POST", "/v1/numbers", `{"e164":"+91,x=y","type":"inbound"}`, http.StatusBadRequest},
-		{"number ok", "POST", "/v1/numbers", `{"e164":"+912265915089","type":"inbound"}`, http.StatusCreated},
+		{"number ok", "POST", "/v1/numbers", `{"e164":"+912240000089","type":"inbound"}`, http.StatusCreated},
 		{"causes quote", "PATCH", "/v1/tenants/me", `{"failover_causes":["A','B"]}`, http.StatusBadRequest},
 		{"causes ok", "PATCH", "/v1/tenants/me", `{"failover_causes":["NORMAL_TEMPORARY_FAILURE","503"]}`, http.StatusOK},
 		{"hold music foreign path", "PATCH", "/v1/tenants/me", `{"hold_music":"/etc/freeswitch/vars.xml"}`, http.StatusBadRequest},
