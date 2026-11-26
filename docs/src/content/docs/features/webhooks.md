@@ -70,7 +70,7 @@ Tring-Signature: t=1760000000,v1=5d41402abc4b2a76b9719d911017c592...
     "node_label": "Account number",
     "outcome": "default",
     "dtmf": "40213",
-    "vars": { "caller": "+919800000001", "did": "+912240000000", "account": "40213" }
+    "vars": { "caller": "+919800000001", "did": "+9122XXXXXXXX", "account": "40213" }
   }
 }
 ```
