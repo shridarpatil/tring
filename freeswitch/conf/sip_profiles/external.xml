@@ -58,7 +58,8 @@
     <!-- ************************************************* -->
 
     <!--<param name="aggressive-nat-detection" value="true"/>-->
-    <param name="inbound-codec-negotiation" value="generous"/>
+    <!-- generous (the carrier's order) unless TRING_CARRIER_G729 (vars.xml). -->
+    <param name="inbound-codec-negotiation" value="$${carrier_codec_negotiation}"/>
     <param name="nonce-ttl" value="60"/>
     <param name="auth-calls" value="false"/>
     <!-- Carriers authenticate by IP: only the 'carriers' ACL (acl.conf.xml,

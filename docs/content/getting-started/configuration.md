@@ -126,6 +126,7 @@ The gateway role runs browser WebRTC on `/rtc`, the IVR, agent routing and call 
 | `TRING_TRUNK_IP` | empty | IP the FreeSWITCH trunk (external) profile binds **and** advertises. Empty uses the primary interface and advertises `TRING_PUBLIC_IP`. Set it when the carrier reaches you on a private circuit on another interface. |
 | `TRING_SIP_RELAYS` | empty | Shares this server's carrier trunk with other Tring servers (a UAT box, a dedicated instance). `name=ipv4:port:numbers` entries separated by `;`, where `numbers` is a comma-separated list of E.164 numbers and `A-B` ranges (at most 1000 per relay). Calls to a relay's numbers are sent to that server; calls from that server's IP go out over the carrier, keeping their caller ID only if it is one of the relay's numbers (otherwise the relay's first number). Each relay's IP is added to the carrier ACL. Malformed entries are skipped and logged. See [Sharing a trunk with another server](#sharing-a-trunk-with-another-server). |
 | `TRING_SIP_RELAY_GATEWAY` | empty | Gateway name of the carrier trunk that relays call out on (`t_…`, shown in the FreeSWITCH log and `sofia status`). Unset rejects relays' outbound calls. |
+| `TRING_CARRIER_G729` | `false` | Offers G.729 first on the carrier leg, falling back to G.711, and prefers it over the carrier's own order. G.729 uses about 24 kbps each way against about 80 for G.711, so a bandwidth-capped trunk carries about 3× the calls, at slightly lower audio quality and some FreeSWITCH CPU for transcoding to G.711. Needs the FreeSWITCH image built with `--target g729`; the published image has no G.729 transcoder and stays on G.711 with this set. See [G.729 on the carrier leg](#g729-on-the-carrier-leg). |
 | `TRING_WHATSAPP_ENABLED` | `false` | Loads the TLS-only `whatsapp` SIP profile for inbound WhatsApp calls. Off binds nothing. Needs the certificates described in the [WhatsApp guide](/tring/guides/whatsapp-sip/). |
 | `TRING_WHATSAPP_IP` | empty | IP the `whatsapp` profile binds. Empty uses the primary interface. |
 | `TRING_WHATSAPP_PUBLIC_IP` | empty | IP advertised to Meta in SIP/SDP. Empty falls back to `TRING_PUBLIC_IP`, then the bind IP. |
@@ -250,3 +251,20 @@ These are not in `.env.example` but are read by the binaries, Compose or FreeSWI
 - Store recordings in a private, encrypted bucket with an IAM role.
 - Pin `TRING_TAG` to a release.
 - Turn on MFA for your cloud and registry accounts, keep audit logging on, and rotate secrets on a schedule (except `TRING_SECRETS_KEY`, which can't be rotated yet).
+
+## G.729 on the carrier leg
+
+G.729 compresses the carrier leg to about 24 kbps each way (G.711 uses about 80), so a trunk whose bandwidth, not its channel count, is the limit carries roughly three times the calls. FreeSWITCH transcodes it to G.711 for Tring, so agents' browsers, prompts and recordings are unchanged. Audio is a little more compressed than G.711 and degrades faster under packet loss.
+
+The transcoder is the open-source [bcg729](https://github.com/BelledonneCommunications/bcg729) library, which is GPLv3. FreeSWITCH is MPL 1.1, so the published `tring-freeswitch` image doesn't include it. Build the image yourself and keep it in a private registry:
+
+```bash
+docker build --target g729 -t <your-registry>/tring-freeswitch:g729 -f freeswitch/Dockerfile freeswitch
+docker push <your-registry>/tring-freeswitch:g729
+```
+
+Point the `freeswitch` service's `image:` in `docker-compose.yml` at it, set `TRING_CARRIER_G729=true` in `.env`, and recreate the container. Rebuild only when `freeswitch/` changes.
+
+The carrier must offer G.729 (payload type `18` in its SDP). Check with a capture of an inbound INVITE: `m=audio … RTP/AVP 8 0 18 101` means it does. Carriers that don't offer it still negotiate G.711. Use RFC 2833 DTMF (`telephone-event`), since in-band tones don't survive G.729.
+
+Check a live call with `fs_cli -x "show channels"`: the carrier leg reads `G729` and the leg to Tring reads `PCMA` or `PCMU`.
