@@ -36,7 +36,7 @@ func TestComposeVideoOneCameraKeepsOtherPlaceholder(t *testing.T) {
 			}
 			for _, at := range []string{"0.5", "1.5"} {
 				raw, err := exec.Command("ffmpeg", "-v", "error", "-ss", at, "-i", out, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-").Output()
-				if err != nil || len(raw) != 1280*480*3 {
+				if err != nil || len(raw) != 640*240*3 {
 					t.Fatalf("decode: %v (%d bytes)", err, len(raw))
 				}
 				for side, placeholder := range []string{"agent", "client"} {
@@ -52,14 +52,14 @@ func TestComposeVideoOneCameraKeepsOtherPlaceholder(t *testing.T) {
 						t.Fatal(err)
 					}
 					pixels, difference := 0, 0
-					for y := 0; y < 480; y++ {
-						for x := 0; x < 640; x++ {
+					for y := 0; y < 240; y++ {
+						for x := 0; x < 320; x++ {
 							r, g, b, _ := expected.At(x, y).RGBA()
 							if r>>8 < 150 || g>>8 < 150 || b>>8 < 150 {
 								continue
 							}
 							pixels++
-							index := (y*1280 + side*640 + x) * 3
+							index := (y*640 + side*320 + x) * 3
 							for channel, want := range []uint32{r >> 8, g >> 8, b >> 8} {
 								delta := int(raw[index+channel]) - int(want)
 								if delta < 0 {
@@ -168,10 +168,10 @@ func TestComposeVideoIncludesBothPeopleAndCameraOffGaps(t *testing.T) {
 		red, blue bool
 	}{{0.2, false, false}, {0.8, true, false}, {1.2, true, true}, {2, false, true}, {2.8, false, false}} {
 		raw, err := exec.Command("ffmpeg", "-v", "error", "-ss", fmt.Sprintf("%.1f", tc.at), "-i", out, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-").Output()
-		if err != nil || len(raw) != 1280*480*3 {
+		if err != nil || len(raw) != 640*240*3 {
 			t.Fatalf("decode at %v: %v (%d bytes)", tc.at, err, len(raw))
 		}
-		l, r := raw[(240*1280+320)*3:], raw[(240*1280+960)*3:]
+		l, r := raw[(120*640+160)*3:], raw[(120*640+480)*3:]
 		if got := int(l[0]) > int(l[1])+100; got != tc.red {
 			t.Errorf("agent at %.1f red=%v, want %v", tc.at, got, tc.red)
 		}
@@ -270,16 +270,16 @@ func TestComposeVideoResolutionChangePreservesTimeline(t *testing.T) {
 		blue bool
 	}{{"0.5", false}, {"1.5", true}} {
 		raw, err := exec.Command("ffmpeg", "-v", "error", "-ss", tc.at, "-i", out, "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-").Output()
-		if err != nil || len(raw) != 1280*480*3 {
+		if err != nil || len(raw) != 640*240*3 {
 			t.Fatalf("decode: %v, bytes=%d", err, len(raw))
 		}
-		pixel := raw[(240*1280+320)*3:]
+		pixel := raw[(120*640+160)*3:]
 		blue := int(pixel[2]) > int(pixel[0])+100
 		if blue != tc.blue {
 			t.Errorf("at %ss blue=%v, want %v (timeline reset)", tc.at, blue, tc.blue)
 		}
 		// The 16:9 screen is letterboxed inside the 4:3 panel, not stretched.
-		if top := raw[(20*1280+320)*3:]; tc.blue && int(top[0])+int(top[1])+int(top[2]) > 60 {
+		if top := raw[(10*640+160)*3:]; tc.blue && int(top[0])+int(top[1])+int(top[2]) > 60 {
 			t.Errorf("at %ss the screen share fills the panel (rgb %v); want it letterboxed", tc.at, top[:3])
 		}
 	}

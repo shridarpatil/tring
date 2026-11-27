@@ -55,7 +55,7 @@ func Encode(ctx context.Context, out, in string, rate int) error {
 	}
 	args := append(audioFFmpegArgs(), "-threads", "1", "-i", in)
 	args = append(args, encodeArgs(rate, out)...)
-	if b, err := ffmpegCmd(ctx, args...).CombinedOutput(); err != nil {
+	if b, err := runLowPriority(ffmpegCmd(ctx, args...)); err != nil {
 		return fmt.Errorf("ffmpeg encode: %w: %s", err, b)
 	}
 	return nil
@@ -86,8 +86,7 @@ func MergeStereo(ctx context.Context, out, left, right string, rate int) error {
 		"-map", "[a]",
 	)
 	args = append(args, encodeArgs(rate, out)...)
-	cmd := ffmpegCmd(ctx, args...)
-	if b, err := cmd.CombinedOutput(); err != nil {
+	if b, err := runLowPriority(ffmpegCmd(ctx, args...)); err != nil {
 		return fmt.Errorf("ffmpeg merge: %w: %s", err, b)
 	}
 	return nil
@@ -150,8 +149,7 @@ func MergeCall(ctx context.Context, out, customer string, agents []AgentLeg, rat
 
 	args = append(args, "-filter_complex", fc.String(), "-map", "[a]")
 	args = append(args, encodeArgs(rate, out)...)
-	cmd := ffmpegCmd(ctx, args...)
-	if b, err := cmd.CombinedOutput(); err != nil {
+	if b, err := runLowPriority(ffmpegCmd(ctx, args...)); err != nil {
 		return fmt.Errorf("ffmpeg merge-call: %w: %s", err, b)
 	}
 	return nil
