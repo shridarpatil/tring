@@ -16,7 +16,7 @@
 #     -f freeswitch/Dockerfile freeswitch
 # G.729 transcoder (mod_bcg729), for the opt-in `g729` target only. The base
 # image's mod_g729 is passthrough only, so a carrier leg in G.729
-# (TRING_CARRIER_G729=true) needs a real encoder/decoder to reach the plug's
+# (TRING_CARRIER_CODEC=g729) needs a real encoder/decoder to reach the plug's
 # G.711. bcg729 is GPLv3 and FreeSWITCH is MPL 1.1, so the default image —
 # the one CI publishes — never contains it; operators who want G.729 build
 # `--target g729` for their own use. Built against the FreeSWITCH
@@ -59,6 +59,7 @@ FROM safarov/freeswitch@sha256:f156e01a96d48944078ed7f0e24304be63ea15f6466cf607a
 # Static config → vanilla templates (mirrors the docker-compose :ro mounts).
 COPY --chmod=755 tring-carrier-acl.sh             /usr/local/bin/tring-carrier-acl
 COPY --chmod=755 tring-sip-relays.sh              /usr/local/bin/tring-sip-relays
+COPY --chmod=755 tring-carrier-codecs.sh          /usr/local/bin/tring-carrier-codecs
 COPY conf/vars.xml                               /usr/share/freeswitch/conf/vanilla/vars.xml
 COPY conf/dialplan/default.xml                   /usr/share/freeswitch/conf/vanilla/dialplan/default.xml
 COPY conf/dialplan/public.xml                     /usr/share/freeswitch/conf/vanilla/dialplan/public.xml
