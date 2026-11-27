@@ -1,0 +1,325 @@
+---
+title: Tenant & guest config
+description: Read and update tenant settings, set the default guest flow, and mint single-use visitor call credentials.
+order: 4
+---
+
+All endpoints on this page act on the tenant the credential belongs to. They accept a tenant API key or a console session (see [Authentication](/tring/api-reference/authentication/)).
+
+## Tenant settings
+
+### The tenant object
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Tenant ID. |
+| `name` | string | Tenant name. |
+| `outbound_strategy` | string | How outbound calls pick a trunk: `failover`, `round_robin`, `manual` or `load_based`. Default `failover`. See [Numbers & trunks](/tring/features/numbers-and-trunks/). |
+| `failover_causes` | string[] | FreeSWITCH hangup causes that make an outbound call try the next trunk. |
+| `hold_music` | string | The `file_path` of a sound used as hold music, or `""` for the built-in default. |
+| `record_calls` | boolean | Record calls once the agent and caller are connected. Default `true`. |
+| `max_call_seconds` | integer | Maximum call duration, in seconds. Default `14400` (4 hours). Also sets how long the TURN credentials handed to browsers stay valid. |
+| `transfer_failed_message` | string | What a caller hears when a transfer finds no one available. |
+| `transfer_timeout_seconds` | integer | How long an agent's transfer rings the target before the call goes back to the transferring agent. Default `60`. |
+| `recording_sample_rate` | integer | Sample rate, in Hz, that call recordings are encoded at. Default `8000`. |
+| `recording_format` | string | Format of call recordings: `ogg` (default), `mp3` or `wav`. |
+| `mask_numbers_agents` | boolean | Mask client phone numbers (the caller on inbound calls, the callee on outbound calls, and `client_ref`) for agents who manage no team. Default `false`. |
+| `mask_numbers_managers` | boolean | Mask client phone numbers for team managers. Default `false`. |
+| `mask_numbers_supervisors` | boolean | Mask client phone numbers for supervisors. Default `false`. Admins, API keys and webhooks are never masked; see [masking client numbers by role](/tring/features/agents-and-routing/#masking-client-numbers-by-role). |
+| `wrap_up_seconds` | integer | Default [wrap-up](/tring/features/agents-and-routing/#call-wrap-up) window, `0` to `600`, for calls that reach an agent without a team ring. `0` (default) is off. A team's own setting overrides it. |
+| `require_disposition` | boolean | Default for whether a disposition is mandatory in the wrap-up. Default `false`. |
+
+The default `failover_causes` are `NETWORK_OUT_OF_ORDER`, `GATEWAY_DOWN`, `USER_NOT_REGISTERED`, `SUBSCRIBER_ABSENT`, `NORMAL_TEMPORARY_FAILURE`, `RECOVERY_ON_TIMER_EXPIRE` and `NO_ROUTE_DESTINATION`.
+
+### GET /v1/tenants/me
+
+Read the current tenant's settings.
+
+**Auth:** API key or console session.
+
+```bash
+curl -sS "$TRING_URL/v1/tenants/me" \
+  -H "Authorization: Bearer $TRING_API_KEY"
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "name": "Default",
+  "outbound_strategy": "failover",
+  "failover_causes": [
+    "NETWORK_OUT_OF_ORDER",
+    "GATEWAY_DOWN",
+    "USER_NOT_REGISTERED",
+    "SUBSCRIBER_ABSENT",
+    "NORMAL_TEMPORARY_FAILURE",
+    "RECOVERY_ON_TIMER_EXPIRE",
+    "NO_ROUTE_DESTINATION"
+  ],
+  "hold_music": "",
+  "record_calls": true,
+  "max_call_seconds": 14400,
+  "transfer_failed_message": "Sorry, no one is available to take your call right now. Please try again later.",
+  "transfer_timeout_seconds": 60,
+  "recording_sample_rate": 8000,
+  "recording_format": "ogg",
+  "mask_numbers_agents": false,
+  "mask_numbers_managers": false,
+  "mask_numbers_supervisors": false
+}
+```
+
+**Errors:** only the authentication errors (`401`).
+
+### PATCH /v1/tenants/me
+
+Update one or more tenant settings. Fields you leave out keep their current value.
+
+**Auth:** API key or console session.
+
+**Request body** (at least one field is required)
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `outbound_strategy` | string | no | One of `failover`, `round_robin`, `manual`, `load_based`. |
+| `failover_causes` | string[] | no | Replaces the whole list of hangup causes that trigger failover to the next trunk. Each entry is a FreeSWITCH cause name (`NORMAL_TEMPORARY_FAILURE`) or a Q.850 code; at most 32. |
+| `hold_music` | string | no | A sound's `file_path` (from [`GET /v1/audio`](/tring/api-reference/audio/#get-v1audio)) to use as hold music, or `""` to go back to the built-in default. It must be one of your tenant's sounds (or `local_stream://moh`); anything else is rejected. |
+| `record_calls` | boolean | no | Turn call recording on or off. |
+| `max_call_seconds` | integer | no | Maximum call duration in seconds, from `60` to `86400` (1 minute to 24 hours). |
+| `transfer_failed_message` | string | no | Text played when a transfer finds no one available. It's turned into speech when you save it. Sending `""` makes that moment silent. |
+| `transfer_timeout_seconds` | integer | no | How long an agent's transfer rings before the call goes back to them, from `5` to `600`. |
+| `recording_sample_rate` | integer | no | Recording sample rate in Hz: `8000`, `12000`, `16000`, `24000` or `48000`. Applies to calls that start after the change. |
+| `recording_format` | string | no | Recording format: `ogg`, `mp3` or `wav`. Applies to calls that start after the change. |
+| `mask_numbers_agents` | boolean | no | Mask client numbers for agents. |
+| `mask_numbers_managers` | boolean | no | Mask client numbers for team managers. |
+| `mask_numbers_supervisors` | boolean | no | Mask client numbers for supervisors. |
+| `wrap_up_seconds` | integer | no | Default wrap-up window in seconds, `0` to `600`. |
+| `require_disposition` | boolean | no | Default for requiring a disposition. |
+
+```bash
+curl -sS -X PATCH "$TRING_URL/v1/tenants/me" \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "outbound_strategy": "round_robin",
+    "record_calls": false,
+    "max_call_seconds": 3600,
+    "hold_music": "/var/lib/tring/sounds/00000000-0000-4000-8000-000000000001/7b0e9a52-0000-4000-8000-0000000000b1.ogg"
+  }'
+```
+
+**Response** `200 OK` with the full, updated [tenant object](#the-tenant-object).
+
+**Errors**
+
+| Status | `error` |
+|---|---|
+| `400` | `invalid JSON body` |
+| `400` | `at least one of outbound_strategy, failover_causes, hold_music, record_calls, max_call_seconds, transfer_failed_message, transfer_timeout_seconds, recording_sample_rate, recording_format, mask_numbers_*, wrap_up_seconds or require_disposition is required` |
+| `400` | `wrap_up_seconds must be 0-600` |
+| `400` | `transfer_timeout_seconds must be between 5 and 600` |
+| `400` | `recording_sample_rate must be one of 8000, 12000, 16000, 24000, 48000` |
+| `400` | `recording_format must be one of ogg, mp3, wav` |
+| `400` | `max_call_seconds must be between 60 and 86400 (1 min–24 h)` |
+| `400` | `outbound_strategy must be failover\|round_robin\|manual\|load_based` |
+| `400` | `failover_causes must be FreeSWITCH cause names (e.g. NORMAL_TEMPORARY_FAILURE) or Q.850 codes` / `too many failover_causes` |
+| `400` | `hold_music must be one of this tenant's uploaded sounds` |
+| `500` | `update failed` |
+
+:::note
+`transfer_failed_message` is converted to audio with the server's text-to-speech engine when you save it. If text-to-speech isn't set up, or the conversion fails, the update still succeeds, but the caller hears silence and then the call ends. Check the API logs for a `tts:` warning if the message doesn't play.
+:::
+
+## Recording storage
+
+Where finished recordings are uploaded. With no bucket, recordings stay on the server's local spool. See [Recording and call logs](/tring/features/recording-and-call-logs/#storage).
+
+**Auth:** API key with full scope or admin console session.
+
+### The recording storage object
+
+| Field | Type | Description |
+|---|---|---|
+| `bucket` | string | S3 bucket. `""` keeps recordings local. |
+| `region` | string | Bucket region, for example `ap-south-1`. Required for AWS S3 (empty `endpoint`). |
+| `endpoint` | string | `""` for AWS S3, or `host[:port]` of an S3-compatible store (MinIO, Cloudflare R2). |
+| `prefix` | string | Object key prefix. Default `recordings`. Objects are `<prefix>/<tenant-id>/YYYY/MM/DD/<leg-id>.<format>`. |
+| `use_ssl` | boolean | Use HTTPS to the endpoint. Defaults to `true` when left out of a `PUT`. |
+| `access_key` | string | Static access key. `""` uses the server's IAM role. |
+| `has_secret` | boolean | Whether a secret key is stored. The secret itself is never returned. |
+
+### GET /v1/tenants/me/recording-storage
+
+**Response** `200 OK` with the [recording storage object](#the-recording-storage-object).
+
+### PUT /v1/tenants/me/recording-storage
+
+Replaces the storage config. Send every field. Leave out `secret_key` (or send `""`) to keep the stored secret; a changed `access_key` needs its `secret_key`. Sending an empty `access_key` also removes the secret, so uploads use the IAM role. With a bucket set, the server first writes `<prefix>/<tenant-id>/.tring-write-test` and saves nothing if that fails. It then deletes the file; if the delete is refused, the config is still saved and the response carries a `warning` naming the file. The change applies to the next recording.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `bucket`, `region`, `endpoint`, `prefix`, `use_ssl`, `access_key` | | yes | As in the [object](#the-recording-storage-object). |
+| `secret_key` | string | no | New secret key. Stored encrypted with `TRING_SECRETS_KEY`. |
+
+```bash
+curl -sS -X PUT "$TRING_URL/v1/tenants/me/recording-storage" \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"bucket":"acme-recordings","region":"ap-south-1","endpoint":"","prefix":"recordings","use_ssl":true,"access_key":""}'
+```
+
+**Response** `200 OK` with the saved [recording storage object](#the-recording-storage-object), plus `warning` (string) when the save worked but needs attention.
+
+**Errors**
+
+| Status | `error` |
+|---|---|
+| `400` | `invalid JSON body` |
+| `400` | `bucket must be 3-63 lowercase letters, digits, dots or hyphens` (and the matching messages for `region`, `endpoint`, `prefix`, `access_key`) |
+| `400` | `endpoint address not allowed (private or local; list it in TRING_OUTBOUND_ALLOW_CIDRS to permit)` |
+| `400` | `secret_key needs an access_key` / `secret_key is required with an access_key` / `enter the secret_key for the new access key` |
+| `400` | `region is required for AWS S3 (for example ap-south-1)` |
+| `400` | `secret_key needs TRING_SECRETS_KEY on the server (it is stored encrypted)` |
+| `400` | `storage test failed: <S3 code>: <message>` / `storage test failed: could not reach the storage endpoint` |
+| `500` | `update failed` |
+
+### DELETE /v1/tenants/me/recording-storage/keys
+
+Removes the access key and secret. Uploads then use the server's IAM role. The bucket and other fields are kept.
+
+**Response** `204 No Content`.
+
+## Guest (visitor) calls
+
+Website visitors call you through the [visitor widget](/tring/sdk/visitor-widget/). Each visitor call lands in an IVR flow. You can name the flow when you mint credentials, or fall back to the tenant's default guest flow.
+
+### GET /v1/guest-config
+
+Read the tenant's default guest flow.
+
+**Auth:** API key or console session.
+
+```bash
+curl -sS "$TRING_URL/v1/guest-config" \
+  -H "Authorization: Bearer $TRING_API_KEY"
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "default_flow_id": "4c8b1f20-0000-4000-8000-0000000000f1"
+}
+```
+
+`default_flow_id` is `null` when no default is set.
+
+**Errors**
+
+| Status | `error` |
+|---|---|
+| `500` | `query failed` |
+
+### PATCH /v1/guest-config
+
+Set or clear the default guest flow.
+
+**Auth:** API key or console session.
+
+**Request body**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `default_flow_id` | string | yes | A flow UUID to use as the default, or `""` to clear it. The flow must belong to your tenant and be active. |
+
+```bash
+curl -sS -X PATCH "$TRING_URL/v1/guest-config" \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"default_flow_id":"4c8b1f20-0000-4000-8000-0000000000f1"}'
+```
+
+**Response** `200 OK`, the same shape as [`GET /v1/guest-config`](#get-v1guest-config).
+
+**Errors**
+
+| Status | `error` |
+|---|---|
+| `400` | `invalid JSON body` |
+| `400` | `default_flow_id required` (field missing or `null`) |
+| `400` | `invalid default_flow_id` (not a UUID) |
+| `400` | `flow not found or inactive` |
+| `400` | `flow lookup failed` |
+| `500` | `query failed`, `update failed` |
+
+### POST /v1/guest-credentials
+
+Mint the credentials a visitor's browser needs to place **one** web call. Call this from your backend with your API key, then return the response to the visitor's browser, which passes it to the visitor widget.
+
+**Auth:** API key or console session. Never call this from the browser: it needs your API key.
+
+**Request body** (optional, an empty body is fine)
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `flow_id` | string | no | The IVR flow this call runs. Must be an active flow in your tenant. Defaults to the tenant's `default_flow_id`. |
+| `client_ref` | string | no | Your identifier for the caller, for example a CRM customer ID. It's recorded on the call so you can match the call log to the customer. Only pass a value you've verified, such as the logged-in user's ID from your own session. Leave it out for anonymous visitors. |
+
+```bash
+curl -sS -X POST "$TRING_URL/v1/guest-credentials" \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"flow_id":"4c8b1f20-0000-4000-8000-0000000000f1","client_ref":"customer-123"}'
+```
+
+**Response** `200 OK`
+
+```json
+{
+  "gateway_url": "https://gw.example.com",
+  "flow_id": "4c8b1f20-0000-4000-8000-0000000000f1",
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example.signature",
+  "ice_servers": [
+    { "urls": "stun:stun.example.com:3478" },
+    {
+      "urls": "turn:turn.example.com:3478",
+      "username": "1760700000:customer-123",
+      "credential": "example-credential"
+    }
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `gateway_url` | The media gateway URL the browser connects to (`TRING_GATEWAY_PUBLIC_URL`). |
+| `flow_id` | The flow the call is pinned to. |
+| `token` | The visitor call token. Valid for **2 minutes**, and only for **one** call. |
+| `ice_servers` | STUN/TURN servers in the browser's `RTCIceServer` format. TURN entries appear only if TURN is configured. With a TURN secret, each response gets its own short-lived TURN credential. |
+
+**How the visitor flow works**
+
+1. The visitor clicks "Call us" on your site.
+2. Your frontend asks **your** backend for credentials.
+3. Your backend checks the request (signed-in session, CAPTCHA or rate limit for anonymous visitors), then calls `POST /v1/guest-credentials`.
+4. Your backend returns the response to the browser, and the visitor widget connects straight to the media gateway with it.
+5. The gateway accepts the token once. A second call needs new credentials.
+
+The flow is fixed in the token, so a visitor can't change which flow they reach.
+
+**Errors**
+
+| Status | `error` |
+|---|---|
+| `400` | `invalid flow_id` (not a UUID) |
+| `400` | `flow not found or inactive` |
+| `400` | `flow lookup failed` |
+| `400` | `no flow for this guest call — pass flow_id, or set a default flow in Settings` |
+| `500` | `tenant config lookup failed` |
+| `500` | `token issue failed` |
+
+:::caution
+Anyone who can reach your credentials endpoint can make calls into your IVR. Rate-limit it, and put a CAPTCHA in front of it if anonymous visitors can call.
+:::

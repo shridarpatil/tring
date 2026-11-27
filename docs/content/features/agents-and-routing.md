@@ -1,0 +1,180 @@
+---
+title: Agents and routing
+description: Agents, presence and availability, teams, ring strategies, queues and ring reservations.
+order: 3
+label: Agents & routing
+---
+
+When an IVR [Transfer node](/tring/features/ivr-flows/#transfer) or an agent's blind transfer needs a human, the gateway's routing engine picks who rings. This page explains the pieces it uses.
+
+## Agents
+
+An agent is a person who takes calls in the browser through the [agent widget](/tring/sdk/agent-widget/) or the [JavaScript API](/tring/sdk/javascript-api/).
+
+| Field | What it is |
+|---|---|
+| `id` | Agent UUID. |
+| `sip_username` | Your identifier for the agent, unique per tenant. Use your own CRM user id here: every `/v1/agents/{id}` path accepts either the UUID or the `sip_username`. It is also what a Transfer node's `agent_sip` names. |
+| `display_name` | Name shown in the console, transfer pickers and call logs. |
+| `role` | `admin`, `supervisor` or `agent`. See [Roles](#roles-and-logins). |
+| `available_for_calls` | Your Away/Break switch, controlled from your backend. |
+| `status` | Live state on list responses: `online`, `on_call`, `wrap_up`, `away` or `offline`. |
+
+Create agents in the console (**Agents**) or with `POST /v1/agents` (`sip_username` required, `display_name` optional). See the [Agents API](/tring/api-reference/agents/).
+
+To fix a mistyped `sip_username`, an admin can edit it on the console's **Users** page (or `PATCH /v1/users/{id}`). This is not allowed while the agent is on a call. The agent's widget reconnects under the new name. Your CRM and any Transfer nodes that use the old name must be updated. The console lists those flows after the save. See [PATCH /v1/users/{id}](/tring/api-reference/users/#patch-v1usersid).
+
+## Roles and logins
+
+Agents and console users are the same thing: one **user** with a `role`.
+
+| Role | Console access |
+|---|---|
+| `agent` | Their own view at `/agent`: their calls and stats, take calls in the browser, their teams. |
+| `supervisor` | Every team's live state and calls, and can supervise any live call. |
+| `admin` | Everything, including the admin API and managing users. |
+
+Team **manager** is not a role. It is a flag on a user's membership of one team (`is_manager`), so the same person can manage one team and be an ordinary member of another. A manager sees that team's live state and calls, can add and remove its members (but not other managers), and can supervise calls that belong to it. Only a supervisor or admin can make someone a manager.
+
+Everyone signs in at `/login`. Admins land on the admin console at `/admin/`; supervisors and agents land on `/agent`, and team pages are at `/agent/teams/<name>`.
+
+Role has no effect on routing: anyone in a team is rung when the team rings, whatever their role.
+
+**Login.** A user signs in to the console with email and password. Email is optional and, when set, unique across tenants. A user created with `POST /v1/agents` (API key) has no email or password, so they have no console login. An admin gives them one by setting `email` and `password` with `PATCH /v1/users/{id}`, or creates a user with a login directly using `POST /v1/users`. Clearing the email removes the login. See the [Users API](/tring/api-reference/users/).
+
+The CRM integration is unchanged: your backend still mints agent tokens with `/v1/agents/{id}/token`, the widget connects with them, and `sip_username` identifies the agent. `/v1/agents` responses simply include `role` as well.
+
+### Taken and missed
+
+The agent view counts calls today and over the last 7 days:
+
+| Count | Meaning |
+|---|---|
+| **Taken** | Calls this agent answered. |
+| **Missed** | Calls that rang this agent and that they did not answer, even if a teammate answered. A call that rang them several times counts once. |
+
+## Presence and availability
+
+Two separate things decide whether an agent can be rung:
+
+| | Controlled by | Meaning |
+|---|---|---|
+| **Presence** | The agent's browser | The widget holds a presence socket to the gateway. Connected and idle is `online`; in a call is `on_call`; filling in the [wrap-up](#call-wrap-up) after a call is `wrap_up`; disconnected is `offline`. Stored in Redis with a 30-second TTL, refreshed every 10 seconds, so a crashed browser drops out within 30 seconds. |
+| **Availability** | Your backend | `available_for_calls`. Set it with `POST /v1/agents/{id}/availability` and `{"available": false}` when the agent goes on break. |
+
+```bash
+curl -sS -X POST https://api.example.com/v1/agents/crm-user-17/availability \
+  -H "Authorization: Bearer $TRING_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"available": false}'
+```
+
+Each change updates the live dashboard. An agent who is connected but unavailable shows as `away`.
+
+:::caution
+Unavailable agents are never rung, whatever the target: a team, "all available agents", or one specific agent. They're also left out of the agent widget's transfer picker, and a blind transfer to one is refused straight away.
+:::
+
+Presence needs Redis (`TRING_REDIS_ADDR`). Without it, the console cannot show who is online.
+
+## Call wrap-up
+
+Wrap-up gives an agent a timed window after a call to record how it went: a **disposition**, **tags** and **notes**. The disposition and tag lists are managed per tenant, and each entry is shared by all teams or limited to chosen teams. The agent is offered the shared entries plus those of the team whose ring reached them; a call with no team ring gets shared entries only. See [Dispositions & call tags](/tring/api-reference/dispositions-and-tags/#teams).
+
+Two settings control it, on each team and as a tenant default:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `wrap_up_seconds` | `0` | Length of the window, 0 to 600 seconds. `0` turns wrap-up off. |
+| `require_disposition` | `false` | The agent must pick a disposition to save. |
+
+Set them on the team page in the console or with the [Teams](/tring/api-reference/teams/) and [tenant](/tring/api-reference/tenant/) APIs. The settings that apply are those of the team whose ring reached the agent. A transfer to another team uses that team's settings. Calls that reached the agent without a team ring (a direct-to-agent transfer, click-to-call, "all available agents") use the tenant default. [Agent-assisted campaigns](/tring/features/campaigns/#agent-assisted-campaigns) use the campaign team's settings.
+
+How it behaves:
+
+- Only calls that were answered get a wrap-up. An agent who blind-transfers the call away gets none; if the transfer fails and the call comes back to them, they wrap up when it ends.
+- While wrapping up the agent's status is `wrap_up`: connected but not rung. On the team board they count as live but not available.
+- The agent saves in the [agent widget](/tring/sdk/agent-widget/#wrap-up) (or your own UI) before the timer runs out. The agent is available again as soon as they save.
+- If the timer runs out first, the call's `wrap_up_end` is `timeout`, its disposition stays empty, and the agent becomes available.
+- An agent who places a call (the dial pad or a CRM click-to-call) ends their wrap-up first.
+- Your backend can set or change the outcome at any time with [`PATCH /v1/calls/{id}/wrap-up`](/tring/api-reference/dispositions-and-tags/#patch-v1callsidwrap-up). The console call log shows the outcome read-only.
+
+The outcome is part of the [call object](/tring/api-reference/calls/#the-call-object), and the flow's **On wrap-up** [webhook](/tring/features/webhooks/#choosing-what-sends) reports it.
+
+## Teams
+
+A team is a named group of agents with routing settings. A Transfer node targets it by **name**.
+
+| Field | Default | What it does |
+|---|---|---|
+| `name` | | Unique per tenant; used in flows and API paths. |
+| `strategy` | `ring_all` | How members are rung. See below. |
+| `ring_seconds` | `20` | How long each ring attempt lasts. |
+| `max_wait_seconds` | `120` | Total time a caller can wait for this team before the transfer gives up (`no_answer`). |
+| `moh_sound` | `local_stream://moh` | What waiting callers hear. A sound-library file path overrides; the default value means "use the tenant's hold music". |
+
+Members have a `position` (default `1`), which orders them for `sequential`. Add members with `POST /v1/teams/{name}/agents` and `{"agent_id": "…", "position": 2}`. See the [Teams API](/tring/api-reference/teams/).
+
+## Ring strategies
+
+| Strategy | Who rings |
+|---|---|
+| `ring_all` | Every available member at once. The first to accept gets the call. |
+| `round_robin` | One member at a time, starting from a rotating offset per team. Spreads load. |
+| `sequential` | One member at a time, in `position` order. |
+| `longest_wait` | One member at a time, the one idle longest first (by when they last finished a call). |
+
+For the one-at-a-time strategies, each attempt rings one agent for `ring_seconds`. If they decline, the next agent rings at once; if they do not answer, their ring is withdrawn and the next agent rings. An agent who declines is not rung again for that call.
+
+The round-robin counter is kept in memory per gateway process and resets on restart.
+
+## Queues
+
+When everyone on a team is busy, the caller waits in the team's queue:
+
+1. The caller joins the line and hears the team's hold music (silence if no playable file is configured).
+2. When an agent is free **and** the caller is at the head of the line, the agents are rung by the strategy.
+3. If nobody answers, the caller goes back in line and waits again.
+4. When `max_wait_seconds` runs out, the transfer reports `no_answer` and the flow takes that edge.
+
+A caller who hangs up leaves the queue. Live queue depth per team is published to Redis and shown on the dashboard, and returned by `GET /v1/queues` together with the number of calls currently connected to an agent. See [Queues and stats](/tring/api-reference/queues-and-stats/).
+
+## Reservations
+
+An agent can receive only one ringing or active call at a time. Inbound routing and outbound click-to-call share an atomic reservation: simultaneous requests cannot both claim the same agent. Another inbound caller waits or reaches another available agent; another outbound request returns an agent-busy error.
+
+The reservation stays held through answering, the connected call, and the reconnect grace window. It is released after decline, cancellation, timeout, or hangup. Only the owning call can renew or release it, so delayed cleanup cannot free a newer call's slot.
+
+Reservations live in Redis and are shared by gateways using that Redis; without Redis they are in-memory per process. Their 30-second expiry is refreshed every 10 seconds while held. If renewal fails, the gateway stops the affected ring or call rather than allowing overlapping ownership.
+
+## Transfers without a team
+
+| Transfer target | Behaviour |
+|---|---|
+| All available agents | Rings every connected, idle, available agent of the tenant at once. No queue settings apply; the default wait is 2 minutes and each ring attempt is 30 seconds. |
+| One agent (`agent_sip`) | Rings that agent, with the same defaults. The caller hears the tenant's hold music while waiting. |
+
+## What the agent sees
+
+The ringing agent sees a label, never an internal id: the Transfer node's `label` if set, otherwise the caller's identity (phone number or `client_ref`), otherwise `Web Caller`. Use `label` to hide the caller's number from agents (see [Outbound calls](/tring/features/outbound-calls/#number-masking)).
+
+### Masking client numbers by role
+
+**Settings → Privacy → Mask client phone numbers for** has one checkbox per role: **Agents**, **Team managers** and **Supervisors**. They are independent, so you can, for example, mask agents and managers but let supervisors see full numbers. The same switches are `mask_numbers_agents`, `mask_numbers_managers` and `mask_numbers_supervisors` on `PATCH /v1/tenants/me`. All three are off by default.
+
+| User | Masked when |
+|---|---|
+| Agent (manages no team) | Agents is checked |
+| Team manager (an agent who manages at least one team) | Team managers is checked |
+| Supervisor | Supervisors is checked |
+| Admin | Never |
+
+Only the client's side of a call is masked: the caller on an inbound call, the person called on an outbound call, and the `client_ref` your CRM passes for a web caller. Your own numbers (the DID that was called, the caller ID you dial out from) stay visible.
+
+A masked number keeps its first 2 and last 4 digits and any leading `+`, spaces, dashes, brackets and dots: `+919876543210` shows as `+91••••••3210` and `(022) 2345 6789` as `(02•) •••• 6789`. Only a value that is itself a phone number (7 or more digits and nothing but separators) is masked. Text is never searched for numbers, so a `client_ref` such as `Order 2026-11-07` or `Ravi 9876543210`, or a short id such as `12345`, is shown as it is. If your CRM passes a number as `client_ref`, pass it on its own.
+
+Caller labels from IVR flows are masked too. A Transfer node's `label` is rendered for a masked agent with `{{caller}}` masked, so `Customer {{caller}} order {{order_date}}` shows as `Customer +91••••••3210 order 2026-11-07`. Only `{{caller}}` is masked: a number typed into the label as fixed text, or one from another variable (such as an `http_callback` result), is shown as it is. Digits the caller entered in the IVR (the call's IVR path) are not masked.
+
+Masking happens on the server, so the full number never reaches a masked user's browser. It covers the calls in the agent view and team pages (`/v1/me/calls`, `/v1/me/dashboard`, `/v1/my-teams`), a supervisor's live dashboard stream (including the target of a transfer to an external number), and the caller shown on an incoming ring. That ring is also what your CRM's embedded widget shows, so a masked agent sees the masked number there too. Admins on the same dashboard still see full numbers. If the gateway can't tell whether an agent should be masked (for example it can't reach the database), it masks.
+
+API keys and webhooks are never masked: your backend always gets the full number. A change applies to new rings and page loads straight away; an open supervisor dashboard picks it up within about 20 seconds.
