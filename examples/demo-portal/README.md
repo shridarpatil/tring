@@ -25,7 +25,7 @@ agent clicks a customer row (sends an id, NOT a number)
 browser → Tring widget → raw WebRTC to the media gateway → call placed (FreeSWITCH stays private)
 ```
 
-See `docs/src/content/docs/architecture/overview.md` (trusted-identity sequence) and the SDK README's
+See `docs/content/architecture/overview.md` (trusted-identity sequence) and the SDK README's
 "How it works — protocol reference" for the full wire details.
 
 ## Prerequisites
@@ -137,10 +137,10 @@ is ready and can happen before an agent answers.
 
 Detailed guides:
 
-- [Visitor widget and backend examples](../../docs/src/content/docs/sdk/visitor-widget.md)
-- [Agent widget and token endpoint](../../docs/src/content/docs/sdk/agent-widget.md)
-- [JavaScript API and events](../../docs/src/content/docs/sdk/javascript-api.md)
-- [Video recordings](../../docs/src/content/docs/features/recording-and-call-logs.md)
+- [Visitor widget and backend examples](../../docs/content/sdk/visitor-widget.md)
+- [Agent widget and token endpoint](../../docs/content/sdk/agent-widget.md)
+- [JavaScript API and events](../../docs/content/sdk/javascript-api.md)
+- [Video recordings](../../docs/content/features/recording-and-call-logs.md)
 
 ## How it maps to your real app
 

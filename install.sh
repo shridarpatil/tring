@@ -120,7 +120,7 @@ Next steps:
   # BACK UP .env: TRING_SECRETS_KEY encrypts the stored SIP trunk passwords;
   # without it they can't be recovered and must be re-entered.
   # Edit it — for a SERVER (not localhost) the network IPs are what people
-  # get wrong (see section 5 of .env.example and docs/src/content/docs/architecture/state-and-ha.md):
+  # get wrong (see section 5 of .env.example and docs/content/architecture/state-and-ha.md):
   #   TRING_GATEWAY_PUBLIC_URL=https://gw.your-domain  # browser-reachable, must hit /rtc
   #   TRING_PUBLIC_IP=<public/elastic ip>   # rewrites the gateway's WebRTC ICE candidate
   #   TRING_REDIS_ADDR=127.0.0.1:6379       # gateway HARD-dep when REQUIRE_AUTH=true (default)

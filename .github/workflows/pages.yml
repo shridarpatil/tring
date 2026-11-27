@@ -1,7 +1,8 @@
 name: docs site
 
-# Builds docs/ (Astro Starlight, same setup as the whatomate docs) and
-# publishes it to GitHub Pages.
+# Builds docs/ with oatdocs (a small Go docs generator, no npm) and
+# publishes it to GitHub Pages. The oatdocs version is pinned; Go's checksum
+# database verifies its source.
 # One-time setup: Settings → Pages → Source: "GitHub Actions".
 on:
   push:
@@ -21,19 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-go@v6
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: docs/package-lock.json
+          go-version: stable
+          cache: false
       - uses: actions/configure-pages@v6
-      # Exact versions from the lockfile; no install scripts run.
-      - name: Install
-        working-directory: docs
-        run: npm ci --ignore-scripts
       - name: Build
-        working-directory: docs
-        run: npm run build
+        run: go run github.com/shridarpatil/oatdocs@v0.1.0 build docs
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/dist

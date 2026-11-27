@@ -1,0 +1,7 @@
+{
+  "title": "Tring",
+  "description": "Open-source, API-first voice calling",
+  "base": "/tring",
+  "repo": "https://github.com/shridarpatil/tring",
+  "theme": "theme"
+}
