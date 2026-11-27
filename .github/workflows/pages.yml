@@ -7,7 +7,8 @@ name: docs site
 on:
   push:
     branches: [main]
-    paths: ["docs/**", ".github/workflows/pages.yml"]
+    # oat-theme.css: the docs take the console's theme variables from it.
+    paths: ["docs/**", "web/src/oat-theme.css", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
           cache: false
       - uses: actions/configure-pages@v6
       - name: Build
-        run: go run github.com/shridarpatil/oatdocs@v0.1.0 build docs
+        run: go run github.com/shridarpatil/oatdocs@v0.2.0 build docs
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/dist
