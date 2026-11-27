@@ -50,8 +50,8 @@
       <!-- The carrier's codec order: the plug leg's own G.711 law first (see
            the bridge below). break="never" so it only ever picks the order. -->
       <condition field="${ep_codec_string}" expression="^[^,]*\.PCMU@" break="never">
-        <action application="set" data="tring_carrier_codecs=PCMU,PCMA"/>
-        <anti-action application="set" data="tring_carrier_codecs=PCMA,PCMU"/>
+        <action application="set" data="tring_carrier_codecs=$${carrier_codecs_pcmu}"/>
+        <anti-action application="set" data="tring_carrier_codecs=$${carrier_codecs_pcma}"/>
       </condition>
       <condition field="destination_number" expression="^(\+?\d+)$">
         <action application="set" data="effective_caller_id_number=${sip_from_user}"/>
@@ -63,8 +63,10 @@
              ever rang. A phone room's plug leg offers its G.711 law: it goes
              first here, so a carrier that takes it shares one codec with the
              plug and FS relays the frames untouched; the other law stays as
-             a fallback (a cheap A/µ transcode in FS). Quoted so the comma
-             doesn't end the {} block. -->
+             a fallback (a cheap A/µ transcode in FS). With
+             TRING_CARRIER_G729, G.729 leads both orders (vars.xml) and FS
+             transcodes it to the plug's law. Quoted so the comma doesn't end
+             the {} block. -->
         <action application="bridge" data="{absolute_codec_string='${tring_carrier_codecs}'}sofia/gateway/${sip_h_X-Tring-Trunk}/$1"/>
       </condition>
     </extension>
