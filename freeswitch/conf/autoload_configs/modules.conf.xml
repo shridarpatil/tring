@@ -98,7 +98,7 @@
     <load module="mod_spandsp"/>
     <load module="mod_g723_1"/>
     <!-- G.729: only the Dockerfile's `g729` target loads mod_bcg729 here (a
-         real transcoder; see TRING_CARRIER_G729). The stock passthrough
+         real transcoder; see TRING_CARRIER_CODEC). The stock passthrough
          mod_g729 is deliberately not loaded: it would let a carrier leg
          negotiate G.729 that nothing can decode to the plug's G.711. -->
     <!-- tring:g729 -->

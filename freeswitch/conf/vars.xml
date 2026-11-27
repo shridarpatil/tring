@@ -284,17 +284,15 @@
        law with no transcode (dialplan/public.xml); WhatsApp and the gateway
        legs keep the prefs above.
 
-       TRING_CARRIER_G729=true puts G.729 first on the carrier leg (~24 kbps
-       each way vs ~80 for G.711, so ~3x the calls on a bandwidth-capped
-       trunk) and FS transcodes it to the plug's G.711. It needs the image's
-       `g729` build target (mod_bcg729); on the default image G.729 isn't a
-       loaded codec, so FS skips it and stays on G.711. Negotiation turns
-       greedy (our order wins) because carriers tend to list G.711 first. -->
-  <X-PRE-PROCESS cmd="exec-set" data="carrier_codec_prefs=sh -c 'if [ x${TRING_CARRIER_G729} = xtrue ]; then echo G729,PCMA,PCMU; else echo PCMA,PCMU; fi'"/>
-  <X-PRE-PROCESS cmd="exec-set" data="carrier_codec_negotiation=sh -c 'if [ x${TRING_CARRIER_G729} = xtrue ]; then echo greedy; else echo generous; fi'"/>
+       TRING_CARRIER_CODEC=g729|amr puts a compressed codec first on the
+       carrier leg (G.711 stays as fallback) for bandwidth-capped trunks; FS
+       transcodes it to the plug's G.711. tring-carrier-codecs maps the
+       choice to the settings below. -->
+  <X-PRE-PROCESS cmd="exec-set" data="carrier_codec_prefs=/usr/local/bin/tring-carrier-codecs prefs"/>
+  <X-PRE-PROCESS cmd="exec-set" data="carrier_codec_negotiation=/usr/local/bin/tring-carrier-codecs negotiation"/>
   <!-- Outbound carrier offer, by the plug leg's law (dialplan/default.xml). -->
-  <X-PRE-PROCESS cmd="exec-set" data="carrier_codecs_pcma=sh -c 'if [ x${TRING_CARRIER_G729} = xtrue ]; then echo G729,PCMA,PCMU; else echo PCMA,PCMU; fi'"/>
-  <X-PRE-PROCESS cmd="exec-set" data="carrier_codecs_pcmu=sh -c 'if [ x${TRING_CARRIER_G729} = xtrue ]; then echo G729,PCMU,PCMA; else echo PCMU,PCMA; fi'"/>
+  <X-PRE-PROCESS cmd="exec-set" data="carrier_codecs_pcma=/usr/local/bin/tring-carrier-codecs pcma"/>
+  <X-PRE-PROCESS cmd="exec-set" data="carrier_codecs_pcmu=/usr/local/bin/tring-carrier-codecs pcmu"/>
 
   <!--
       xmpp_client_profile and xmpp_server_profile
