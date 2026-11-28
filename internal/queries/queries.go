@@ -59,6 +59,7 @@ type Queries struct {
 	CampaignCancelRecipients string `query:"campaign-cancel-recipients"`
 	CampaignWorkerLock       string `query:"campaign-worker-lock"`
 	CampaignTenants          string `query:"campaign-tenants"`
+	CampaignHasWork          string `query:"campaign-has-work"`
 	CampaignDue              string `query:"campaign-due"`
 	CampaignSlots            string `query:"campaign-slots"`
 	CampaignLiveCalls        string `query:"campaign-live-calls"`

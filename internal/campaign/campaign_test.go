@@ -367,3 +367,69 @@ func TestAgentCampaignValidation(t *testing.T) {
 		}
 	}
 }
+
+// The worker skips a tick when nothing needs it: only running or scheduled
+// campaigns and queued or active attempts count as work.
+func TestHasWorkOnlyForLiveCampaignState(t *testing.T) {
+	s, f, id := fixtureCampaign(t)
+	ctx := context.Background()
+	want := func(step string, expect bool) {
+		t.Helper()
+		got, err := s.HasWork(ctx)
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if got != expect {
+			t.Fatalf("%s: HasWork = %v, want %v", step, got, expect)
+		}
+	}
+	finish := func(attempt uuid.UUID) {
+		t.Helper()
+		if _, claimed, err := s.Claim(ctx, f.TenantID, attempt); err != nil || !claimed {
+			t.Fatalf("claim: %v %v", claimed, err)
+		}
+		if err := s.Finish(ctx, f.TenantID, attempt, "completed", "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want("draft campaign", false)
+
+	// A draft's test call queues an attempt without starting the campaign.
+	c, _ := s.Get(ctx, f.TenantID, id)
+	testCall, err := s.Test(ctx, f.TenantID, id, "+919876500000", c.Revision, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want("draft with a queued test call", true)
+	finish(testCall)
+	want("draft, test call finished", false)
+
+	startFixture(t, s, f, id)
+	want("running campaign", true)
+	if err := s.Reserve(ctx, DefaultLimits()); err != nil {
+		t.Fatal(err)
+	}
+	attempts, _, _ := s.Attempts(ctx, f.TenantID, id, 25, 0)
+	var attempt uuid.UUID
+	for _, a := range attempts {
+		if a.ID != testCall {
+			attempt = a.ID
+		}
+	}
+	if attempt == uuid.Nil {
+		t.Fatal("no attempt reserved")
+	}
+	if _, claimed, err := s.Claim(ctx, f.TenantID, attempt); err != nil || !claimed {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	c, _ = s.Get(ctx, f.TenantID, id)
+	if err := s.Transition(ctx, f.TenantID, id, "pause", nil, c.Revision); err != nil {
+		t.Fatal(err)
+	}
+	want("paused campaign with an active attempt", true) // stale recovery still needs it
+
+	if err := s.Finish(ctx, f.TenantID, attempt, "completed", "test"); err != nil {
+		t.Fatal(err)
+	}
+	want("paused campaign, attempts finished", false)
+}
