@@ -100,6 +100,11 @@ var defaults = map[string]any{
 	"gateway_control_addr": "127.0.0.1:8089",
 	"gateway_control_url":  "http://127.0.0.1:8089",
 
+	// gateway_pprof_addr serves Go runtime profiles (/debug/pprof/) for
+	// profiling the gateway under load. Empty = off. Loopback only (enforced):
+	// profiles expose stack traces and heap contents.
+	"gateway_pprof_addr": "",
+
 	// media_grace_seconds is the room reconnect window: how long a dropped
 	// participant's slot is held for a page-refresh. The pion media-plane
 	// signaling WebSocket (/rtc) is served by the gateway role on gateway_addr.

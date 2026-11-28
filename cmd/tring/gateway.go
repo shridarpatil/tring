@@ -39,6 +39,7 @@ type gatewayRole struct {
 	d           *deps
 	sig         *signaling.Server
 	srv, ctlSrv *http.Server
+	pprofSrv    *http.Server // nil unless gateway_pprof_addr is set
 	hub         *events.Hub
 	cdr         *callcdr.Log
 }
@@ -269,6 +270,19 @@ func startGateway(d *deps) (*gatewayRole, error) {
 		ReadTimeout:       10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+	if addr := k.String("gateway_pprof_addr"); addr != "" {
+		ps, err := newPprofServer(addr)
+		if err != nil {
+			return nil, err
+		}
+		g.pprofSrv = ps
+		go func() {
+			logger.Warn("gateway pprof listening: profiles expose internals, keep it loopback-only", "addr", ps.Addr)
+			if err := ps.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("gateway pprof serve failed", "err", err)
+			}
+		}()
+	}
 	go func() {
 		logger.Info("gateway control listening", "addr", g.ctlSrv.Addr)
 		if err := g.ctlSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -320,6 +334,9 @@ func (g *gatewayRole) shutdown(ctx context.Context) {
 	defer cancel()
 	_ = g.srv.Shutdown(httpCtx)
 	_ = g.ctlSrv.Shutdown(httpCtx)
+	if g.pprofSrv != nil {
+		_ = g.pprofSrv.Shutdown(httpCtx)
+	}
 	g.hub.Close()
 	if g.cdr != nil {
 		recordingCtx, stop := context.WithTimeout(ctx, 20*time.Second)

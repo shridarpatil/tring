@@ -72,6 +72,30 @@ func TestWebRoomOffersOpusFirst(t *testing.T) {
 }
 
 // A phone room offers the mic only its law, so the browser must answer it.
+// Web calls ask browsers for wideband (16 kHz) Opus: fullband buys nothing for
+// speech and costs ~12 kbps more per leg.
+func TestWebRoomCapsOpusAt16kHz(t *testing.T) {
+	s, err := sfu.New(sfu.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := &offerSink{}
+	p, err := s.Join("web16", "agent", sig)
+	if err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	t.Cleanup(func() { s.Leave("web16", "agent") })
+	p.Negotiate()
+	sig.mu.Lock()
+	defer sig.mu.Unlock()
+	if len(sig.offers) == 0 {
+		t.Fatal("no offer sent")
+	}
+	if want := "a=fmtp:111 minptime=10;useinbandfec=1;maxplaybackrate=16000;sprop-maxcapturerate=16000"; !strings.Contains(sig.offers[0], want) {
+		t.Fatalf("offer lacks %q:\n%s", want, sig.offers[0])
+	}
+}
+
 func TestPhoneRoomOffersOnlyItsLaw(t *testing.T) {
 	s, err := sfu.New(sfu.Config{})
 	if err != nil {

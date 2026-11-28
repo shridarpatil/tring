@@ -55,11 +55,17 @@ func audioParameters(c room.Codec) webrtc.RTPCodecParameters {
 	}
 	// Standard WebRTC Opus fmtp: useinbandfec=1 lets the far side reconstruct
 	// an isolated lost packet instead of hearing a gap; minptime=10 keeps 20ms
-	// framing. stereo=1 so screen-share/music isn't downmixed.
+	// framing. maxplaybackrate/sprop-maxcapturerate=16000 ask browsers to encode
+	// wideband (16 kHz, "HD voice") instead of fullband: plenty for speech, and
+	// browsers then default to ~20 kbps instead of ~32, ~20% less per leg with
+	// headers. The RTP clock stays 48 kHz (RFC 7587), and the SFU forwards Opus
+	// untouched, so nothing else changes. pion matches answers only on params
+	// both sides list, so a browser that echoes its own maxplaybackrate still
+	// negotiates.
 	return webrtc.RTPCodecParameters{
 		RTPCodecCapability: webrtc.RTPCodecCapability{
 			MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2,
-			SDPFmtpLine: "minptime=10;useinbandfec=1",
+			SDPFmtpLine: "minptime=10;useinbandfec=1;maxplaybackrate=16000;sprop-maxcapturerate=16000",
 		},
 		PayloadType: webrtc.PayloadType(room.Opus.PayloadType()),
 	}

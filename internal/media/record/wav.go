@@ -1,6 +1,7 @@
 package record
 
 import (
+	"bufio"
 	"encoding/binary"
 	"os"
 
@@ -17,8 +18,9 @@ import (
 // with silence; otherwise the leg would drift ahead of the other channel.
 type wavWriter struct {
 	f       *os.File
-	silence byte   // the law's zero-amplitude sample
-	n       uint32 // data bytes written
+	buf     *bufio.Writer // batches the 160-byte frames into few write(2)s
+	silence byte          // the law's zero-amplitude sample
+	n       uint32        // data bytes written
 	started bool
 	nextTS  uint32 // RTP timestamp the next packet should carry
 }
@@ -26,6 +28,12 @@ type wavWriter struct {
 // wavHeaderSize is the RIFF header, an 18-byte fmt chunk (non-PCM formats
 // carry cbSize) and the data chunk header.
 const wavHeaderSize = 12 + 8 + 18 + 8
+
+// wavBufSize is about 1s of 8kHz G.711. Unbuffered, every 20 ms frame was its
+// own write(2): at 200 calls ~20k syscalls/s and ~13% of the gateway's CPU in
+// a profile. A crash loses at most this much of a leg's tail, which a crash
+// mid-call already cuts.
+const wavBufSize = 8 << 10
 
 // maxGapFill bounds the silence filled for one gap: 5s. A bigger jump is a
 // new stream (a browser reconnect starts a fresh timestamp base), not loss.
@@ -57,7 +65,7 @@ func newWAVWriter(path string, c room.Codec) (*wavWriter, error) {
 		_ = f.Close()
 		return nil, err
 	}
-	return &wavWriter{f: f, silence: g711.Silence(c)}, nil
+	return &wavWriter{f: f, buf: bufio.NewWriterSize(f, wavBufSize), silence: g711.Silence(c)}, nil
 }
 
 // WriteRTP appends pkt's samples, first filling any timestamp gap since the
@@ -80,13 +88,18 @@ func (w *wavWriter) WriteRTP(pkt *rtp.Packet) error {
 }
 
 func (w *wavWriter) write(b []byte) error {
-	n, err := w.f.Write(b)
+	n, err := w.buf.Write(b)
 	w.n += uint32(n)
 	return err
 }
 
-// Close patches the RIFF and data sizes into the header and closes the file.
+// Close flushes the buffered samples, patches the RIFF and data sizes into the
+// header and closes the file.
 func (w *wavWriter) Close() error {
+	if err := w.buf.Flush(); err != nil {
+		_ = w.f.Close()
+		return err
+	}
 	var sz [4]byte
 	binary.LittleEndian.PutUint32(sz[:], wavHeaderSize-8+w.n)
 	_, err1 := w.f.WriteAt(sz[:], 4)
