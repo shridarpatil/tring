@@ -1477,6 +1477,14 @@ UPDATE campaign_recipients r SET status='cancelled' WHERE tenant_id=$1 AND campa
 -- name: campaign-worker-lock
 SELECT pg_try_advisory_xact_lock(7274696, 35);
 
+-- name: campaign-has-work
+-- Cross-tenant on purpose (the scheduler serves every tenant, like
+-- campaign-tenants): is there anything for the worker to do? Both halves read
+-- the partial indexes campaign_due and campaign_attempt_active, which are
+-- near-empty when no campaign is live.
+SELECT EXISTS (SELECT 1 FROM campaigns WHERE status IN ('running','scheduled'))
+    OR EXISTS (SELECT 1 FROM campaign_attempts WHERE status IN ('queued','active'));
+
 -- name: campaign-tenants
 SELECT t.id FROM tenants t ORDER BY COALESCE((SELECT min(c.next_dispatch_at) FROM campaigns c WHERE c.tenant_id=t.id AND c.status IN ('running','scheduled')), 'infinity'::timestamptz),t.id;
 

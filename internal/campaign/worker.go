@@ -28,6 +28,16 @@ type Worker struct {
 	Log      *slog.Logger
 }
 
+// HasWork reports whether any tenant has a running or scheduled campaign or a
+// queued or active attempt: everything Reserve, dispatch and stale recovery
+// act on. Without it an idle install still ran the full per-tenant pass every
+// tick (a transaction, the allocation lock and ~5 queries per tenant, 4x/s).
+func (s *Store) HasWork(ctx context.Context) (bool, error) {
+	var work bool
+	err := s.Pool.QueryRow(ctx, s.Q.CampaignHasWork).Scan(&work)
+	return work, err
+}
+
 func (s *Store) tenants(ctx context.Context) ([]uuid.UUID, error) {
 	return s.tenantIDs(ctx, s.Pool)
 }
@@ -229,6 +239,12 @@ func (w *Worker) Run(ctx context.Context) {
 		case <-ticker.C:
 		}
 		tickCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// One indexed EXISTS instead of the full pass when nothing is live. On
+		// error, fall through: the full pass reports the problem as before.
+		if work, err := w.Store.HasWork(tickCtx); err == nil && !work {
+			cancel()
+			continue
+		}
 		err := w.Store.Reserve(tickCtx, w.Limits)
 		if err != nil {
 			log.Warn("campaign scheduler failed", "err", err)
