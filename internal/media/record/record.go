@@ -155,7 +155,7 @@ func (r *Recorder) WriteRTP(pid room.ParticipantID, pkt *rtp.Packet) error {
 		if codec.G711() {
 			nw, err = newWAVWriter(path, codec)
 		} else {
-			nw, err = oggwriter.New(path, opusRate, opusChannels)
+			nw, err = newOggWriter(path)
 		}
 		if err != nil {
 			return err
@@ -243,3 +243,18 @@ func sanitize(s string) string {
 }
 
 var _ room.TrackSink = (*Recorder)(nil)
+
+// newOggWriter is oggwriter.New behind a write buffer (oggFile), so a web
+// leg's Opus pages don't each cost a write(2).
+func newOggWriter(path string) (*oggwriter.OggWriter, error) {
+	of, err := newOggFile(path)
+	if err != nil {
+		return nil, err
+	}
+	w, err := oggwriter.NewWith(of, opusRate, opusChannels)
+	if err != nil {
+		_ = of.Close()
+		return nil, err
+	}
+	return w, nil
+}

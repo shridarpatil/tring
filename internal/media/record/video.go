@@ -83,8 +83,16 @@ func (r *Recorder) WriteVideoRTP(pid room.ParticipantID, stream, codec string, p
 			return err
 		}
 		path := filepath.Join(r.dir, fmt.Sprintf("%s-%s-%s.ivf", r.callID, sanitize(string(pid)), uuid.NewString()))
-		writer, err := ivfwriter.New(path, ivfwriter.WithCodec(codec), ivfwriter.WithFrameRate(1, 90000), ivfwriter.WithDirectPTS())
+		// Buffered: unbuffered, every RTP packet of a camera or screen share
+		// was its own write(2). bufferedFile flushes before ivfwriter's Close
+		// seeks back to patch the frame count.
+		bf, err := newBufferedFile(path, videoBufSize)
 		if err != nil {
+			return err
+		}
+		writer, err := ivfwriter.NewWith(bf, ivfwriter.WithCodec(codec), ivfwriter.WithFrameRate(1, 90000), ivfwriter.WithDirectPTS())
+		if err != nil {
+			_ = bf.Close()
 			return err
 		}
 		v = &videoCapture{pid: pid, path: path, writer: writer, start: time.Now(), lastRTP: pkt.Timestamp}
