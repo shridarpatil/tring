@@ -109,6 +109,7 @@ The gateway role runs browser WebRTC on `/rtc`, the IVR, agent routing and call 
 | `TRING_GATEWAY_REQUIRE_AUTH` | `true` | When `true`, the gateway will not start without Redis (see the note above). `/rtc` always requires a signed token regardless of this setting. Keep it `true`. |
 | `TRING_MEDIA_GRACE_SECONDS` | `30` | How long a dropped participant's slot is held so a page refresh can rejoin the same call. See [page-refresh grace](/tring/features/web-calling/#page-refresh-grace). |
 | `TRING_GATEWAY_DRAIN_SECONDS` | `300` | On `docker stop` (SIGTERM) the gateway stops taking new calls and waits up to this long for live calls to end. Calls still up after that are ended (callers and agents get a hangup, call records settle as a system end, recordings are finalized) before it exits. New web calls, inbound phone calls and two-number connects are refused meanwhile, and `/healthz` returns 503. Keep the gateway's `stop_grace_period` in `docker-compose.yml` (`345s`) about 40s above it, or Docker kills it before the remaining calls are ended. |
+| `TRING_GATEWAY_PPROF_ADDR` | empty | Serves Go runtime profiles (`/debug/pprof/`) for finding where the gateway's CPU and memory go. Empty is off. Only a loopback address is accepted (`127.0.0.1:6060`); the gateway refuses to start with anything else. Idle until a profile is requested, so it can stay set. See [Profiling the gateway](#profiling-the-gateway). |
 | `TRING_RTC_DEV_TOKENS` | `false` | Mounts an **unauthenticated** token mint at `/rtc/dev-token` for the local test client. |
 | `TRING_TRUSTED_PROXIES` | empty | Comma-separated CIDRs of the reverse proxies in front of the **api**. Only `X-Forwarded-For` hops inside these ranges are trusted when logging the client IP and rate limiting console login. Empty ignores `X-Forwarded-For` entirely. |
 | `TRING_OUTBOUND_ALLOW_CIDRS` | empty | Comma-separated CIDRs that tenant-supplied URLs (webhooks, IVR `http_callback` nodes) may reach even though they aren't public. By default the **api** and **gateway** refuse to connect to loopback, private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), link-local (including cloud metadata `169.254.169.254`), CGNAT (`100.64/10`), multicast and reserved addresses, on every redirect too. List only your CRM's range, for example `10.20.0.0/16`. |
@@ -280,3 +281,25 @@ Point the `freeswitch` service's `image:` in `docker-compose.yml` at it, set `TR
 ### Checking a live call
 
 `fs_cli -x "show channels"`: the carrier leg reads `G729` or `AMR`, and the leg to Tring reads `PCMA` or `PCMU`. Our SDP answer to the carrier carries the same codec, e.g. `m=audio … RTP/AVP 18 101` for G.729.
+
+## Profiling the gateway
+
+Set `TRING_GATEWAY_PPROF_ADDR=127.0.0.1:6060` in `.env` and recreate the `tring` container (at a quiet time: it drains live calls first). The listener costs nothing until you ask for a profile, so you can leave it set and profile whenever you need to.
+
+Profiles contain stack traces and heap contents, so the address must be loopback and port 6060 must never be opened in a firewall or security group. Reach it through an SSH tunnel:
+
+```bash
+ssh -N -L 6060:127.0.0.1:6060 <user>@<server>     # keep running
+go tool pprof -http=:8081 "http://localhost:6060/debug/pprof/profile?seconds=30"
+```
+
+The second command records 30 seconds of CPU and opens a web UI at `http://localhost:8081` (flame graph, top functions, call graph, source; the graph view needs Graphviz). Capture during real load and note the number of live calls.
+
+| Path | Shows |
+|---|---|
+| `/debug/pprof/profile?seconds=30` | CPU: where the time goes |
+| `/debug/pprof/heap` | Memory in use |
+| `/debug/pprof/allocs` | Allocation hot spots (garbage-collector pressure) |
+| `/debug/pprof/goroutine?debug=1` | Goroutine count and where they wait |
+
+A CPU profile adds a few percent of CPU only while it records. Avoid `goroutine?debug=2` (a full stack dump) at peak: with thousands of goroutines it briefly pauses the gateway.
